@@ -88,6 +88,12 @@ describe('the offset body ghost', () => {
     expect(shell.visible).toBe(true);
     ghost.veilAddedMaterial(source.clone(), true);
     expect(shell.visible).toBe(true);
+    // Pointerup can precede the first exact replacement. The unchanged
+    // source still occludes its shell throughout that released frame.
+    ghost.veilAddedMaterial(source, true, 'released');
+    expect(shell.visible).toBe(false);
+    ghost.veilAddedMaterial(source.clone(), true, 'released');
+    expect(shell.visible).toBe(true);
     ghost.setClippingPlane(new THREE.Plane(new THREE.Vector3(1, 0, 0), 0));
     ghost.veilAddedMaterial(source, true);
     expect(shell.visible).toBe(true);

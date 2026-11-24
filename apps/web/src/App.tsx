@@ -2564,11 +2564,6 @@ interface RegionExtrudePreviewCandidate {
 interface ReusableOffsetPreview {
   candidate: OffsetPreviewCandidate;
   displayInstalled?: true;
-  validation?: {
-    controller: AbortController;
-    lineageDemand: string;
-    derived: Promise<ProjectDocument['derived']>;
-  };
 }
 
 interface OffsetPreviewResult {
@@ -6231,7 +6226,6 @@ export function App() {
       presentationTimeMs: () => previewPresentationMs.current,
       publish: (preview) => {
         if (!preview) {
-          reusableOffsetPreviewRef.current?.validation?.controller.abort();
           reusableOffsetPreviewRef.current = null;
           shownOffsetLaneRef.current = null;
           setPreviewDoc(null);
@@ -6240,7 +6234,6 @@ export function App() {
           return;
         }
         traceFaceDragPublish(preview.document.offset, preview.document);
-        reusableOffsetPreviewRef.current?.validation?.controller.abort();
         const held: ReusableOffsetPreview = { candidate: preview.document };
         reusableOffsetPreviewRef.current = held;
         // A chained set's coarse whole-chain frame for a value the hand has
@@ -6270,37 +6263,6 @@ export function App() {
             // The next pending pointer value can enter the geometry worker
             // immediately while the GPU paints this submitted frame.
             held.displayInstalled = true;
-            // A held dense frame can use its idle time for the same full
-            // rebuild release would request. Moving the hand cancels it.
-            if (offsetPreviewValueRef.current === preview.document.offset) {
-              stopOffsetRestCheck();
-              offsetRestTimer.current = window.setTimeout(() => {
-                offsetRestTimer.current = null;
-                const candidate = held.candidate;
-                if (
-                  reusableOffsetPreviewRef.current !== held ||
-                  offsetPreviewValueRef.current !== candidate.offset ||
-                  !previewSelectionIsCurrent(candidate)
-                )
-                  return;
-                const controller = new AbortController();
-                const demand = geometry.liveLineageDemand();
-                const derived = syncCandidate(
-                  candidate.document,
-                  undefined,
-                  demand,
-                  { signal: controller.signal, prepareBodyId: candidate.bodyId }
-                );
-                held.validation = {
-                  controller,
-                  lineageDemand: JSON.stringify(demand) ?? '',
-                  derived
-                };
-                void derived.catch(() => {
-                  delete held.validation;
-                });
-              }, OFFSET_FACE_REST_MS);
-            }
           } else show();
         }
         setLastValidPreview(preview.document.offset);
@@ -6453,7 +6415,6 @@ export function App() {
   useEffect(
     () => () => {
       stopOffsetRestCheck();
-      reusableOffsetPreviewRef.current?.validation?.controller.abort();
       pendingDirectEditRef.current?.cancelReleasedDisplay?.();
     },
     [stopOffsetRestCheck]
@@ -32524,11 +32485,6 @@ export function App() {
 
   function handleOffsetPreview(offset: number, exactGeometry = true) {
     stopOffsetRestCheck();
-    const held = reusableOffsetPreviewRef.current;
-    if (held?.validation && held.candidate.offset !== offset) {
-      held.validation.controller.abort();
-      delete held.validation;
-    }
     const current = interactionRef.current;
     // The arrow rig is shared: in region mode its value is an extrude height.
     if (current.mode === 'region') {
@@ -33240,18 +33196,6 @@ export function App() {
     }
     // Keep the accepted candidate's feature ids, but analysis is still absent:
     // release always asks for a full authoritative rebuild before committing.
-    const candidate =
-      exact === undefined
-        ? offsetPreview.running?.document?.offset === offset
-          ? offsetPreview.running.document
-          : reusableOffsetPreviewRef.current?.candidate
-        : undefined;
-    const reuse =
-      candidate &&
-      candidate.offset === offset &&
-      previewSelectionIsCurrent(candidate)
-        ? candidate
-        : null;
     const sourceBody =
       managerRef.current?.document.derived.bodyRepresentations[plan.bodyId];
     const retaken = retakenRelease.take('offset-face');
@@ -33259,10 +33203,23 @@ export function App() {
       exact === undefined && retaken?.submittedValue === offset;
     const releasedFrame =
       !resumeRelease &&
-      reuse &&
+      exact === undefined &&
       sourceBody &&
       denseBodyNeedsPreparation(sourceBody)
-        ? offsetPreview.takeRunning(offset)
+        ? offsetPreview.takeRequested(offset)
+        : null;
+    const candidate =
+      releasedFrame?.document ??
+      (exact === undefined
+        ? offsetPreview.running?.document?.offset === offset
+          ? offsetPreview.running.document
+          : reusableOffsetPreviewRef.current?.candidate
+        : undefined);
+    const reuse =
+      candidate &&
+      candidate.offset === offset &&
+      previewSelectionIsCurrent(candidate)
+        ? candidate
         : null;
     offsetPreview.stop();
     // A chained set's lead frame stays on screen until the commit replaces
@@ -33289,29 +33246,13 @@ export function App() {
         : reuse
           ? reuse.successMessage
           : plan.successMessage;
-    const held = reusableOffsetPreviewRef.current;
-    const validation =
-      held?.candidate === reuse &&
-      held?.validation?.lineageDemand ===
-        (JSON.stringify(geometry.liveLineageDemand()) ?? '')
-        ? held.validation
-        : undefined;
-    // The release owns this rebuild now. Retiring the gesture must not abort it.
-    if (validation && held) delete held.validation;
     void executeValidatedDirectEdit(
       reuse ? reuse.command : plan.command,
       reuse ? reuse.bodyId : plan.bodyId,
       successMessage,
       offset,
       undefined,
-      reuse ? reuse.validationTargets : plan.validationTargets,
-      validation && reuse
-        ? {
-            baseProjectId: reuse.baseProjectId,
-            baseVersion: reuse.baseVersion,
-            derived: validation.derived
-          }
-        : undefined
+      reuse ? reuse.validationTargets : plan.validationTargets
     );
     if (releasedFrame) {
       const release = pendingDirectEditRef.current;

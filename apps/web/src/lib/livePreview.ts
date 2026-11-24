@@ -350,7 +350,6 @@ export class LivePreview<TDocument, TDerived> {
       }
     } finally {
       const aborted = this.abort?.signal.aborted ?? false;
-      this.releasedAbort = null;
       this.runningPreview = null;
       this.runningGeneration = null;
       this.abort = null;
@@ -389,27 +388,49 @@ export class LivePreview<TDocument, TDerived> {
   }
 
   /**
-   * Let the caller finish displaying a matching in-flight value after release.
-   * The gesture stops publishing immediately. The release owns the promise.
+   * Release owns the display for the last requested value. If that value
+   * is queued behind an older one, retire the older work and submit the
+   * final display before the caller queues its authoritative history check.
    */
-  takeRunning(
+  takeRequested(
     value: number
   ): (RunningPreview<TDocument, TDerived> & { cancel: () => void }) | null {
-    const running = this.runningPreview;
+    let running = this.runningPreview;
+    let controller = this.abort;
     if (
-      !running ||
-      running.value !== value ||
-      this.runningGeneration !== this.generation ||
-      !this.abort ||
-      this.abort.signal.aborted ||
-      this.options.isCurrent?.(running.document) === false
-    )
-      return null;
-    const controller = this.abort;
-    this.abort = null;
-    this.stop();
-    this.releasedAbort = controller;
-    return { ...running, cancel: () => controller.abort() };
+      running?.value === value &&
+      this.runningGeneration === this.generation &&
+      controller &&
+      !controller.signal.aborted &&
+      this.options.isCurrent?.(running.document) !== false
+    ) {
+      this.abort = null;
+      this.stop();
+    } else {
+      if (this.pending?.value !== value) return null;
+      this.stop();
+      try {
+        const document = this.options.build(value);
+        if (!document || this.options.isCurrent?.(document) === false)
+          return null;
+        controller = new AbortController();
+        running = {
+          value,
+          document,
+          result: this.options.derive(document, controller.signal)
+        };
+      } catch {
+        // Release still owns the normal checked rebuild when a preview fails.
+        return null;
+      }
+    }
+    const owner = controller;
+    this.releasedAbort = owner;
+    const retire = () => {
+      if (this.releasedAbort === owner) this.releasedAbort = null;
+    };
+    void running.result.then(retire, retire);
+    return { ...running, cancel: () => owner.abort() };
   }
 
   /** Invalidate work while retaining the displayed result during final validation. */

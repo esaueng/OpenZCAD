@@ -289,6 +289,67 @@ function mainThreadTasksAfterRelease(events: TraceEvent[]) {
     }));
 }
 
+/** Keep a quick gesture on the host clock even when Chromium is busy drawing. */
+async function dispatchQuickDrag(
+  page: Page,
+  start: { x: number; y: number },
+  handle: Handle,
+  reach: number
+) {
+  const interval = Number(
+    process.env.OZ_FACE_DRAG_INPUT_INTERVAL_MS ?? MOVE_INTERVAL_MS
+  );
+  if (
+    !Number.isFinite(interval) ||
+    interval < 0 ||
+    !Number.isInteger(MOVES) ||
+    MOVES < 1
+  )
+    throw new Error(
+      'Quick drags require a positive sample count and a finite nonnegative interval.'
+    );
+  const session = await page.context().newCDPSession(page);
+  try {
+    const origin = await page.evaluate(() => performance.timeOrigin);
+    await page.mouse.down();
+    const inputAt = Date.now() - origin;
+    const sends: Promise<unknown>[] = [];
+    for (let index = 1; index <= MOVES; index++) {
+      const distance = (reach * index) / MOVES;
+      sends.push(
+        session.send('Input.dispatchMouseEvent', {
+          type: 'mouseMoved',
+          button: 'left',
+          buttons: 1,
+          modifiers: 8,
+          x: start.x + handle.dx * handle.pixelsPerUnit * distance,
+          y: start.y + handle.dy * handle.pixelsPerUnit * distance,
+          timestamp: Date.now() / 1000
+        })
+      );
+      if (index < MOVES)
+        await new Promise((resolve) => setTimeout(resolve, interval));
+    }
+    const releaseAt = Date.now() - origin;
+    sends.push(
+      session.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        button: 'left',
+        buttons: 0,
+        modifiers: 8,
+        clickCount: 1,
+        x: start.x + handle.dx * handle.pixelsPerUnit * reach,
+        y: start.y + handle.dy * handle.pixelsPerUnit * reach,
+        timestamp: Date.now() / 1000
+      })
+    );
+    await Promise.all(sends);
+    return { inputAt, releaseAt };
+  } finally {
+    await session.detach();
+  }
+}
+
 /**
  * Streams `MOVES` pointer moves in real time: out to `reach` and back to a
  * third of it, so the drag reverses as a hand does. Returns the trace.
@@ -398,65 +459,48 @@ async function traceDrag(
     await profiler.send('Profiler.setSamplingInterval', { interval: 200 });
     await profiler.send('Profiler.start');
   }
-  await page.mouse.down();
-  const released = await canvas.evaluate(
-    async (
-      element,
-      { start, handle, reach, moves, interval, oneWay, immediateRelease, mark }
-    ) => {
-      const pointerId = Number(element.dataset.traceDragPointerId);
-      const turn = Math.round(moves * 0.6);
-      for (let index = 1; index <= moves; index += 1) {
-        const distance = oneWay
-          ? (reach * index) / moves
-          : index <= turn
-            ? (reach * index) / turn
-            : reach - ((reach * 2) / 3) * ((index - turn) / (moves - turn));
-        element.dispatchEvent(
-          new PointerEvent('pointermove', {
-            bubbles: true,
-            cancelable: true,
-            pointerType: 'mouse',
-            isPrimary: true,
-            pointerId,
-            buttons: 1,
-            shiftKey: true,
-            clientX: start.x + handle.dx * handle.pixelsPerUnit * distance,
-            clientY: start.y + handle.dy * handle.pixelsPerUnit * distance
-          })
-        );
-        if (immediateRelease && index === moves) {
-          const at = performance.mark(mark).startTime;
+  const quick = immediateRelease
+    ? await dispatchQuickDrag(page, start, handle, reach)
+    : null;
+  if (!quick) {
+    await page.mouse.down();
+    await canvas.evaluate(
+      async (element, { start, handle, reach, moves, interval, oneWay }) => {
+        const pointerId = Number(element.dataset.traceDragPointerId);
+        const turn = Math.round(moves * 0.6);
+        for (let index = 1; index <= moves; index += 1) {
+          const distance = oneWay
+            ? (reach * index) / moves
+            : index <= turn
+              ? (reach * index) / turn
+              : reach - ((reach * 2) / 3) * ((index - turn) / (moves - turn));
           element.dispatchEvent(
-            new PointerEvent('pointerup', {
+            new PointerEvent('pointermove', {
               bubbles: true,
               cancelable: true,
               pointerType: 'mouse',
               isPrimary: true,
               pointerId,
-              buttons: 0,
+              buttons: 1,
               shiftKey: true,
               clientX: start.x + handle.dx * handle.pixelsPerUnit * distance,
               clientY: start.y + handle.dy * handle.pixelsPerUnit * distance
             })
           );
-          return at;
+          await new Promise((resolve) => setTimeout(resolve, interval));
         }
-        await new Promise((resolve) => setTimeout(resolve, interval));
+      },
+      {
+        start,
+        handle,
+        reach,
+        moves: MOVES,
+        interval: MOVE_INTERVAL_MS,
+        oneWay
       }
-      return null;
-    },
-    {
-      start,
-      handle,
-      reach,
-      moves: MOVES,
-      interval: MOVE_INTERVAL_MS,
-      oneWay,
-      immediateRelease,
-      mark: RELEASE_MARK
-    }
-  );
+    );
+  }
+  const released = quick?.releaseAt ?? null;
   // DOM-dispatched moves do not move the browser's physical cursor. Release
   // from the final sample, or pointerup sees zero travel and cancels the edit.
   const motionEndedAt =
@@ -632,7 +676,23 @@ async function traceDrag(
       'the selected height reached the WebGL framebuffer'
     ).toBe(true);
   }
-  return { ...result, tasksAfterRelease };
+  const gpuAt = result.trace.find(
+    (event) => event.detail?.gpuCompletedAt !== undefined
+  )?.detail?.gpuCompletedAt;
+  const committedAt = result.trace.find(
+    (event) => event.kind === 'committed'
+  )?.t;
+  if (quick)
+    expect(result.trace.some((event) => event.kind === 'pointer')).toBe(true);
+  return {
+    ...result,
+    tasksAfterRelease,
+    hostGestureMs: quick ? quick.releaseAt - quick.inputAt : null,
+    hostInputToGpuMs:
+      quick && gpuAt !== undefined ? gpuAt - quick.inputAt : null,
+    hostInputToCommitMs:
+      quick && committedAt !== undefined ? committedAt - quick.inputAt : null
+  };
 }
 
 function record(
@@ -668,6 +728,9 @@ function record(
     at: new Date().toISOString(),
     userAgent: process.env.OZ_PERF_HOST ?? null,
     summary,
+    hostGestureMs: result.hostGestureMs,
+    hostInputToGpuMs: result.hostInputToGpuMs,
+    hostInputToCommitMs: result.hostInputToCommitMs,
     reactCommits: result.reactCommits,
     rendering: {
       motion: renderingSummary(
@@ -899,11 +962,12 @@ test('traces a supplied project face drag', async ({ page }) => {
       immediate
     )
   );
-  expect(summary.pointerEvents).toBeGreaterThan(0);
-  if (!immediate)
+  if (!immediate) {
+    expect(summary.pointerEvents).toBeGreaterThan(0);
     expect(
       summary.presentedFrames + summary.proxyPresentedFrames
     ).toBeGreaterThan(0);
+  }
   expect(summary.releaseToFrameMs).not.toBeNull();
 });
 

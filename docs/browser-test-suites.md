@@ -149,10 +149,13 @@ native backup can be selected through `OZ_FACE_DRAG_PROJECT`. Use
 `OZ_FACE_DRAG_NEAR=x,y,z` to distinguish parallel faces in document coordinates.
 For a quick release set `OZ_FACE_DRAG_IMMEDIATE_RELEASE=1`, the signed distance in
 `OZ_FACE_DRAG_DISTANCE` and the sample count in `OZ_FACE_DRAG_MOVES`. This
-releases at the final pointer sample and records both the displayed body's
+sends mouse input from the host at `OZ_FACE_DRAG_INPUT_INTERVAL_MS` intervals
+(default 16 ms), releases at the final sample and records both the displayed body's
 bounds and the subsequent checked history revision. Set `OZ_FACE_DRAG_EXPECT_MAX_Z`
 to read the framebuffer when the solid reaches the expected height. Its trace
-event records the GPU completion time in `detail.gpuCompletedAt`. Model limitations,
+event records the GPU completion time in `detail.gpuCompletedAt`. The JSON
+reports `hostGestureMs`, `hostInputToGpuMs` and `hostInputToCommitMs` from
+the first mouse move sent by the host. Model limitations,
 the exact commands and measured diagnosis are in
 [face-drag main-thread work](qa/2026-11-09/face-drag-main-thread.md).
 `two committed face resizes` repeats the recording's R2 filleted-union shape:

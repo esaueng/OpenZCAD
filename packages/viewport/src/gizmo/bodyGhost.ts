@@ -78,7 +78,8 @@ export interface BodyGhost {
    */
   veilAddedMaterial(
     live: THREE.Mesh | null,
-    sourcePoseUnchanged?: boolean
+    sourcePoseUnchanged?: boolean,
+    phase?: 'dragging' | 'released'
   ): boolean;
   dispose(): void;
 }
@@ -530,7 +531,8 @@ export function createBodyGhost(
   }
   function veilAddedMaterial(
     live: THREE.Mesh | null,
-    sourcePoseUnchanged = false
+    sourcePoseUnchanged = false,
+    phase: 'dragging' | 'released' = 'dragging'
   ) {
     showShell(true);
     const liveMaterial = live?.material;
@@ -549,7 +551,7 @@ export function createBodyGhost(
     const { plane, margin } = veilFrame(oldPlane);
     // Only a pull adds material to veil. Pushed in, nothing lies past the
     // old face, and a cap there would close empty air with a solid face.
-    if (!reachesBeyond(live, plane, margin)) {
+    if (phase === 'released' || !reachesBeyond(live, plane, margin)) {
       unveil();
       if (
         sourcePoseUnchanged &&

@@ -4756,14 +4756,14 @@ export function ModelViewer({
       // Selection rebuilds its overlays with each preview body, so this
       // runs every frame the ghost is up.
       hideHighlightsUnderGhost(body ?? undefined);
-      const live = offsetDrag ? body : null;
       return offsetGhost.veilAddedMaterial(
-        live instanceof THREE.Mesh ? live : null,
+        body instanceof THREE.Mesh ? body : null,
         context.renderedBodies?.length === 1 &&
           !offsetBodyProxy &&
           !xrayRef.current &&
           displayModeRef.current !== 'wireframe' &&
-          !sectionViewRef.current
+          !sectionViewRef.current,
+        offsetDrag ? 'dragging' : 'released'
       );
     }
     offsetGhostClearRef.current = clearOffsetGhost;
