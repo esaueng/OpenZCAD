@@ -351,6 +351,44 @@ describe('AI deterministic modeling operation contracts', () => {
     ).toEqual(operations.map((operation) => operation.kind));
   });
 
+  it.each(['chamfer', 'draft'])(
+    'rejects a model-supplied %s rim choice',
+    (choice) => {
+      const edit = {
+        kind: 'offset-face',
+        faceHash: 101,
+        faceReference,
+        sourceSurfaceType: 'plane',
+        sourceArea: 100,
+        sourceCenter: { x: 0, y: 0, z: 10 },
+        sourceNormal: { x: 0, y: 0, z: 1 },
+        offset: 2
+      };
+      const op = {
+        kind: 'add_direct_edit',
+        name: 'Offset',
+        targetBodyId: 'body_source'
+      };
+      expect(() =>
+        parseCadPatchProposal(
+          proposal([{ ...op, operation: { ...edit, ambiguousRim: choice } }])
+        )
+      ).toThrow('Invalid add_direct_edit');
+      expect(() =>
+        parseCadPatchProposal(
+          proposal([{ ...op, operation: { ...edit, ambiguousRim: choice } }]),
+          undefined,
+          'display-history'
+        )
+      ).not.toThrow();
+      expect(() =>
+        parseCadPatchProposal(
+          proposal([{ ...op, operation: { ...edit, ambiguousRim: 'refuse' } }])
+        )
+      ).not.toThrow();
+    }
+  );
+
   it('accepts exact current face context and rejects a stale lineage reference', () => {
     const operation = {
       kind: 'add_face_sketch',

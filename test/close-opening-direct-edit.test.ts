@@ -1,7 +1,8 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   createProjectDocument,
+  directEditBody,
   transformBody
 } from '@openzcad/document-core';
 import {
@@ -18,6 +19,9 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import { cutFaceDeletion } from '../apps/web/src/lib/featureDeletion';
 import { faceLineageTrace, isCutFace } from '../apps/web/src/lib/historyFocus';
+
+import * as faceMove from '../packages/kernel-adapter/src/exact-face-distance';
+import { OffsetFaceRefusal } from '../packages/kernel-adapter/src/exact-offset-face-refusal';
 
 /**
  * Closing a rectangular window cut through a wall, the two ways a user
@@ -162,6 +166,46 @@ describe('closing a window through a wall', () => {
       expect(body.bbox.max.z).toBeCloseTo(40, 9);
     }
   }, 60_000);
+
+  it('keeps the exact window-closing fallback for a historical typed collision', async () => {
+    const { document, bodyId } = await windowedWall();
+    const { bottom } = windowWalls(document, bodyId);
+    const candidate = directEditBody(
+      document,
+      {
+        name: 'Close old window',
+        targetBodyId: bodyId,
+        operation: offsetBottom(bottom, WINDOW_HEIGHT)
+      },
+      'replay'
+    ).document;
+    const detail =
+      'swept face reaches nonadjacent face before completing the move';
+    const move = vi
+      .spyOn(faceMove, 'journaledMove')
+      .mockImplementationOnce(() => {
+        throw new OffsetFaceRefusal({
+          family: 'direct-edit',
+          category: 'unsupported',
+          kernelCode: 'offset_face_chamfer_rim_not_carried',
+          kernelMessage: detail,
+          reason: detail,
+          message: detail
+        });
+      });
+    try {
+      const closed = await adapter!.syncDocument(candidate);
+      expect(move).toHaveBeenCalled();
+      expect(closed.warnings).toEqual([]);
+      expect(closed.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+        WALL_VOLUME,
+        6
+      );
+      expect(closed.bodyRepresentations[bodyId]!.faceCount).toBe(6);
+    } finally {
+      move.mockRestore();
+    }
+  });
 
   it('still refuses a push that would leave the body', async () => {
     // The window's top is 5 below the wall's top: a 25 push would build

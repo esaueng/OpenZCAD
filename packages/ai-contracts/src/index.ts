@@ -2562,9 +2562,9 @@ const directEditOperationSchema = {
         sourceNormal: numberVectorSchema,
         ambiguousRim: {
           type: 'string',
-          enum: ['refuse', 'chamfer', 'draft'],
+          const: 'refuse',
           description:
-            'Use refuse unless the user explicitly selected chamfer or draft for an ambiguous rim.'
+            'Ambiguous rims require a selection in the Offset Face editor.'
         },
         offset: scalarSchema
       },
@@ -4630,7 +4630,8 @@ function parseDatumAxisDefinition(
 
 export function parseCadPatchProposal(
   value: unknown,
-  digest?: CadDocumentDigest
+  digest?: CadDocumentDigest,
+  purpose: 'proposal' | 'display-history' = 'proposal'
 ): CadPatchProposal {
   const candidate = record(value);
   if (
@@ -5174,9 +5175,10 @@ export function parseCadPatchProposal(
               commonAxis)) ||
           (edit.kind === 'offset-face' &&
             (edit.ambiguousRim === undefined ||
-              ['refuse', 'chamfer', 'draft'].some(
-                (choice) => choice === edit.ambiguousRim
-              )) &&
+              edit.ambiguousRim === 'refuse' ||
+              (purpose === 'display-history' &&
+                (edit.ambiguousRim === 'chamfer' ||
+                  edit.ambiguousRim === 'draft'))) &&
             edit.sourceSurfaceType === 'plane' &&
             typeof edit.sourceArea === 'number' &&
             edit.sourceArea > 0 &&

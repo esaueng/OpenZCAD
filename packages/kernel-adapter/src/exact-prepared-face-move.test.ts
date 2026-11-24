@@ -88,6 +88,43 @@ describe('preparedFaceMove', () => {
 });
 
 describe('journaledMove with a prepared move', () => {
+  it.each(['failed preparation', 'malformed journal'])(
+    'retries legacy exact sets with their recorded rim reading after %s',
+    (failure) => {
+      const { kernel } = fakeKernel();
+      const mock = {
+        ...kernel,
+        prepareMoveFacesWithOptions: vi.fn(() => {
+          if (failure === 'failed preparation')
+            throw new Error('preparation unavailable');
+          return 10;
+        }),
+        moveFacesPreparedJournaled: vi.fn(() => '{}'),
+        moveFacesDetailedWithOptions: vi.fn(() => ({ status: 'ok', value: 77 }))
+      };
+      expect(
+        journaledMove(
+          mock as unknown as RemusKernel,
+          5,
+          faces,
+          2,
+          null,
+          false,
+          'legacyReplay'
+        )
+      ).toEqual({ solid: 77, relation: null });
+      expect(mock.moveFacesDetailedWithOptions).toHaveBeenCalledWith(
+        5,
+        faces,
+        2,
+        JSON.stringify({ ambiguousRim: 'legacyReplay' })
+      );
+      expect(mock.moveFaces).not.toHaveBeenCalled();
+      expect(mock.releasePreparedMove).toHaveBeenCalledTimes(
+        failure === 'failed preparation' ? 0 : 1
+      );
+    }
+  );
   it('keeps the preparation when the plain move refuses too', () => {
     const { kernel, remus } = fakeKernel();
     kernel.moveFaces.mockImplementation(() => {

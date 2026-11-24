@@ -500,6 +500,56 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
       ).toBeCloseTo(2 * X * Y, 5);
     });
 
+    it.each([
+      ['bevel', 52265.05383333333],
+      ['opposite', 52787.80716666669],
+      ['symmetric', 52621.030500000015]
+    ] as const)(
+      'replays Face Distance on an imported bevel (%s)',
+      async (side, historicalVolume) => {
+        const fixture = imported.get('sharp')!;
+        const source = await adapter.syncDocument(fixture.document);
+        const topology = source.bodyRepresentations[fixture.bodyId]!.topology!;
+        const pair = topology.opposingPlanarFacePairs!.find(
+          (p) =>
+            p.faceAHash === fixture.bottom.hash ||
+            p.faceBHash === fixture.bottom.hash
+        )!;
+        const moveFirst =
+          (pair.faceAHash === fixture.bottom.hash) === (side === 'bevel');
+        const candidate = directEditBody(
+          fixture.document,
+          {
+            name: 'Face Distance',
+            targetBodyId: fixture.bodyId,
+            operation: {
+              kind: 'set-face-distance',
+              faceHash: pair.faceAHash,
+              oppositeFaceHash: pair.faceBHash,
+              faceReference: pair.faceAReference,
+              oppositeFaceReference: pair.faceBReference,
+              moveMode:
+                side === 'symmetric'
+                  ? 'symmetric'
+                  : moveFirst
+                    ? 'one-sided-first'
+                    : 'one-sided-second',
+              sourceDistance: pair.distance,
+              distance: pair.distance + 2
+            }
+          },
+          'replay'
+        ).document;
+        const rebuilt = await adapter.syncDocument(candidate);
+        expect(rebuilt.warnings).toEqual([]);
+        // Frozen v2026.1.163 result for the 60 × 40 × 20 block with a 0.35 mm bevel.
+        expect(rebuilt.bodyRepresentations[fixture.bodyId]!.volume).toBeCloseTo(
+          historicalVolume,
+          6
+        );
+      }
+    );
+
     it('requires a choice for a new Offset Face on an imported band', async () => {
       const candidate = offsetBy(imported.get('sharp')!, 2, 'refuse');
       for (const state of [

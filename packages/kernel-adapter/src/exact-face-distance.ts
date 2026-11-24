@@ -216,6 +216,24 @@ export function journaledMove(
     typeof qualityKernel.moveFacesJournaledWithQuality === 'function';
   let payload: string;
   const withRimOptions = rimPolicy !== undefined && rimPolicy !== 'refuse';
+  function retryExactMove(error: unknown) {
+    // Approximation permissions and explicit rim choices must survive a failure.
+    if (withQuality) throw error;
+    if (rimPolicy === 'legacyReplay') {
+      const result = kernel.moveFacesDetailedWithOptions(
+        solid,
+        faces,
+        distance,
+        JSON.stringify({ ambiguousRim: rimPolicy })
+      );
+      if (result.status !== 'ok') throw error;
+      return { solid: result.value, relation: null };
+    }
+    if (withRimOptions) throw error;
+    const moved = kernel.moveFaces(solid, faces, distance);
+    if (prepared) releasePreparedFaceMove(kernel);
+    return { solid: moved, relation: null };
+  }
   try {
     if (withRimOptions) {
       // Use the saved reading from the start. Newer recognition can also
@@ -310,11 +328,7 @@ export function journaledMove(
         kernel.discardCheckpoint(checkpoint);
       }
     }
-    if (withRimOptions) throw error;
-    if (withQuality) throw error;
-    const moved = kernel.moveFaces(solid, faces, distance);
-    if (prepared) releasePreparedFaceMove(kernel);
-    return { solid: moved, relation: null };
+    return retryExactMove(error);
   }
   try {
     journal = decodeRemusMoveFacesJournal(payload);
@@ -352,12 +366,7 @@ export function journaledMove(
       }
     }
   } catch (error) {
-    if (withQuality || withRimOptions) {
-      throw error;
-    }
-    const moved = kernel.moveFaces(solid, faces, distance);
-    if (prepared) releasePreparedFaceMove(kernel);
-    return { solid: moved, relation: null };
+    return retryExactMove(error);
   }
   const relation =
     explicitRelation !== undefined
@@ -417,6 +426,24 @@ export function composeMoveFacesRelations(
   return { faceMap, conflictedSources };
 }
 
+/** Dimension commands have no rim choice; keep their original face-move semantics. */
+export function moveDimensionFaces(
+  kernel: RemusKernel,
+  solid: number,
+  faces: Uint32Array,
+  distance: number
+) {
+  return journaledMove(
+    kernel,
+    solid,
+    faces,
+    distance,
+    null,
+    false,
+    'legacyReplay'
+  );
+}
+
 function moveFacePair(
   kernel: RemusKernel,
   solid: number,
@@ -430,7 +457,7 @@ function moveFacePair(
   }
   if (mode === 'symmetric') {
     const oppositeHash = faceFingerprint(kernel, faceB);
-    const first = journaledMove(
+    const first = moveDimensionFaces(
       kernel,
       solid,
       coplanarFaceGroup(kernel, solid, faceA),
@@ -441,7 +468,7 @@ function moveFacePair(
       first.solid,
       oppositeHash
     );
-    const second = journaledMove(
+    const second = moveDimensionFaces(
       kernel,
       first.solid,
       coplanarFaceGroup(kernel, first.solid, intermediateOpposite),
@@ -453,7 +480,7 @@ function moveFacePair(
     };
   }
   const movingFace = mode === 'one-sided-first' ? faceA : faceB;
-  return journaledMove(
+  return moveDimensionFaces(
     kernel,
     solid,
     coplanarFaceGroup(kernel, solid, movingFace),

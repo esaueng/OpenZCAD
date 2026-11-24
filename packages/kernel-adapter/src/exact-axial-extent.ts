@@ -25,7 +25,7 @@ import type { IdleLineageView } from './exact-idle-lineage-view';
 import { cloneBuildState, historyFeatureDigest } from './exact-history-cache';
 import { resolveDirectEditFace } from './exact-direct-edit-ops';
 import { edgeHandlesByFingerprint } from './exact-witnesses';
-import { journaledMove } from './exact-face-distance';
+import { moveDimensionFaces } from './exact-face-distance';
 import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import {
   createRemusSemanticLineage,
@@ -615,7 +615,7 @@ export function resizeAxialPrefix(
       getSurfaceType: (f: number) => kernel.getSurfaceType(f)
     };
     const beforeCensus = censusOfSolids(census, [solid]);
-    const moved = journaledMove(
+    const moved = moveDimensionFaces(
       kernel,
       solid,
       new Uint32Array(end),

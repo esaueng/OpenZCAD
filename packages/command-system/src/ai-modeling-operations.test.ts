@@ -159,6 +159,24 @@ describe('AI modeling command translation', () => {
       ]
     });
 
+    // Old assistant history can display an explicit rim choice but cannot authorize it.
+    const direct = proposal.operations[0]!;
+    if (
+      direct.kind !== 'add_direct_edit' ||
+      direct.operation.kind !== 'offset-face'
+    ) {
+      throw new Error('Expected the offset proposal fixture.');
+    }
+    for (const ambiguousRim of ['draft', 'chamfer'] as const) {
+      expect(() =>
+        commandsForCadPatch(baseline, {
+          ...proposal,
+          operations: [
+            { ...direct, operation: { ...direct.operation, ambiguousRim } }
+          ]
+        })
+      ).toThrow('Choose Chamfer or Draft');
+    }
     const commands = commandsForCadPatch(baseline, proposal);
     expect(commands.map((command) => command.kind)).toEqual([
       'feature.direct-edit',
