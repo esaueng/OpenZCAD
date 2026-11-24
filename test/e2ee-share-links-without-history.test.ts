@@ -18,10 +18,11 @@ import {
 import {
   frozenShareDocument,
   frozenShareDocumentProblem,
-  importStepBody,
+  addPrimitiveFeature,
   isSharedWithoutHistory,
   isTweakableWithoutHistory,
   listNodesByKind,
+  setParameter,
   sharedProjectSnapshotDocument,
   tweakableShareDocument
 } from '@openzcad/document-core';
@@ -149,19 +150,23 @@ async function project() {
 }
 
 /**
- * The owner's project, and a model of it whose import's exact solid is
- * inline, so its recipe (`tweakableShareDocument`) carries no stored source.
- * Only that model is shared: an encrypted project keeps every import apart.
+ * The owner's project, and a parametric model of it (a feature named after
+ * the secret on a `width` parameter) whose recipe is shared. Only that model
+ * is shared: it is never saved into the project.
  */
 async function recipeProject() {
   const base = await sharedProject(accounts(), owner, other, 'editor');
   const laptop = page(base.srv, base.laptop);
-  const shared = importStepBody(base.document, {
-    name: 'Plate',
-    artifactId: 'artifact_local_recipe',
-    sourceName: `${SECRET}.step`,
-    stepText: STEP
-  }).document;
+  const shared = addPrimitiveFeature(
+    setParameter(base.document, { name: 'width', expression: '20' }),
+    {
+      name: `${SECRET} boss`,
+      primitiveKind: 'box',
+      dimensions: { width: 'width', height: 10, depth: 4 }
+    }
+  );
+  for (const node of Object.values(shared.nodes))
+    if (node.kind === 'body') node.name = 'Plate';
   await renewShareDelegation(laptop.shareLinks, (value) =>
     signShareDelegation(owner.identityPrivateKey, value)
   );
@@ -451,6 +456,35 @@ describe(
         }
       );
       expect(asked).toEqual([true, false]);
+      // Nor is a view-only link given the recipe, however it is asked.
+      await expect(
+        updateFrozenShareLink(
+          laptop.shareLinks,
+          projectId,
+          solids.shareId,
+          recipe
+        )
+      ).rejects.toMatchObject({ code: 'frozen-model' });
+      await expect(
+        updateFrozenShareLink(
+          laptop.shareLinks,
+          projectId,
+          solids.shareId,
+          async () => recipe
+        )
+      ).rejects.toMatchObject({ code: 'frozen-model' });
+      // A link that lost its model is held to the narrower kind.
+      srv.db
+        .prepare('DELETE FROM e2ee_share_snapshots WHERE share_id = ?')
+        .run(link.shareId);
+      await expect(
+        updateFrozenShareLink(
+          laptop.shareLinks,
+          projectId,
+          link.shareId,
+          async () => recipe
+        )
+      ).rejects.toMatchObject({ code: 'frozen-model' });
       expect(featureNames((await browser.open(solids.url))!.document)).toEqual([
         'Plate v2'
       ]);

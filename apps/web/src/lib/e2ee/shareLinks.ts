@@ -1349,18 +1349,28 @@ export async function updateFrozenShareLink(
         'link-not-found',
         'This link shares the project with its history; it has no model to update.'
       );
+    // The kind of model the link shares never changes: a view-only link is
+    // never given the recipe, nor a tweakable one stripped of it. A link with
+    // no model yet is held to the narrower kind, solids only.
+    const parameters =
+      (await frozenLinkSharesParameters(ctx, projectId, {
+        shareId,
+        shareKeyHash: link.shareKeyHash,
+        keyEpoch: head.keyEpoch
+      })) ?? false;
     const frozen = frozenSnapshotDocument(
       typeof frozenDocument === 'function'
-        ? await frozenDocument(
-            await frozenLinkSharesParameters(ctx, projectId, {
-              shareId,
-              shareKeyHash: link.shareKeyHash,
-              keyEpoch: head.keyEpoch
-            })
-          )
+        ? await frozenDocument(parameters)
         : frozenDocument,
       projectId
     );
+    if (isTweakableWithoutHistory(frozen) !== parameters)
+      throw new ShareLinksError(
+        'frozen-model',
+        parameters
+          ? 'This link shares the model\u2019s parameters; update it with them.'
+          : 'This link shares the finished solids only; update it with them.'
+      );
     const outcome = await publishShareSnapshots(ctx, projectId, head, {
       only: [shareId],
       republish: [shareId],
@@ -1377,9 +1387,9 @@ export async function updateFrozenShareLink(
 
 /**
  * Whether the model a `frozen` link serves now carries its parameters
- * (`tweakableShareDocument`), read back from its owner-signed snapshot. A
- * link whose model cannot be read is taken to share imported solids only,
- * the narrower of the two.
+ * (`tweakableShareDocument`), read back from its owner-signed snapshot; null
+ * when the link has no model yet. A model that is there but cannot be read
+ * throws: guessing would let an Update change what the link shares.
  */
 async function frozenLinkSharesParameters(
   ctx: ShareLinksContext,
@@ -1389,29 +1399,25 @@ async function frozenLinkSharesParameters(
     readonly shareKeyHash: Uint8Array;
     readonly keyEpoch: number;
   }
-): Promise<boolean> {
-  try {
-    const record = (await ctx.api.list(projectId)).links.find(
-      (entry) => entry.shareId === link.shareId
-    );
-    if (!record?.snapshot) return false;
-    const shareKey = await shareKeyFor(
-      ctx,
-      projectId,
-      link.shareId,
-      link.shareKeyHash,
-      record,
-      link.keyEpoch
-    );
-    const { document } = await storedFrozenDocument(ctx, projectId, {
-      shareId: link.shareId,
-      shareKey,
-      authors: ownDeviceKeyHashes(ctx)
-    });
-    return isTweakableWithoutHistory(document);
-  } catch {
-    return false;
-  }
+): Promise<boolean | null> {
+  const record = (await ctx.api.list(projectId)).links.find(
+    (entry) => entry.shareId === link.shareId
+  );
+  if (!record?.snapshot) return null;
+  const shareKey = await shareKeyFor(
+    ctx,
+    projectId,
+    link.shareId,
+    link.shareKeyHash,
+    record,
+    link.keyEpoch
+  );
+  const { document } = await storedFrozenDocument(ctx, projectId, {
+    shareId: link.shareId,
+    shareKey,
+    authors: ownDeviceKeyHashes(ctx)
+  });
+  return isTweakableWithoutHistory(document);
 }
 
 /**
@@ -1432,7 +1438,7 @@ export async function frozenShareLinkSharesParameters(
     shareId,
     shareKeyHash: link.shareKeyHash,
     keyEpoch: head.keyEpoch
-  });
+  }).catch(() => null);
 }
 
 class ShareGrantAlreadyWritten extends Error {}

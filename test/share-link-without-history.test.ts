@@ -6,12 +6,14 @@ import {
   isShareLinkHistoryReady
 } from '@openzcad/cloudflare-adapters';
 import {
+  addPrimitiveFeature,
   createProjectDocument,
   frozenShareDocument,
   frozenShareDocumentProblem,
   importStepBody,
   isTweakableWithoutHistory,
   listNodesByKind,
+  setParameter,
   sharedProjectSnapshotDocument,
   tweakableShareDocument
 } from '@openzcad/document-core';
@@ -58,6 +60,27 @@ function ownerProject(): ProjectDocument {
     commandLog: [{ type: SECRET } as never],
     revisions: [{ ...base.revisions[0]!, reason: SECRET }]
   };
+}
+
+/**
+ * The recipe of a parametric model of the owner's project: a feature named
+ * `${SECRET} boss` on a `width` parameter. Recipes carry no imported file.
+ */
+function recipeOf(document: ProjectDocument): ProjectDocument {
+  let model = createProjectDocument(document.name, document.ownerUserId);
+  model.projectId = document.projectId;
+  model = setParameter(model, { name: 'width', expression: '20' });
+  model = addPrimitiveFeature(model, {
+    name: `${SECRET} boss`,
+    primitiveKind: 'box',
+    dimensions: { width: 'width', height: 10, depth: 4 }
+  });
+  for (const node of Object.values(model.nodes))
+    if (node.kind === 'body') node.name = 'Plate';
+  return tweakableShareDocument({
+    ...model,
+    commandLog: [{ type: SECRET } as never]
+  });
 }
 
 function frozenOf(document: ProjectDocument, bodyName = 'Plate') {
@@ -209,7 +232,7 @@ describe.each([
         mode: 'tweak',
         tokenHash: await hashFrozenShareLinkToken(token('t')),
         createdAt: now(),
-        frozenDocument: tweakableShareDocument(document)
+        frozenDocument: recipeOf(document)
       }
     );
     expect(created).toMatchObject({ mode: 'tweak', history: false });
@@ -221,9 +244,7 @@ describe.each([
     ).toEqual(['Feature 1']);
     // Bodies keep their names, as a view-only link's solids do; nothing of
     // how the model was built, its file names or its history goes with them.
-    expect(
-      JSON.stringify(shared).replaceAll(`"name":"${SECRET} feature"`, '')
-    ).not.toContain(SECRET);
+    expect(JSON.stringify(shared)).not.toContain(SECRET);
     // Nor asked for view.
     await expect(
       service.createProjectShareLink(document.ownerUserId, document.projectId, {
@@ -231,7 +252,7 @@ describe.each([
         mode: 'view',
         tokenHash: await hashFrozenShareLinkToken(token('v')),
         createdAt: now(),
-        frozenDocument: tweakableShareDocument(document)
+        frozenDocument: recipeOf(document)
       })
     ).rejects.toThrow(ProjectSharingError);
   });
@@ -244,7 +265,7 @@ describe.each([
         document.ownerUserId,
         document.projectId,
         'share_f',
-        tweakableShareDocument(document),
+        recipeOf(document),
         now()
       )
     ).rejects.toThrow(ProjectSharingError);
@@ -257,7 +278,7 @@ describe.each([
         mode: 'tweak',
         tokenHash: await hashFrozenShareLinkToken(token('t')),
         createdAt: now(),
-        frozenDocument: tweakableShareDocument(document)
+        frozenDocument: recipeOf(document)
       }
     );
     await expect(
@@ -275,7 +296,7 @@ describe.each([
           document.ownerUserId,
           document.projectId,
           'share_t',
-          tweakableShareDocument(document),
+          recipeOf(document),
           now()
         )
       ).mode

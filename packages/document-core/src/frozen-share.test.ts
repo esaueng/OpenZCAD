@@ -5,6 +5,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import {
+  addPrimitiveFeature,
   assertStorableDocument,
   createProjectDocument,
   duplicateProjectDocument,
@@ -15,6 +16,7 @@ import {
   isSharedWithoutHistory,
   listNodesByKind,
   isTweakableWithoutHistory,
+  setParameter,
   sharedProjectSnapshotDocument,
   tweakableShareDocument,
   tweakableShareDocumentProblem,
@@ -237,18 +239,25 @@ describe('a copy of a model shared without history', () => {
 });
 
 describe('tweakableShareDocument', () => {
-  /** An owner's model: an import named for its source, with a past. */
+  /** An owner's parametric model, with names, a warning and a past. */
   function recipeSource(): ProjectDocument {
-    const imported = importStepBody(createProjectDocument('Bracket', owner), {
-      name: 'Secret bracket',
-      artifactId: 'artifact_local_1',
-      sourceName: 'customer-x.step',
-      stepText: STEP
-    }).document;
+    let document = setParameter(createProjectDocument('Bracket', owner), {
+      name: 'width',
+      expression: '20'
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Secret boss',
+      primitiveKind: 'box',
+      dimensions: { width: 'width', height: 10, depth: 4 }
+    });
     return {
-      ...imported,
+      ...document,
       commandLog: [{ kind: 'secret' } as never],
-      editHistory: { undo: [], redo: [] } as never
+      editHistory: { undo: [], redo: [] } as never,
+      derived: {
+        ...document.derived,
+        warnings: ['Secret boss could not be filleted.']
+      }
     };
   }
 
@@ -261,16 +270,18 @@ describe('tweakableShareDocument', () => {
     expect(document.revisions).toEqual([]);
     expect(document.commandLog).toEqual([]);
     expect(document.editHistory).toBeUndefined();
+    expect(document.derived.warnings).toEqual([]);
     expect(document.ownerUserId).toBe('user_shared');
-    const [feature] = listNodesByKind(document, 'feature');
-    expect(feature!.name).toBe('Feature 1');
-    expect((feature!.data as { sourceName?: string }).sourceName).toBe(
-      'Feature 1.step'
-    );
-    // The recipe still rebuilds: the import's exact solid travels inline.
-    expect((feature!.data as { stepText?: string }).stepText).toBe(STEP);
+    expect(document.parameterOrder).toHaveLength(1);
+    expect(
+      listNodesByKind(document, 'feature').map((node) => node.name)
+    ).toEqual(['Feature 1']);
     expect(initiallyHiddenBodyIds(document)).toEqual([body!.bodyId]);
-    expect(JSON.stringify(document)).not.toContain('customer-x');
+    // Bodies keep their names; nothing else says "Secret boss".
+    const nodes = Object.values(document.nodes).filter(
+      (node) => node.kind !== 'body'
+    );
+    expect(JSON.stringify({ ...document, nodes })).not.toContain('Secret');
     expect(tweakableShareDocumentProblem(document)).toBeNull();
     // The Worker's one check accepts it as a model without history.
     expect(frozenShareDocumentProblem(document)).toBeNull();
@@ -283,13 +294,20 @@ describe('tweakableShareDocument', () => {
     ).toBeNull();
   });
 
-  it('refuses a model whose import source is stored apart', () => {
-    const source = recipeSource();
-    const feature = listNodesByKind(source, 'feature')[0]!;
-    (feature.data as unknown as Record<string, unknown>).stepSourceRef = {
-      marker: 'openzcad-source-ref'
-    };
-    expect(() => tweakableShareDocument(source)).toThrow(/imported file/);
+  it('refuses a model built on an imported file, inline or stored', () => {
+    const inline = importStepBody(recipeSource(), {
+      name: 'Plate',
+      artifactId: 'artifact_local_1',
+      sourceName: 'customer-x.step',
+      stepText: "ISO-10303-21;\nHEADER;\nFILE_NAME('customer-x');\n"
+    }).document;
+    expect(() => tweakableShareDocument(inline)).toThrow(/imported file/);
+    const stored = structuredClone(inline);
+    const feature = listNodesByKind(stored, 'feature').at(-1)!;
+    const data = feature.data as unknown as Record<string, unknown>;
+    delete data.stepText;
+    data.stepSourceRef = { marker: 'openzcad-source-ref' };
+    expect(() => tweakableShareDocument(stored)).toThrow(/imported file/);
   });
 
   it.each<[string, (document: ProjectDocument) => void]>([
@@ -300,11 +318,16 @@ describe('tweakableShareDocument', () => {
       }
     ],
     [
-      'an imported file name',
+      'an imported file',
       (document) => {
         const feature = listNodesByKind(document, 'feature')[0]!;
-        (feature.data as unknown as Record<string, unknown>).sourceName =
-          'customer-x.step';
+        (feature as { featureKind: string }).featureKind = 'imported-step';
+      }
+    ],
+    [
+      'a rebuild warning',
+      (document) => {
+        document.derived.warnings = ['Secret boss failed.'];
       }
     ],
     [

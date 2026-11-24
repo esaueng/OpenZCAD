@@ -322,10 +322,25 @@ export function tweakableShareDocument(
   });
   if (document.featureOrder.length === 0)
     throw new Error('This model has no feature to share.');
-  if (!emptyRecord(document.assets) || carriesStoredSource(document.nodes))
+  // An imported file is its own source: its text names the file, its
+  // author and the system that wrote it, and a stored one is not served to
+  // such a link at all. A model built on one shares view only.
+  if (
+    !emptyRecord(document.assets) ||
+    carriesStoredSource(document.nodes) ||
+    Object.values(document.nodes).some(isImportedFeature)
+  )
     throw new Error(
       'This model uses an imported file, which a link without history cannot carry with its parameters. Share it view only, or include history.'
     );
+  // Rebuild warnings name features as the owner named them, and the time
+  // says when the owner last worked on it: the visitor's rebuild says its own.
+  document.derived = {
+    bodyRepresentations: {},
+    exportableBodyIds: [],
+    warnings: [],
+    updatedAt: new Date(0).toISOString()
+  };
   const root = document.nodes[document.rootNodeId];
   if (root?.kind !== 'project') throw new Error('The project node is missing.');
   root.metadata = {
@@ -339,12 +354,7 @@ export function tweakableShareDocument(
     const node = Object.values(document.nodes).find(
       (entry) => entry.kind === 'feature' && entry.featureId === featureId
     );
-    if (node?.kind !== 'feature') return;
-    node.name = `Feature ${index + 1}`;
-    // An imported file's name says where the model came from.
-    const data = node.data as unknown as Record<string, unknown>;
-    if (typeof data.sourceName === 'string')
-      data.sourceName = `${node.name}${fileExtension(data.sourceName)}`;
+    if (node?.kind === 'feature') node.name = `Feature ${index + 1}`;
   });
   for (const node of Object.values(document.nodes))
     if (node.kind === 'body') {
@@ -385,11 +395,16 @@ const TWEAKABLE_DOCUMENT_KEYS = new Set([
   'displayUnits'
 ]);
 
-/** `.step` of `bracket.step`; empty for a name with no extension. */
-function fileExtension(name: string): string {
-  const match = /\.[A-Za-z0-9]{1,8}$/.exec(name);
-  return match ? match[0] : '';
+function isImportedFeature(node: ProjectDocument['nodes'][string]): boolean {
+  return node.kind === 'feature' && node.featureKind.startsWith('imported-');
 }
+
+const DERIVED_KEYS = new Set([
+  'bodyRepresentations',
+  'exportableBodyIds',
+  'warnings',
+  'updatedAt'
+]);
 
 function carriesStoredSource(nodes: ProjectDocument['nodes']): boolean {
   const text = JSON.stringify(nodes);
@@ -419,19 +434,18 @@ export function tweakableShareDocumentProblem(
     return 'It carries history.';
   if (!emptyRecord(document.assets) || carriesStoredSource(document.nodes))
     return 'It carries an import source.';
+  if (
+    !onlyKeys(document.derived, DERIVED_KEYS) ||
+    !emptyRecord(document.derived.bodyRepresentations) ||
+    !emptyList(document.derived.exportableBodyIds) ||
+    !emptyList(document.derived.warnings)
+  )
+    return 'It carries the owner\u2019s rebuild results.';
   if (document.featureOrder.length === 0) return 'It has no feature.';
   for (const node of Object.values(document.nodes)) {
-    if (node.kind === 'feature') {
-      if (!/^Feature \d+$/.test(node.name))
-        return 'It names how the model was built.';
-      const { sourceName } = node.data as unknown as Record<string, unknown>;
-      if (
-        sourceName !== undefined &&
-        (typeof sourceName !== 'string' ||
-          sourceName !== `${node.name}${fileExtension(sourceName)}`)
-      )
-        return 'It names an imported file.';
-    }
+    if (isImportedFeature(node)) return 'It carries an imported file.';
+    if (node.kind === 'feature' && !/^Feature \d+$/.test(node.name))
+      return 'It names how the model was built.';
     if (node.kind === 'sketch' && !/^Sketch \d+$/.test(node.name))
       return 'It names how the model was built.';
   }
