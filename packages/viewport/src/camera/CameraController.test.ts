@@ -169,6 +169,65 @@ describe('assembly depth after restoring or switching projection', () => {
   );
 });
 
+describe('restoring a pose while already orthographic', () => {
+  it('scales position, target and span together and keeps the direction (I03)', () => {
+    // Front, orthographic, in millimetres.
+    const { controller } = createController();
+    controller.restore(
+      {
+        position: [20, -300, 10],
+        target: [20, 0, 10],
+        orthographicZoom: 1.5,
+        orthographicHalfHeight: 60
+      },
+      'orthographic'
+    );
+    const before = controller.capture();
+    const direction = (state: typeof before) =>
+      new THREE.Vector3(...state.position)
+        .sub(new THREE.Vector3(...state.target))
+        .normalize();
+    // A conversion to inches lands the same view, every length times k.
+    const k = 1 / 25.4;
+    controller.restore(
+      {
+        ...before,
+        position: before.position.map((value) => value * k) as [
+          number,
+          number,
+          number
+        ],
+        target: before.target.map((value) => value * k) as [
+          number,
+          number,
+          number
+        ],
+        orthographicHalfHeight: before.orthographicHalfHeight! * k
+      },
+      'orthographic'
+    );
+    const after = controller.capture();
+    expect(controller.activeCamera).toBe(controller.orthographic);
+    for (const axis of [0, 1, 2] as const) {
+      expect(after.position[axis]).toBeCloseTo(before.position[axis] * k, 9);
+      expect(after.target[axis]).toBeCloseTo(before.target[axis] * k, 9);
+    }
+    expect(after.orthographicHalfHeight).toBeCloseTo(
+      before.orthographicHalfHeight! * k,
+      9
+    );
+    expect(after.orthographicZoom).toBe(1.5);
+    expect(direction(after).angleTo(direction(before))).toBeLessThan(1e-9);
+    // The ortho camera looks along that direction too: straight on stays
+    // straight on.
+    const looking = new THREE.Vector3(0, 0, -1).applyQuaternion(
+      controller.orthographic.quaternion
+    );
+    expect(looking.angleTo(direction(after).negate())).toBeLessThan(1e-6);
+    controller.dispose();
+  });
+});
+
 afterEach(() => {
   vi.runOnlyPendingTimers();
   vi.useRealTimers();

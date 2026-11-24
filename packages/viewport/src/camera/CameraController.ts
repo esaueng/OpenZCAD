@@ -1701,6 +1701,15 @@ export class CameraController {
     this.holdRecordedUp(state.up);
     this.perspective.lookAt(this.orbit.target);
     this.perspective.updateMatrixWorld(true);
+    // Already orthographic, the controls drive the ortho camera, and
+    // `applyProjection` below changes nothing: seat the ortho camera on the
+    // restored pose before they update, or it keeps its old position under
+    // the new target and frustum. A pose restored without a glide (I03 lands
+    // a rescaled pose at once) tilted and shifted the view.
+    if (this.mode === 'orthographic' && projection === 'orthographic') {
+      this.orthographic.up.copy(this.perspective.up);
+      this.syncOrthographic(false);
+    }
     this.orbit.update();
     if (projection !== 'orthographic') {
       return;
