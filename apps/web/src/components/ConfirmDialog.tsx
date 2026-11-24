@@ -7,6 +7,7 @@ import {
   type ReactElement,
   type ReactNode
 } from 'react';
+import { createPortal } from 'react-dom';
 import { CircleAlert, Trash2 } from 'lucide-react';
 import { useModalFocus } from '../lib/useModalFocus';
 
@@ -40,6 +41,11 @@ export interface ConfirmDialogProps extends ConfirmRequest {
  * that with Cancel without ever showing it, so the action did nothing and
  * said nothing. Focus starts on Cancel, so a reflex Enter keeps what was
  * there; Escape cancels too.
+ *
+ * Portaled to the document body: an owner inside a containing block for
+ * fixed elements (the assistant panel's `container-type` and `clip-path`)
+ * otherwise confined the backdrop to that box and clipped the dialog away,
+ * so Clear conversation showed a dim rectangle and no question.
  */
 export function ConfirmDialog({
   title,
@@ -56,7 +62,7 @@ export function ConfirmDialog({
   useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: cancelRef });
   const Icon = tone === 'danger' ? Trash2 : CircleAlert;
 
-  return (
+  return createPortal(
     <div className="modal-backdrop confirm-backdrop">
       <div
         ref={dialogRef}
@@ -100,7 +106,8 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
