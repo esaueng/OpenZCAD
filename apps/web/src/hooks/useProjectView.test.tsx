@@ -608,4 +608,28 @@ describe('a first view of a model shared without history', () => {
     });
     expect([...result.current.hiddenBodyIds]).toEqual(['body_cover']);
   });
+
+  it("never saves the shared model's body ids over this device's view", () => {
+    workspaceSession.saveProjectView('owner-project', {
+      camera: settledPose,
+      projection: 'perspective',
+      settings: { showGrid: true, displayMode: 'shaded-edges' },
+      hiddenBodyIds: ['body_owner_cover'],
+      units: 'mm'
+    });
+    const { result } = renderHook(() => useProjectView('owner-project'));
+    act(() => {
+      result.current.restore('owner-project', defaults, 'mm', undefined, {
+        bodyIds: ['body_frozen_cover'],
+        overrideSaved: true
+      });
+    });
+    expect([...result.current.hiddenBodyIds]).toEqual(['body_frozen_cover']);
+    act(() => result.current.onCameraSettled('owner-project', transientPose));
+    act(() => result.current.setHiddenBodyIds(new Set()));
+    act(() => result.current.onCameraSettled('owner-project', settledPose));
+    expect(
+      workspaceSession.loadProjectView('owner-project')?.hiddenBodyIds
+    ).toEqual(['body_owner_cover']);
+  });
 });

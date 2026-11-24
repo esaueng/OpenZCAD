@@ -192,7 +192,21 @@ export function useProjectView(
     };
   }, []);
 
-  const savedHidden = savedHiddenBodyIds?.(hiddenBodyIds) ?? hiddenBodyIds;
+  /**
+   * A view whose hidden set the document overrode (a model shared without
+   * history, which keeps its owner's project id) saves the set this device
+   * already had, never the shared model's own body ids: those would replace
+   * the owner's choices for their real project.
+   */
+  const keptHiddenRef = useRef<{
+    projectId: string;
+    ids: ReadonlySet<string>;
+  } | null>(null);
+  const kept = keptHiddenRef.current;
+  const savedHidden =
+    kept && kept.projectId === projectId
+      ? kept.ids
+      : (savedHiddenBodyIds?.(hiddenBodyIds) ?? hiddenBodyIds);
 
   function hiddenReferences(): ProjectViewState['hiddenReferences'] {
     return hiddenDatumIds.size || hiddenReferenceImageIds.size
@@ -323,6 +337,9 @@ export function useProjectView(
         orbitMode: defaults.orbitMode,
         pointerNavigation: defaults.pointerNavigation
       });
+      keptHiddenRef.current = initialHidden?.overrideSaved
+        ? { projectId: id, ids: new Set(saved?.hiddenBodyIds ?? []) }
+        : null;
       setHiddenBodyIds(
         new Set(
           initialHidden && (initialHidden.overrideSaved || !saved)
