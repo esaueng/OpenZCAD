@@ -2241,6 +2241,10 @@ import {
   type ViewportCameraState
 } from './lib/workspaceSession';
 import {
+  adoptAccountCopyLocally,
+  stampLegacyViewUnits
+} from './lib/adoptAccountCopy';
+import {
   defaultAppSettings,
   saveLocalAppSettings,
   shouldAdoptAccountSettings
@@ -8874,11 +8878,13 @@ export function App() {
           restoredDocument = rememberedLocal
             ? withLocalDerived(restoredDocument, rememberedLocal)
             : restoredDocument;
-          await saveLocalProject(restoredDocument);
-          await saveLastSyncedVersion(
-            restoredDocument.projectId,
-            restoredDocument.version
-          );
+          // I03: legacy view state is stamped with the device copy's unit
+          // before the account copy (perhaps converted elsewhere) replaces it.
+          await adoptAccountCopyLocally(restoredDocument, rememberedLocal, {
+            stampViewUnits: stampLegacyViewUnits,
+            saveLocalProject,
+            saveLastSyncedVersion
+          });
           if (!isCurrent()) {
             return;
           }
@@ -16604,9 +16610,14 @@ export function App() {
           ? withLocalDerived(outcome.document, localDocument)
           : outcome.document;
       if (outcome.choice === 'remote') {
-        await saveLocalProject(openedDocument);
-        if (!isCurrent()) return;
-        await saveLastSyncedVersion(projectId, openedDocument.version);
+        // I03: as at startup, stamp legacy view state with the device copy's
+        // unit before the account copy replaces it.
+        await adoptAccountCopyLocally(openedDocument, localDocument, {
+          stampViewUnits: stampLegacyViewUnits,
+          saveLocalProject,
+          saveLastSyncedVersion,
+          isCurrent
+        });
       }
       if (!isCurrent()) return;
       commitAccountState();

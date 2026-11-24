@@ -461,3 +461,28 @@ export function saveProjectView(
   );
   return writeSession({ ...session, views: limitedViews }, storage);
 }
+
+/**
+ * I03: this device's remembered view of `projectId` was written in `units`
+ * (the unit the device copy is stored in). Records that on a view written
+ * before views recorded their unit, so it is still read in `units` after the
+ * device copy is replaced by one converted elsewhere. A view that already
+ * names a unit, or no view at all, is left alone; the view keeps its place in
+ * the recency order. False only when the browser refused the write.
+ */
+export function stampProjectViewUnits(
+  projectId: string,
+  units: UnitSystem,
+  storage: StorageLike | null = defaultStorage()
+): boolean {
+  const session = readSession(storage);
+  const view = session.views[projectId];
+  if (!view || view.units) return true;
+  return writeSession(
+    {
+      ...session,
+      views: { ...session.views, [projectId]: { ...view, units } }
+    },
+    storage
+  );
+}
