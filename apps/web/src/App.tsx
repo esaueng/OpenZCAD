@@ -560,7 +560,6 @@ import {
 import { localAutosaveFailedStatus } from './lib/localAutosaveFailure';
 import {
   LocalProjectAutosave,
-  departureFlush,
   sameLocalProjectContent,
   type LocalProjectAutosaveOptions,
   type LocalProjectWriteResult
@@ -1951,6 +1950,7 @@ import {
   localDeletionFence,
   saveAccountThumbnail,
   saveProjectThumbnail,
+  ThumbnailWriteCancelledError,
   saveLocalProject,
   saveLocalSaveStates,
   sha256Hex,
@@ -2198,6 +2198,13 @@ import {
   NavigationEditPause,
   type ProjectNavigation
 } from './lib/navigationEditPause';
+import {
+  DepartureRecoveryCopies,
+  DepartureRecoveryCopyError,
+  departureBarrier,
+  departureRecoveryHost,
+  type DepartureRecoveryHost
+} from './lib/departureRecoveryCopy';
 import { collaborationClientId } from './lib/collaborationProtocol';
 import { copyLineageNote, withCopyBranchPoint } from './lib/copyBranchPoint';
 import {
@@ -3076,9 +3083,39 @@ export function App() {
         setNavigationPauseVersion((version) => version + 1)
       )
   );
-  /** Ends `isCurrent`'s pause, when it is a {@link ProjectNavigation}. */
-  const endProjectNavigation = (isCurrent: () => boolean) =>
-    (isCurrent as Partial<ProjectNavigation>).end?.();
+  /**
+   * What a departure kept as a recovery copy, said once the navigation has
+   * ended: the screen it lands on (the shelf above all) resets the status
+   * line and toast as it opens, which would otherwise erase it at once.
+   * `show` is bound to `announce` once that is declared.
+   */
+  const departureNoticeRef = useRef<{
+    pending: string | null;
+    show(message: string): void;
+  }>({ pending: null, show: () => undefined });
+  const showDepartureNotice = useCallback(() => {
+    const notice = departureNoticeRef.current;
+    if (notice.pending === null) return;
+    const message = notice.pending;
+    notice.pending = null;
+    notice.show(message);
+  }, []);
+  /**
+   * The function that ends a departure's pause. A {@link ProjectNavigation}
+   * brings its own; a caller's plain "still current?" check (an accepted
+   * invitation, a link leaving its shared session) gets one begun here, so
+   * every departure pauses edits and keeps a refused edit as a recovery
+   * copy through the same barrier.
+   */
+  const departureEnd = (isCurrent: () => boolean): (() => void) => {
+    const navigation = isCurrent as Partial<ProjectNavigation>;
+    if (navigation.end) return () => navigation.end?.();
+    const endPause = navigationPause.begin(managerRef.current);
+    return () => {
+      endPause();
+      showDepartureNotice();
+    };
+  };
   const beginProjectNavigation = useCallback(
     (clearShareFragment = true): ProjectNavigation => {
       cancelNavigationBusy();
@@ -3092,12 +3129,15 @@ export function App() {
       setPendingShareToken(null);
       setSharePage(null);
       // Every navigation must end its pause: callers run in try/finally.
-      const end = navigationPause.begin(managerRef.current);
+      const endPause = navigationPause.begin(managerRef.current);
       return Object.assign(() => fragmentNavigationRef.current === navigation, {
-        end
+        end() {
+          endPause();
+          showDepartureNotice();
+        }
       });
     },
-    [cancelNavigationBusy, navigationPause]
+    [cancelNavigationBusy, navigationPause, showDepartureNotice]
   );
   const restoreShareSessionFragment = useCallback(() => {
     const active = shareSessionRef.current;
@@ -3971,6 +4011,7 @@ export function App() {
     },
     []
   );
+  departureNoticeRef.current.show = announce;
   const dismissToast = useCallback((id: number) => {
     setToast((current) => (current?.id === id ? null : current));
   }, []);
@@ -5694,6 +5735,35 @@ export function App() {
    * claim settled, and holds the claim's lock until the write lands.
    */
   const projectOwnershipRef = useRef<ProjectStorageOwnership | null>(null);
+  // A promoted tab must compare its in-memory edits with what it opened
+  // before it can write to the storage it just acquired.
+  const pendingStoragePromotionRef = useRef<ProjectStorageOwnership | null>(
+    null
+  );
+  const readWritableProjectClaim = useCallback(() => {
+    const claim = projectOwnershipRef.current;
+    return claim === pendingStoragePromotionRef.current ? null : claim;
+  }, []);
+  const saveWorkspaceThumbnail = useCallback(
+    async (
+      projectId: string,
+      thumbnail: Parameters<typeof saveProjectThumbnail>[1]
+    ) => {
+      if (thumbnail.artifactId) {
+        // An already captured card can finish publishing after navigation.
+        return saveProjectThumbnail(projectId, thumbnail);
+      }
+      // A staged card can outlive a refused autosave and be flushed on
+      // departure. Hold the same storage claim before saving its geometry.
+      const written = await writeOwnedProjectStorage(
+        readWritableProjectClaim,
+        projectId,
+        () => saveProjectThumbnail(projectId, thumbnail)
+      );
+      if (!written) throw new ThumbnailWriteCancelledError();
+    },
+    [readWritableProjectClaim]
+  );
   /**
    * The document as this workspace opened it: the one autosave snapshot a
    * read-only tab may drop as having nothing of its own to save.
@@ -5724,18 +5794,69 @@ export function App() {
           localSaveCallbacksRef.current.onDirtyChange(dirty)
       })
   );
+  /** One recovery copy per refused departing edit, across navigations. */
+  const [departureRecoveryCopies] = useState(
+    () => new DepartureRecoveryCopies()
+  );
+  /**
+   * How a departure keeps an edit this tab may no longer write, read when
+   * it happens: refreshed every render, so the barrier below stays one
+   * stable callback while naming the copy against the current shelf and
+   * owning it as the current user.
+   */
+  const departureRecoveryRef = useRef<{
+    host: DepartureRecoveryHost;
+    kept(copy: ProjectDocument, source: ProjectDocument): void;
+  } | null>(null);
+  departureRecoveryRef.current = {
+    host: departureRecoveryHost({
+      existingNames: () => projects.map((project) => project.name),
+      ownerUserId: () => session?.userId ?? localUserId,
+      carryEncryption: (sourceProjectId, copyProjectId) =>
+        carryEncryptionRequirement(sourceProjectId, copyProjectId, {
+          account: false
+        }),
+      save: saveLocalProject
+    }),
+    kept(copy, source) {
+      // Listed at once, from the document just written, so the shelf the
+      // departure may land on shows it; its card is drawn best effort.
+      setProjects((current) =>
+        mergeProjectSummaries([summarizeLocalDocument(copy)], current)
+      );
+      setLocalSaveFailed(false);
+      // Another tab's document can have the same version number as these
+      // refused edits. Draw from the recovered geometry under the new id.
+      void seedCopyThumbnail(null, copy);
+      const message = `Your latest edits to ${source.name} were kept as a separate project, ${copy.name}.`;
+      setStatus(message);
+      departureNoticeRef.current.pending = message;
+    }
+  };
   const flushPendingLocalSave = useCallback((): Promise<void> => {
     if (localSaveTimeoutRef.current !== null) {
       window.clearTimeout(localSaveTimeoutRef.current);
       localSaveTimeoutRef.current = null;
     }
-    // An edit this tab may not write (another tab holds the project) is
-    // reported, not waited on: it can never land, and every navigation
-    // would stall behind it.
-    return departureFlush(localAutosave.flush(), (refused) =>
-      setStatus(refused.message)
-    );
-  }, [localAutosave, setStatus]);
+    // An edit this tab may no longer write (another tab holds the project)
+    // can never land there. A departure from that project keeps it as a
+    // separate project first and moves on only once that copy is durable;
+    // when the copy fails, the departure stops and the edit stays here.
+    // Outside a departure it is reported, and stays queued and dirty.
+    const recovery = departureRecoveryRef.current!;
+    return departureBarrier(localAutosave, {
+      departing: () => navigationPause.departing()?.document.projectId ?? null,
+      copies: departureRecoveryCopies,
+      host: recovery.host,
+      onRefused: (refused) => setStatus(refused.message),
+      onKept: (copy, source) =>
+        departureRecoveryRef.current?.kept(copy, source),
+      onCopyFailed: (failure) => {
+        setLocalSaveFailed(true);
+        setStatus(failure.message);
+      }
+    });
+  }, [localAutosave, navigationPause, departureRecoveryCopies, setStatus]);
   flushPendingLocalSaveRef.current = flushPendingLocalSave;
   // Encrypting an existing project (ADR-024 Phase 7, slice 7-2) first
   // saves this page's pending edits to it, here and to the account.
@@ -8290,10 +8411,10 @@ export function App() {
     }
     const tracker = trackProjectStorage(projectId, {
       onPromoted() {
-        projectOpenElsewhereRef.current = false;
-        setProjectOpenElsewhere(false);
-        setStatus('This tab can edit the project now.');
-        void adoptStoredProject(projectId);
+        const manager = managerRef.current;
+        if (manager?.document.projectId !== projectId) return;
+        pendingStoragePromotionRef.current = ownership;
+        void adoptStoredProject(ownership, manager);
       },
       onAnswered(owned) {
         projectOpenElsewhereRef.current = !owned;
@@ -8320,6 +8441,8 @@ export function App() {
       projectOwnershipSettledRef.current = null;
       if (projectOwnershipRef.current === ownership)
         projectOwnershipRef.current = null;
+      if (pendingStoragePromotionRef.current === ownership)
+        pendingStoragePromotionRef.current = null;
       // No edit is taken while a navigation leaves the project (see
       // `navigationPause`), so autosave has written everything by now; a
       // write still in flight keeps the lock until it lands.
@@ -11396,7 +11519,7 @@ export function App() {
   function hydrateDocumentInner(
     nextDocument: ProjectDocument,
     options: HydrateOptions = {}
-  ) {
+  ): boolean {
     let normalized: ProjectDocument;
     try {
       // Every document published here, from any source, is checked first: a
@@ -11425,7 +11548,7 @@ export function App() {
       // the same update-required surface the collaboration path uses rather
       // than showing a quietly incomplete model.
       setStatus(errorMessage(error, 'This project needs a newer OpenZCAD.'));
-      return;
+      return false;
     }
     const restoreView = options.restoreView ?? true;
     const rememberProject = options.rememberProject ?? true;
@@ -11498,7 +11621,7 @@ export function App() {
     ) {
       showAccountEcho(withMatchingLocalDerived(normalized, current));
       setSaveState('saving');
-      return;
+      return true;
     }
     managerRef.current = new CommandManager(
       normalized,
@@ -11546,26 +11669,46 @@ export function App() {
     setSelectedProfiles([]);
     setMoveCommitHold(null);
     setTool(null);
+    return true;
   }
 
-  /**
-   * Picks up a project this tab had open read-only, once the tab that owned it
-   * has gone. A read-only tab has no edits of its own to weigh, so whatever is
-   * stored is unambiguously the version to continue from.
-   */
-  async function adoptStoredProject(projectId: string) {
-    const stored = await loadLocalProject(projectId).catch(() => null);
-    const current = managerRef.current?.document;
+  /** Continue from the previous owner's device copy after taking its lock. */
+  async function adoptStoredProject(
+    ownership: ProjectStorageOwnership,
+    manager: CommandManager
+  ) {
+    const stored = await loadLocalProject(ownership.projectId).catch(
+      () => null
+    );
     if (
-      !stored ||
-      !current ||
-      stored.projectId !== current.projectId ||
-      stored.version === current.version
+      projectOwnershipRef.current !== ownership ||
+      managerRef.current !== manager
     ) {
       return;
     }
-    hydrateDocument(stored, { restoreView: false, rememberProject: false });
-    setStatus('Editing this project here now.');
+    const current = manager.document;
+    // This tab may have accepted an edit before its original claim was
+    // refused. Keep it available for recovery, and protect the previous
+    // owner's device copy from a late autosave of the same edit.
+    if (!sameLocalProjectContent(openedDocumentRef.current, current)) return;
+    if (!stored || stored.projectId !== current.projectId) {
+      setStatus(
+        'Could not read the saved project on this device. Reopen it to try again.'
+      );
+      return;
+    }
+    // The previous owner can add save points without advancing the document
+    // version. Adopt the stored document before enabling edits and autosave.
+    if (
+      !hydrateDocument(stored, { restoreView: false, rememberProject: false })
+    ) {
+      return;
+    }
+    openedDocumentRef.current = managerRef.current.document;
+    pendingStoragePromotionRef.current = null;
+    projectOpenElsewhereRef.current = false;
+    setProjectOpenElsewhere(false);
+    setStatus('This tab can edit the project now.');
   }
 
   async function writePendingLocalDocument(
@@ -11582,12 +11725,23 @@ export function App() {
     // lock is then held until the write lands: a tab that takes the project
     // over when this one leaves it must not save before this write does, or
     // this late write would land on top of its newer save.
+    const untouched = sameLocalProjectContent(
+      openedDocumentRef.current,
+      pending
+    );
     const written = await writeLocalProjectUnderClaim(
-      () => projectOwnershipRef.current,
+      readWritableProjectClaim,
       pending.projectId,
       () => saveLocalProject(pending),
-      sameLocalProjectContent(openedDocumentRef.current, pending)
+      untouched
     );
+    if (
+      written === 'refused' &&
+      untouched &&
+      pendingStoragePromotionRef.current?.projectId === pending.projectId
+    ) {
+      return false;
+    }
     if (written !== true) {
       // Another tab owns this project's storage, or this tab has let its
       // claim go. That copy is the one being kept up to date; writing here
@@ -16572,6 +16726,7 @@ export function App() {
     projectId: string,
     isCurrent: () => boolean = beginProjectNavigation()
   ) {
+    const endDeparture = departureEnd(isCurrent);
     try {
       // A project the account stores in a format this build cannot open
       // (ADR-024 Phase 4) is not loaded at all, nor its device copy opened.
@@ -16746,7 +16901,7 @@ export function App() {
         finishBusy();
       }
     } finally {
-      endProjectNavigation(isCurrent);
+      endDeparture();
     }
   }
 
@@ -16826,6 +16981,12 @@ export function App() {
     const navigation = fragmentNavigationRef.current;
     const isCurrent = () =>
       !cancelled && fragmentNavigationRef.current === navigation;
+    // Leaving the open project for the link is a departure like any other:
+    // its edits pause now, so the flush below is the last word on them and
+    // nothing edited later is lost when the shared model replaces it. A
+    // newer navigation's pause supersedes this one; ending it is then a
+    // no-op.
+    const endPause = navigationPause.begin(managerRef.current);
     const finishBusy = startNavigationBusy();
     // An encrypted link's failures are worded by its loader (slice 5-11).
     let describeFailure: ((error: unknown) => string) | null = null;
@@ -16938,6 +17099,13 @@ export function App() {
         );
       } catch (error) {
         if (isCurrent()) {
+          if (error instanceof DepartureRecoveryCopyError) {
+            clearProjectShareFragment();
+            setPendingShareToken(null);
+            setSharePage(null);
+            setStatus(error.message);
+            return;
+          }
           setSharePage({
             phase: 'error',
             title: 'We couldn’t open this shared model',
@@ -16947,10 +17115,13 @@ export function App() {
         }
       } finally {
         finishBusy();
+        endPause();
+        showDepartureNotice();
       }
     })();
     return () => {
       cancelled = true;
+      endPause();
     };
   }, [
     pendingShareToken,
@@ -16958,6 +17129,8 @@ export function App() {
     startupState,
     foregroundBusy,
     startNavigationBusy,
+    navigationPause,
+    showDepartureNotice,
     setStatus
   ]);
 
@@ -17142,6 +17315,7 @@ export function App() {
   async function handleGoHome(
     isCurrent: () => boolean = beginProjectNavigation()
   ) {
+    const endDeparture = departureEnd(isCurrent);
     try {
       try {
         await flushPendingLocalSave();
@@ -17220,7 +17394,7 @@ export function App() {
         if (listingPending) setAccountListingPending(false);
       }
     } finally {
-      endProjectNavigation(isCurrent);
+      endDeparture();
     }
   }
   leaveShareSessionRef.current = handleGoHome;
@@ -17696,9 +17870,10 @@ export function App() {
    * Never throws: the copy is complete without a picture.
    */
   async function seedCopyThumbnail(
-    source: ProjectDocument,
+    source: ProjectDocument | null,
     copy: ProjectDocument
   ): Promise<void> {
+    const accountId = session?.userId ?? null;
     try {
       const [{ seedRecoveryCopyThumbnail }, { renderPartThumbnail }] =
         await Promise.all([
@@ -17707,7 +17882,17 @@ export function App() {
         ]);
       await seedRecoveryCopyThumbnail(source, copy, {
         loadCached: loadProjectThumbnail,
-        save: saveProjectThumbnail,
+        save: async (projectId, thumbnail) => {
+          await saveProjectThumbnail(projectId, thumbnail);
+          if (source === null) {
+            rememberCapturedThumbnail({
+              projectId,
+              source: thumbnail.source,
+              accountId,
+              protected: isEncryptedProject(projectId)
+            });
+          }
+        },
         render: renderPartThumbnail
       });
     } catch {
@@ -39288,7 +39473,7 @@ export function App() {
                     ),
                     api,
                     loadProjectThumbnail,
-                    saveProjectThumbnail
+                    saveWorkspaceThumbnail
                   ]
                 : undefined
             }

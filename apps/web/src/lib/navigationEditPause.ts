@@ -49,6 +49,15 @@ export class NavigationEditPause {
   }
 
   /**
+   * The manager a navigation in progress is leaving, or null: the project
+   * whose refused edit a departure keeps as a recovery copy. It stays the
+   * departing one after the next project opens, until the pause ends.
+   */
+  departing(): CommandManager | null {
+    return this.paused?.manager ?? null;
+  }
+
+  /**
    * Makes `manager` refuse every edit while paused: the check under all of
    * the workspace's own, for an edit that reaches the manager without one
    * (a shortcut in the same tick as the navigation, a validated commit
