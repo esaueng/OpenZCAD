@@ -7,6 +7,7 @@ import type {
   PreparedBodyGeometry
 } from '../../../../../packages/viewport/src/render/preparedBody';
 import { facetedSource } from '../../../../../packages/viewport/src/render/edgeOverlay';
+import { analyticShadingKey } from '../../../../../packages/viewport/src/render/analyticNormals';
 
 interface Entry {
   bodyId: GeometryBodyRepresentation['bodyId'];
@@ -14,6 +15,8 @@ interface Entry {
   vertices: Float32Array;
   indices: Uint32Array;
   faces: Float64Array;
+  /** Exact-normal inputs; see `analyticShadingKey`. */
+  shading: string;
   edges: { id: string; neighbours: readonly number[] }[];
   faceted: boolean;
   tangentIds: Set<string>;
@@ -83,6 +86,7 @@ export class RestoredMeshPreparation {
       vertices,
       indices,
       faces: faceInputs,
+      shading: analyticShadingKey(faces),
       edges: edges.map((edge) => ({
         id: edge.topologyId,
         neighbours: edge.adjacentFaceHashes?.slice() ?? []
@@ -121,6 +125,7 @@ export class RestoredMeshPreparation {
         saved.faces.length === topology.faces.length * 3 &&
         saved.edges.length === topology.edges.length &&
         saved.faceted === facetedSource(body.source) &&
+        saved.shading === analyticShadingKey(topology.faces) &&
         saved.vertices.length === body.mesh.vertices.length &&
         saved.indices.length === body.mesh.indices.length &&
         topology.faces.every(
