@@ -132,7 +132,7 @@ async function edit(
 function offsetBottom(
   bottom: FaceTopology,
   offset: number
-): DirectEditOperation {
+): Extract<DirectEditOperation, { kind: 'offset-face' }> {
   return {
     kind: 'offset-face',
     ...snapshot(bottom),
@@ -167,45 +167,64 @@ describe('closing a window through a wall', () => {
     }
   }, 60_000);
 
-  it('keeps the exact window-closing fallback for a historical typed collision', async () => {
-    const { document, bodyId } = await windowedWall();
-    const { bottom } = windowWalls(document, bodyId);
-    const candidate = directEditBody(
-      document,
-      {
-        name: 'Close old window',
-        targetBodyId: bodyId,
-        operation: offsetBottom(bottom, WINDOW_HEIGHT)
-      },
-      'replay'
-    ).document;
-    const detail =
-      'swept face reaches nonadjacent face before completing the move';
-    const move = vi
-      .spyOn(faceMove, 'journaledMove')
-      .mockImplementationOnce(() => {
-        throw new OffsetFaceRefusal({
-          family: 'direct-edit',
-          category: 'unsupported',
-          kernelCode: 'offset_face_chamfer_rim_not_carried',
-          kernelMessage: detail,
-          reason: detail,
-          message: detail
+  it.each([undefined, 'chamfer', 'draft'] as const)(
+    'handles a window-closing typed collision with rim choice %s',
+    async (ambiguousRim) => {
+      const { document, bodyId } = await windowedWall();
+      const { bottom } = windowWalls(document, bodyId);
+      const candidate = directEditBody(
+        document,
+        {
+          name: 'Close old window',
+          targetBodyId: bodyId,
+          operation: {
+            ...offsetBottom(bottom, WINDOW_HEIGHT),
+            ...(ambiguousRim ? { ambiguousRim } : {})
+          }
+        },
+        'replay'
+      ).document;
+      const detail =
+        'swept face reaches nonadjacent face before completing the move';
+      const move = vi
+        .spyOn(faceMove, 'journaledMove')
+        .mockImplementationOnce(() => {
+          throw new OffsetFaceRefusal({
+            family: 'direct-edit',
+            category: 'unsupported',
+            kernelCode: 'offset_face_chamfer_rim_not_carried',
+            kernelMessage: detail,
+            reason: detail,
+            message: detail
+          });
         });
-      });
-    try {
-      const closed = await adapter!.syncDocument(candidate);
-      expect(move).toHaveBeenCalled();
-      expect(closed.warnings).toEqual([]);
-      expect(closed.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
-        WALL_VOLUME,
-        6
-      );
-      expect(closed.bodyRepresentations[bodyId]!.faceCount).toBe(6);
-    } finally {
-      move.mockRestore();
+      try {
+        const closed = await adapter!.syncDocument(candidate);
+        expect(move).toHaveBeenCalled();
+        if (ambiguousRim) {
+          expect(
+            closed.featureWarnings?.some(
+              (w) =>
+                w.kernelRefusal?.code === 'offset_face_chamfer_rim_not_carried'
+            )
+          ).toBe(true);
+          expect(closed.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+            WALL_VOLUME - 16 * 4 * WINDOW_HEIGHT,
+            6
+          );
+          return;
+        }
+        expect(closed.warnings).toEqual([]);
+        expect(closed.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+          WALL_VOLUME,
+          6
+        );
+        expect(closed.bodyRepresentations[bodyId]!.faceCount).toBe(6);
+      } finally {
+        move.mockRestore();
+      }
     }
-  });
+  );
 
   it('still refuses a push that would leave the body', async () => {
     // The window's top is 5 below the wall's top: a 25 push would build

@@ -23,14 +23,15 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { commandFactories } from '@openzcad/command-system';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   chamferEdges,
   createProjectDocument,
   directEditBody,
   filletEdges,
-  importStepBody
+  importStepBody,
+  normalizeDocument
 } from '@openzcad/document-core';
 import { RemusKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
@@ -517,9 +518,9 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
         )!;
         const moveFirst =
           (pair.faceAHash === fixture.bottom.hash) === (side === 'bevel');
-        const candidate = directEditBody(
-          fixture.document,
-          {
+        const manager = new CommandManager(fixture.document);
+        manager.execute(
+          commandFactories.directEditBody({
             name: 'Face Distance',
             targetBodyId: fixture.bodyId,
             operation: {
@@ -537,16 +538,29 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
               sourceDistance: pair.distance,
               distance: pair.distance + 2
             }
-          },
-          'replay'
-        ).document;
-        const rebuilt = await adapter.syncDocument(candidate);
-        expect(rebuilt.warnings).toEqual([]);
-        // Frozen v2026.1.163 result for the 60 × 40 × 20 block with a 0.35 mm bevel.
-        expect(rebuilt.bodyRepresentations[fixture.bodyId]!.volume).toBeCloseTo(
-          historicalVolume,
-          6
+          })
         );
+        manager.undo();
+        expect(
+          (await adapter.syncDocument(manager.document)).bodyRepresentations[
+            fixture.bodyId
+          ]!.volume
+        ).toBeCloseTo(fixture.volume, 6);
+        manager.redo();
+        const saved = normalizeDocument(
+          JSON.parse(JSON.stringify(manager.document))
+        );
+        const cold = new RemusKernelAdapter();
+        try {
+          const rebuilt = await cold.syncDocument(saved);
+          expect(rebuilt.warnings).toEqual([]);
+          // Frozen v2026.1.163 result for the 60 × 40 × 20 block with a 0.35 mm bevel.
+          expect(
+            rebuilt.bodyRepresentations[fixture.bodyId]!.volume
+          ).toBeCloseTo(historicalVolume, 6);
+        } finally {
+          cold.dispose();
+        }
       }
     );
 
