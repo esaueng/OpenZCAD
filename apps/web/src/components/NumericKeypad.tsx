@@ -940,6 +940,7 @@ export function NumericKeypad({
 
   const explained =
     state === 'refused' && refusal?.operation.error ? refusal : null;
+  const choosingRim = explained?.operation.error?.code === 'ambiguous_rim_chamfer';
   // A refusal the control cannot explain on its own (no operation to name
   // it) is shown as the host's sentence.
   const reasonShown =
@@ -1018,7 +1019,7 @@ export function NumericKeypad({
     <div
       ref={rootRef}
       className="numeric-keypad"
-      data-state={state}
+      data-state={choosingRim ? 'choice-required' : state}
       data-grid={gridOpen ? 'open' : 'closed'}
       // The tag at the pick steps aside while the control carries it.
       data-operation={operationShown === null ? undefined : ''}
@@ -1120,7 +1121,7 @@ export function NumericKeypad({
             event.currentTarget.focus();
           }}
           value={value}
-          aria-invalid={unreadable || state === 'refused'}
+          aria-invalid={unreadable || (state === 'refused' && !choosingRim)}
           aria-describedby={describedBy}
           spellCheck={false}
           enterKeyHint="done"

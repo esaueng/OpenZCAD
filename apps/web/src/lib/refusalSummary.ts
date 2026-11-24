@@ -15,7 +15,7 @@ import {
  */
 export interface RefusalSummary {
   /** The state, in words: colour is never the only cue. */
-  status: 'not-built' | 'selection-changed';
+  status: 'not-built' | 'selection-changed' | 'choice-required';
   /** The short line after the status word. */
   headline: string;
   /** The cause in plain words, for the explanation under the headline. */
@@ -56,6 +56,14 @@ export function refusalSummary(
   error: CommandDiagnostic,
   operationTitle: string
 ): RefusalSummary {
+  if (error.code === 'ambiguous_rim_chamfer') {
+    return {
+      status: 'choice-required',
+      headline: 'Choose how to move the rim',
+      cause: error.message,
+      pickAnother: false
+    };
+  }
   if (isStaleSelectionError(error)) {
     return {
       status: 'selection-changed',
@@ -125,5 +133,6 @@ export function refusalSummary(
 /** The status word as it is read. */
 export const REFUSAL_STATUS_LABELS: Record<RefusalSummary['status'], string> = {
   'not-built': 'Not built',
-  'selection-changed': 'Selection changed'
+  'selection-changed': 'Selection changed',
+  'choice-required': 'Choice required'
 };

@@ -98,6 +98,8 @@ for (const [label, policy] of [
       await expect(
         pad.getByRole('button', { name: 'Extend draft' })
       ).toBeVisible();
+      await expect(pad.getByRole('textbox')).toHaveAttribute('aria-invalid', 'false');
+      await expect(pad.getByText('Choose how to move the rim')).toBeVisible();
       await pad.getByRole('button', { name: label }).click();
       await expect(pad).toBeHidden();
       // Wait for the actual autosave, including the expression and the decision.
