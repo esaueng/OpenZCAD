@@ -167,7 +167,24 @@ function transparentDrawOrder(
     camera.projectionMatrix,
     camera.matrixWorldInverse
   );
-  const list = new WebGLRenderList();
+  // @types/three trails the runtime here: three r186's `push` takes the
+  // camera (for reversed depth) and `sort` takes two comparators.
+  const list = new (
+    WebGLRenderList as unknown as new () => {
+      init(): void;
+      push(
+        object: THREE.Object3D,
+        geometry: THREE.BufferGeometry,
+        material: THREE.Material,
+        groupOrder: number,
+        z: number,
+        group: null,
+        camera: THREE.Camera
+      ): void;
+      sort(opaqueSort: null, transparentSort: null): void;
+      transparent: { object: THREE.Object3D }[];
+    }
+  )();
   list.init();
   for (const root of objects) {
     root.updateMatrixWorld(true);
@@ -179,7 +196,15 @@ function transparentDrawOrder(
       const z = new THREE.Vector4(center.x, center.y, center.z, 1)
         .applyMatrix4(object.matrixWorld)
         .applyMatrix4(projScreen).z;
-      list.push(object, geometry, object.material, 0, z, null, camera);
+      list.push(
+        object,
+        geometry,
+        object.material as THREE.Material,
+        0,
+        z,
+        null,
+        camera
+      );
     });
   }
   list.sort(null, null);

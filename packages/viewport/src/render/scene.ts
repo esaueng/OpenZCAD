@@ -1326,7 +1326,7 @@ export function updateObjectForBody(
   object.name = body.name;
   object.material.color.set(body.color);
   updateBodyMaterialOpacity(object.material, body.opacity ?? 1);
-  syncBodyShadowCasting(object, body.opacity ?? 1);
+  syncBodyShadowCasting(object as THREE.Mesh, body.opacity ?? 1);
   releasePreparedBodyGeometry(body);
   return true;
 }
