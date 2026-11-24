@@ -1035,6 +1035,8 @@ export function assertDocumentContentCommandSchema(
     if (!record(command) || seen.has(command)) continue;
     seen.add(command);
     if (command.kind === 'transaction') pending.push(command.payload);
+    if (command.kind === 'feature.direct-edit' && record(command.payload))
+      assertOffsetRimPolicy(command.payload.operation, document.schemaVersion);
     if (
       command.kind === 'objectFolder.create' ||
       command.kind === 'objectFolder.rename' ||
@@ -1418,6 +1420,25 @@ export function assertFilletContentSchema(
   if (problem) throw new Error(problem);
 }
 
+export function assertOffsetRimPolicy(
+  operation: unknown,
+  version: number
+): void {
+  if (
+    !record(operation) ||
+    (operation.kind !== 'offset-face' && operation.kind !== 'offset-faces') ||
+    operation.ambiguousRim === undefined
+  )
+    return;
+  if (
+    version < 155 ||
+    !['refuse', 'chamfer', 'draft'].some(
+      (value) => value === operation.ambiguousRim
+    )
+  )
+    throw new Error('Invalid Offset Face rim policy for this project schema.');
+}
+
 export function assertDocumentContentSchema(document: ProjectDocument): void {
   if (document.objectFolders !== undefined)
     assertObjectFolderSchema(document.schemaVersion);
@@ -1655,6 +1676,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         document.schemaVersion,
         node.id
       );
+    if (node.kind === 'feature' && node.data.featureKind === 'direct-edit')
+      assertOffsetRimPolicy(node.data.operation, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'thread')
       assertThreadContentSchema(node.data, document.schemaVersion);
     if (

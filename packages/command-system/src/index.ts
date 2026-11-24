@@ -165,6 +165,7 @@ import {
   deleteSketchConstraint,
   deleteSketchObject,
   directEditBody,
+  authoredDirectEdit,
   type DirectEditInput,
   draftBody,
   type DraftInput,
@@ -3370,7 +3371,10 @@ export const commandFactories = {
     );
   },
   directEditBody(payload: DirectEditInput): CommandDefinition<DirectEditInput> {
-    const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
+    const withIds = {
+      ...authoredDirectEdit(payload),
+      ids: payload.ids ?? createFeatureOnlyIds()
+    };
     return makeCommand(
       'feature.direct-edit',
       payload.name,
@@ -7093,7 +7097,8 @@ export function replayCommands(
       case 'feature.direct-edit':
         next = directEditBody(
           next,
-          command.payload as DirectEditInput
+          command.payload as DirectEditInput,
+          'replay'
         ).document;
         break;
       case 'feature.fillet':

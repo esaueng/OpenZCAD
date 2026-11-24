@@ -412,8 +412,11 @@ export class AxialExtentTracker {
           'sourceArea',
           'sourceCenter',
           'sourceNormal',
-          'offset'
+          'offset',
+          'ambiguousRim'
         ]) &&
+        (d.operation.ambiguousRim === undefined ||
+          d.operation.ambiguousRim === 'refuse') &&
         typeof d.operation.offset === 'number' &&
         Number.isFinite(d.operation.offset) &&
         d.operation.faceReference

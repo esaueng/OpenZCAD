@@ -559,15 +559,19 @@ export function NumericKeypad({
     evaluation.value === undefined
       ? undefined
       : normalize(evaluation.value, value, entryUnit);
+  const offsetExpression = (raw: string) =>
+    request.totalBaseline === undefined
+      ? raw
+      : (request.totalSense ?? 1) === 1
+        ? `(${raw}) - ${request.totalBaseline}`
+        : `${request.totalBaseline} - (${raw})`;
   const normalizedRaw =
     evaluation.normalizedRaw === undefined
       ? undefined
-      : request.totalBaseline === undefined
-        ? evaluation.normalizedRaw
-        : evaluation.isExpression
-          ? (request.totalSense ?? 1) === 1
-            ? `(${evaluation.normalizedRaw}) - ${request.totalBaseline}`
-            : `${request.totalBaseline} - (${evaluation.normalizedRaw})`
+      : evaluation.isExpression
+        ? offsetExpression(evaluation.normalizedRaw)
+        : request.totalBaseline === undefined
+          ? evaluation.normalizedRaw
           : String(normalizedValue);
 
   /** Hands a value to the live preview and waits for its verdict. */
@@ -839,12 +843,8 @@ export function NumericKeypad({
     const result = evaluateEntry(next, entryUnit, nextMode);
     if (result.ok && result.value !== undefined) {
       const previewed = normalize(result.value, next, entryUnit);
-      if (
-        result.isExpression &&
-        request.totalBaseline === undefined &&
-        result.normalizedRaw !== undefined
-      ) {
-        preview(previewed, result.normalizedRaw);
+      if (result.isExpression && result.normalizedRaw !== undefined) {
+        preview(previewed, offsetExpression(result.normalizedRaw));
       } else {
         preview(previewed);
       }
@@ -940,6 +940,7 @@ export function NumericKeypad({
 
   const explained =
     state === 'refused' && refusal?.operation.error ? refusal : null;
+  const choosingRim = explained?.operation.error?.code === 'ambiguous_rim_chamfer';
   // A refusal the control cannot explain on its own (no operation to name
   // it) is shown as the host's sentence.
   const reasonShown =
@@ -1018,7 +1019,7 @@ export function NumericKeypad({
     <div
       ref={rootRef}
       className="numeric-keypad"
-      data-state={state}
+      data-state={choosingRim ? 'choice-required' : state}
       data-grid={gridOpen ? 'open' : 'closed'}
       // The tag at the pick steps aside while the control carries it.
       data-operation={operationShown === null ? undefined : ''}
@@ -1120,7 +1121,7 @@ export function NumericKeypad({
             event.currentTarget.focus();
           }}
           value={value}
-          aria-invalid={unreadable || state === 'refused'}
+          aria-invalid={unreadable || (state === 'refused' && !choosingRim)}
           aria-describedby={describedBy}
           spellCheck={false}
           enterKeyHint="done"

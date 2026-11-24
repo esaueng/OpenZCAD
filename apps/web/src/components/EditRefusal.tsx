@@ -1,5 +1,6 @@
+import { RimChoiceActions } from './RimChoiceActions';
 import { useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, X } from 'lucide-react';
+import { AlertTriangle, Info, X } from 'lucide-react';
 import type { SelectionCalloutOperation } from '../lib/selectionCallout';
 import { formatNumber } from '../lib/model';
 import { REFUSAL_STATUS_LABELS, refusalSummary } from '../lib/refusalSummary';
@@ -99,6 +100,8 @@ export function EditRefusal({
 
   if (!error) return null;
   const summary = refusalSummary(error, operation.title);
+  const choosingRim = summary.status === 'choice-required';
+  const StatusIcon = choosingRim ? Info : AlertTriangle;
   const culprit = error.culprit;
   const id = lineId ?? ownLineId;
   const compact = variant === 'bar';
@@ -114,8 +117,8 @@ export function EditRefusal({
       <div className="edit-refusal-row">
         {/* The live region holds the words only; the buttons beside it are
             outside, so pressing one announces nothing but itself. */}
-        <span id={id} className="edit-refusal-line" role="alert">
-          <AlertTriangle size={13} aria-hidden="true" />
+        <span id={id} className="edit-refusal-line" role={choosingRim ? 'status' : 'alert'}>
+          <StatusIcon size={13} aria-hidden="true" />
           <strong>{REFUSAL_STATUS_LABELS[summary.status]}</strong>
           <span
             className={compact ? 'visually-hidden' : 'edit-refusal-headline'}
@@ -135,6 +138,13 @@ export function EditRefusal({
             {`Try ${formatNumber(trySize)} ${unitLabel}`.trim()}
           </button>
         )}
+        {operation.onChooseRim &&
+          operation.error?.code === 'ambiguous_rim_chamfer' && (
+            <RimChoiceActions
+              choose={operation.onChooseRim}
+              className="edit-refusal-action"
+            />
+          )}
         {operation.keepLastValidLabel && (
           <button
             type="button"

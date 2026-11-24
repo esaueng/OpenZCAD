@@ -72,6 +72,7 @@ import {
 export { assertSketchBoundaryTopologyPreserved } from './sketch-boundary-dependencies';
 import {
   assertDocumentContentSchema,
+  assertOffsetRimPolicy,
   assertSheetMetalSchema,
   assertDatumPointCsysSchema,
   assertRibSchema,
@@ -4981,6 +4982,19 @@ function transformCopyBody(
   return { document: next, bodyId };
 }
 
+/** Mark newly authored offsets so an unrecorded rim requires a decision. */
+export function authoredDirectEdit(input: DirectEditInput): DirectEditInput {
+  const operation = input.operation;
+  assertOffsetRimPolicy(operation, PROJECT_DOCUMENT_SCHEMA_VERSION);
+  if (
+    (operation.kind === 'offset-face' || operation.kind === 'offset-faces') &&
+    operation.ambiguousRim === undefined
+  ) {
+    return { ...input, operation: { ...operation, ambiguousRim: 'refuse' } };
+  }
+  return input;
+}
+
 /**
  * Append an in-place exact-topology edit. Like a transform, this keeps the
  * target BodyId stable while preserving the imported STEP source earlier in
@@ -4988,7 +5002,8 @@ function transformCopyBody(
  */
 export function directEditBody(
   document: ProjectDocument,
-  input: DirectEditInput
+  input: DirectEditInput,
+  source: 'author' | 'replay' = 'author'
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
   const { featureId, featureNodeId } =
@@ -5005,7 +5020,10 @@ export function directEditBody(
     data: {
       featureKind: 'direct-edit',
       targetBodyId: input.targetBodyId,
-      operation: input.operation
+      operation:
+        source === 'replay'
+          ? input.operation
+          : authoredDirectEdit(input).operation
     }
   };
 
@@ -7583,6 +7601,9 @@ export function repairedDirectEditOperation(
       }
       return {
         kind: 'offset-face',
+        ...(operation.ambiguousRim === undefined
+          ? {}
+          : { ambiguousRim: operation.ambiguousRim }),
         ...identity,
         sourceSurfaceType: 'plane',
         sourceArea: geometry.area,
@@ -7615,6 +7636,9 @@ export function repairedDirectEditOperation(
       }
       return {
         kind: 'offset-faces',
+        ...(operation.ambiguousRim === undefined
+          ? {}
+          : { ambiguousRim: operation.ambiguousRim }),
         ...identity,
         sourceSurfaceType: 'plane',
         sourceArea: geometry.area,

@@ -28,6 +28,7 @@ import {
   addPrimitiveFeature,
   chamferEdges,
   createProjectDocument,
+  directEditBody,
   filletEdges,
   importStepBody
 } from '@openzcad/document-core';
@@ -39,6 +40,7 @@ import {
   type EdgeTopology,
   type FaceTopology,
   type FeatureWarning,
+  type OffsetRimPolicy,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -178,23 +180,31 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
     adapter.dispose();
   });
 
-  function offsetBy(f: Fixture, offset: number): ProjectDocument {
-    return commandFactories
-      .directEditBody({
-        name: 'Offset Face',
-        targetBodyId: f.bodyId,
-        operation: {
-          kind: 'offset-face',
-          faceHash: f.bottom.hash,
-          ...(f.bottom.reference ? { faceReference: f.bottom.reference } : {}),
-          sourceSurfaceType: 'plane',
-          sourceArea: f.bottom.geometry!.area,
-          sourceCenter: f.bottom.geometry!.center,
-          sourceNormal: f.bottom.geometry!.normal!,
-          offset
-        }
-      })
-      .apply(f.document);
+  function offsetBy(
+    f: Fixture,
+    offset: number,
+    policy: OffsetRimPolicy | 'historical' = 'historical'
+  ): ProjectDocument {
+    const input = {
+      name: 'Offset Face',
+      targetBodyId: f.bodyId,
+      operation: {
+        kind: 'offset-face' as const,
+        faceHash: f.bottom.hash,
+        ...(f.bottom.reference ? { faceReference: f.bottom.reference } : {}),
+        sourceSurfaceType: 'plane' as const,
+        sourceArea: f.bottom.geometry!.area,
+        sourceCenter: f.bottom.geometry!.center,
+        sourceNormal: f.bottom.geometry!.normal!,
+        offset,
+        ...(policy === 'historical' || policy === 'refuse'
+          ? {}
+          : { ambiguousRim: policy })
+      }
+    };
+    return policy === 'historical'
+      ? directEditBody(f.document, input, 'replay').document
+      : commandFactories.directEditBody(input).apply(f.document);
   }
 
   function failures(warnings: readonly FeatureWarning[] | undefined) {
@@ -205,11 +215,27 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
     );
   }
 
+  it('carries an authored rim after an unrelated body is added', async () => {
+    const fixture = fixtures.get('sharp')!;
+    const document = addPrimitiveFeature(fixture.document, {
+      name: 'Separate box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    const state = await adapter.syncDocument(
+      offsetBy({ ...fixture, document }, 2, 'refuse')
+    );
+    expect(failures(state.featureWarnings)).toEqual([]);
+    expect(
+      state.bodyRepresentations[fixture.bodyId]!.volume - fixture.volume
+    ).toBeCloseTo(2 * X * Y, 5);
+  });
+
   for (const shape of ['rounded', 'sharp', 'one-edge', 'uneven'] as const) {
     for (const offset of [20, 2, 0.1, -0.1, -2, -12]) {
       it(`${shape}: carries the chamfer through an offset of ${offset}`, async () => {
         const f = fixtures.get(shape)!;
-        const candidate = offsetBy(f, offset);
+        const candidate = offsetBy(f, offset, 'refuse');
         const preview = await adapter.previewGeometry(candidate, {
           deferTopology: true
         });
@@ -248,7 +274,7 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
   ] as const) {
     it(`${shape}: refuses ${offset} as a chamfer it cannot carry`, async () => {
       const f = fixtures.get(shape)!;
-      const candidate = offsetBy(f, offset);
+      const candidate = offsetBy(f, offset, 'refuse');
       for (const derived of [
         await adapter.previewGeometry(candidate, { deferTopology: true }),
         await adapter.syncDocument(candidate)
@@ -430,6 +456,72 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
           );
         })
       );
+    });
+
+    it('keeps an imported bottom rim ambiguous after an equal chamfer is added on top', async () => {
+      const original = imported.get('sharp')!;
+      const edges = (await edgesOf(original.document, original.bodyId)).filter(
+        along((_x, _y, z) => near(z, Z))
+      );
+      expect(edges).toHaveLength(4);
+      const added = chamferEdges(original.document, {
+        name: 'Top chamfer',
+        targetBodyId: original.bodyId,
+        edgeHashes: edges.map((e) => e.hash),
+        size: CHAMFER
+      });
+      const baseline = await adapter.syncDocument(added.document);
+      expect(baseline.warnings).toEqual([]);
+      const body = baseline.bodyRepresentations[added.bodyId]!;
+      const bottom = body.topology!.faces.find(
+        (f) => f.geometry?.normal?.z === -1
+      )!;
+      const fixture = { ...original, ...added, bottom, volume: body.volume };
+      const top = body.topology!.faces.find(
+        (f) => f.geometry?.normal?.z === 1
+      )!;
+      const authored = await adapter.syncDocument(
+        offsetBy({ ...fixture, bottom: top }, 2, 'refuse')
+      );
+      expect(failures(authored.featureWarnings)).toEqual([]);
+      expect(
+        authored.bodyRepresentations[added.bodyId]!.volume - body.volume
+      ).toBeCloseTo(2 * X * Y, 5);
+      const current = await adapter.syncDocument(
+        offsetBy(fixture, 2, 'refuse')
+      );
+      expect(failures(current.featureWarnings)[0]?.kernelRefusal?.code).toBe(
+        'ambiguous_rim_chamfer'
+      );
+      const historical = await adapter.syncDocument(offsetBy(fixture, 2));
+      expect(failures(historical.featureWarnings)).toEqual([]);
+      expect(
+        historical.bodyRepresentations[added.bodyId]!.volume - body.volume
+      ).toBeCloseTo(2 * X * Y, 5);
+    });
+
+    it('requires a choice for a new Offset Face on an imported band', async () => {
+      const candidate = offsetBy(imported.get('sharp')!, 2, 'refuse');
+      for (const state of [
+        await adapter.previewGeometry(candidate, { deferTopology: true }),
+        await adapter.syncDocument(candidate)
+      ]) {
+        const refused = failures(state.featureWarnings);
+        expect(refused).toHaveLength(1);
+        expect(refused[0]?.kernelRefusal?.code).toBe('ambiguous_rim_chamfer');
+      }
+    });
+
+    it('carries a chosen chamfer and re-limits a chosen draft on the same imported band', async () => {
+      const f = imported.get('sharp')!;
+      const carry = await adapter.syncDocument(offsetBy(f, 2, 'chamfer'));
+      const draft = await adapter.syncDocument(offsetBy(f, 2, 'draft'));
+      expect(failures(carry.featureWarnings)).toEqual([]);
+      expect(failures(draft.featureWarnings)).toEqual([]);
+      const volume = (state: typeof carry) =>
+        Object.values(state.bodyRepresentations).at(-1)!.volume;
+      expect(volume(carry) - f.volume).toBeCloseTo(2 * f.section, 6);
+      expect(volume(draft) - f.volume).toBeCloseTo(swept(relimit.sharp, 2), 6);
     });
 
     async function offsetImported(shape: string, offset: number) {
@@ -800,10 +892,16 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
             offset
           );
           expect(guard).not.toBeNull();
-          const moved = kernel.moveFaces(solid, Uint32Array.of(bottom), offset);
-          expect(() => guard!(moved)).not.toThrow();
+          const handle = kernel.prepareMoveFacesWithOptions(
+            solid,
+            Uint32Array.of(bottom),
+            JSON.stringify({ ambiguousRim: 'legacyReplay' })
+          );
+          const moved = kernel.moveFacesPrepared(handle, offset);
+          kernel.releasePreparedMove(handle);
+          expect(() => guard!.validate(moved)).not.toThrow();
           // The unmoved body leaves the face short of where it was sent.
-          expect(() => guard!(solid)).toThrow(
+          expect(() => guard!.validate(solid)).toThrow(
             /chamfered or drafted edge can't move with it/
           );
         }

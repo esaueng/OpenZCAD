@@ -605,7 +605,8 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // map), replayed as a pure transform. An older client would skip the
 // unknown command on replay and rebuild every later edit in the old unit,
 // so it must refuse the document. Builds on v153.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 154 as const;
+// v155 records how an Offset Face edit resolves a history-free rim.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 155 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -1221,6 +1222,8 @@ export type FaceDistanceMoveMode =
  * ordinal now resolves to different geometry instead of editing the wrong
  * feature.
  */
+export type OffsetRimPolicy = 'refuse' | 'chamfer' | 'draft';
+
 export type DirectEditOperation =
   | {
       kind: 'resize-through-hole';
@@ -1327,6 +1330,8 @@ export type DirectEditOperation =
        * so an older build refuses it instead of moving only the first face.
        */
       kind: 'offset-faces';
+      /** Absent on saved edits that use the historical rim rules. */
+      ambiguousRim?: OffsetRimPolicy;
       faceHash: number;
       faceReference?: FaceTopologyReferenceV5;
       sourceSurfaceType: 'plane';
@@ -1341,6 +1346,8 @@ export type DirectEditOperation =
     }
   | {
       kind: 'offset-face';
+      /** Absent on saved edits that use the historical rim rules. */
+      ambiguousRim?: OffsetRimPolicy;
       faceHash: number;
       faceReference?: FaceTopologyReferenceV5;
       sourceSurfaceType: 'plane';

@@ -174,6 +174,7 @@ export interface SelectionCalloutOperation {
   onViewDetails(): void;
   /** Present only while a refused rebuild is held to save as a reproduction. */
   onSaveReproduction?: (() => void) | undefined;
+  onChooseRim?: (choice: 'chamfer' | 'draft') => void;
   onKeepLastValid(): void;
   onSelectAllEdges(): void;
 }

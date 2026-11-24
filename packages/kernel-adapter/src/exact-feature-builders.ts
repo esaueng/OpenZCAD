@@ -492,6 +492,14 @@ function buildDirectEditFeature(
     !deferOutputLineage && !data.operation.faceReference
       ? faceReferenceRepairCandidate(kernel, target, data.operation.faceHash)
       : null;
+  const chamferInput =
+    data.operation.kind === 'offset-face' &&
+    data.operation.ambiguousRim === 'refuse' &&
+    target.chamferSource &&
+    target.solids.length === 1 &&
+    target.solids[0] === target.chamferSource.output
+      ? [target.chamferSource.input]
+      : undefined;
   const edited = applyDirectEdit(
     kernel,
     target,
@@ -507,7 +515,8 @@ function buildDirectEditFeature(
           data.targetBodyId,
           scope
         )
-      : []
+      : [],
+    chamferInput
   );
   if (deferOutputLineage) {
     result.shapes.set(data.targetBodyId, edited);
@@ -3869,6 +3878,9 @@ function buildEdgeModifierFeature(
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, {
     solids: [modified],
+    ...(data.featureKind === 'chamfer'
+      ? { chamferSource: { input: target, output: modified } }
+      : {}),
     lineage:
       verifiedLineage.faceReferences.size > 0 ||
       verifiedLineage.edgeReferences.size > 0 ||

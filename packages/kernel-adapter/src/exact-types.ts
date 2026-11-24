@@ -36,6 +36,8 @@ export interface ExactShape {
   solids: number[];
   /** Handle of axis-aligned rectangular stock built from a box or an overlapping linear row of boxes. */
   rectangularStock?: number;
+  /** The solid pair of a successful chamfer, valid while its result is unchanged. */
+  chamferSource?: { input: number; output: number };
   /** Source facets when a readable mesh cannot be represented as a B-rep. */
   referenceMesh?: { vertices: Float64Array; indices: Uint32Array };
   /** Exact, handle-bound schema-v5 references plus fail-closed diagnostics. */

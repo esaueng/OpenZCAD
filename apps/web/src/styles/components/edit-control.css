@@ -484,6 +484,10 @@
   line-height: 1.35;
 }
 
+.edit-refusal[data-status='choice-required'] .edit-refusal-line {
+  color: var(--color-text);
+}
+
 .edit-refusal-line > svg {
   flex: none;
 }

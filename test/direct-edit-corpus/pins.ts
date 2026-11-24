@@ -797,16 +797,17 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
       "Part A's slanted base-chamfer planes meet the post's conical chamfer and the blends; the local offset cannot carry those neighbours."
   },
   {
-    id: 'chamfer-rim',
+    id: 'unresolved-rim-after-direct-edits',
     family: 'direct-edit',
     category: 'unsupported',
-    code: 'offset_face_chamfer_rim_not_carried',
+    code: 'ambiguous_rim_chamfer',
     messages: [
-      "This face's chamfered edge can't move with it here. Remove the chamfer in History, offset the face, then chamfer the edge again."
+      'Choose whether this rim should move as a chamfer or extend as a draft.'
     ],
     at: ['A/seed-2/20#11'],
     owner: 'K10',
-    reason: 'The same chamfer-carry limit the A/bottom ladder pins.'
+    reason:
+      'After the cylinder resize and five wall edits, the rebuilt band has no surviving chamfer provenance. The unchosen offset must leave geometry and history intact.'
   },
   {
     id: 'chamfered-wall-collapse',
@@ -900,3 +901,18 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
       'Observation O4: changing an earlier value removes the face a later edit picked, and the later edit refuses. The chain requires that typed re-pick refusal, never an edit of a different face.'
   }
 ];
+
+/** Limits independently exercised on the recorded, unchanged Part A. */
+export const RECORDED_BOTTOM_CHAIN_PIN: ChainRefusalPin = {
+  id: 'chamfer-rim',
+  family: 'direct-edit',
+  category: 'unsupported',
+  code: 'offset_face_chamfer_rim_not_carried',
+  messages: [
+    "This face's chamfered edge can't move with it here. Remove the chamfer in History, offset the face, then chamfer the edge again."
+  ],
+  at: ['A/o2-bottom-14/1#0', 'A/o2-bottom-18/1#0'],
+  owner: 'K10',
+  reason:
+    'The recorded bottom-offset chain on the unchanged authored body reaches the same chamfer-carry limit as the A/bottom ladder.'
+};
