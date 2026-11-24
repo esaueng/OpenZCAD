@@ -48,7 +48,9 @@ import {
 import { recognizePlanarEmboss } from '../packages/kernel-adapter/src/planar-emboss';
 import { referenceRecaptureHooks } from '../packages/kernel-adapter/src/reference-recapture-slot';
 import {
+  netDistance,
   recordTessellatedBody,
+  surfaceNetOf,
   tessellatedFaceDistances
 } from '../packages/kernel-adapter/src/units-reference-recapture';
 import type {
@@ -1224,8 +1226,8 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
         k,
         distance === undefined ? undefined : evidenceOf([[1, [[1, distance]]]])
       ).refusals.map((refusal) => refusal.field);
-    // No evidence: the area is compared, and differs.
-    expect(fields()).toEqual(['area']);
+    // No evidence: refused by name, never compared by area instead.
+    expect(fields()).toEqual(['tessellatedFaces']);
     expect(fields(1e-14)).toEqual([]);
     // Past the box's kernel tolerance, both sides of the pair refuse.
     expect(fields(1e-4)).toEqual(['faces.1', 'convertedFaces.1']);
@@ -1341,15 +1343,18 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
         sourceKernel,
         [solid],
         Array.from(sourceKernel.getSolidFaces(solid))
-      )!;
+      );
+      if (!record || 'failure' in record) throw new Error('Not recorded.');
       expect(record.faces.filter((face) => face.tessellated)).toHaveLength(1);
       const target = build(targetKernel, k, converted);
       const distances = tessellatedFaceDistances(
         targetKernel,
+        [target],
         Array.from(targetKernel.getSolidFaces(target)),
         record,
         k
-      )!;
+      );
+      if ('failure' in distances) throw new Error(distances.failure);
       const [row] = [...distances.values()];
       expect(row!.size).toBe(1);
       return [...row!.values()][0]!;
@@ -1383,6 +1388,104 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
       ).toBeGreaterThan(1e-4);
     });
   }
+
+  for (const [method, why] of [
+    ['serializeSolids', 'the source build could not save the body'],
+    [
+      'deserializeSolids',
+      'the verification build could not load the source body'
+    ]
+  ] as const)
+    it(`refuses a fillet whose surfaces cannot be compared (${method} fails)`, async () => {
+      // A body with a B-spline face whose comparison cannot be made refuses
+      // by name; its area is never compared instead (a kernel load limit,
+      // for example).
+      const source = await perCornerFillet();
+      const there = convertDocumentUnits(source, 'inch');
+      if (!there.ok) throw new Error('conversion refused');
+      const prototype = RemusKernel.prototype as unknown as Record<
+        string,
+        unknown
+      >;
+      const original = prototype[method];
+      prototype[method] = () => {
+        throw new Error('load limit');
+      };
+      let result: Awaited<ReturnType<typeof computeConversionReferenceMap>>;
+      try {
+        result = await computeConversionReferenceMap(source, there.document);
+      } finally {
+        prototype[method] = original;
+      }
+      expect(codes(result)).toEqual([
+        'geometry-mismatch Block Body tessellatedFaces'
+      ]);
+      expect(result.ok ? '' : result.refusals[0]!.message).toContain(
+        `${why} (load limit)`
+      );
+    });
+
+  it('bounds rational surfaces by their normalized weights', () => {
+    // Review: a quadratic with poles x = [0, 1, 0] and weights 1e-14 each
+    // has its midpoint at x = 0.5; a middle weight of 9e-13 moves it to
+    // 0.989 while the poles stay put. An absolute weight allowance passed
+    // that; the normalized weights differ by 99%, which refuses.
+    const net = (weights: number[], knotsV = [0, 1]) =>
+      surfaceNetOf({
+        degreeU: 2,
+        degreeV: 1,
+        nbPolesU: 3,
+        nbPolesV: 2,
+        multiplicitiesU: [3, 3],
+        multiplicitiesV: knotsV
+          .map(() => 1)
+          .fill(2, 0, 1)
+          .fill(2, -1),
+        knotsU: [0, 1],
+        knotsV,
+        isPeriodicU: false,
+        isPeriodicV: false,
+        isRational: true,
+        poles: [
+          [
+            [0, 0, 0],
+            [0, 1, 0]
+          ],
+          [
+            [1, 0, 0],
+            [1, 1, 0]
+          ],
+          [
+            [0, 0, 0],
+            [0, 1, 0]
+          ]
+        ],
+        weights: [
+          [weights[0], weights[0]],
+          [weights[1], weights[1]],
+          [weights[2], weights[2]]
+        ]
+      })!;
+    const even = net([1e-14, 1e-14, 1e-14]);
+    expect(netDistance(even, net([1e-14, 9e-13, 1e-14]))).toBe(Infinity);
+    // A uniform scale of every weight is the same surface.
+    expect(netDistance(even, net([3, 3, 3]))).toBe(0);
+    // A small relative change is bounded, by 2δ/(1 − δ) × the pole reach.
+    const nudged = netDistance(even, net([1e-14, 1e-14 * (1 + 1e-9), 1e-14]));
+    expect(nudged).toBeGreaterThan(0);
+    expect(nudged).toBeLessThan(3e-9);
+    // A non-positive weight is not a net the bound holds for.
+    expect(net([1, 0, 1])).toBeNull();
+    // Knots must agree exactly after normalization: an affine change of
+    // parameter is the same surface, any other change refuses.
+    expect(netDistance(net([1, 1, 1], [0, 1]), net([1, 1, 1], [2, 4]))).toBe(0);
+    expect(
+      netDistance(
+        net([1, 1, 1], [0, 0.5, 1]),
+        net([1, 1, 1], [0, 0.5 + 1e-15, 1])
+      )
+    ).toBe(Infinity);
+  });
 
   it('refuses a converted per-corner fillet with one corner radius 1% off', async () => {
     const source = await perCornerFillet();
@@ -1454,6 +1557,7 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
                 geometry: {
                   surfaceType: 'plane',
                   area: area * unit ** 2,
+                  areaProvenance: 'exact',
                   center: { x: 0, y: 5 * unit, z: index * 10 * unit },
                   centroid: {
                     x: (index === 0 ? left : right) * unit,
