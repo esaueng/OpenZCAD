@@ -170,6 +170,31 @@ describe('clearing the assistant conversation', () => {
     expect(screen.queryByText('Put a 6 mm hole through the boss')).toBeNull();
   });
 
+  // The panel is a containing block for fixed elements (`container-type`)
+  // and clips to its box (`clip-path`): a confirm rendered inside it showed
+  // only a dim rectangle, the next click tucked the panel away, and the
+  // conversation stayed.
+  it('opens the confirm outside the panel and stays open while confirming', async () => {
+    const onCollapsedChange = vi.fn();
+    const { user, clear } = await renderPanel({ onCollapsedChange });
+
+    await user.click(clear);
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Clear the conversation?'
+    });
+    expect(dialog.closest('.assistant-panel')).toBeNull();
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
+
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Clear conversation' })
+    );
+
+    await waitFor(() =>
+      expect(loadAssistantThread(doc.projectId)).toHaveLength(0)
+    );
+    expect(onCollapsedChange).not.toHaveBeenCalledWith(true);
+  });
+
   it('does not ask when the user has turned confirmations off', async () => {
     const { user, clear } = await renderPanel({ confirmDestructive: false });
 

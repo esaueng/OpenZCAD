@@ -920,8 +920,10 @@ export function AssistantPanel({
         !(target instanceof Element) ||
         panelRef.current?.contains(target) ||
         target.closest(ASSISTANT_PROMPT_SELECTOR) ||
-        // The consent question is the panel's own, portaled out of it.
-        target.closest('[data-assistant-consent]')
+        // The consent question and the shared confirm (Clear conversation)
+        // are the panel's own, portaled out of it.
+        target.closest('[data-assistant-consent]') ||
+        target.closest('.confirm-backdrop')
       ) {
         return;
       }
