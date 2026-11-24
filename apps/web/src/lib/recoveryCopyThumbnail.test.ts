@@ -79,6 +79,25 @@ describe('seedRecoveryCopyThumbnail', () => {
     });
   });
 
+  it('draws a divergent recovery without consulting the original card', async () => {
+    const { copy } = documents();
+    const loadCached = vi.fn();
+    const save = vi.fn().mockResolvedValue(undefined);
+    const render = vi
+      .fn()
+      .mockResolvedValue('data:image/webp;base64,RECOVERED');
+
+    await seedRecoveryCopyThumbnail(null, copy, { loadCached, save, render });
+
+    expect(loadCached).not.toHaveBeenCalled();
+    expect(render).toHaveBeenCalledWith([{ consumed: false }]);
+    expect(save).toHaveBeenCalledWith(copy.projectId, {
+      source: 'data:image/webp;base64,RECOVERED',
+      version: copy.version,
+      updatedAt: copy.derived.updatedAt
+    });
+  });
+
   it('records an empty part when it has no features and nothing to draw', async () => {
     const { source, copy } = documents();
     copy.derived.bodyRepresentations = {};

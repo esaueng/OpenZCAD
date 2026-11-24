@@ -1950,6 +1950,7 @@ import {
   localDeletionFence,
   saveAccountThumbnail,
   saveProjectThumbnail,
+  ThumbnailWriteCancelledError,
   saveLocalProject,
   saveLocalSaveStates,
   sha256Hex,
@@ -5739,6 +5740,30 @@ export function App() {
   const pendingStoragePromotionRef = useRef<ProjectStorageOwnership | null>(
     null
   );
+  const readWritableProjectClaim = useCallback(() => {
+    const claim = projectOwnershipRef.current;
+    return claim === pendingStoragePromotionRef.current ? null : claim;
+  }, []);
+  const saveWorkspaceThumbnail = useCallback(
+    async (
+      projectId: string,
+      thumbnail: Parameters<typeof saveProjectThumbnail>[1]
+    ) => {
+      if (thumbnail.artifactId) {
+        // An already captured card can finish publishing after navigation.
+        return saveProjectThumbnail(projectId, thumbnail);
+      }
+      // A staged card can outlive a refused autosave and be flushed on
+      // departure. Hold the same storage claim before saving its geometry.
+      const written = await writeOwnedProjectStorage(
+        readWritableProjectClaim,
+        projectId,
+        () => saveProjectThumbnail(projectId, thumbnail)
+      );
+      if (!written) throw new ThumbnailWriteCancelledError();
+    },
+    [readWritableProjectClaim]
+  );
   /**
    * The document as this workspace opened it: the one autosave snapshot a
    * read-only tab may drop as having nothing of its own to save.
@@ -5799,7 +5824,10 @@ export function App() {
       setProjects((current) =>
         mergeProjectSummaries([summarizeLocalDocument(copy)], current)
       );
-      void seedCopyThumbnail(source, copy);
+      setLocalSaveFailed(false);
+      // Another tab's document can have the same version number as these
+      // refused edits. Draw from the recovered geometry under the new id.
+      void seedCopyThumbnail(null, copy);
       const message = `Your latest edits to ${source.name} were kept as a separate project, ${copy.name}.`;
       setStatus(message);
       departureNoticeRef.current.pending = message;
@@ -5823,7 +5851,10 @@ export function App() {
       onRefused: (refused) => setStatus(refused.message),
       onKept: (copy, source) =>
         departureRecoveryRef.current?.kept(copy, source),
-      onCopyFailed: (failure) => setStatus(failure.message)
+      onCopyFailed: (failure) => {
+        setLocalSaveFailed(true);
+        setStatus(failure.message);
+      }
     });
   }, [localAutosave, navigationPause, departureRecoveryCopies, setStatus]);
   flushPendingLocalSaveRef.current = flushPendingLocalSave;
@@ -11699,10 +11730,7 @@ export function App() {
       pending
     );
     const written = await writeLocalProjectUnderClaim(
-      () => {
-        const claim = projectOwnershipRef.current;
-        return claim === pendingStoragePromotionRef.current ? null : claim;
-      },
+      readWritableProjectClaim,
       pending.projectId,
       () => saveLocalProject(pending),
       untouched
@@ -17842,9 +17870,10 @@ export function App() {
    * Never throws: the copy is complete without a picture.
    */
   async function seedCopyThumbnail(
-    source: ProjectDocument,
+    source: ProjectDocument | null,
     copy: ProjectDocument
   ): Promise<void> {
+    const accountId = session?.userId ?? null;
     try {
       const [{ seedRecoveryCopyThumbnail }, { renderPartThumbnail }] =
         await Promise.all([
@@ -17853,7 +17882,17 @@ export function App() {
         ]);
       await seedRecoveryCopyThumbnail(source, copy, {
         loadCached: loadProjectThumbnail,
-        save: saveProjectThumbnail,
+        save: async (projectId, thumbnail) => {
+          await saveProjectThumbnail(projectId, thumbnail);
+          if (source === null) {
+            rememberCapturedThumbnail({
+              projectId,
+              source: thumbnail.source,
+              accountId,
+              protected: isEncryptedProject(projectId)
+            });
+          }
+        },
         render: renderPartThumbnail
       });
     } catch {
@@ -39434,7 +39473,7 @@ export function App() {
                     ),
                     api,
                     loadProjectThumbnail,
-                    saveProjectThumbnail
+                    saveWorkspaceThumbnail
                   ]
                 : undefined
             }

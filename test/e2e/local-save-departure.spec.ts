@@ -223,6 +223,18 @@ for (const [scenario, title] of [
     const name = 'Claim recovery';
     await prepareLocalBox(page, name);
     const original = (await storedProject(page, name))!;
+    let boxThumbnail: string | null = null;
+    if (scenario === 'home') {
+      await page.getByTitle('Back to projects', { exact: true }).click();
+      const tile = page.locator('.start-tile').filter({
+        has: page.getByText(name, { exact: true })
+      });
+      const image = tile.locator('.start-tile-thumb img');
+      await expect(image).toHaveAttribute('src', /^data:image\/webp;base64,/);
+      boxThumbnail = await image.getAttribute('src');
+      await tile.locator('.start-tile-open').click();
+      await expectBodyCount(page, 1);
+    }
     const contender = await page.context().newPage();
     try {
       if (shareOwner) {
@@ -282,6 +294,9 @@ for (const [scenario, title] of [
           contender.getByText(/Export it, or try again\./)
         ).toBeVisible({ timeout: SAVE_BUDGET_MS });
         await expectBoxAndSphere(contender);
+        await expect(
+          contender.getByRole('status', { name: 'Not saved', exact: true })
+        ).toBeVisible();
         if (shareOwner) {
           expect(new URL(contender.url()).hash).toBe('');
           await expect(
@@ -322,6 +337,22 @@ for (const [scenario, title] of [
       await expect(
         contender.getByText(recoveryName, { exact: true })
       ).toBeVisible();
+      if (boxThumbnail) {
+        const cardImage = (projectName: string) =>
+          contender
+            .locator('.start-tile')
+            .filter({ has: contender.getByText(projectName, { exact: true }) })
+            .locator('.start-tile-thumb img');
+        await expect(cardImage(recoveryName)).toHaveAttribute(
+          'src',
+          /^data:image\/webp;base64,/
+        );
+        await expect(cardImage(name)).toHaveAttribute('src', boxThumbnail);
+        await expect(cardImage(recoveryName)).not.toHaveAttribute(
+          'src',
+          boxThumbnail
+        );
+      }
       const recovery = await storedProject(contender, recoveryName);
       expect(recovery?.projectId).toBeTruthy();
       expect(recovery?.projectId).not.toBe(original.projectId);

@@ -20,6 +20,7 @@ interface RecoveryCopyThumbnailHost {
  * never opened. This runs at write time, while the source's meshes are still
  * in memory: the source's cached image is reused when it matches the version
  * being cloned, and otherwise the copy's own derived bodies are rendered.
+ * Pass no source when the copy comes from a divergent in-memory edit.
  *
  * The record is keyed on the copy's document version, the version the
  * workspace's capture treats as already drawn. That is why a copy that
@@ -32,12 +33,14 @@ interface RecoveryCopyThumbnailHost {
  * source project.
  */
 export async function seedRecoveryCopyThumbnail(
-  source: ProjectDocument,
+  source: ProjectDocument | null,
   copy: ProjectDocument,
   host: RecoveryCopyThumbnailHost
 ): Promise<void> {
-  const cached = await host.loadCached(source.projectId).catch(() => null);
-  if (cached && cached.version === source.version && cached.source) {
+  const cached = source
+    ? await host.loadCached(source.projectId).catch(() => null)
+    : null;
+  if (cached && cached.version === source?.version && cached.source) {
     await host.save(copy.projectId, {
       source: cached.source,
       version: copy.version,
