@@ -1058,7 +1058,10 @@ async function translateOpenRouterChatCompletion(
     ...(typeof text === 'string' ? { output_text: text } : {}),
     ...(status === 'incomplete'
       ? { incomplete_details: { reason: 'max_output_tokens' } }
-      : {})
+      : {}),
+    // A reasoning model can spend the turn thinking and return no content.
+    // Name that case so the client can say so instead of a generic failure.
+    ...(status === 'failed' ? { error: { code: 'empty_reply' } } : {})
   };
   const events = [
     ...(typeof text === 'string'
