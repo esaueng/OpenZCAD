@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   createProjectDocument,
@@ -536,6 +536,22 @@ describe('GLB import placement', () => {
     );
   });
 
+  it('prepares node transforms without parsing the full GLB JSON', () => {
+    const glb = withScene((json) => {
+      json.nodes[0]!.scale = [2, 2, 2];
+      json.nodes[0]!.extras = { label: 'fixture metadata' };
+    });
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      expect(glbWithIdentityNodes(glb)).not.toBe(glb);
+      expect(parse).not.toHaveBeenCalledWith(
+        expect.stringContaining('fixture metadata')
+      );
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it('refuses the node transforms the reader no longer sees, by name', () => {
     const refuse = (node: Record<string, unknown>, pattern: RegExp) =>
       expect(() =>
@@ -599,5 +615,17 @@ describe('GLB import placement', () => {
         }, 2)
       )
     ).toThrow(/holds 2 meshes but its scene shows 1/);
+  });
+
+  it('rejects a singular mesh even if another transform compares as equal', () => {
+    const glb = withScene((json) => {
+      for (const [index, node] of json.nodes.entries()) {
+        node.translation = [1000, 0, 0];
+        node.scale = [1, 1, index === 0 ? 0 : 5e-7];
+      }
+      // The scene walk visits the second, invertible mesh first.
+      json.scenes = [{ nodes: [0, 1] }];
+    }, 2);
+    expect(() => glbPlacement(glb)).toThrow(/flattens them/);
   });
 });

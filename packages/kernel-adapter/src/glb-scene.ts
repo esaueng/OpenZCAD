@@ -36,8 +36,8 @@ export const GLTF_ROOT_NAME = 'OpenZCAD millimetres, Z up';
 const Z_UP_TO_Y_UP: readonly number[] = [-Math.SQRT1_2, 0, 0, Math.SQRT1_2];
 
 interface GlbChunks {
-  readonly json: GltfJson;
-  readonly jsonSource: string;
+  readonly version: number;
+  readonly jsonBytes: Uint8Array;
   /** Everything after the JSON chunk, byte for byte (the BIN chunk). */
   readonly rest: Uint8Array;
 }
@@ -60,7 +60,7 @@ interface GltfJson {
   [key: string]: unknown;
 }
 
-function readGlb(data: Uint8Array): GlbChunks {
+function readGlbChunks(data: Uint8Array): GlbChunks {
   if (data.byteLength < 20) {
     throw new Error('This file is too short to be a GLB.');
   }
@@ -75,12 +75,25 @@ function readGlb(data: Uint8Array): GlbChunks {
   ) {
     throw new Error('This GLB has no readable JSON chunk.');
   }
-  const jsonSource = new TextDecoder('utf-8', {
+  const end = 20 + jsonLength;
+  return {
+    version: view.getUint32(4, true),
+    jsonBytes: data.subarray(20, end),
+    rest: data.subarray(end)
+  };
+}
+
+function decodeGlbJson(jsonBytes: Uint8Array): string {
+  return new TextDecoder('utf-8', {
     fatal: true,
     ignoreBOM: true
-  }).decode(data.subarray(20, 20 + jsonLength));
-  const json = JSON.parse(jsonSource) as GltfJson;
-  return { json, jsonSource, rest: data.subarray(20 + jsonLength) };
+  }).decode(jsonBytes);
+}
+
+function readGlb(data: Uint8Array) {
+  const { jsonBytes, rest } = readGlbChunks(data);
+  const json = JSON.parse(decodeGlbJson(jsonBytes)) as GltfJson;
+  return { json, rest };
 }
 
 function writeGlb(json: GltfJson, rest: Uint8Array): Uint8Array<ArrayBuffer> {
@@ -258,6 +271,23 @@ function sameMatrix(a: Matrix4, b: Matrix4): boolean {
   return a.every((value, index) => Math.abs(value - b[index]!) <= 1e-9 * scale);
 }
 
+function requireInvertiblePlacement(world: Matrix4): void {
+  const determinant =
+    world[0]! * (world[5]! * world[10]! - world[9]! * world[6]!) -
+    world[4]! * (world[1]! * world[10]! - world[9]! * world[2]!) +
+    world[8]! * (world[1]! * world[6]! - world[5]! * world[2]!);
+  if (
+    !world.every(Number.isFinite) ||
+    !Number.isFinite(determinant) ||
+    determinant === 0
+  ) {
+    throw new Error(
+      'This GLB places its meshes with a transform that flattens them or ' +
+        'cannot be represented, so there is no shape to import.'
+    );
+  }
+}
+
 /**
  * Where a GLB places its geometry, in model millimetres, as the twelve-number
  * row-major placement the 3MF path already applies.
@@ -304,6 +334,7 @@ export function glbPlacement(data: Uint8Array): readonly number[] {
             'as separate meshes, or as one merged mesh.'
         );
       }
+      requireInvertiblePlacement(world);
       placed.set(node.mesh, [world]);
     }
     const children = node.children ?? [];
@@ -334,20 +365,6 @@ export function glbPlacement(data: Uint8Array): readonly number[] {
           'would collapse; export the scene as one merged mesh.'
       );
     }
-    const determinant =
-      world[0]! * (world[5]! * world[10]! - world[9]! * world[6]!) -
-      world[4]! * (world[1]! * world[10]! - world[9]! * world[2]!) +
-      world[8]! * (world[1]! * world[6]! - world[5]! * world[2]!);
-    if (
-      !world.every(Number.isFinite) ||
-      !Number.isFinite(determinant) ||
-      determinant === 0
-    ) {
-      throw new Error(
-        'This GLB places its meshes with a transform that flattens them or ' +
-          'cannot be represented, so there is no shape to import.'
-      );
-    }
   }
   const m = multiply(GLTF_TO_MODEL, world);
   return [
@@ -373,11 +390,33 @@ const NODE_TRANSFORM_LENGTHS = new Map([
   ['scale', 3]
 ]);
 
-/** Locate only numeric transform arrays on nodes in validated JSON. */
+/** End of an array of the required length, or -1 for the reader to validate. */
+function transformArrayEnd(
+  source: string,
+  start: number,
+  length: number
+): number {
+  const entry =
+    /[ \t\n\r]*(-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)[ \t\n\r]*([,\]])/y;
+  entry.lastIndex = start + 1;
+  for (let index = 0; index < length; index += 1) {
+    const match = entry.exec(source);
+    const separator = index === length - 1 ? ']' : ',';
+    if (
+      !match ||
+      match[2] !== separator ||
+      !Number.isFinite(Number(match[1]))
+    ) {
+      return -1;
+    }
+  }
+  return entry.lastIndex;
+}
+
+/** Locate transform arrays without materializing the document before Remus. */
 function identityNodeJson(source: string): string | null {
   const tokens = /"[^"\\]*(?:\\[\s\S][^"\\]*)*"|[{}[\]]/g;
   const arrayProperty = /[ \t\n\r]*:[ \t\n\r]*\[/y;
-  const numberArray = /\[[ \t\n\r,0-9.eE+-]*\]/y;
   const parts: string[] = [];
   let copiedThrough = 0;
   let depth = 0;
@@ -390,7 +429,7 @@ function identityNodeJson(source: string): string | null {
       depth += 1;
     } else if (token === ']' || token === '}') {
       depth -= 1;
-      if (depth === 1) insideNodes = false;
+      if (depth === 1 && insideNodes) break;
     } else if (depth === 1 || (insideNodes && depth === 3)) {
       arrayProperty.lastIndex = index + token.length;
       if (!arrayProperty.test(source)) continue;
@@ -402,11 +441,8 @@ function identityNodeJson(source: string): string | null {
       }
       const length = NODE_TRANSFORM_LENGTHS.get(name);
       if (length === undefined) continue;
-      numberArray.lastIndex = start;
-      if (!numberArray.test(source)) continue;
-      const end = numberArray.lastIndex;
-      const values = JSON.parse(source.slice(start, end)) as number[];
-      if (values.length !== length || !values.every(Number.isFinite)) continue;
+      const end = transformArrayEnd(source, start, length);
+      if (end < 0) continue;
 
       // Null is the reader's default transform. Keep the key and its byte
       // width so duplicate fields and the rest of the file reach it intact.
@@ -440,15 +476,12 @@ function identityNodeJson(source: string): string | null {
 export function glbWithIdentityNodes(data: Uint8Array): Uint8Array {
   let chunks: GlbChunks;
   try {
-    chunks = readGlb(data);
+    chunks = readGlbChunks(data);
   } catch {
     return data;
   }
-  const { json, jsonSource, rest } = chunks;
-  const header = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  if (header.getUint32(4, true) !== 2) {
-    return data;
-  }
+  const { version, jsonBytes, rest } = chunks;
+  if (version !== 2) return data;
   const trailing = new DataView(rest.buffer, rest.byteOffset, rest.byteLength);
   for (let offset = 0; offset + 8 <= rest.byteLength;) {
     const length = trailing.getUint32(offset, true);
@@ -457,19 +490,13 @@ export function glbWithIdentityNodes(data: Uint8Array): Uint8Array {
     }
     offset += 8 + length;
   }
-  if (
-    typeof json !== 'object' ||
-    json === null ||
-    Array.isArray(json) ||
-    !Array.isArray(json.nodes) ||
-    !json.nodes.every(
-      (node) =>
-        typeof node === 'object' && node !== null && !Array.isArray(node)
-    )
-  ) {
+  let identitySource: string | null;
+  try {
+    identitySource = identityNodeJson(decodeGlbJson(jsonBytes));
+  } catch {
+    // Leave invalid UTF-8 or JSON tokens to the reader's diagnostics.
     return data;
   }
-  const identitySource = identityNodeJson(jsonSource);
   if (identitySource === null) return data;
   const identityGlb = new Uint8Array(data);
   new TextEncoder().encodeInto(
