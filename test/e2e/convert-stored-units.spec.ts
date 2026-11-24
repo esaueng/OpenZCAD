@@ -417,6 +417,56 @@ test('a kept measurement and the camera follow the conversion, its undo and a re
   expect(errors).toEqual([]);
 });
 
+test('an undo or a reload straight after converting keeps the same view', async ({
+  page
+}) => {
+  test.setTimeout(240_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await stubApi(page);
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ status: 401, json: { error: 'Not signed in' } })
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Straight after');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'box');
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled(
+    READY
+  );
+  await expect.poll(() => cameraDistance(page)).toBeGreaterThan(0);
+  const distance = await cameraDistance(page);
+  const dialog = await openConversion(page);
+  await dialog.getByRole('button', { name: 'Convert', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText(
+    `“${CHECKPOINT}” was saved first`,
+    READY
+  );
+  await dialog.getByRole('button', { name: 'Done' }).click();
+  // No wait for the camera: the undo comes at once. The camera lands on the
+  // converted view in one step, so there is no glide frame for the undo to
+  // scale back by 25.4.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expectShownIn(page, 'Lengths are shown and typed in mm.');
+  await expect
+    .poll(async () => (await cameraDistance(page)) / distance, READY)
+    .toBeCloseTo(1, 4);
+
+  // Redo, then reload as soon as the document is saved.
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expectShownIn(page, 'Lengths are shown and typed in in.');
+  await expect(page.locator('.save-state')).toHaveClass(SAVED, READY);
+  await page.reload();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
+  await expectShownIn(page, 'Lengths are shown and typed in in.');
+
+  await expect
+    .poll(async () => (await cameraDistance(page)) / distance, READY)
+    .toBeCloseTo(1 / 25.4, 3);
+  expect(errors).toEqual([]);
+});
+
 test('the review lists each fact beside its marker at phone width', async ({
   page
 }) => {

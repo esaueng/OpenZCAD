@@ -346,3 +346,72 @@ describe('I03: the remembered view follows the stored unit', () => {
     expect(view.result.current.settings.sectionView).toEqual(millimetreSection);
   });
 });
+
+describe('I03: a view written before it recorded its unit', () => {
+  const defaults = {
+    projection: 'perspective' as const,
+    showGrid: true,
+    displayMode: 'shaded-edges' as const,
+    reducedMotion: false,
+    zoomToCursor: true,
+    middleDrag: 'pan' as const,
+    orbitMode: 'free' as const,
+    pointerNavigation: 'auto' as const
+  };
+  const legacyView = {
+    camera: {
+      position: [254, 0, 0] as [number, number, number],
+      target: [25.4, 0, 0] as [number, number, number],
+      orthographicZoom: 1
+    },
+    projection: 'perspective' as const,
+    settings: {
+      showGrid: false,
+      displayMode: 'shaded' as const,
+      sectionView: { plane: 'XY' as const, offset: 12.7 }
+    },
+    hiddenBodyIds: []
+  };
+
+  it('is read in the unit this device last held the project in', () => {
+    // Saved in millimetres here; converted to inches on another device.
+    workspaceSession.saveProjectView('elsewhere', legacyView);
+    const view = renderHook(() => useProjectView('elsewhere'));
+    act(() => view.result.current.restore('elsewhere', defaults, 'inch', 'mm'));
+    expect(view.result.current.initialView?.position[0]).toBeCloseTo(10, 12);
+    expect(view.result.current.settings.sectionView?.offset).toBeCloseTo(
+      0.5,
+      12
+    );
+    // And the next write records the unit it is in now.
+    act(() =>
+      view.result.current.onCameraSettled(
+        'elsewhere',
+        view.result.current.initialView!
+      )
+    );
+    expect(workspaceSession.loadProjectView('elsewhere')?.units).toBe('inch');
+  });
+
+  it('drops its camera and cut when the unit it is in cannot be known', () => {
+    workspaceSession.saveProjectView('ambiguous', legacyView);
+    const view = renderHook(() => useProjectView('ambiguous'));
+    act(() =>
+      view.result.current.restore('ambiguous', defaults, 'inch', 'unknown')
+    );
+    expect(view.result.current.initialView).toBeNull();
+    expect(view.result.current.settings.sectionView).toBeUndefined();
+    // The rest of the view is unit-free and stays.
+    expect(view.result.current.settings.showGrid).toBe(false);
+    expect(view.result.current.settings.displayMode).toBe('shaded');
+  });
+
+  it('keeps a stamped view when the unit is otherwise unknown', () => {
+    workspaceSession.saveProjectView('stamped', { ...legacyView, units: 'mm' });
+    const view = renderHook(() => useProjectView('stamped'));
+    act(() =>
+      view.result.current.restore('stamped', defaults, 'inch', 'unknown')
+    );
+    expect(view.result.current.initialView?.position[0]).toBeCloseTo(10, 12);
+  });
+});

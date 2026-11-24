@@ -271,6 +271,7 @@ import {
   type ExtrudeInput,
   type StaleDirectEditFaceRepair,
   unitsConvertCheckpointName,
+  UNITS_CONVERT_COMMAND_KIND,
   type ConvertibleUnit
 } from '@openzcad/document-core';
 import {
@@ -2564,6 +2565,14 @@ interface HydrateOptions {
    * is kept rather than overwritten.
    */
   activeProjectSince?: ActiveProjectSnapshot;
+  /**
+   * I03: the stored unit this device last held the project in, when the
+   * document opened is a newer copy (the account's) that may have been
+   * converted elsewhere. View state written before it recorded its unit is
+   * taken to be in this unit. Defaults to the open document's unit when it
+   * is the same project.
+   */
+  previousUnits?: UnitSystem;
 }
 
 /**
@@ -8966,7 +8975,10 @@ export function App() {
         );
         if (startupProjectId && restoredDocument) {
           hydrateDocument(restoredDocument, {
-            activeProjectSince: startupPointer
+            activeProjectSince: startupPointer,
+            ...(rememberedLocal?.projectId === restoredDocument.projectId
+              ? { previousUnits: rememberedLocal.units }
+              : {})
           });
           if (accountDocumentNeedsRepair) {
             setSaveState('repair');
@@ -11360,6 +11372,27 @@ export function App() {
       clearSectionOutline();
       restoredSectionRequestTokenRef.current = null;
       pendingSectionRestoreRef.current = normalized.projectId;
+      const open = managerRef.current?.document;
+      const previousUnits =
+        options.previousUnits ??
+        (open?.projectId === normalized.projectId ? open.units : undefined);
+      // With no unit known here, a project whose log shows a conversion may
+      // have older view state in either unit: it is dropped, not guessed.
+      const legacyUnits =
+        previousUnits ??
+        (normalized.commandLog.some(
+          (command) => command.kind === UNITS_CONVERT_COMMAND_KIND
+        )
+          ? ('unknown' as const)
+          : undefined);
+      // Saved views written before they recorded their unit are in the unit
+      // this device last held the project in; record it before any is shown.
+      if (previousUnits) {
+        const projectId = normalized.projectId;
+        void import('./lib/savedViews').then(({ stampSavedViewUnits }) =>
+          stampSavedViewUnits(projectId, previousUnits)
+        );
+      }
       restoreProjectView(
         normalized.projectId,
         {
@@ -11372,7 +11405,8 @@ export function App() {
           orbitMode: appSettings.viewport.orbitMode,
           pointerNavigation: appSettings.viewport.pointerNavigation
         },
-        normalized.units
+        normalized.units,
+        legacyUnits
       );
     }
     if (rememberProject) {
@@ -11538,7 +11572,11 @@ export function App() {
     (_factor, from, to) => {
       const projectId = doc?.projectId;
       const rescaled = rescaleProjectView(from, to);
-      if (rescaled?.camera) requestView({ pose: rescaled.camera, projection });
+      // At once, not a glide: the model was rescaled in one step, and a
+      // glide's frames would be reported, persisted and rescaled again by an
+      // undo or a reload made before it landed.
+      if (rescaled?.camera)
+        requestView({ pose: rescaled.camera, projection, instant: true });
       if (rescaled) {
         const remembered = rememberedSection.current;
         if (remembered && !rescaled.sectionView)
@@ -16572,7 +16610,10 @@ export function App() {
       }
       if (!isCurrent()) return;
       commitAccountState();
-      hydrateDocument(openedDocument, { activeProjectSince });
+      hydrateDocument(openedDocument, {
+        activeProjectSince,
+        ...(localDocument ? { previousUnits: localDocument.units } : {})
+      });
       setStatus(
         outcome.choice === 'local' && remoteDocument
           ? `Opened newer local edits for ${openedDocument.name}.`

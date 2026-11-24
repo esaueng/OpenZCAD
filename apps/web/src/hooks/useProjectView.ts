@@ -67,12 +67,19 @@ export interface ProjectView {
   /**
    * Applies a project's remembered view, falling back to the defaults.
    * `units` is the project's stored unit: a view remembered in another
-   * unit (converted since) is rescaled to it.
+   * unit (converted since) is rescaled to it. `legacyUnits` is the unit
+   * this device last held the project in, when known: a view written
+   * before views recorded their unit is taken to be in it (the project may
+   * have been converted on another device since), else in `units`.
+   * `'unknown'` says the project has been converted but this device cannot
+   * tell which unit such a view is in: its camera and section are dropped
+   * (the project refits) rather than shown at the wrong scale.
    */
   restore(
     projectId: string,
     defaults: ProjectViewDefaults,
-    units?: UnitSystem
+    units?: UnitSystem,
+    legacyUnits?: UnitSystem | 'unknown'
   ): void;
   /** The viewport reported a live pose; keep it immediately available. */
   onCameraChange(projectId: string | null, camera: ViewportCameraState): void;
@@ -254,28 +261,35 @@ export function useProjectView(
     setHiddenDatumIds,
     hiddenReferenceImageIds,
     setHiddenReferenceImageIds,
-    restore(id, defaults, units) {
+    restore(id, defaults, units, legacyUnits) {
       const saved = loadProjectView(id);
       savedHiddenReferencesProject.current = saved?.hiddenReferences
         ? id
         : null;
       unitsRef.current = units ?? null;
+      const ambiguous = Boolean(
+        saved && !saved.units && legacyUnits === 'unknown'
+      );
+      const savedUnits =
+        saved?.units ?? (legacyUnits === 'unknown' ? undefined : legacyUnits);
       const factor =
-        saved?.units && units ? storedUnitFactor(saved.units, units) : 1;
-      const savedCamera = saved?.camera ?? null;
+        savedUnits && units ? storedUnitFactor(savedUnits, units) : 1;
+      const savedCamera = ambiguous ? null : (saved?.camera ?? null);
       const camera =
         savedCamera && factor !== 1
           ? scaledCameraPose(savedCamera, factor)
           : savedCamera;
       const savedSection = saved?.settings.sectionView;
+      const { sectionView: _unknownScale, ...savedSettings } =
+        saved?.settings ?? {};
       cameraRef.current = camera;
       setInitialView(camera);
       setProjection(saved?.projection ?? defaults.projection);
       setSettings({
         showGrid: defaults.showGrid,
         displayMode: defaults.displayMode,
-        ...saved?.settings,
-        ...(savedSection && factor !== 1
+        ...(ambiguous ? savedSettings : saved?.settings),
+        ...(savedSection && !ambiguous && factor !== 1
           ? { sectionView: scaledSectionView(savedSection, factor) }
           : {}),
         reducedMotion: defaults.reducedMotion,
