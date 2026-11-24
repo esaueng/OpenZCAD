@@ -890,14 +890,17 @@ const topologyTransport = new TopologyTransport();
 /**
  * Persisted kernel sessions: a reopened project restores its history kernel
  * instead of replaying it (see `kernelSessionPersistence.ts`). Off in dev
- * servers, whose app commit does not name the code that is running.
+ * servers, which have no content-addressed worker bundle.
  */
 const kernelSessions = new KernelSessionPersistence({
   identity: () =>
     import.meta.env.DEV || !sessionModule
       ? null
       : kernelSessionIdentity({
-          appCommit: import.meta.env.OZ_BUILD_COMMIT,
+          workerPath:
+            import.meta.env.OZ_BUILD_COMMIT === 'unknown'
+              ? undefined
+              : self.location?.pathname,
           remusVersion: KERNEL_BUILD.packageVersion,
           remusCommit: KERNEL_BUILD.sourceCommit,
           kernelBuildId: sessionModule.kernelSnapshotBuildId()

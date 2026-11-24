@@ -175,3 +175,25 @@ that frame. Run the same fixture and renderer on both revisions.
 OZ_PERF=1 OZ_PERF_ANGLE=gl STEP_PERF_FILE=/path/to/shapr3d_hammer_holder.step \
   pnpm exec playwright test perf-step-import.spec.ts --repeat-each=3 --workers=1
 ```
+
+### Project-card open benchmark
+
+Use a saved `.openzcad` file with solid geometry and a snapshot that fits the
+local session cache. Run serially from the repository root. Each repetition
+imports into a fresh browser context, removes that context’s derived session,
+times a cold project-card open, then times reopening after capture.
+
+```bash
+OPENZCAD_BUILD_COMMIT=$(git rev-parse HEAD) OZ_PERF=1 \
+  OZ_PERF_PROJECT=/absolute/path/to/project.openzcad \
+  pnpm exec playwright test perf-project-open --workers=1 --repeat-each=3
+```
+
+The timer runs from the project-card click through receipt of the complete
+exact worker result and ready status. The probe checks feature replay and
+restore counts, body bounds, topology hashes, mesh buffers and warnings.
+For a release-transition check, set `OZ_PERF_PROJECT_NEXT_ORIGIN` to a second
+loopback preview (e.g. `http://127.0.0.1:4174`) built with a different
+app commit, the same geometry code and the same `VITE_E2E=1
+VITE_E2E_FULL_RENDER=1` flags. It loads the second build while retaining
+the test context's IndexedDB. Keep private project files outside the checkout.

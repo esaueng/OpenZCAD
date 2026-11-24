@@ -8,6 +8,34 @@ import { nodeFontDataSource } from '../packages/geometry/src/text/nodeFontSource
 afterEach(() => vi.useRealTimers());
 
 describe('font download deadlines', () => {
+  it('refuses a different release’s bytes at the same URL before caching the face', async () => {
+    const request = {
+      file: 'open-sans-regular.ttf',
+      url: '/fonts/open-sans-regular.ttf',
+      family: 'open-sans',
+      style: 'regular' as const
+    };
+    const bytes = await nodeFontDataSource()(request);
+    const { createHash } = await import('node:crypto');
+    const digests = {
+      [request.file]: createHash('sha256')
+        .update(new Uint8Array(bytes))
+        .digest('hex')
+    };
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(new Uint8Array([0, 1])))
+      .mockResolvedValueOnce(new Response(bytes));
+    const library = new FontLibrary(
+      fetchFontDataSource(fetchImpl, 1000, digests)
+    );
+    await expect(library.load(request.family, request.style)).rejects.toThrow(
+      'does not match this build'
+    );
+    expect(library.peek(request.family, request.style)).toBeUndefined();
+    expect(await library.load(request.family, request.style)).toBeDefined();
+  });
+
   it('keeps a progressing font download that takes longer than the idle budget', async () => {
     const bytes = await nodeFontDataSource()({
       file: 'open-sans-regular.ttf',

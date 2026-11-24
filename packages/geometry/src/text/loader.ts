@@ -139,9 +139,10 @@ export class FontLibrary {
  */
 export function fetchFontDataSource(
   fetchImpl: typeof fetch = fetch,
-  idleTimeoutMs?: number
+  idleTimeoutMs?: number,
+  expectedDigests?: Readonly<Record<string, string>> | null
 ): FontDataSource {
-  return async ({ url, family, style }) => {
+  return async ({ file, url, family, style }) => {
     const controller =
       idleTimeoutMs === undefined ? null : new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -170,7 +171,25 @@ export function fetchFontDataSource(
       }
       return await response.arrayBuffer();
     };
-    if (!controller) return load();
+    // Stable font URLs can serve a newer release to an older open tab.
+    // Check after streaming so download progress still renews the idle budget.
+    const verified = async (bytes: ArrayBuffer) => {
+      if (expectedDigests) {
+        const actual = new Uint8Array(
+          await crypto.subtle.digest('SHA-256', bytes)
+        );
+        if (
+          Array.from(actual, (byte) => byte.toString(16).padStart(2, '0')).join(
+            ''
+          ) !== expectedDigests[file]
+        )
+          throw new TextGeometryError(
+            `Font asset for ${family} ${style} does not match this build.`
+          );
+      }
+      return bytes;
+    };
+    if (!controller) return verified(await load());
     try {
       const expired = new Promise<ArrayBuffer>((_resolve, reject) => {
         renewBudget = () => {
@@ -186,7 +205,7 @@ export function fetchFontDataSource(
         };
         renewBudget();
       });
-      return await Promise.race([load(), expired]);
+      return verified(await Promise.race([load(), expired]));
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }

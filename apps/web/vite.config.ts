@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { cp, mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -290,6 +291,26 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     ...(remusArtifacts && !localRemus ? { artifacts: remusArtifacts } : {})
   };
   const commit = sourceCommit();
+  // CAD text is an external input to replay. Include each face's digest
+  // in the worker build and verify the downloaded bytes before parsing.
+  const fontDigests =
+    command === 'build'
+      ? Object.fromEntries(
+          await Promise.all(
+            FONT_FAMILIES.flatMap((family) =>
+              family.faces.map(async ({ file }) => {
+                const bytes = await readFile(
+                  join(repoRoot, 'packages/geometry/assets/fonts', file)
+                );
+                return [
+                  file,
+                  createHash('sha256').update(bytes).digest('hex')
+                ] as const;
+              })
+            )
+          )
+        )
+      : null;
   // Fails when a manifest disagrees with package.json. A build counts the
   // user-facing merges since the base version, deepening a shallow CI or
   // Workers Builds clone, and fails rather than report the bare base: a
@@ -352,6 +373,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     plugins,
     define: {
       'import.meta.env.VITE_E2E': JSON.stringify(process.env.VITE_E2E ?? ''),
+      'import.meta.env.OZ_FONT_DIGESTS': JSON.stringify(fontDigests),
       'import.meta.env.OZ_DESKTOP': JSON.stringify(isDesktop),
       'import.meta.env.OZ_PERF': JSON.stringify(process.env.OZ_PERF ?? ''),
       'import.meta.env.OZ_APP_VERSION': JSON.stringify(appVersion),
@@ -369,6 +391,12 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
       rollupOptions: {
         preserveEntrySignatures: false,
         output: {
+          // Session compatibility uses the emitted geometry worker and its
+          // dependency graph. Leave other workers on the default naming.
+          entryFileNames: (chunk: { name: string }) =>
+            chunk.name === 'geometryWorker'
+              ? 'assets/[name]-[hash:21].js'
+              : 'assets/[name]-[hash].js',
           // Worker builds have their own output configuration. Keep the
           // exact adapter splits there without pulling unrelated dependencies
           // into every worker. Preserve evaluation order across the split.
