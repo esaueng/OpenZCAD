@@ -18,9 +18,12 @@ import {
 import {
   frozenShareDocument,
   frozenShareDocumentProblem,
+  importStepBody,
   isSharedWithoutHistory,
+  isTweakableWithoutHistory,
   listNodesByKind,
-  sharedProjectSnapshotDocument
+  sharedProjectSnapshotDocument,
+  tweakableShareDocument
 } from '@openzcad/document-core';
 import type { ProjectDocument } from '@openzcad/shared';
 import worker from '../apps/web/worker/index';
@@ -46,6 +49,7 @@ import {
   reissueShareLinks,
   renewShareDelegation,
   sealSnapshot,
+  frozenShareLinkSharesParameters,
   updateFrozenShareLink
 } from '../apps/web/src/lib/e2ee/shareLinks';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
@@ -142,6 +146,26 @@ async function project() {
     signShareDelegation(owner.identityPrivateKey, value)
   );
   return { ...shared, laptop, document, blobId, step };
+}
+
+/**
+ * The owner's project, and a model of it whose import's exact solid is
+ * inline, so its recipe (`tweakableShareDocument`) carries no stored source.
+ * Only that model is shared: an encrypted project keeps every import apart.
+ */
+async function recipeProject() {
+  const base = await sharedProject(accounts(), owner, other, 'editor');
+  const laptop = page(base.srv, base.laptop);
+  const shared = importStepBody(base.document, {
+    name: 'Plate',
+    artifactId: 'artifact_local_recipe',
+    sourceName: `${SECRET}.step`,
+    stepText: STEP
+  }).document;
+  await renewShareDelegation(laptop.shareLinks, (value) =>
+    signShareDelegation(owner.identityPrivateKey, value)
+  );
+  return { ...base, laptop, shared };
 }
 
 const frozenOf = (document: ProjectDocument, bodyName = 'Plate') =>
@@ -370,6 +394,66 @@ describe(
       expect(
         (await listShareLinks(laptop.shareLinks, projectId)).links
       ).toMatchObject([{ mode: 'frozen', status: 'not-published' }]);
+    });
+
+    it('shares the parameters to tweak, and Update keeps sharing them', async () => {
+      const { srv, laptop, projectId, shared } = await recipeProject();
+      const recipe = tweakableShareDocument(shared);
+      const link = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'frozen',
+        recipe
+      );
+      const browser = visitor(srv);
+      const opened = await browser.open(link.url);
+      // The grant says view; the owner-signed model says it may be tweaked.
+      expect(opened).toMatchObject({ mode: 'view' });
+      expect(isTweakableWithoutHistory(opened!.document)).toBe(true);
+      expect(featureNames(opened!.document)).toEqual(['Feature 1']);
+      expect(JSON.stringify(opened!.document)).not.toContain(SECRET);
+      expect(
+        await frozenShareLinkSharesParameters(
+          laptop.shareLinks,
+          projectId,
+          link.shareId
+        )
+      ).toBe(true);
+      const asked: boolean[] = [];
+      await updateFrozenShareLink(
+        laptop.shareLinks,
+        projectId,
+        link.shareId,
+        async (parameters) => {
+          asked.push(parameters);
+          return parameters ? recipe : frozenOf(shared);
+        }
+      );
+      expect(asked).toEqual([true]);
+      expect(
+        isTweakableWithoutHistory((await browser.open(link.url))!.document)
+      ).toBe(true);
+
+      // A view-only link without history is asked for its solids.
+      const solids = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'frozen',
+        frozenOf(shared)
+      );
+      await updateFrozenShareLink(
+        laptop.shareLinks,
+        projectId,
+        solids.shareId,
+        async (parameters) => {
+          asked.push(parameters);
+          return parameters ? recipe : frozenOf(shared, 'Plate v2');
+        }
+      );
+      expect(asked).toEqual([true, false]);
+      expect(featureNames((await browser.open(solids.url))!.document)).toEqual([
+        'Plate v2'
+      ]);
     });
 
     it('Update replaces the model under the same link', async () => {

@@ -359,16 +359,11 @@ export function parseCreateShareLink(value: unknown): {
     );
   const mode = parseProjectShareLinkMode(record.mode);
   const withoutHistory = record.history === false;
-  // A link without history has no parameters to tweak, and serves the
-  // frozen model sent with it instead of the project. A document sent with
-  // any other link is refused rather than ignored, so a client can never
+  // A link without history serves the frozen model sent with it instead of
+  // the project; persistence holds its mode to that model (view for
+  // imported solids, tweak for the parameters). A document sent with any
+  // other link is refused rather than ignored, so a client can never
   // believe it shared a frozen model while the link serves the live one.
-  if (withoutHistory && mode !== 'view')
-    throw new SharingRequestError(
-      400,
-      'SHARE_LINK_MODE_INVALID',
-      'A link without history is view only.'
-    );
   if (withoutHistory !== (record.document !== undefined))
     throw new SharingRequestError(
       400,

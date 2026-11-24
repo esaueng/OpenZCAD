@@ -158,6 +158,7 @@ import {
   createProjectDocument,
   duplicateProjectDocument,
   frozenShareDocumentProblem,
+  isTweakableWithoutHistory,
   normalizeDocument,
   sharedProjectSnapshotDocument,
   withoutDerivedProjection
@@ -292,6 +293,16 @@ export function frozenShareSnapshot(
       `The model could not be shared without its history. ${problem}`
     );
   return document;
+}
+
+/**
+ * L08: the mode of a link without history follows the model it shares: one
+ * that carries its parameters may be tweaked, imported solids only viewed.
+ */
+export function frozenShareLinkMode(
+  document: ProjectDocument
+): ProjectShareLinkMode {
+  return isTweakableWithoutHistory(document) ? 'tweak' : 'view';
 }
 
 /**
@@ -1245,11 +1256,22 @@ export class InMemoryPersistenceService implements PersistenceService {
       input.tokenHash,
       frozenDocument !== undefined
     );
+    if (frozenDocument && frozenShareLinkMode(frozenDocument) !== input.mode)
+      throw new ProjectSharingError(
+        'SHARE_LINK_SNAPSHOT_INVALID',
+        frozenShareLinkMode(frozenDocument) === 'tweak'
+          ? 'A model shared with its parameters makes a tweak link.'
+          : 'A model shared as imported solids makes a view-only link.'
+      );
     const { frozenDocument: _received, ...link } = input;
     this.projectShareLinks.set(input.shareLinkId, {
       ...link,
       ...(frozenDocument
-        ? { frozenDocument, frozenAt: input.createdAt, mode: 'view' as const }
+        ? {
+            frozenDocument,
+            frozenAt: input.createdAt,
+            mode: frozenShareLinkMode(frozenDocument)
+          }
         : {}),
       label: input.label ?? null,
       projectId,
@@ -1295,7 +1317,15 @@ export class InMemoryPersistenceService implements PersistenceService {
         'Project share link not found.'
       );
     }
-    link.frozenDocument = frozenShareSnapshot(document, projectId);
+    const frozenDocument = frozenShareSnapshot(document, projectId);
+    // A view-only link is never given parameters, nor a tweakable one
+    // stripped of them.
+    if (frozenShareLinkMode(frozenDocument) !== link.mode)
+      throw new ProjectSharingError(
+        'SHARE_LINK_NOT_FOUND',
+        'Project share link not found.'
+      );
+    link.frozenDocument = frozenDocument;
     link.frozenAt = updatedAt;
     return this.shareLinkSummary(shareLinkId);
   }
@@ -1387,13 +1417,17 @@ export class InMemoryPersistenceService implements PersistenceService {
       // L08: never the live project. The frozen model is checked again on
       // the way out, and a link that lost it serves nothing.
       if (!link.frozenDocument) return null;
+      const frozenDocument = frozenShareSnapshot(
+        link.frozenDocument,
+        link.projectId
+      );
       return {
         projectId: link.projectId,
         name: document.name,
-        mode: 'view',
+        mode: frozenShareLinkMode(frozenDocument),
         ...(link.comments ? { comments: true } : {}),
         history: false,
-        document: frozenShareSnapshot(link.frozenDocument, link.projectId)
+        document: frozenDocument
       };
     }
     if (isUnreadableStoredDocument(normalizedForLoad(document)))

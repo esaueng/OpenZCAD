@@ -12,6 +12,7 @@ export type SharedLinkCopyDestination = 'account' | 'device';
  */
 export function SharedLinkCopyDialog({
   withoutHistory = false,
+  parameters = false,
   accountEncrypts,
   error,
   onRetry,
@@ -19,6 +20,11 @@ export function SharedLinkCopyDialog({
 }: {
   /** L08: the link shares the finished model only, so the copy holds that. */
   withoutHistory?: boolean;
+  /**
+   * L08: the link shared the parameters too; the copy still keeps only the
+   * solids, as the visitor tweaked them.
+   */
+  parameters?: boolean;
   accountEncrypts: boolean | null;
   error?: string | null;
   onRetry?(): void;
@@ -45,9 +51,11 @@ export function SharedLinkCopyDialog({
       >
         <h2 id="shared-link-copy-title">Make a copy</h2>
         <p>
-          {withoutHistory
-            ? 'The copy is yours: it holds the finished model as imported solids, without the owner’s features, sketches or parameters, and opens in Build mode. Its history lists one imported solid per body.'
-            : 'The copy is yours: it keeps the model, its parameters and history, and opens in Build mode.'}{' '}
+          {withoutHistory && parameters
+            ? 'The copy is yours: it holds the model as you tweaked it, as imported solids, without the owner’s features, sketches or parameters, and opens in Build mode. Its history lists one imported solid per body.'
+            : withoutHistory
+              ? 'The copy is yours: it holds the finished model as imported solids, without the owner’s features, sketches or parameters, and opens in Build mode. Its history lists one imported solid per body.'
+              : 'The copy is yours: it keeps the model, its parameters and history, and opens in Build mode.'}{' '}
           Later changes the owner makes don&apos;t reach it.
         </p>
         <p id="shared-link-copy-account" role={error ? 'alert' : undefined}>

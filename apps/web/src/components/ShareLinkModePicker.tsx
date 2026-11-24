@@ -17,6 +17,23 @@ export const SHARE_LINK_NO_HISTORY_HINT =
   'Visitors get the finished model only: no features, sketches or parameters. Bodies you hid start hidden. It stays as it is now until you update the link.';
 
 /**
+ * What a Tweak link without history shares. The recipe reaches the
+ * visitor's browser (a tweak rebuilds there), so this promises a hidden
+ * feature list, not a model that cannot be reverse-engineered.
+ */
+export const SHARE_LINK_NO_HISTORY_TWEAK_HINT =
+  'Visitors can change the parameters, but never see the feature list, sketches or how the model was built, and a copy they make keeps the solids only. The recipe is still in their browser, hidden rather than removed. It stays as it is now until you update the link.';
+
+/** The mode's own line for a link without history. */
+export const SHARE_LINK_NO_HISTORY_MODE_HINT: Record<
+  ProjectShareLinkMode,
+  string
+> = {
+  view: 'View only: visitors get the finished solids.',
+  tweak: 'Visitors can change parameters, without the feature list.'
+};
+
+/**
  * The access a new share link grants, as two native radios drawn as one
  * segmented control: arrow keys move between them, as in any radio group.
  */

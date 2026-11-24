@@ -14,7 +14,10 @@ import {
   initiallyHiddenBodyIds,
   isSharedWithoutHistory,
   listNodesByKind,
+  isTweakableWithoutHistory,
   sharedProjectSnapshotDocument,
+  tweakableShareDocument,
+  tweakableShareDocumentProblem,
   withoutSharedHistoryMark
 } from './index';
 
@@ -230,5 +233,115 @@ describe('a copy of a model shared without history', () => {
       stepText: STEP
     }).document;
     expect(withoutSharedHistoryMark(withImport)).toBe(withImport);
+  });
+});
+
+describe('tweakableShareDocument', () => {
+  /** An owner's model: an import named for its source, with a past. */
+  function recipeSource(): ProjectDocument {
+    const imported = importStepBody(createProjectDocument('Bracket', owner), {
+      name: 'Secret bracket',
+      artifactId: 'artifact_local_1',
+      sourceName: 'customer-x.step',
+      stepText: STEP
+    }).document;
+    return {
+      ...imported,
+      commandLog: [{ kind: 'secret' } as never],
+      editHistory: { undo: [], redo: [] } as never
+    };
+  }
+
+  it('keeps the recipe, without its history or the names it was built with', () => {
+    const source = recipeSource();
+    const [body] = listNodesByKind(source, 'body');
+    const document = tweakableShareDocument(source, new Set([body!.bodyId]));
+    expect(isSharedWithoutHistory(document)).toBe(true);
+    expect(isTweakableWithoutHistory(document)).toBe(true);
+    expect(document.revisions).toEqual([]);
+    expect(document.commandLog).toEqual([]);
+    expect(document.editHistory).toBeUndefined();
+    expect(document.ownerUserId).toBe('user_shared');
+    const [feature] = listNodesByKind(document, 'feature');
+    expect(feature!.name).toBe('Feature 1');
+    expect((feature!.data as { sourceName?: string }).sourceName).toBe(
+      'Feature 1.step'
+    );
+    // The recipe still rebuilds: the import's exact solid travels inline.
+    expect((feature!.data as { stepText?: string }).stepText).toBe(STEP);
+    expect(initiallyHiddenBodyIds(document)).toEqual([body!.bodyId]);
+    expect(JSON.stringify(document)).not.toContain('customer-x');
+    expect(tweakableShareDocumentProblem(document)).toBeNull();
+    // The Worker's one check accepts it as a model without history.
+    expect(frozenShareDocumentProblem(document)).toBeNull();
+    expect(
+      frozenShareDocumentProblem(
+        sharedProjectSnapshotDocument(
+          assertStorableDocument(JSON.parse(JSON.stringify(document)))
+        )
+      )
+    ).toBeNull();
+  });
+
+  it('refuses a model whose import source is stored apart', () => {
+    const source = recipeSource();
+    const feature = listNodesByKind(source, 'feature')[0]!;
+    (feature.data as unknown as Record<string, unknown>).stepSourceRef = {
+      marker: 'openzcad-source-ref'
+    };
+    expect(() => tweakableShareDocument(source)).toThrow(/imported file/);
+  });
+
+  it.each<[string, (document: ProjectDocument) => void]>([
+    [
+      'a feature name',
+      (document) => {
+        listNodesByKind(document, 'feature')[0]!.name = 'Secret boss';
+      }
+    ],
+    [
+      'an imported file name',
+      (document) => {
+        const feature = listNodesByKind(document, 'feature')[0]!;
+        (feature.data as unknown as Record<string, unknown>).sourceName =
+          'customer-x.step';
+      }
+    ],
+    [
+      'its owner',
+      (document) => {
+        document.ownerUserId = owner;
+      }
+    ],
+    [
+      'a save state',
+      (document) => {
+        document.revisions = [{ revisionId: 'rev_1' } as never];
+      }
+    ],
+    [
+      'undo history',
+      (document) => {
+        document.editHistory = { undo: [], redo: [] } as never;
+      }
+    ],
+    [
+      'drawings',
+      (document) => {
+        document.drawings = { sheets: [] };
+      }
+    ]
+  ])('refuses %s', (_label, change) => {
+    const document = tweakableShareDocument(recipeSource());
+    change(document);
+    expect(frozenShareDocumentProblem(document)).not.toBeNull();
+  });
+
+  it('copies as an ordinary project, without either mark', () => {
+    const copy = withoutSharedHistoryMark(
+      tweakableShareDocument(recipeSource())
+    );
+    expect(isSharedWithoutHistory(copy)).toBe(false);
+    expect(isTweakableWithoutHistory(copy)).toBe(false);
   });
 });

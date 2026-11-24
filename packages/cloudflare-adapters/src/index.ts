@@ -188,6 +188,7 @@ import {
   sha256Hex,
   assertShareLinkTokenHashDomain,
   EncryptedProjectSharingError,
+  frozenShareLinkMode,
   frozenShareSnapshot,
   isFrozenShareLinkTokenHash,
   type ClientProjectStorage,
@@ -2468,7 +2469,21 @@ export class D1R2PersistenceService implements PersistenceService {
     // the row to it as well): a lookup of a bare hash never finds a link
     // without history, whatever the Worker that runs it knows.
     assertShareLinkTokenHashDomain(input.tokenHash, frozen);
-    const mode = frozen ? 'view' : input.mode;
+    const frozenDocument = frozen
+      ? frozenShareSnapshot(input.frozenDocument, projectId)
+      : undefined;
+    // A link without history may be tweaked exactly when it shares the
+    // model's parameters; its mode is the model's, never the request's.
+    const mode = frozenDocument
+      ? frozenShareLinkMode(frozenDocument)
+      : input.mode;
+    if (frozenDocument && frozenShareLinkMode(frozenDocument) !== input.mode)
+      throw new ProjectSharingError(
+        'SHARE_LINK_SNAPSHOT_INVALID',
+        frozenShareLinkMode(frozenDocument) === 'tweak'
+          ? 'A model shared with its parameters makes a tweak link.'
+          : 'A model shared as imported solids makes a view-only link.'
+      );
     const columns: [string, string | number][] = [
       ['id', input.shareLinkId],
       ['project_id', projectId],
@@ -2481,12 +2496,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (frozen)
       columns.push(
         ['history', 0],
-        [
-          'frozen_document',
-          await encodeFrozenShareDocument(
-            frozenShareSnapshot(input.frozenDocument, projectId)
-          )
-        ],
+        ['frozen_document', await encodeFrozenShareDocument(frozenDocument!)],
         ['frozen_at', input.createdAt]
       );
     // The project is still plaintext in the statement that stores the link.
@@ -2608,18 +2618,26 @@ export class D1R2PersistenceService implements PersistenceService {
         'SHARE_LINK_HISTORY_UNAVAILABLE',
         'Sharing without history is not available on this server yet.'
       );
-    const stored = await encodeFrozenShareDocument(
-      frozenShareSnapshot(document, projectId)
-    );
+    const snapshot = frozenShareSnapshot(document, projectId);
+    const stored = await encodeFrozenShareDocument(snapshot);
     // Only a link made without history takes a frozen model: the predicate
-    // keeps a link to the live project from being turned into one, or back.
+    // keeps a link to the live project from being turned into one, or back,
+    // and a view-only link from being given parameters (or a tweakable one
+    // from losing them).
     const row = await this.env.DB.prepare(
       `UPDATE project_share_links SET frozen_document = ?, frozen_at = ?
        WHERE id = ? AND project_id = ? AND revoked_at IS NULL AND history = 0
-         AND ${await this.shareableProjectFence()}
+         AND mode = ? AND ${await this.shareableProjectFence()}
        RETURNING ${await this.shareLinkColumns()}`
     )
-      .bind(stored, updatedAt, shareLinkId, projectId, projectId)
+      .bind(
+        stored,
+        updatedAt,
+        shareLinkId,
+        projectId,
+        frozenShareLinkMode(snapshot),
+        projectId
+      )
       .first<ProjectShareLinkRow>();
     if (!row) {
       // Encrypted since the check above: its links are revoked, and no
@@ -2842,16 +2860,17 @@ export class D1R2PersistenceService implements PersistenceService {
       // The frozen model is checked again on the way out; anything else in
       // the column, or nothing, serves nothing.
       if (row.history !== 0 || !row.frozen_document) return null;
+      const frozenDocument = frozenShareSnapshot(
+        await decodeFrozenShareDocument(row.frozen_document),
+        row.project_id
+      );
       return {
         projectId: row.project_id,
         name: row.name,
-        mode: 'view',
+        mode: frozenShareLinkMode(frozenDocument),
         ...(row.allow_comments === 1 ? { comments: true } : {}),
         history: false,
-        document: frozenShareSnapshot(
-          await decodeFrozenShareDocument(row.frozen_document),
-          row.project_id
-        )
+        document: frozenDocument
       };
     }
     const document = row.document_object_id

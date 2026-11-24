@@ -255,7 +255,12 @@ export interface ProjectSharingDialogProps {
    * solid per body and nothing of how it was built. Without it the option
    * to leave history out is not offered.
    */
-  onFreezeModel?(): Promise<ProjectDocument>;
+  /**
+   * L08: the current model for a link without history: imported solids, or
+   * with `parameters` the recipe a visitor may tweak
+   * (`tweakableShareDocument`).
+   */
+  onFreezeModel?(options?: { parameters?: boolean }): Promise<ProjectDocument>;
   role: ProjectAccessRole | null;
   collaborationStatus: CollaborationStatus;
   collaborationFailure?: string | null;
@@ -1649,7 +1654,9 @@ export function ProjectSharingDialog({
                         await shareLinkClient.updateProjectShareLinkSnapshot(
                           projectId,
                           shareLink.shareLinkId,
-                          await onFreezeModel()
+                          await onFreezeModel({
+                            parameters: shareLink.mode === 'tweak'
+                          })
                         );
                         await refresh();
                       }
@@ -1664,7 +1671,9 @@ export function ProjectSharingDialog({
                       // in the account.
                       const frozen =
                         !history && onFreezeModel
-                          ? await onFreezeModel()
+                          ? await onFreezeModel({
+                              parameters: mode === 'tweak'
+                            })
                           : undefined;
                       if (!frozen) await onBeforeCreateShareLink?.();
                       setCreatedShareLink(null);
@@ -1672,7 +1681,7 @@ export function ProjectSharingDialog({
                       const created = frozen
                         ? await shareLinkClient.createProjectShareLink(
                             projectId,
-                            'view',
+                            mode,
                             label,
                             comments,
                             frozen

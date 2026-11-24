@@ -6,6 +6,8 @@ import { StableLabel } from './StableLabel';
 import {
   SHARE_LINK_MODE_HINT,
   SHARE_LINK_NO_HISTORY_HINT,
+  SHARE_LINK_NO_HISTORY_MODE_HINT,
+  SHARE_LINK_NO_HISTORY_TWEAK_HINT,
   ShareLinkModePicker
 } from './ShareLinkModePicker';
 
@@ -320,7 +322,7 @@ export function ShareLinkComposer({
         event.preventDefault();
         if (disabled || createDisabled || blocked) return;
         onCreate({
-          mode: withoutHistory ? 'view' : mode,
+          mode,
           comments,
           history: !withoutHistory,
           name
@@ -344,14 +346,13 @@ export function ShareLinkComposer({
       <div className="share-link-composer-mode">
         <ShareLinkModePicker
           value={mode}
-          viewOnly={withoutHistory}
           disabled={disabled}
           describedBy={modeHintId}
           onChange={setMode}
         />
         <p id={modeHintId} className="sharing-hint">
           {withoutHistory
-            ? 'View only: a link without history has nothing to tweak.'
+            ? SHARE_LINK_NO_HISTORY_MODE_HINT[mode]
             : SHARE_LINK_MODE_HINT[mode]}
         </p>
       </div>
@@ -363,11 +364,18 @@ export function ShareLinkComposer({
             hint={
               history
                 ? 'Visitors see every feature and always get the latest model.'
-                : SHARE_LINK_NO_HISTORY_HINT
+                : mode === 'tweak'
+                  ? SHARE_LINK_NO_HISTORY_TWEAK_HINT
+                  : SHARE_LINK_NO_HISTORY_HINT
             }
             checked={history}
             disabled={disabled}
-            onChange={setHistory}
+            onChange={(next) => {
+              setHistory(next);
+              // Leaving history out starts from the solids only; Tweak,
+              // which shares the recipe, is a choice made after it.
+              if (!next) setMode('view');
+            }}
           />
         ) : null}
         <ShareLinkOption

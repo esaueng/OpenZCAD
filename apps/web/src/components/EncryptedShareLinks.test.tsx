@@ -548,7 +548,9 @@ describe('EncryptedShareLinks names (ADR-024 amendment 2026-11-22)', () => {
   it('names a new link once it is made, and shows the name on its card', async () => {
     const named: EncryptedShareLinksState = {
       ...active,
-      links: [{ ...active.links[0]!, shareId: 'shr_new', name: 'Client review' }]
+      links: [
+        { ...active.links[0]!, shareId: 'shr_new', name: 'Client review' }
+      ]
     };
     const client = fakeClient([empty, named]);
     const user = userEvent.setup();
@@ -659,7 +661,9 @@ describe('EncryptedShareLinks names (ADR-024 amendment 2026-11-22)', () => {
       links: [{ ...named.links[0]!, name: null }, named.links[1]!]
     });
     const renamed = screen.getByRole('form', { name: 'Rename Supplier' });
-    await user.clear(within(renamed).getByRole('textbox', { name: 'Link name' }));
+    await user.clear(
+      within(renamed).getByRole('textbox', { name: 'Link name' })
+    );
     await user.click(within(renamed).getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(client.rename).toHaveBeenLastCalledWith('proj_x', 'shr_a', null)
@@ -732,14 +736,46 @@ describe('EncryptedShareLinks without history (L08)', () => {
     expect(history).toBeChecked();
     await user.click(history);
     const access = screen.getByRole('radiogroup', { name: 'Link access' });
-    expect(within(access).getByRole('radio', { name: 'Tweak' })).toBeDisabled();
+    expect(within(access).getByRole('radio', { name: 'View' })).toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     await waitFor(() =>
       expect(client.create).toHaveBeenCalledWith('proj_x', 'frozen', {
         frozenDocument: frozenModel
       })
     );
+    expect(onFreezeModel).toHaveBeenCalledWith({ parameters: false });
     expect(await screen.findAllByText(/No history link/)).not.toHaveLength(0);
+  });
+
+  it('shares the parameters without history when Tweak is chosen', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: false },
+      frozenRow
+    ]);
+    const onFreezeModel = vi.fn(async () => frozenModel);
+    const user = userEvent.setup();
+    render(
+      <EncryptedShareLinks
+        projectId="proj_x"
+        client={client}
+        onFreezeModel={onFreezeModel}
+      />
+    );
+    await user.click(
+      await screen.findByRole('checkbox', { name: 'Include history' })
+    );
+    const access = screen.getByRole('radiogroup', { name: 'Link access' });
+    await user.click(within(access).getByRole('radio', { name: 'Tweak' }));
+    expect(
+      screen.getByRole('checkbox', { name: 'Include history' })
+    ).toHaveAccessibleDescription(/never see the feature list/);
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(client.create).toHaveBeenCalledWith('proj_x', 'frozen', {
+        frozenDocument: frozenModel
+      })
+    );
+    expect(onFreezeModel).toHaveBeenCalledWith({ parameters: true });
   });
 
   it('Update freezes the current model into the listed link', async () => {
@@ -762,8 +798,18 @@ describe('EncryptedShareLinks without history (L08)', () => {
       })
     );
     await waitFor(() =>
-      expect(update).toHaveBeenCalledWith('proj_x', 'shr_f', frozenModel)
+      expect(update).toHaveBeenCalledWith(
+        'proj_x',
+        'shr_f',
+        expect.any(Function)
+      )
     );
+    // The link's own model says which kind to freeze.
+    const freeze = (update.mock.calls[0] as unknown[])[2] as (
+      parameters: boolean
+    ) => Promise<unknown>;
+    await expect(freeze(true)).resolves.toBe(frozenModel);
+    expect(onFreezeModel).toHaveBeenCalledWith({ parameters: true });
     expect(client.create).not.toHaveBeenCalled();
   });
 

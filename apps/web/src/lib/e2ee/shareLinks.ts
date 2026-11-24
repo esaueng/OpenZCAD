@@ -102,6 +102,7 @@ import {
 import {
   assertStorableDocument,
   frozenShareDocumentProblem,
+  isTweakableWithoutHistory,
   sharedProjectSnapshotDocument
 } from '@openzcad/document-core';
 import {
@@ -1329,9 +1330,14 @@ export async function updateFrozenShareLink(
   ctx: ShareLinksContext,
   projectId: string,
   shareId: string,
-  frozenDocument: ProjectDocument
+  /**
+   * The current model, frozen; or how to freeze it, told whether the link
+   * shares the model's parameters (as the model it serves now does: the
+   * grant says only `frozen`, and the owner-signed model says which).
+   */
+  frozenDocument:
+    ProjectDocument | ((parameters: boolean) => Promise<ProjectDocument>)
 ): Promise<void> {
-  const frozen = frozenSnapshotDocument(frozenDocument, projectId);
   await workLock(ctx, projectId, async () => {
     const head = await ctx.store.shareHead(projectId);
     await requireOwner(ctx, projectId, head.keyEpoch);
@@ -1343,6 +1349,18 @@ export async function updateFrozenShareLink(
         'link-not-found',
         'This link shares the project with its history; it has no model to update.'
       );
+    const frozen = frozenSnapshotDocument(
+      typeof frozenDocument === 'function'
+        ? await frozenDocument(
+            await frozenLinkSharesParameters(ctx, projectId, {
+              shareId,
+              shareKeyHash: link.shareKeyHash,
+              keyEpoch: head.keyEpoch
+            })
+          )
+        : frozenDocument,
+      projectId
+    );
     const outcome = await publishShareSnapshots(ctx, projectId, head, {
       only: [shareId],
       republish: [shareId],
@@ -1354,6 +1372,66 @@ export async function updateFrozenShareLink(
         outcome.failed.find((failure) => failure.shareId === shareId)?.reason ??
           'The link could not be updated. Try again.'
       );
+  });
+}
+
+/**
+ * Whether the model a `frozen` link serves now carries its parameters
+ * (`tweakableShareDocument`), read back from its owner-signed snapshot. A
+ * link whose model cannot be read is taken to share imported solids only,
+ * the narrower of the two.
+ */
+async function frozenLinkSharesParameters(
+  ctx: ShareLinksContext,
+  projectId: string,
+  link: {
+    readonly shareId: string;
+    readonly shareKeyHash: Uint8Array;
+    readonly keyEpoch: number;
+  }
+): Promise<boolean> {
+  try {
+    const record = (await ctx.api.list(projectId)).links.find(
+      (entry) => entry.shareId === link.shareId
+    );
+    if (!record?.snapshot) return false;
+    const shareKey = await shareKeyFor(
+      ctx,
+      projectId,
+      link.shareId,
+      link.shareKeyHash,
+      record,
+      link.keyEpoch
+    );
+    const { document } = await storedFrozenDocument(ctx, projectId, {
+      shareId: link.shareId,
+      shareKey,
+      authors: ownDeviceKeyHashes(ctx)
+    });
+    return isTweakableWithoutHistory(document);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the `frozen` link `shareId` serves the model with its parameters,
+ * for its owner's card; null when the link or its model cannot be read.
+ */
+export async function frozenShareLinkSharesParameters(
+  ctx: ShareLinksContext,
+  projectId: string,
+  shareId: string
+): Promise<boolean | null> {
+  const head = await ctx.store.shareHead(projectId);
+  const link = head.shareLinks?.links.find(
+    (entry) => entry.shareId === shareId
+  );
+  if (link?.mode !== 'frozen') return null;
+  return frozenLinkSharesParameters(ctx, projectId, {
+    shareId,
+    shareKeyHash: link.shareKeyHash,
+    keyEpoch: head.keyEpoch
   });
 }
 

@@ -889,7 +889,9 @@ export function TopBar({
             label="Shared model"
             description={
               shareSession.withoutHistory
-                ? 'The owner shared this model without its history: you have the finished solid, with no features, sketches or parameters. Make a copy to keep or change it.'
+                ? shareSession.mode === 'tweak'
+                  ? 'The owner shared this model without its history: you can try parameter changes here, and they stay in this tab. A copy keeps the solids as you left them.'
+                  : 'The owner shared this model without its history: you have the finished solid, with no features, sketches or parameters. Make a copy to keep or change it.'
                 : shareSession.mode === 'view'
                   ? 'Someone shared this model with you to look at. Make a copy to keep or change it.'
                   : 'Someone shared this model with you. You can try parameter changes here; they stay in this tab. Make a copy to keep them.'

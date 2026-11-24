@@ -1962,7 +1962,6 @@ describe('ProjectSharingDialog links without history (L08)', () => {
     await user.click(history);
     const access = screen.getByRole('radiogroup', { name: 'Link access' });
     expect(within(access).getByRole('radio', { name: 'View' })).toBeChecked();
-    expect(within(access).getByRole('radio', { name: 'Tweak' })).toBeDisabled();
     expect(history).toHaveAccessibleDescription(
       /finished model only: no features, sketches or parameters/
     );
@@ -1985,6 +1984,41 @@ describe('ProjectSharingDialog links without history (L08)', () => {
     expect(
       screen.getByRole('button', { name: /^Update .* to the current model$/ })
     ).toBeVisible();
+  });
+
+  it('shares the parameters without history when Tweak is chosen', async () => {
+    const links = shareLinkClient();
+    const user = userEvent.setup();
+    const onFreezeModel = vi.fn(async () => frozenOf(base));
+    const base: ProjectDocument = await open(links, { onFreezeModel });
+    await user.click(
+      await screen.findByRole('checkbox', { name: 'Include history' })
+    );
+    const access = screen.getByRole('radiogroup', { name: 'Link access' });
+    await user.click(within(access).getByRole('radio', { name: 'Tweak' }));
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(links.createProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'tweak',
+        null,
+        false,
+        expect.anything()
+      )
+    );
+    expect(onFreezeModel).toHaveBeenLastCalledWith({ parameters: true });
+    expect(await screen.findByText(/Tweak · No history, as of/)).toBeVisible();
+    // Its Update shares the parameters again.
+    await openCard(/^Tweak link · /, user);
+    await user.click(
+      await screen.findByRole('button', {
+        name: /^Update .* to the current model$/
+      })
+    );
+    await waitFor(() =>
+      expect(links.updateProjectShareLinkSnapshot).toHaveBeenCalled()
+    );
+    expect(onFreezeModel).toHaveBeenLastCalledWith({ parameters: true });
   });
 
   it('makes no link when the model cannot be frozen', async () => {

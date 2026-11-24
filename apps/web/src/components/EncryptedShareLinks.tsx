@@ -132,8 +132,17 @@ export interface EncryptedShareLinkClient {
   update?(
     projectId: string,
     shareId: string,
-    frozenDocument: ProjectDocument
+    /** Told whether the link shares the model's parameters. */
+    freeze: (parameters: boolean) => Promise<ProjectDocument>
   ): Promise<void>;
+  /**
+   * L08: whether a `frozen` link shares the model's parameters (read from
+   * its owner-signed model); null when that cannot be read.
+   */
+  sharesParameters?(
+    projectId: string,
+    shareId: string
+  ): Promise<boolean | null>;
   /** Revokes the link and drops its name. */
   revoke(projectId: string, shareId: string): Promise<void>;
   /**
@@ -274,7 +283,7 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       name
     );
   },
-  async update(projectId, shareId, frozenDocument) {
+  async update(projectId, shareId, freeze) {
     const [{ encryptedShareLinks }, links] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
@@ -283,7 +292,18 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       (await encryptedShareLinks()).ctx,
       projectId,
       shareId,
-      frozenDocument
+      freeze
+    );
+  },
+  async sharesParameters(projectId, shareId) {
+    const [{ encryptedShareLinks }, links] = await Promise.all([
+      import('../lib/e2ee/encryptedProjects'),
+      import('../lib/e2ee/shareLinks')
+    ]);
+    return links.frozenShareLinkSharesParameters(
+      (await encryptedShareLinks()).ctx,
+      projectId,
+      shareId
     );
   },
   async allowComments(projectId, shareId) {
@@ -478,7 +498,12 @@ export function EncryptedShareLinks({
    * L08: the current model frozen for a link without history. Without it
    * the option to leave history out is not offered.
    */
-  onFreezeModel?(): Promise<ProjectDocument>;
+  /**
+   * L08: the current model for a link without history: imported solids, or
+   * with `parameters` the recipe a visitor may tweak
+   * (`tweakableShareDocument`).
+   */
+  onFreezeModel?(options?: { parameters?: boolean }): Promise<ProjectDocument>;
   /** Reports the link count and whether a link needs the owner. */
   onSummary?(summary: EncryptedShareLinksSummary): void;
 }) {
@@ -491,6 +516,35 @@ export function EncryptedShareLinks({
   // The new-link card is open (it always is while there are no links).
   const [composing, setComposing] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // L08: whether each open `frozen` link shares the model's parameters;
+  // its grant says only that it has no history.
+  const [frozenParameters, setFrozenParameters] = useState<
+    Record<string, boolean | null>
+  >({});
+  const sharesParameters = client.sharesParameters;
+  useEffect(() => {
+    const row = state?.links.find((link) => link.shareId === expandedId);
+    if (
+      !row ||
+      row.mode !== 'frozen' ||
+      !sharesParameters ||
+      frozenParameters[row.shareId] !== undefined
+    )
+      return;
+    let live = true;
+    void sharesParameters(projectId, row.shareId)
+      .catch(() => null)
+      .then((parameters) => {
+        if (live)
+          setFrozenParameters((known) => ({
+            ...known,
+            [row.shareId]: parameters
+          }));
+      });
+    return () => {
+      live = false;
+    };
+  }, [expandedId, frozenParameters, projectId, sharesParameters, state]);
   // The link whose Revoke is waiting for a yes (design review I2).
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -613,7 +667,9 @@ export function EncryptedShareLinks({
     // L08: frozen in this browser first, so a model that cannot be frozen
     // makes no link at all.
     const frozenDocument =
-      withoutHistory && onFreezeModel ? await onFreezeModel() : undefined;
+      withoutHistory && onFreezeModel
+        ? await onFreezeModel({ parameters: draft.mode === 'tweak' })
+        : undefined;
     const made = frozenDocument
       ? await client.create(projectId, 'frozen', {
           frozenDocument,
@@ -1051,9 +1107,15 @@ export function EncryptedShareLinks({
                   facts={[
                     [
                       'Visitors can',
-                      row.mode === 'tweak'
+                      row.mode === 'tweak' ||
+                      (row.mode === 'frozen' &&
+                        frozenParameters[row.shareId] === true)
                         ? 'View and change parameters'
-                        : 'View, measure and export'
+                        : row.mode === 'frozen' &&
+                            sharesParameters &&
+                            frozenParameters[row.shareId] === undefined
+                          ? 'Checking…'
+                          : 'View, measure and export'
                     ],
                     [
                       'History',
@@ -1102,10 +1164,8 @@ export function EncryptedShareLinks({
                       aria-label={`Update ${name} to the current model`}
                       onClick={() =>
                         void run(`update:${row.shareId}`, async () =>
-                          client.update!(
-                            projectId,
-                            row.shareId,
-                            await onFreezeModel()
+                          client.update!(projectId, row.shareId, (parameters) =>
+                            onFreezeModel({ parameters })
                           )
                         )
                       }

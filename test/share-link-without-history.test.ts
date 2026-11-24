@@ -10,8 +10,10 @@ import {
   frozenShareDocument,
   frozenShareDocumentProblem,
   importStepBody,
+  isTweakableWithoutHistory,
   listNodesByKind,
-  sharedProjectSnapshotDocument
+  sharedProjectSnapshotDocument,
+  tweakableShareDocument
 } from '@openzcad/document-core';
 import {
   EncryptedProjectSharingError,
@@ -186,21 +188,98 @@ describe.each([
     ).toMatchObject({ history: false, label: 'For the supplier' });
   });
 
-  it('forces view even when asked for tweak', async () => {
+  it('holds the mode to the model: view for solids, tweak for parameters', async () => {
     const { service, document } = await setup();
-    const created = await service.createProjectShareLink(
-      document.ownerUserId,
-      document.projectId,
-      {
+    // Imported solids have nothing to tweak.
+    await expect(
+      service.createProjectShareLink(document.ownerUserId, document.projectId, {
         shareLinkId: 'share_f',
         mode: 'tweak',
         tokenHash: await hashFrozenShareLinkToken(token('f')),
         createdAt: now(),
         frozenDocument: frozenOf(document)
+      })
+    ).rejects.toThrow(ProjectSharingError);
+    // The recipe, without its history or names, makes a tweak link.
+    const created = await service.createProjectShareLink(
+      document.ownerUserId,
+      document.projectId,
+      {
+        shareLinkId: 'share_t',
+        mode: 'tweak',
+        tokenHash: await hashFrozenShareLinkToken(token('t')),
+        createdAt: now(),
+        frozenDocument: tweakableShareDocument(document)
       }
     );
-    expect(created.mode).toBe('view');
+    expect(created).toMatchObject({ mode: 'tweak', history: false });
+    const shared = await visit(service, 't');
+    expect(shared).toMatchObject({ mode: 'tweak', history: false });
+    expect(isTweakableWithoutHistory(shared!.document)).toBe(true);
+    expect(
+      listNodesByKind(shared!.document, 'feature').map((node) => node.name)
+    ).toEqual(['Feature 1']);
+    // Bodies keep their names, as a view-only link's solids do; nothing of
+    // how the model was built, its file names or its history goes with them.
+    expect(
+      JSON.stringify(shared).replaceAll(`"name":"${SECRET} feature"`, '')
+    ).not.toContain(SECRET);
+    // Nor asked for view.
+    await expect(
+      service.createProjectShareLink(document.ownerUserId, document.projectId, {
+        shareLinkId: 'share_v',
+        mode: 'view',
+        tokenHash: await hashFrozenShareLinkToken(token('v')),
+        createdAt: now(),
+        frozenDocument: tweakableShareDocument(document)
+      })
+    ).rejects.toThrow(ProjectSharingError);
+  });
+
+  it('never changes what kind of model a link without history shares', async () => {
+    const { service, document } = await setup();
+    await frozenLink(service, document, 'share_f', 'f');
+    await expect(
+      service.updateProjectShareLinkSnapshot(
+        document.ownerUserId,
+        document.projectId,
+        'share_f',
+        tweakableShareDocument(document),
+        now()
+      )
+    ).rejects.toThrow(ProjectSharingError);
     expect((await visit(service, 'f'))?.mode).toBe('view');
+    await service.createProjectShareLink(
+      document.ownerUserId,
+      document.projectId,
+      {
+        shareLinkId: 'share_t',
+        mode: 'tweak',
+        tokenHash: await hashFrozenShareLinkToken(token('t')),
+        createdAt: now(),
+        frozenDocument: tweakableShareDocument(document)
+      }
+    );
+    await expect(
+      service.updateProjectShareLinkSnapshot(
+        document.ownerUserId,
+        document.projectId,
+        'share_t',
+        frozenOf(document),
+        now()
+      )
+    ).rejects.toThrow(ProjectSharingError);
+    expect(
+      (
+        await service.updateProjectShareLinkSnapshot(
+          document.ownerUserId,
+          document.projectId,
+          'share_t',
+          tweakableShareDocument(document),
+          now()
+        )
+      ).mode
+    ).toBe('tweak');
   });
 
   it('refuses to store the project itself as the frozen model', async () => {
