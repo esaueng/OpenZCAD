@@ -1925,6 +1925,8 @@ export interface SceneContext {
   captureView(): ViewportCameraState;
   /** Holds an exact durable pose, orthographic zoom included. */
   restoreView(state: ViewportCameraState, projection: ProjectionMode): void;
+  /** Stops a running glide where it is. */
+  cancelCameraTween(): void;
   /** Invalidates the viewport and schedules a render if it is idle. */
   requestRender(): void;
   renderer: THREE.WebGLRenderer;
@@ -2636,10 +2638,19 @@ function spaceMousePivot(
   return box.isEmpty() ? null : box.getCenter(new THREE.Vector3());
 }
 
-function startRequestedView(
-  context: SceneContext,
+export function startRequestedView(
+  context: Pick<
+    SceneContext,
+    | 'camera'
+    | 'controls'
+    | 'hasFitCamera'
+    | 'startCameraTween'
+    | 'restoreView'
+    | 'cancelCameraTween'
+    | 'requestRender'
+  >,
   request: ViewRequest,
-  handled: MutableRefObject<{ context: SceneContext; nonce: number } | null>
+  handled: MutableRefObject<{ context: object; nonce: number } | null>
 ) {
   if (
     handled.current?.context === context &&
@@ -2653,6 +2664,12 @@ function startRequestedView(
   context.hasFitCamera = true;
   const { camera, controls } = context;
   const target = request.view;
+  if (typeof target === 'object' && 'pose' in target && target.instant) {
+    context.cancelCameraTween();
+    context.restoreView(target.pose, target.projection);
+    context.requestRender();
+    return;
+  }
   if (typeof target === 'object' && 'pose' in target) {
     // A saved view glides to its pose, then holds it exactly: the tween
     // moves position and target, and the restore lands the orthographic
@@ -3072,7 +3089,7 @@ export function ModelViewer({
   const viewRequestRef = useRef(viewRequest);
   viewRequestRef.current = viewRequest;
   const handledViewRequestRef = useRef<{
-    context: SceneContext;
+    context: object;
     nonce: number;
   } | null>(null);
   /**
@@ -4160,6 +4177,7 @@ export function ModelViewer({
         cameraRig.startTween(pose, onComplete, glide),
       captureView: () => cameraRig.capture(),
       restoreView: (state, mode) => cameraRig.restore(state, mode),
+      cancelCameraTween: () => cameraRig.cancelTween(),
       requestRender,
       renderer,
       labelRenderer,

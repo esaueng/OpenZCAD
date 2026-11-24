@@ -1,10 +1,19 @@
-import { VIEWPORT_FIELD_OF_VIEW_BOUNDS } from '@openzcad/shared';
+import {
+  VIEWPORT_FIELD_OF_VIEW_BOUNDS,
+  type UnitSystem
+} from '@openzcad/shared';
 import type {
   DisplayMode,
   ProjectionMode,
   SectionViewSettings,
   ViewportCameraState
 } from '@openzcad/viewport';
+import {
+  isStoredUnit,
+  scaledCameraPose,
+  scaledSectionView,
+  storedUnitFactor
+} from './storedUnitView';
 
 /**
  * Named camera views for a project, kept on this device beside the remembered
@@ -27,6 +36,15 @@ export interface SavedView {
   xray?: boolean;
   /** Captured camera angle; absent in older saved views. */
   fieldOfView?: number;
+  /**
+   * I03: the project's stored unit when the view was saved; the camera and
+   * section are lengths in it. Absent in views saved before it was
+   * recorded: those are stamped when the project next opens or converts
+   * here, with the unit they are known to be in, or `'unknown'` when that
+   * cannot be told (converted elsewhere, or no history to rule it out). An
+   * unknown view is shown as saved and never stamped later.
+   */
+  units?: UnitSystem | 'unknown';
   savedAt: number;
 }
 
@@ -40,14 +58,18 @@ function defaultStorage(): StorageLike | null {
   }
 }
 
-function readAll(storage: StorageLike | null): Record<string, SavedView[]> {
+function readAll(
+  storage: StorageLike | null,
+  requireReadable = false
+): Record<string, SavedView[]> {
   try {
     const raw = storage?.getItem(SAVED_VIEWS_STORAGE_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, SavedView[]>)
       : {};
-  } catch {
+  } catch (error) {
+    if (requireReadable) throw error;
     return {};
   }
 }
@@ -115,8 +137,61 @@ function isSavedView(value: unknown): value is SavedView {
     (view.xray === undefined || typeof view.xray === 'boolean') &&
     isFieldOfView(view.fieldOfView) &&
     isFieldOfView(view.camera.fieldOfView) &&
-    isUp(view.camera.up)
+    isUp(view.camera.up) &&
+    (view.units === undefined ||
+      view.units === 'unknown' ||
+      isStoredUnit(view.units))
   );
+}
+
+/**
+ * The view to show in a project stored in `units`: the same view of the
+ * same part, its camera and section rescaled when it was saved in another
+ * unit (the project was converted since). An unstamped view is taken to be
+ * in `units` already.
+ */
+export function savedViewInUnits(
+  view: SavedView,
+  units: UnitSystem
+): SavedView {
+  if (!isStoredUnit(view.units) || view.units === units) return view;
+  const factor = storedUnitFactor(view.units, units);
+  return {
+    ...view,
+    units,
+    camera: scaledCameraPose(view.camera, factor),
+    ...(view.sectionView
+      ? { sectionView: scaledSectionView(view.sectionView, factor) }
+      : {})
+  };
+}
+
+/**
+ * Records the known unit, or `'unknown'`, on older unstamped project views.
+ * Existing markers are preserved. Returns false when view storage cannot be
+ * read or written.
+ */
+export function stampSavedViewUnits(
+  projectId: string,
+  units: UnitSystem | 'unknown',
+  storage: StorageLike | null = defaultStorage()
+): boolean {
+  if (!storage) return false;
+  try {
+    const all = readAll(storage, true);
+    const views = all[projectId];
+    if (!Array.isArray(views)) return true;
+    const unstamped = (view: SavedView) =>
+      isSavedView(view) && view.units === undefined;
+    if (!views.some(unstamped)) return true;
+    all[projectId] = views.map((view) =>
+      unstamped(view) ? { ...view, units } : view
+    );
+    storage.setItem(SAVED_VIEWS_STORAGE_KEY, JSON.stringify(all));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function loadSavedViews(

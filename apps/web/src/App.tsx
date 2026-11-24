@@ -1040,10 +1040,8 @@ import {
 } from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import type { AutoFrameRequest } from './lib/autoFrame';
-import {
-  scaledCameraPose,
-  useStoredUnitCamera
-} from './hooks/useStoredUnitCamera';
+import { useStoredUnitCamera } from './hooks/useStoredUnitCamera';
+import { legacyViewUnits, scaledSectionView } from './lib/storedUnitView';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
 import {
   faceSketchAttachment,
@@ -2245,6 +2243,10 @@ import {
   type ViewportCameraState
 } from './lib/workspaceSession';
 import {
+  adoptAccountCopyLocally,
+  stampLegacyViewUnits
+} from './lib/adoptAccountCopy';
+import {
   defaultAppSettings,
   saveLocalAppSettings,
   shouldAdoptAccountSettings
@@ -2569,7 +2571,23 @@ interface HydrateOptions {
    * is kept rather than overwritten.
    */
   activeProjectSince?: ActiveProjectSnapshot;
+  /**
+   * I03: the stored unit this device last held the project in, when the
+   * document opened is a newer copy (the account's) that may have been
+   * converted elsewhere. View state written before it recorded its unit is
+   * taken to be in this unit. Defaults to the open document's unit when it
+   * is the same project.
+   */
+  previousUnits?: UnitSystem | 'unknown';
 }
+
+/**
+ * I03: the open's status note when the browser refused to record the unit
+ * of this device's older view state before a converted account copy
+ * replaced the device copy.
+ */
+const VIEW_UNITS_UNKNOWN_NOTE =
+  ' This browser could not keep the unit of its remembered view, so that view was reset.';
 
 /**
  * The sealed shelf (ADR-024 amendment 2026-11-14), loaded on first use so
@@ -4229,6 +4247,7 @@ export function App() {
     onCameraChange: updateCameraPose,
     onCameraSettled: persistCameraPose,
     persistSection: persistSectionView,
+    rescale: rescaleProjectView,
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null, (onScreen) =>
     persistedHiddenBodyIds(onScreen, currentBodyIsolation)
@@ -8847,6 +8866,9 @@ export function App() {
         const accountDocumentLoadFailed = Boolean(
           accountMayOwnStartupProject && rememberedRemoteResult.error
         );
+        // Set when the browser refused to record the unit of this device's
+        // older view state before the account copy replaced the device copy.
+        let startupViewUnitsUnknown = false;
         const restoredOutcome = chooseProjectDocument(
           rememberedLocal,
           rememberedRemote,
@@ -8869,11 +8891,17 @@ export function App() {
           restoredDocument = rememberedLocal
             ? withLocalDerived(restoredDocument, rememberedLocal)
             : restoredDocument;
-          await saveLocalProject(restoredDocument);
-          await saveLastSyncedVersion(
-            restoredDocument.projectId,
-            restoredDocument.version
-          );
+          // I03: legacy view state is stamped with the device copy's unit
+          // before the account copy (perhaps converted elsewhere) replaces it.
+          await adoptAccountCopyLocally(restoredDocument, rememberedLocal, {
+            stampViewUnits: stampLegacyViewUnits,
+            saveLocalProject,
+            saveLastSyncedVersion,
+            isCurrent,
+            viewUnitsUnknown: () => {
+              startupViewUnitsUnknown = true;
+            }
+          });
           if (!isCurrent()) {
             return;
           }
@@ -8970,7 +8998,12 @@ export function App() {
         );
         if (startupProjectId && restoredDocument) {
           hydrateDocument(restoredDocument, {
-            activeProjectSince: startupPointer
+            activeProjectSince: startupPointer,
+            ...(startupViewUnitsUnknown
+              ? { previousUnits: 'unknown' as const }
+              : rememberedLocal?.projectId === restoredDocument.projectId
+                ? { previousUnits: rememberedLocal.units }
+                : {})
           });
           if (accountDocumentNeedsRepair) {
             setSaveState('repair');
@@ -9009,7 +9042,9 @@ export function App() {
             );
             return;
           }
-          setStatus(`Reopened ${restoredDocument.name}.`);
+          setStatus(
+            `Reopened ${restoredDocument.name}.${startupViewUnitsUnknown ? VIEW_UNITS_UNKNOWN_NOTE : ''}`
+          );
           return;
         }
         if (startupProjectId) {
@@ -11364,16 +11399,55 @@ export function App() {
       clearSectionOutline();
       restoredSectionRequestTokenRef.current = null;
       pendingSectionRestoreRef.current = normalized.projectId;
-      restoreProjectView(normalized.projectId, {
-        projection: appSettings.viewport.defaultProjection,
-        showGrid: appSettings.viewport.showGrid,
-        displayMode: appSettings.viewport.displayMode,
-        reducedMotion: appSettings.appearance.reducedMotion,
-        zoomToCursor: appSettings.viewport.zoomToCursor,
-        middleDrag: appSettings.viewport.middleDrag,
-        orbitMode: appSettings.viewport.orbitMode,
-        pointerNavigation: appSettings.viewport.pointerNavigation
+      const open = managerRef.current?.document;
+      const previousUnits =
+        options.previousUnits ??
+        (open?.projectId === normalized.projectId ? open.units : undefined);
+      // With no unit known here, a project that may have been converted (a
+      // conversion in its log, or no log to rule one out) has older view
+      // state in either unit: it is dropped, not guessed.
+      const legacyUnits = legacyViewUnits({
+        previousUnits,
+        units: normalized.units,
+        commandLog: normalized.commandLog,
+        historyAvailable: !(
+          shareSessionRef.current || isSharedWithoutHistory(normalized)
+        )
       });
+      // Saved views written before they recorded their unit are recorded in
+      // that unit now, before any is shown, or marked as unknown so a later
+      // open (after the newer copy is cached here) cannot stamp them.
+      {
+        const projectId = normalized.projectId;
+        void import('./lib/savedViews').then(({ stampSavedViewUnits }) =>
+          stampSavedViewUnits(projectId, legacyUnits)
+        );
+      }
+      const refreshed = restoreProjectView(
+        normalized.projectId,
+        {
+          projection: appSettings.viewport.defaultProjection,
+          showGrid: appSettings.viewport.showGrid,
+          displayMode: appSettings.viewport.displayMode,
+          reducedMotion: appSettings.appearance.reducedMotion,
+          zoomToCursor: appSettings.viewport.zoomToCursor,
+          middleDrag: appSettings.viewport.middleDrag,
+          orbitMode: appSettings.viewport.orbitMode,
+          pointerNavigation: appSettings.viewport.pointerNavigation
+        },
+        normalized.units,
+        legacyUnits
+      );
+      // The project on screen, now in another unit (an account refresh of a
+      // conversion made elsewhere): the mounted viewer does not reread its
+      // initial view, so the live camera lands on the rescaled pose here.
+      // The unit-change hook then finds the view already in this unit.
+      if (refreshed)
+        requestView({
+          pose: refreshed.pose,
+          projection: refreshed.projection,
+          instant: true
+        });
     }
     if (rememberProject) {
       rememberActiveProject(
@@ -11529,15 +11603,41 @@ export function App() {
   // I03: a stored-unit conversion (or its undo, redo or checkpoint restore)
   // rescales every number of the model, so the camera follows by the same k
   // and the part stays where it was on screen. Scaling the pose rather than
-  // reframing keeps the user's view, as an edit does.
-  useStoredUnitCamera(doc?.projectId ?? null, doc?.units ?? null, (factor) => {
-    const snapshot = projectViewSnapshot();
-    if (snapshot)
-      requestView({
-        pose: scaledCameraPose(snapshot.camera, factor),
-        projection
-      });
-  });
+  // reframing keeps the user's view, as an edit does. The section cut, the
+  // cut remembered while sectioning is off, and this device's remembered
+  // view and saved views are lengths in the same unit and follow with it.
+  useStoredUnitCamera(
+    doc?.projectId ?? null,
+    doc?.units ?? null,
+    (factor, from, to) => {
+      const projectId = doc?.projectId;
+      // The cut kept for switching sectioning back on follows the model it
+      // was on, whichever path brought the new unit (a refresh restores the
+      // view before this runs). A live cut replaces it after this effect.
+      const remembered = rememberedSection.current;
+      if (remembered)
+        rememberedSection.current = scaledSectionView(remembered, factor);
+      const rescaled = rescaleProjectView(from, to);
+      // At once, not a glide: the model was rescaled in one step, and a
+      // glide's frames would be reported, persisted and rescaled again by an
+      // undo or a reload made before it landed.
+      if (rescaled?.camera)
+        requestView({ pose: rescaled.camera, projection, instant: true });
+      if (rescaled) {
+        if (rescaled.sectionView && projectId) {
+          // The exact section on screen cut the model in the old unit; ask
+          // for it again once the converted model is rebuilt.
+          clearSectionOutline();
+          restoredSectionRequestTokenRef.current = null;
+          pendingSectionRestoreRef.current = projectId;
+        }
+      }
+      if (projectId)
+        void import('./lib/savedViews').then(({ stampSavedViewUnits }) =>
+          stampSavedViewUnits(projectId, from)
+        );
+    }
+  );
 
   function handleViewportSettled(camera: ViewportCameraState) {
     persistCameraPose(doc?.projectId ?? null, camera);
@@ -14257,6 +14357,7 @@ export function App() {
   const savedViewsControl = doc
     ? {
         projectId: doc.projectId,
+        units: doc.units,
         capture() {
           const snapshot = projectViewSnapshot();
           return snapshot
@@ -16365,7 +16466,10 @@ export function App() {
       const existing = await loadLocalProject(definition.projectId);
       if (!isCurrent()) return;
       if (existing) {
-        hydrateDocument(existing, { activeProjectSince });
+        hydrateDocument(existing, {
+          activeProjectSince,
+          previousUnits: existing.units
+        });
         if (definition.initialWorkspace)
           setWorkspaceMode(definition.initialWorkspace);
         setStatus(`Opened ${existing.name}.`);
@@ -16482,7 +16586,10 @@ export function App() {
           : null;
         setCloudAvailable(false);
         setArtifacts([]);
-        hydrateDocument(localDocument, { activeProjectSince });
+        hydrateDocument(localDocument, {
+          activeProjectSince,
+          previousUnits: localDocument.units
+        });
         if (!needsRepair) accountUnreachableProjectIdRef.current = projectId;
         setSaveState(needsRepair ? 'repair' : 'offline');
         setStatus(
@@ -16534,22 +16641,39 @@ export function App() {
         );
         return;
       }
+      let viewUnitsUnknown = false;
       const openedDocument =
         outcome.choice === 'remote' && localDocument
           ? withLocalDerived(outcome.document, localDocument)
           : outcome.document;
       if (outcome.choice === 'remote') {
-        await saveLocalProject(openedDocument);
-        if (!isCurrent()) return;
-        await saveLastSyncedVersion(projectId, openedDocument.version);
+        // I03: as at startup, stamp legacy view state with the device copy's
+        // unit before the account copy replaces it.
+        await adoptAccountCopyLocally(openedDocument, localDocument, {
+          stampViewUnits: stampLegacyViewUnits,
+          saveLocalProject,
+          saveLastSyncedVersion,
+          isCurrent,
+          viewUnitsUnknown: () => {
+            viewUnitsUnknown = true;
+          }
+        });
       }
       if (!isCurrent()) return;
       commitAccountState();
-      hydrateDocument(openedDocument, { activeProjectSince });
+      hydrateDocument(openedDocument, {
+        activeProjectSince,
+        ...(viewUnitsUnknown
+          ? { previousUnits: 'unknown' as const }
+          : localDocument
+            ? { previousUnits: localDocument.units }
+            : {})
+      });
       setStatus(
-        outcome.choice === 'local' && remoteDocument
+        (outcome.choice === 'local' && remoteDocument
           ? `Opened newer local edits for ${openedDocument.name}.`
-          : `Opened ${openedDocument.name}.`
+          : `Opened ${openedDocument.name}.`) +
+          (viewUnitsUnknown ? VIEW_UNITS_UNKNOWN_NOTE : '')
       );
     } catch (error) {
       if (isCurrent()) {
