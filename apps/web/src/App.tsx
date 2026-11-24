@@ -2488,6 +2488,13 @@ const PROJECT_EDITING_MOVING_NOTICE =
 /** The owner tab was busy (a save, a conversion) and kept the project. */
 const PROJECT_EDITING_DECLINED_NOTICE =
   'Editing is locked: the other tab is finishing a save. Click here to try again.';
+/**
+ * The tab editing the project never answered: it is frozen, or it loaded
+ * before tabs could hand editing over. Neither ever will, and taking the
+ * project anyway could lose a write it still has queued.
+ */
+const PROJECT_EDITING_UNANSWERED_NOTICE =
+  "Editing is locked: the tab editing this project isn't responding. Reload or close that tab to edit here.";
 /** The lane's notice in a tab that handed editing to another tab. */
 const PROJECT_EDITING_MOVED_NOTICE =
   'Editing moved to another tab. Click here to edit in this tab.';
@@ -2496,6 +2503,7 @@ const PROJECT_HANDOFF_NOTICES: ReadonlySet<string> = new Set([
   PROJECT_OPEN_ELSEWHERE_NOTICE,
   PROJECT_EDITING_MOVING_NOTICE,
   PROJECT_EDITING_DECLINED_NOTICE,
+  PROJECT_EDITING_UNANSWERED_NOTICE,
   PROJECT_EDITING_MOVED_NOTICE
 ]);
 /** Identifies this tab to the others editing the same projects. */
@@ -7962,11 +7970,12 @@ export function App() {
       return true;
     }
     if (projectOpenElsewhereRef.current) {
-      setStatus(
-        requestEditingHere()
-          ? PROJECT_EDITING_MOVING_NOTICE
-          : PROJECT_OPEN_ELSEWHERE_NOTICE
-      );
+      // Kept up until the owner answers, which then replaces it.
+      if (requestEditingHere()) {
+        setStatus(PROJECT_EDITING_MOVING_NOTICE, { sticky: true });
+      } else {
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      }
       return false;
     }
     setStatus(cannotSentence(action, reason));
@@ -7990,11 +7999,12 @@ export function App() {
       return true;
     }
     if (projectOpenElsewhereRef.current) {
-      setStatus(
-        requestEditingHere()
-          ? PROJECT_EDITING_MOVING_NOTICE
-          : PROJECT_OPEN_ELSEWHERE_NOTICE
-      );
+      // Kept up until the owner answers, which then replaces it.
+      if (requestEditingHere()) {
+        setStatus(PROJECT_EDITING_MOVING_NOTICE, { sticky: true });
+      } else {
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      }
       return false;
     }
     setStatus(cannotSentence(action, reason));
@@ -8019,11 +8029,12 @@ export function App() {
       return true;
     }
     if (projectOpenElsewhereRef.current) {
-      setStatus(
-        requestEditingHere()
-          ? PROJECT_EDITING_MOVING_NOTICE
-          : PROJECT_OPEN_ELSEWHERE_NOTICE
-      );
+      // Kept up until the owner answers, which then replaces it.
+      if (requestEditingHere()) {
+        setStatus(PROJECT_EDITING_MOVING_NOTICE, { sticky: true });
+      } else {
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      }
       return false;
     }
     setStatus(cannotSentence(action, reason));
@@ -8040,11 +8051,12 @@ export function App() {
       return true;
     }
     if (projectOpenElsewhereRef.current) {
-      setStatus(
-        requestEditingHere()
-          ? PROJECT_EDITING_MOVING_NOTICE
-          : PROJECT_OPEN_ELSEWHERE_NOTICE
-      );
+      // Kept up until the owner answers, which then replaces it.
+      if (requestEditingHere()) {
+        setStatus(PROJECT_EDITING_MOVING_NOTICE, { sticky: true });
+      } else {
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      }
       return false;
     }
     setStatus(cannotSentence(action, reason));
@@ -8574,17 +8586,27 @@ export function App() {
   function requestEditingHere(): boolean {
     const tracker = projectEditingRef.current;
     if (!tracker || projectHandoffBlockedRef.current) return false;
-    if (tracker.ownership.owned) return true;
-    projectEditingAskedRef.current = true;
+    projectEditingAskedRef.current = !tracker.ownership.owned;
     void tracker.requestEditing().then((result) => {
       if (projectEditingRef.current !== tracker) return;
-      if (result === 'owner') return;
+      if (result === 'owner') {
+        // Promotion retires the notice; an answer from a tab that already
+        // owned the project has no promotion to do it.
+        setStatusEntry((current) =>
+          current.text === PROJECT_EDITING_MOVING_NOTICE
+            ? retireStatus(current, Date.now())
+            : current
+        );
+        return;
+      }
       projectEditingAskedRef.current = false;
       if (!projectOpenElsewhereRef.current) return;
       setStatus(
         result === 'declined'
           ? PROJECT_EDITING_DECLINED_NOTICE
-          : PROJECT_OPEN_ELSEWHERE_NOTICE,
+          : result === 'timeout'
+            ? PROJECT_EDITING_UNANSWERED_NOTICE
+            : PROJECT_OPEN_ELSEWHERE_NOTICE,
         { sticky: true }
       );
     });

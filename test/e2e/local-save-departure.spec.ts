@@ -419,6 +419,37 @@ test('carries each tab’s edits and undo history to the tab the user switches t
   }
 });
 
+test('says how to edit here when the tab editing the project never answers', async ({
+  page
+}) => {
+  // A tab loaded before tabs could hand editing over listens on no channel:
+  // it keeps the project, and the tab asking for it must say what to do.
+  await page.addInitScript(() =>
+    Reflect.deleteProperty(window, 'BroadcastChannel')
+  );
+  const name = 'Unanswered handoff';
+  await prepareLocalBox(page, name);
+  const original = (await storedProject(page, name))!;
+  const second = await page.context().newPage();
+  try {
+    await openSameProject(second, original, false, true);
+    await expect(
+      second.locator('.workspace-toast-body [role="status"]')
+    ).toContainText('Reload or close that tab to edit here.', {
+      timeout: 15_000
+    });
+    await expect(
+      second.getByRole('button', { name: /^Box.*open in another tab/ })
+    ).toBeDisabled();
+    // The tab that kept the project still edits it.
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeEnabled();
+  } finally {
+    await second.close();
+  }
+});
+
 test('keeps the previous owner’s copy when the storage read on promotion fails', async ({
   page
 }) => {
