@@ -25,6 +25,14 @@ import { sharedProjectSnapshotDocument } from './shared-snapshot';
 export const SHARED_WITHOUT_HISTORY_METADATA_KEY =
   'sharedWithoutHistory' as const;
 
+/**
+ * On a body of a frozen model: the owner had it hidden when sharing, so a
+ * visitor's view (and the first view of their copy) starts with it hidden.
+ * Visibility is otherwise this device's view state, never the document's;
+ * the mark is only where that view starts.
+ */
+export const BODY_INITIALLY_HIDDEN_METADATA_KEY = 'initiallyHidden' as const;
+
 /** One body of the frozen model. */
 export interface FrozenShareBody {
   name: string;
@@ -33,6 +41,8 @@ export interface FrozenShareBody {
   /** A colour someone chose for it; null when it is drawn in the default. */
   color: string | null;
   opacity: number | null;
+  /** The owner had it hidden: it is shared, but starts hidden. */
+  hidden?: boolean;
 }
 
 /** The document a link without history serves for `source`. */
@@ -72,6 +82,7 @@ export function frozenShareDocument(
     }
     if (body.opacity !== null)
       metadata[BODY_OPACITY_METADATA_KEY] = body.opacity;
+    if (body.hidden) metadata[BODY_INITIALLY_HIDDEN_METADATA_KEY] = true;
     node.metadata = metadata;
   });
   return sharedProjectSnapshotDocument(document);
@@ -85,6 +96,18 @@ export function isSharedWithoutHistory(
     document.nodes[document.rootNodeId]?.metadata?.[
       SHARED_WITHOUT_HISTORY_METADATA_KEY
     ] === true
+  );
+}
+
+/** The bodies `document` asks a first view to start with hidden. */
+export function initiallyHiddenBodyIds(
+  document: Pick<ProjectDocument, 'nodes'>
+): string[] {
+  return Object.values(document.nodes).flatMap((node) =>
+    node.kind === 'body' &&
+    node.metadata?.[BODY_INITIALLY_HIDDEN_METADATA_KEY] === true
+      ? [node.bodyId]
+      : []
   );
 }
 
@@ -166,8 +189,17 @@ const FEATURE_DATA_KEYS = new Set([
 const BODY_METADATA_KEYS = new Set<string>([
   BODY_COLOR_METADATA_KEY,
   BODY_COLOR_CHOSEN_METADATA_KEY,
-  BODY_OPACITY_METADATA_KEY
+  BODY_OPACITY_METADATA_KEY,
+  BODY_INITIALLY_HIDDEN_METADATA_KEY
 ]);
+
+/** Absent, or exactly `true`: a hidden mark never carries a value. */
+function hiddenMarkOnly(metadata: object | undefined): boolean {
+  const mark: unknown = (metadata as Record<string, unknown> | undefined)?.[
+    BODY_INITIALLY_HIDDEN_METADATA_KEY
+  ];
+  return mark === undefined || mark === true;
+}
 
 function onlyKeys(value: object, allowed: ReadonlySet<string>): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
@@ -236,7 +268,9 @@ export function frozenShareDocumentProblem(
       if (
         node.bodyType !== 'solid' ||
         node.representationSource !== 'step-import' ||
-        !onlyKeys(node.metadata ?? {}, BODY_METADATA_KEYS)
+        !onlyKeys(node.metadata ?? {}, BODY_METADATA_KEYS) ||
+        // A mark, never a value that could carry anything else.
+        !hiddenMarkOnly(node.metadata)
       )
         return 'It holds a body other than an imported solid.';
     }

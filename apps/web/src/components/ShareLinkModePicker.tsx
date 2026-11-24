@@ -14,7 +14,7 @@ export const SHARE_LINK_MODE_HINT: Record<ProjectShareLinkMode, string> = {
 
 /** What a link without history shares, in place of the mode's own line. */
 export const SHARE_LINK_NO_HISTORY_HINT =
-  'Visitors get the finished model only: no features, sketches or parameters. It stays as it is now until you update the link.';
+  'Visitors get the finished model only: no features, sketches or parameters. Bodies you hid start hidden. It stays as it is now until you update the link.';
 
 /**
  * The access a new share link grants, as two native radios drawn as one

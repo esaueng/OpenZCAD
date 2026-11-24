@@ -562,3 +562,50 @@ describe('I03: a view read before it recorded its unit is rewritten at once', ()
     expect(stored?.settings.displayMode).toBe('shaded');
   });
 });
+
+describe('a first view of a model shared without history', () => {
+  const defaults = {
+    projection: 'perspective' as const,
+    showGrid: true,
+    displayMode: 'shaded-edges' as const,
+    reducedMotion: false,
+    zoomToCursor: true,
+    middleDrag: 'pan' as const,
+    orbitMode: 'free' as const,
+    pointerNavigation: 'auto' as const
+  };
+
+  it('starts with the marked bodies hidden when this device saved none', () => {
+    const { result } = renderHook(() => useProjectView('shared-copy'));
+    act(() => {
+      result.current.restore('shared-copy', defaults, 'mm', undefined, {
+        bodyIds: ['body_cover']
+      });
+    });
+    expect([...result.current.hiddenBodyIds]).toEqual(['body_cover']);
+  });
+
+  it("keeps this device's own hidden set unless told the mark wins", () => {
+    workspaceSession.saveProjectView('shared-copy', {
+      camera: settledPose,
+      projection: 'perspective',
+      settings: { showGrid: true, displayMode: 'shaded-edges' },
+      hiddenBodyIds: [],
+      units: 'mm'
+    });
+    const { result } = renderHook(() => useProjectView('shared-copy'));
+    act(() => {
+      result.current.restore('shared-copy', defaults, 'mm', undefined, {
+        bodyIds: ['body_cover']
+      });
+    });
+    expect([...result.current.hiddenBodyIds]).toEqual([]);
+    act(() => {
+      result.current.restore('shared-copy', defaults, 'mm', undefined, {
+        bodyIds: ['body_cover'],
+        overrideSaved: true
+      });
+    });
+    expect([...result.current.hiddenBodyIds]).toEqual(['body_cover']);
+  });
+});
