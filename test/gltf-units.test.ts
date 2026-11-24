@@ -12,7 +12,8 @@ import {
 import { toUserId, type UnitSystem } from '@openzcad/shared';
 import {
   GLTF_ROOT_NAME,
-  glbPlacement
+  glbPlacement,
+  glbWithIdentityNodes
 } from '../packages/kernel-adapter/src/glb-scene';
 import { glbFixture } from './support/mesh-import-fixtures';
 
@@ -331,38 +332,41 @@ describe('GLB export in glTF units', { timeout: 30_000 }, () => {
 });
 
 describe('GLB import placement', () => {
+  function rewriteJson(glb: Uint8Array, rewrite: (source: string) => string) {
+    const view = new DataView(glb.buffer, glb.byteOffset, glb.byteLength);
+    const jsonLength = view.getUint32(12, true);
+    const end = 20 + jsonLength;
+    const encoder = new TextEncoder();
+    const encoded = encoder.encode(
+      rewrite(new TextDecoder().decode(glb.subarray(20, end)))
+    );
+    const paddedLength = Math.ceil(encoded.length / 4) * 4;
+    const out = new Uint8Array(20 + paddedLength + glb.length - end);
+    out.set(glb.subarray(0, 20));
+    const header = new DataView(out.buffer);
+    header.setUint32(8, out.length, true);
+    header.setUint32(12, paddedLength, true);
+    out.fill(0x20, 20, 20 + paddedLength);
+    out.set(encoded, 20);
+    out.set(glb.subarray(end), 20 + paddedLength);
+    return out;
+  }
+
   /** The 2 × 3 × 4 fixture box with its scene rewritten. */
   function withScene(
     mutate: (json: {
+      scene?: number;
       nodes: Record<string, unknown>[];
       meshes: unknown[];
-      scenes: { nodes: number[] }[];
+      scenes?: { nodes: number[] }[];
     }) => void,
     count = 1
   ): Uint8Array {
-    const glb = glbFixture(count);
-    const view = new DataView(glb.buffer, glb.byteOffset, glb.byteLength);
-    const jsonLength = view.getUint32(12, true);
-    const json = JSON.parse(
-      new TextDecoder().decode(glb.subarray(20, 20 + jsonLength))
-    ) as Parameters<typeof mutate>[0];
-    mutate(json);
-    let text = JSON.stringify(json);
-    while (text.length % 4) {
-      text += ' ';
-    }
-    const encoded = new TextEncoder().encode(text);
-    const rest = glb.subarray(20 + jsonLength);
-    const out = new Uint8Array(20 + encoded.length + rest.length);
-    const outView = new DataView(out.buffer);
-    outView.setUint32(0, 0x46546c67, true);
-    outView.setUint32(4, 2, true);
-    outView.setUint32(8, out.length, true);
-    outView.setUint32(12, encoded.length, true);
-    outView.setUint32(16, 0x4e4f534a, true);
-    out.set(encoded, 20);
-    out.set(rest, 20 + encoded.length);
-    return out;
+    return rewriteJson(glbFixture(count), (source) => {
+      const json = JSON.parse(source) as Parameters<typeof mutate>[0];
+      mutate(json);
+      return JSON.stringify(json);
+    });
   }
 
   const apply = (t: readonly number[], [x, y, z]: number[]) => [
@@ -382,12 +386,13 @@ describe('GLB import placement', () => {
     const centimetres = withScene((json) => {
       json.nodes[0]!.translation = [0.5, 0, 0];
       json.nodes.push({ children: [0], scale: [0.01, 0.01, 0.01] });
-      json.scenes[0]!.nodes = [json.nodes.length - 1];
+      json.scenes![0]!.nodes = [json.nodes.length - 1];
     });
-    // The reader places the instance; the adapter adds only the unit and axis.
-    expect(glbPlacement(centimetres)).toEqual(
-      glbPlacement(withScene(() => {}))
-    );
+    // A centimetre file: 1 unit is 10 mm, placed 0.5 units along +X.
+    const t = glbPlacement(centimetres);
+    expect(apply(t, [0, 0, 0])[0]).toBeCloseTo(5, 9);
+    expect(apply(t, [1, 0, 0])[0]).toBeCloseTo(15, 9);
+    // The reader is handed identity nodes, so the placement is applied once.
     const xs = async (glb: Uint8Array) =>
       (await importMeshFile('glb', glb, 'mm')).vertices.filter(
         (_v, index) => index % 3 === 0
@@ -400,12 +405,183 @@ describe('GLB import placement', () => {
     expect(Math.max(...scaled)).toBeCloseTo(Math.max(...plain) / 100 + 5, 6);
   });
 
+  const axis = (mesh: { vertices: number[] }, which: number) =>
+    mesh.vertices.filter((_v, index) => index % 3 === which);
+
+  it('places a scene-less file by its parentless nodes', async () => {
+    const offset = (json: Parameters<Parameters<typeof withScene>[0]>[0]) => {
+      json.nodes[0]!.translation = [0.5, 0, 0];
+      json.nodes.push({ children: [0], translation: [0, 0, -0.25] });
+    };
+    const library = withScene((json) => {
+      offset(json);
+      delete json.scene;
+      delete json.scenes;
+    });
+    const scened = withScene((json) => {
+      offset(json);
+      json.scenes![0]!.nodes = [json.nodes.length - 1];
+    });
+    const plain = await importMeshFile(
+      'glb',
+      withScene(() => {}),
+      'mm'
+    );
+    const mesh = await importMeshFile('glb', library, 'mm');
+    // Every parentless node is a root: 0.5 m along glTF +X is 500 mm along
+    // model X, and −0.25 m along glTF +Z (the front) is +250 mm along model Y.
+    expect(Math.min(...axis(mesh, 0))).toBeCloseTo(
+      Math.min(...axis(plain, 0)) + 500,
+      6
+    );
+    expect(Math.min(...axis(mesh, 1))).toBeCloseTo(
+      Math.min(...axis(plain, 1)) + 250,
+      6
+    );
+    expect(mesh.vertices).toEqual(
+      (await importMeshFile('glb', scened, 'mm')).vertices
+    );
+  });
+
+  it('imports the selected scene, not the first', async () => {
+    const selected = withScene((json) => {
+      json.nodes.push({ mesh: 0, translation: [0.5, 0, 0] });
+      json.scenes = [{ nodes: [0] }, { nodes: [json.nodes.length - 1] }];
+      json.scene = 1;
+    });
+    const plain = await importMeshFile(
+      'glb',
+      withScene(() => {}),
+      'mm'
+    );
+    const mesh = await importMeshFile('glb', selected, 'mm');
+    expect(mesh.triangleCount).toBe(plain.triangleCount);
+    expect(Math.min(...axis(mesh, 0))).toBeCloseTo(
+      Math.min(...axis(plain, 0)) + 500,
+      6
+    );
+  });
+
+  it('welds thin geometry where it was authored, before the scene scales it', async () => {
+    // The fixture's 2 × 3 × 4 box authored in millimetres and squashed by its
+    // scene to a 2 × 4 mm plate 90 nm thick: 9e-8 m, under the reader's
+    // 1e-7 weld once placed, but 3 units apart where it was authored.
+    const thin = withScene((json) => {
+      json.nodes[0]!.scale = [0.001, 3e-8, 0.001];
+    });
+    const plain = await importMeshFile(
+      'glb',
+      withScene(() => {}),
+      'mm'
+    );
+    const mesh = await importMeshFile('glb', thin, 'mm');
+    expect(mesh.triangleCount).toBe(plain.triangleCount);
+    const heights = axis(mesh, 2);
+    const thickness = Math.max(...heights) - Math.min(...heights);
+    expect(thickness / 9e-5).toBeCloseTo(1, 9);
+  });
+
+  it('hands the reader identity nodes and preserves all other bytes', () => {
+    const plain = withScene(() => {});
+    expect(glbWithIdentityNodes(plain)).toBe(plain);
+    const placed = withScene((json) => {
+      json.nodes[0]!.name = 'Pièce "A"';
+      json.nodes[0]!.extras = { scale: [2, 3, 4] };
+      json.nodes[0]!.rotation = [0, 0, Math.SQRT1_2, Math.SQRT1_2];
+      json.nodes.push({
+        children: [0],
+        matrix: [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 1, 2, 3, 1]
+      });
+      json.scenes![0]!.nodes = [json.nodes.length - 1];
+    });
+    const escaped = rewriteJson(placed, (source) =>
+      source.replace('"rotation":', '"rotati\\u006fn":')
+    );
+    const read = glbWithIdentityNodes(escaped);
+    const { json } = parseGlb(read);
+    expect(json.nodes).toEqual([
+      {
+        mesh: 0,
+        name: 'Pièce "A"',
+        extras: { scale: [2, 3, 4] },
+        rotation: null
+      },
+      { children: [0], matrix: null }
+    ]);
+    expect(json.scenes).toEqual([{ nodes: [1] }]);
+    expect(read).toEqual(
+      rewriteJson(escaped, (source) =>
+        source
+          .replace(
+            /("rotati\\u006fn":)(\[[^\]]*\])/,
+            (_match, key, value: string) => key + 'null'.padEnd(value.length)
+          )
+          .replace(
+            /("matrix":)(\[[^\]]*\])/,
+            (_match, key, value: string) => key + 'null'.padEnd(value.length)
+          )
+      )
+    );
+  });
+
+  it('leaves repeated properties for the reader to reject', async () => {
+    const placed = withScene((json) => {
+      json.nodes[0]!.scale = [1, 1, 1];
+    });
+    const repeated = rewriteJson(placed, (source) =>
+      source.replace('"scale":[1,1,1]', '"scale":[2,2,2],"scale":[1,1,1]')
+    );
+    await expect(importMeshFile('glb', repeated, 'mm')).rejects.toThrow(
+      /duplicate field.*scale/
+    );
+  });
+
+  it('refuses the node transforms the reader no longer sees, by name', () => {
+    const refuse = (node: Record<string, unknown>, pattern: RegExp) =>
+      expect(() =>
+        glbPlacement(
+          withScene((json) => {
+            Object.assign(json.nodes[0]!, node);
+          })
+        )
+      ).toThrow(pattern);
+    refuse({ rotation: [0, 0, 0, 2] }, /not a unit quaternion/);
+    refuse({ translation: ['1', 0, 0] }, /translation that is not 3 numbers/);
+    refuse({ scale: [1, 1] }, /scale that is not 3 numbers/);
+    refuse(
+      {
+        matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+        scale: [2, 2, 2]
+      },
+      /not an affine placement/
+    );
+    refuse(
+      { matrix: [1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] },
+      /not an affine placement/
+    );
+    refuse({ scale: [1, 0, 1] }, /flattens them/);
+    refuse({ scale: [1e200, 1e200, 1e200] }, /cannot be represented/);
+  });
+
+  it('refuses a second JSON chunk the reader would read instead', () => {
+    const glb = withScene(() => {});
+    const extra = new TextEncoder().encode('{}  ');
+    const out = new Uint8Array(glb.length + 8 + extra.length);
+    out.set(glb);
+    const view = new DataView(out.buffer);
+    view.setUint32(8, out.length, true);
+    view.setUint32(glb.length, extra.length, true);
+    view.setUint32(glb.length + 4, 0x4e4f534a, true);
+    out.set(extra, glb.length + 8);
+    expect(() => glbWithIdentityNodes(out)).toThrow(/more than one JSON chunk/);
+  });
+
   it('refuses what the merged reader cannot honour, by name', () => {
     expect(() =>
       glbPlacement(
         withScene((json) => {
           json.nodes.push({ mesh: 0, translation: [5, 0, 0] });
-          json.scenes[0]!.nodes.push(json.nodes.length - 1);
+          json.scenes![0]!.nodes.push(json.nodes.length - 1);
         })
       )
     ).toThrow(/shows a mesh more than once/);
@@ -419,7 +595,7 @@ describe('GLB import placement', () => {
     expect(() =>
       glbPlacement(
         withScene((json) => {
-          json.scenes[0]!.nodes = [0];
+          json.scenes![0]!.nodes = [0];
         }, 2)
       )
     ).toThrow(/holds 2 meshes but its scene shows 1/);
