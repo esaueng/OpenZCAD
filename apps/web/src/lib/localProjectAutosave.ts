@@ -16,7 +16,12 @@ export class LocalProjectSaveError extends Error {
  * not on this device, so an awaited flush must not be taken as durable.
  */
 export class LocalProjectSaveRefusedError extends Error {
-  constructor() {
+  constructor(
+    /** The refused snapshot, exactly as queued: the work still unsaved. */
+    readonly document: ProjectDocument,
+    /** Stable across cache-only rebuilds of the same pending edit. */
+    readonly key: object
+  ) {
     super(
       'This tab no longer holds the project, so its latest edits were not saved on this device.'
     );
@@ -62,12 +67,19 @@ export interface LocalProjectAutosaveOptions {
 /** One device writer: coalesce waiting snapshots, never overlap transactions,
  * and keep failed work dirty. A flush includes the active write and its tail. */
 export class LocalProjectAutosave {
-  private queued: { document: ProjectDocument; revision: number } | null = null;
+  private queued: {
+    document: ProjectDocument;
+    revision: number;
+    key: object;
+  } | null = null;
   /** Internal canonical generations, independent of document version metadata. */
   private revision = 0;
+  private revisionKey = {};
   private savedRevision = 0;
   private scheduled: ProjectDocument | null = null;
   private inFlight: Promise<void> | null = null;
+  /** Refused snapshots kept durably elsewhere ({@link keptElsewhere}). */
+  private readonly kept = new WeakSet<object>();
 
   constructor(private readonly options: LocalProjectAutosaveOptions) {}
 
@@ -79,9 +91,16 @@ export class LocalProjectAutosave {
   enqueue(document: ProjectDocument): boolean {
     const canonicalChange = !sameLocalProjectContent(this.scheduled, document);
     const wasDirty = this.dirty;
-    if (canonicalChange) this.revision += 1;
+    if (canonicalChange) {
+      this.revision += 1;
+      this.revisionKey = {};
+    }
     this.scheduled = document;
-    this.queued = { document, revision: this.revision };
+    this.queued = {
+      document,
+      revision: this.revision,
+      key: this.revisionKey
+    };
     if (this.dirty !== wasDirty) this.options.onDirtyChange(this.dirty);
     return canonicalChange;
   }
@@ -93,6 +112,27 @@ export class LocalProjectAutosave {
     // in-flight promise registered before the failure/finally path runs.
     this.inFlight = Promise.resolve().then(() => this.drain());
     return this.inFlight;
+  }
+
+  /**
+   * Settles a refused snapshot (`LocalProjectSaveRefusedError.document`)
+   * that has been written durably elsewhere — a recovery copy under a new
+   * project id — so it no longer holds the workspace dirty. Only that exact
+   * snapshot is settled: newer queued work stays queued and dirty. A refusal
+   * of it still in flight settles when it lands.
+   */
+  keptElsewhere(refused: LocalProjectSaveRefusedError): void {
+    this.kept.add(refused.key);
+    const queued = this.queued;
+    if (queued?.key !== refused.key) return;
+    this.queued = null;
+    this.settle(queued.revision);
+  }
+
+  private settle(revision: number): void {
+    const wasDirty = this.dirty;
+    this.savedRevision = Math.max(this.savedRevision, revision);
+    if (this.dirty !== wasDirty) this.options.onDirtyChange(this.dirty);
   }
 
   private async drain(): Promise<void> {
@@ -128,13 +168,24 @@ export class LocalProjectAutosave {
           // identity transfer too. It must not release ownership after failure.
           throw new LocalProjectSaveError(error);
         }
+        if (refused && this.kept.has(snapshot.key)) {
+          // Refused here, but already kept as a recovery copy meanwhile.
+          this.settle(revision);
+          continue;
+        }
         if (refused) {
           // Not written, and no longer this tab's to write: kept (never over
           // a newer snapshot) and dirty, so departure sees unsaved work and
           // a write that holds the project again can still save it.
           this.queued ??= snapshot;
           if (!this.dirty) return;
-          throw new LocalProjectSaveRefusedError();
+          // A later edit can reach the queue while the ownership answer is
+          // pending. Recover that edit, which contains this earlier one.
+          const pending =
+            this.queued.document.projectId === document.projectId
+              ? this.queued
+              : snapshot;
+          throw new LocalProjectSaveRefusedError(pending.document, pending.key);
         }
       }
     } finally {
@@ -152,12 +203,14 @@ export class LocalProjectAutosave {
  */
 export async function departureFlush(
   flush: Promise<void>,
-  onRefused: (error: LocalProjectSaveRefusedError) => void
+  onRefused: (error: LocalProjectSaveRefusedError) => void | Promise<void>
 ): Promise<void> {
   try {
     await flush;
   } catch (error) {
     if (!(error instanceof LocalProjectSaveRefusedError)) throw error;
-    onRefused(error);
+    // Awaited: a departure that keeps the refused work as a recovery copy
+    // continues only once that copy is durable, and stays if it fails.
+    await onRefused(error);
   }
 }

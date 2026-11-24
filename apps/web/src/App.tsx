@@ -560,7 +560,6 @@ import {
 import { localAutosaveFailedStatus } from './lib/localAutosaveFailure';
 import {
   LocalProjectAutosave,
-  departureFlush,
   sameLocalProjectContent,
   type LocalProjectAutosaveOptions,
   type LocalProjectWriteResult
@@ -2198,6 +2197,12 @@ import {
   NavigationEditPause,
   type ProjectNavigation
 } from './lib/navigationEditPause';
+import {
+  DepartureRecoveryCopies,
+  departureBarrier,
+  departureRecoveryHost,
+  type DepartureRecoveryHost
+} from './lib/departureRecoveryCopy';
 import { collaborationClientId } from './lib/collaborationProtocol';
 import { copyLineageNote, withCopyBranchPoint } from './lib/copyBranchPoint';
 import {
@@ -3076,9 +3081,39 @@ export function App() {
         setNavigationPauseVersion((version) => version + 1)
       )
   );
-  /** Ends `isCurrent`'s pause, when it is a {@link ProjectNavigation}. */
-  const endProjectNavigation = (isCurrent: () => boolean) =>
-    (isCurrent as Partial<ProjectNavigation>).end?.();
+  /**
+   * What a departure kept as a recovery copy, said once the navigation has
+   * ended: the screen it lands on (the shelf above all) resets the status
+   * line and toast as it opens, which would otherwise erase it at once.
+   * `show` is bound to `announce` once that is declared.
+   */
+  const departureNoticeRef = useRef<{
+    pending: string | null;
+    show(message: string): void;
+  }>({ pending: null, show: () => undefined });
+  const showDepartureNotice = useCallback(() => {
+    const notice = departureNoticeRef.current;
+    if (notice.pending === null) return;
+    const message = notice.pending;
+    notice.pending = null;
+    notice.show(message);
+  }, []);
+  /**
+   * The function that ends a departure's pause. A {@link ProjectNavigation}
+   * brings its own; a caller's plain "still current?" check (an accepted
+   * invitation, a link leaving its shared session) gets one begun here, so
+   * every departure pauses edits and keeps a refused edit as a recovery
+   * copy through the same barrier.
+   */
+  const departureEnd = (isCurrent: () => boolean): (() => void) => {
+    const navigation = isCurrent as Partial<ProjectNavigation>;
+    if (navigation.end) return () => navigation.end?.();
+    const endPause = navigationPause.begin(managerRef.current);
+    return () => {
+      endPause();
+      showDepartureNotice();
+    };
+  };
   const beginProjectNavigation = useCallback(
     (clearShareFragment = true): ProjectNavigation => {
       cancelNavigationBusy();
@@ -3092,12 +3127,15 @@ export function App() {
       setPendingShareToken(null);
       setSharePage(null);
       // Every navigation must end its pause: callers run in try/finally.
-      const end = navigationPause.begin(managerRef.current);
+      const endPause = navigationPause.begin(managerRef.current);
       return Object.assign(() => fragmentNavigationRef.current === navigation, {
-        end
+        end() {
+          endPause();
+          showDepartureNotice();
+        }
       });
     },
-    [cancelNavigationBusy, navigationPause]
+    [cancelNavigationBusy, navigationPause, showDepartureNotice]
   );
   const restoreShareSessionFragment = useCallback(() => {
     const active = shareSessionRef.current;
@@ -3971,6 +4009,7 @@ export function App() {
     },
     []
   );
+  departureNoticeRef.current.show = announce;
   const dismissToast = useCallback((id: number) => {
     setToast((current) => (current?.id === id ? null : current));
   }, []);
@@ -5724,18 +5763,63 @@ export function App() {
           localSaveCallbacksRef.current.onDirtyChange(dirty)
       })
   );
+  /** One recovery copy per refused departing edit, across navigations. */
+  const [departureRecoveryCopies] = useState(
+    () => new DepartureRecoveryCopies()
+  );
+  /**
+   * How a departure keeps an edit this tab may no longer write, read when
+   * it happens: refreshed every render, so the barrier below stays one
+   * stable callback while naming the copy against the current shelf and
+   * owning it as the current user.
+   */
+  const departureRecoveryRef = useRef<{
+    host: DepartureRecoveryHost;
+    kept(copy: ProjectDocument, source: ProjectDocument): void;
+  } | null>(null);
+  departureRecoveryRef.current = {
+    host: departureRecoveryHost({
+      existingNames: () => projects.map((project) => project.name),
+      ownerUserId: () => session?.userId ?? localUserId,
+      carryEncryption: (sourceProjectId, copyProjectId) =>
+        carryEncryptionRequirement(sourceProjectId, copyProjectId, {
+          account: false
+        }),
+      save: saveLocalProject
+    }),
+    kept(copy, source) {
+      // Listed at once, from the document just written, so the shelf the
+      // departure may land on shows it; its card is drawn best effort.
+      setProjects((current) =>
+        mergeProjectSummaries([summarizeLocalDocument(copy)], current)
+      );
+      void seedCopyThumbnail(source, copy);
+      const message = `${source.name} is open in another tab, so your latest edits to it were kept as a separate project, ${copy.name}.`;
+      setStatus(message);
+      departureNoticeRef.current.pending = message;
+    }
+  };
   const flushPendingLocalSave = useCallback((): Promise<void> => {
     if (localSaveTimeoutRef.current !== null) {
       window.clearTimeout(localSaveTimeoutRef.current);
       localSaveTimeoutRef.current = null;
     }
-    // An edit this tab may not write (another tab holds the project) is
-    // reported, not waited on: it can never land, and every navigation
-    // would stall behind it.
-    return departureFlush(localAutosave.flush(), (refused) =>
-      setStatus(refused.message)
-    );
-  }, [localAutosave, setStatus]);
+    // An edit this tab may no longer write (another tab holds the project)
+    // can never land there. A departure from that project keeps it as a
+    // separate project first and moves on only once that copy is durable;
+    // when the copy fails, the departure stops and the edit stays here.
+    // Outside a departure it is reported, and stays queued and dirty.
+    const recovery = departureRecoveryRef.current!;
+    return departureBarrier(localAutosave, {
+      departing: () => navigationPause.departing()?.document.projectId ?? null,
+      copies: departureRecoveryCopies,
+      host: recovery.host,
+      onRefused: (refused) => setStatus(refused.message),
+      onKept: (copy, source) =>
+        departureRecoveryRef.current?.kept(copy, source),
+      onCopyFailed: (failure) => setStatus(failure.message)
+    });
+  }, [localAutosave, navigationPause, departureRecoveryCopies, setStatus]);
   flushPendingLocalSaveRef.current = flushPendingLocalSave;
   // Encrypting an existing project (ADR-024 Phase 7, slice 7-2) first
   // saves this page's pending edits to it, here and to the account.
@@ -16572,6 +16656,7 @@ export function App() {
     projectId: string,
     isCurrent: () => boolean = beginProjectNavigation()
   ) {
+    const endDeparture = departureEnd(isCurrent);
     try {
       // A project the account stores in a format this build cannot open
       // (ADR-024 Phase 4) is not loaded at all, nor its device copy opened.
@@ -16746,7 +16831,7 @@ export function App() {
         finishBusy();
       }
     } finally {
-      endProjectNavigation(isCurrent);
+      endDeparture();
     }
   }
 
@@ -16826,6 +16911,12 @@ export function App() {
     const navigation = fragmentNavigationRef.current;
     const isCurrent = () =>
       !cancelled && fragmentNavigationRef.current === navigation;
+    // Leaving the open project for the link is a departure like any other:
+    // its edits pause now, so the flush below is the last word on them and
+    // nothing edited later is lost when the shared model replaces it. A
+    // newer navigation's pause supersedes this one; ending it is then a
+    // no-op.
+    const endPause = navigationPause.begin(managerRef.current);
     const finishBusy = startNavigationBusy();
     // An encrypted link's failures are worded by its loader (slice 5-11).
     let describeFailure: ((error: unknown) => string) | null = null;
@@ -16947,10 +17038,13 @@ export function App() {
         }
       } finally {
         finishBusy();
+        endPause();
+        showDepartureNotice();
       }
     })();
     return () => {
       cancelled = true;
+      endPause();
     };
   }, [
     pendingShareToken,
@@ -16958,6 +17052,8 @@ export function App() {
     startupState,
     foregroundBusy,
     startNavigationBusy,
+    navigationPause,
+    showDepartureNotice,
     setStatus
   ]);
 
@@ -17142,6 +17238,7 @@ export function App() {
   async function handleGoHome(
     isCurrent: () => boolean = beginProjectNavigation()
   ) {
+    const endDeparture = departureEnd(isCurrent);
     try {
       try {
         await flushPendingLocalSave();
@@ -17220,7 +17317,7 @@ export function App() {
         if (listingPending) setAccountListingPending(false);
       }
     } finally {
-      endProjectNavigation(isCurrent);
+      endDeparture();
     }
   }
   leaveShareSessionRef.current = handleGoHome;
