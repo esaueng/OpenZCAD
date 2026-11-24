@@ -58,6 +58,8 @@ interface AdapterRefusalSpec {
  * - `blend_radius_negative`: a blend resize to a negative radius.
  * - `radius_not_positive`: a cylindrical-face resize to a radius of zero or
  *   less.
+ * - `cylinder_dimension_not_positive`: a cylinder primitive with a
+ *   nonpositive radius or height.
  */
 export const ADAPTER_REFUSALS = {
   union_not_solid: {
@@ -93,7 +95,11 @@ export const ADAPTER_REFUSALS = {
     category: 'invalid_input'
   },
   blend_radius_negative: { family: 'direct-edit', category: 'invalid_input' },
-  radius_not_positive: { family: 'direct-edit', category: 'invalid_input' }
+  radius_not_positive: { family: 'direct-edit', category: 'invalid_input' },
+  cylinder_dimension_not_positive: {
+    family: 'validation',
+    category: 'invalid_input'
+  }
 } as const satisfies Record<string, AdapterRefusalSpec>;
 
 export type AdapterRefusalCode = keyof typeof ADAPTER_REFUSALS;
