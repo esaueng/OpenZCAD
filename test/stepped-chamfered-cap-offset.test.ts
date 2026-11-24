@@ -14,7 +14,10 @@ import {
 import { tryExactLocalChamferCapOffset } from '../packages/kernel-adapter/src/exact-local-chamfer-cap';
 import { tryExactChamferedCylinderCapOffset } from '../packages/kernel-adapter/src/exact-chamfered-cylinder';
 import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
+import { OffsetFaceRefusal } from '../packages/kernel-adapter/src/exact-offset-face-refusal';
 import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
+import { validatedFeatureRejection } from '../apps/web/src/lib/featureValidation';
+import { GENERIC_REFUSAL } from '../apps/web/src/lib/refusalLanguage';
 import {
   steppedArena,
   steppedChamferedCylinderSolid
@@ -353,6 +356,71 @@ describe('local chamfered end offsets on stepped imported bodies', () => {
     );
   });
 
+  it('reports a cap move that consumes the wall as a typed refusal and keeps the body', async () => {
+    const kernel = new RemusKernel();
+    const io = await loadRemusTranslators();
+    const stepText = new TextDecoder().decode(
+      io.exportStep(
+        kernel.serializeSolid(steppedChamferedCylinderSolid(kernel))
+      )
+    );
+    kernel.free();
+    const imported = importStepBody(
+      createProjectDocument('Stepped rod', toUserId('user_test')),
+      {
+        name: 'Stepped rod',
+        sourceName: 'stepped-rod.step',
+        artifactId: 'artifact_stepped',
+        stepText
+      }
+    );
+    const adapter = await createExactKernelAdapter();
+    adapters.push(adapter);
+    const derived = await adapter.syncDocument(imported.document);
+    expect(derived.warnings).toEqual([]);
+    const before = derived.bodyRepresentations[imported.bodyId]!;
+    const face = cap(before);
+    const manager = new CommandManager({ ...imported.document, derived });
+    manager.execute(
+      planFaceOffset({
+        document: manager.document,
+        bodyId: imported.bodyId,
+        face,
+        faceHash: face.hash,
+        offset: -43
+      })!.command
+    );
+    const refused = await adapter.syncDocument(manager.document);
+    const warning = refused.featureWarnings?.find(
+      (w) => w.kind === 'build-failed' || w.kind === 'refusal'
+    );
+    expect(warning?.kernelRefusal).toMatchObject({
+      family: 'direct-edit',
+      operation: 'offset-face',
+      category: 'invalid_topology',
+      code: 'offset_face_collapses_chamfered_cylinder_wall'
+    });
+    expect(warning!.kernelRefusal!.limit).toBeLessThan(-42);
+    expect(warning!.kernelRefusal!.limit).toBeGreaterThan(-43);
+    const rejection = validatedFeatureRejection({
+      featureName: warning!.featureName,
+      featureId: warning!.featureId,
+      bodyPresent: refused.bodyRepresentations[imported.bodyId] !== undefined,
+      warnings: refused.warnings,
+      featureWarnings: refused.featureWarnings,
+      documentMoved: false
+    });
+    expect(rejection?.message).toBe(
+      'That distance would leave no cylindrical wall before the shoulder.'
+    );
+    expect(rejection?.message).not.toBe(GENERIC_REFUSAL);
+    // The refused edit keeps the last exact body.
+    const kept = refused.bodyRepresentations[imported.bodyId]!;
+    expect(kept.faceCount).toBe(before.faceCount);
+    expect(kept.volume).toBe(before.volume);
+    expect(cap(kept).geometry!.center).toEqual(face.geometry!.center);
+  });
+
   it('refuses wall collapse and non-cap selections without mutating the source', () => {
     const kernel = new RemusKernel();
     try {
@@ -363,12 +431,47 @@ describe('local chamfered end offsets on stepped imported bodies', () => {
           kernel.getFaceNormal(f)[2]! < -0.99
       )!;
       const source = kernel.serializeSolid(solid);
-      expect(() =>
-        tryExactLocalChamferCapOffset(kernel, solid, face, -100)
-      ).toThrow(/no cylindrical wall/);
-      expect(() =>
-        tryExactLocalChamferCapOffset(kernel, solid, face, -43)
-      ).toThrow(/no cylindrical wall/);
+      // The wall before the shoulder runs between its two rims; the cap can
+      // move in by that length and no further. Read independently of the
+      // adapter from the r = 6 cylinder's rim circles.
+      const arena = steppedArena(kernel, solid);
+      const wallIndex = arena.faces.findIndex(
+        (f) =>
+          Math.abs(
+            ((f.surface.Cylinder as { radius?: number } | undefined)?.radius ??
+              0) - 6
+          ) < 1e-7
+      );
+      const rimHeights = arena.wires[
+        arena.faces[wallIndex]!.outer_wire
+      ]!.edges.flatMap(({ edge }) => {
+        const curve = arena.edges[edge]!.curve;
+        return curve === 'Line' ? [] : [curve.Circle.center[2]];
+      });
+      const wallLength = Math.max(...rimHeights) - Math.min(...rimHeights);
+      expect(wallLength).toBeGreaterThan(42);
+      expect(wallLength).toBeLessThan(43);
+      for (const offset of [-100, -43]) {
+        let thrown: unknown;
+        try {
+          tryExactLocalChamferCapOffset(kernel, solid, face, offset);
+        } catch (error) {
+          thrown = error;
+        }
+        // A typed refusal, not a bare Error: the ledgers record it as
+        // `typed-refusal`, analytics buckets it, and the chip offers the
+        // value just inside the limit.
+        expect(thrown).toBeInstanceOf(OffsetFaceRefusal);
+        expect(thrown).toMatchObject({
+          message:
+            'That distance would leave no cylindrical wall before the shoulder.',
+          family: 'direct-edit',
+          category: 'invalid_topology',
+          kernelCode: 'offset_face_collapses_chamfered_cylinder_wall',
+          operation: 'offset-face'
+        });
+        expect((thrown as OffsetFaceRefusal).limit).toBeCloseTo(-wallLength, 7);
+      }
       // A positive wall length alone cannot prove clearance to a rounded
       // shoulder. A move beyond its conservative support bound declines.
       expect(
