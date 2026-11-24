@@ -7,6 +7,11 @@ export interface SaveStatePreviewNoticeProps {
   createdAt: string;
   /** Bodies the saved version builds, so a glance says what changed. */
   bodyCount: number;
+  /**
+   * Recovered from an encrypted project's signed history (ADR-024): it
+   * offers no Restore, only Branch and Close.
+   */
+  recovered?: boolean;
   /** Absent where the project cannot be edited: a viewer previews and branches. */
   onRestore?(): void;
   onBranch(): void;
@@ -22,6 +27,7 @@ export function SaveStatePreviewNotice({
   label,
   createdAt,
   bodyCount,
+  recovered = false,
   onRestore,
   onBranch,
   onClose
@@ -38,6 +44,7 @@ export function SaveStatePreviewNotice({
         <span className="save-preview-notice-detail">
           Saved {new Date(createdAt).toLocaleString()} · {bodyCount}{' '}
           {bodyCount === 1 ? 'body' : 'bodies'} · read only
+          {recovered ? ' · recovered from signed history' : ''}
         </span>
       </span>
       <span className="save-preview-notice-actions">

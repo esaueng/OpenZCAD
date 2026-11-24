@@ -51,7 +51,11 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { ApiError } from '../apps/web/src/lib/api';
-import { EncryptedProjectIntegrityError } from '../apps/web/src/lib/e2ee/encryptedProjectStore';
+import {
+  E2EE_REVISION_UNRECOVERABLE_CODE,
+  EncryptedProjectIntegrityError,
+  EncryptedRevisionRecoveryError
+} from '../apps/web/src/lib/e2ee/encryptedProjectStore';
 import {
   epochAuthenticatorForEpoch,
   epochAuthority,
@@ -3211,4 +3215,395 @@ describe('pending admission bound to the write’s own session (PR #1477 review,
     },
     60_000
   );
+});
+
+// --- Recovery reads ---------------------------------------------------------
+
+describe('recovering a save state the signed map lost (ADR-024 historical read)', () => {
+  type Reason = EncryptedRevisionRecoveryError['reason'];
+
+  async function recoveryRefusal(promise: Promise<unknown>, reason: Reason) {
+    await expect(promise).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof EncryptedRevisionRecoveryError &&
+        error.reason === reason &&
+        error.code === E2EE_REVISION_UNRECOVERABLE_CODE &&
+        // Not an integrity verdict on the head: the indicator stays.
+        error.details?.e2eeIntegrity === undefined
+    );
+  }
+
+  /** The account's rows of a project, to show a read wrote nothing. */
+  function accountRows(srv: Server, projectId: string) {
+    return JSON.stringify([
+      rows(srv, 'SELECT * FROM projects WHERE id = ?', projectId),
+      rows(
+        srv,
+        'SELECT * FROM e2ee_project_versions WHERE project_id = ? ORDER BY document_version',
+        projectId
+      ),
+      rows(
+        srv,
+        'SELECT * FROM e2ee_project_revisions WHERE project_id = ? ORDER BY document_version',
+        projectId
+      ),
+      rows(
+        srv,
+        'SELECT * FROM e2ee_project_envelopes WHERE project_id = ?',
+        projectId
+      )
+    ]);
+  }
+
+  /** Every request a page sends, as `METHOD path`. */
+  function recordRequests(d: Device): string[] {
+    const seen: string[] = [];
+    d.before = async (path, init) => {
+      seen.push(
+        `${init.method ?? 'GET'} ${new URL(path, 'https://example.com').pathname}`
+      );
+    };
+    return seen;
+  }
+
+  /**
+   * A named save at version 2 that the head no longer maps, as heads written
+   * before PR #1997 could leave it. Version 3 is `middle` (an ordinary
+   * autosave unless a case builds its own) and version 4 the head, signed
+   * by the laptop with an empty revision map. `pinAt` makes the reloaded
+   * page trust the head without verifying the log below it (a browser that
+   * accepted it earlier).
+   */
+  async function lostSaveState(
+    options: {
+      middle?: (
+        laptop: Device,
+        projectId: string,
+        named: ProjectDocument,
+        namedHash: string
+      ) => Promise<Hand>;
+      pinAt?: boolean;
+      /** Version 3 is another named save, so its body stays retained. */
+      middleNamed?: boolean;
+    } = {}
+  ) {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const named = await laptop.store.saveRevision({
+      projectId,
+      reason: 'Before the fillet',
+      expectedVersion: v1.version,
+      document: edited(v1, 'Named')
+    });
+    const revisionId = named.revisions.at(-1)!.revisionId;
+    const namedHash = hashAt(srv, projectId, named.version);
+    let middle: ProjectDocument;
+    if (options.middle) {
+      const hand = await options.middle(laptop, projectId, named, namedHash);
+      expect((await putVersion(srv, projectId, hand)).status).toBe(200);
+      middle = edited(named, 'Middle');
+    } else if (options.middleNamed) {
+      middle = await laptop.store.saveRevision({
+        projectId,
+        reason: 'After the fillet',
+        expectedVersion: named.version,
+        document: edited(named, 'Middle')
+      });
+    } else {
+      middle = await save(laptop, edited(named, 'Middle'), named.version);
+    }
+    const keyEpoch = rows<{ key_epoch: number }>(
+      srv,
+      'SELECT key_epoch FROM e2ee_project_versions WHERE project_id = ? AND document_version = ?',
+      projectId,
+      middle.version
+    )[0]!.key_epoch;
+    const head = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: middle.version + 1,
+        keyEpoch,
+        previousVersionHash: fromHex(hashAt(srv, projectId, middle.version))
+      },
+      { expectedVersion: middle.version, document: edited(middle, 'Head') }
+    );
+    expect((await putVersion(srv, projectId, head)).status).toBe(200);
+    const page = reload(srv, laptop);
+    if (options.pinAt) {
+      const pin = await page.pins.read(OWNER, projectId);
+      expect(
+        await page.pins.advance(OWNER, projectId, pin?.headHash ?? null, {
+          headHash: head.hash,
+          documentVersion: middle.version + 1,
+          keyEpoch
+        })
+      ).toBe(true);
+    }
+    const current = await page.store.loadProject(projectId);
+    expect(current).toMatchObject({
+      name: 'Head',
+      version: middle.version + 1
+    });
+    // The ordinary historical read refuses it: the map does not name it.
+    await integrityRefusal(
+      page.store.loadRevision(projectId, revisionId),
+      'history'
+    );
+    return { srv, laptop, page, projectId, named, revisionId, current, head };
+  }
+
+  it('opens it when its signed chain reaches the pinned head, changing nothing', async () => {
+    const { srv, page, projectId, named, revisionId, current } =
+      await lostSaveState();
+    const pin = await page.pins.read(OWNER, projectId);
+    const stateCode = page.store.stateCode?.(projectId);
+    const before = accountRows(srv, projectId);
+    const requests = recordRequests(page);
+    const recovered = await page.store.recoverRevision!(projectId, revisionId);
+    expect(recovered).toMatchObject({ name: 'Named', version: named.version });
+    expect(recovered.revisions.at(-1)!.revisionId).toBe(revisionId);
+    // Nothing moved: the pin, this page's head, the account's rows.
+    expect(await page.pins.read(OWNER, projectId)).toEqual(pin);
+    expect(page.store.stateCode?.(projectId)).toBe(stateCode);
+    expect(page.store.roomAccess().currentHead(projectId)).toMatchObject({
+      version: current.version
+    });
+    expect(accountRows(srv, projectId)).toBe(before);
+    // It only read, and never the current head.
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((request) => request.startsWith('GET '))).toBe(true);
+    expect(requests.some((request) => request.endsWith('/document'))).toBe(
+      false
+    );
+    expect(await page.store.loadProject(projectId)).toEqual(current);
+
+    // A fresh page of the same browser checks it against the pin alone.
+    const fresh = reload(srv, page);
+    const freshRequests = recordRequests(fresh);
+    expect(
+      await fresh.store.recoverRevision!(projectId, revisionId)
+    ).toMatchObject({ name: 'Named', version: named.version });
+    expect(freshRequests.some((request) => request.endsWith('/document'))).toBe(
+      false
+    );
+    expect(await fresh.pins.read(OWNER, projectId)).toEqual(pin);
+    expect(accountRows(srv, projectId)).toBe(before);
+
+    // A browser that never verified a head has nothing to check it against.
+    await recoveryRefusal(
+      device(srv, owner, 'owner_desktop').store.recoverRevision!(
+        projectId,
+        revisionId
+      ),
+      'no-trusted-head'
+    );
+  });
+
+  it('refuses a save state the account no longer keeps', async () => {
+    const { srv, page, projectId, revisionId } = await lostSaveState();
+    const pin = await page.pins.read(OWNER, projectId);
+    srv.db
+      .prepare(
+        'DELETE FROM e2ee_project_revisions WHERE project_id = ? AND revision_id = ?'
+      )
+      .run(projectId, revisionId);
+    await recoveryRefusal(
+      page.store.recoverRevision!(projectId, revisionId),
+      'pruned'
+    );
+    expect(await page.pins.read(OWNER, projectId)).toEqual(pin);
+  });
+
+  it('refuses one whose history to the head was pruned', async () => {
+    const { srv, page, projectId, named, revisionId } = await lostSaveState();
+    const pin = await page.pins.read(OWNER, projectId);
+    // Retention dropped the version between it and the head (decision D6).
+    srv.db
+      .prepare(
+        'DELETE FROM e2ee_project_versions WHERE project_id = ? AND document_version = ?'
+      )
+      .run(projectId, named.version + 1);
+    await recoveryRefusal(
+      page.store.recoverRevision!(projectId, revisionId),
+      'pruned'
+    );
+    expect(await page.pins.read(OWNER, projectId)).toEqual(pin);
+  });
+
+  it('refuses a broken link between it and the head', async () => {
+    const { srv, laptop, page, projectId, named, revisionId } =
+      await lostSaveState();
+    const pin = await page.pins.read(OWNER, projectId);
+    // The account swaps version 3 for another validly signed version 3 that
+    // also follows the save state, so version 4 no longer names its parent.
+    const swapped = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: named.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(hashAt(srv, projectId, named.version))
+      },
+      { expectedVersion: named.version, document: edited(named, 'Swapped') }
+    );
+    srv.db.exec('DROP TRIGGER e2ee_project_version_immutable');
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_versions SET prefix = ?, version_hash = ?, signature = ?
+         WHERE project_id = ? AND document_version = ?`
+      )
+      .run(
+        toBase64Url(parseEnvelope(swapped.envelope).prefix),
+        swapped.hash,
+        swapped.upload.signature,
+        projectId,
+        named.version + 1
+      );
+    await recoveryRefusal(
+      page.store.recoverRevision!(projectId, revisionId),
+      'broken-chain'
+    );
+    expect(await page.pins.read(OWNER, projectId)).toEqual(pin);
+  });
+
+  it('refuses a link whose signature was forged', async () => {
+    const { srv, page, projectId, named, revisionId } = await lostSaveState();
+    srv.db.exec('DROP TRIGGER e2ee_project_version_immutable');
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_versions SET signature = (
+           SELECT signature FROM e2ee_project_versions
+           WHERE project_id = ? AND document_version = ?)
+         WHERE project_id = ? AND document_version = ?`
+      )
+      .run(projectId, named.version, projectId, named.version + 1);
+    await recoveryRefusal(
+      page.store.recoverRevision!(projectId, revisionId),
+      'credential'
+    );
+  });
+
+  it('refuses a link signed by a device that held no editing leaf', async () => {
+    const { page, projectId, revisionId } = await lostSaveState({
+      // Certified, but never in the project's group.
+      middle: (laptop, projectId, named, namedHash) =>
+        handVersion(
+          laptop,
+          projectId,
+          {
+            documentVersion: named.version + 1,
+            keyEpoch: 0,
+            previousVersionHash: fromHex(namedHash)
+          },
+          {
+            expectedVersion: named.version,
+            document: edited(named, 'Middle'),
+            signer: 'owner_desktop'
+          }
+        ),
+      // The browser accepted the head before; the head read checks no lower.
+      pinAt: true
+    });
+    const pin = await page.pins.read(OWNER, projectId);
+    await recoveryRefusal(
+      page.store.recoverRevision!(projectId, revisionId),
+      'credential'
+    );
+    expect(await page.pins.read(OWNER, projectId)).toEqual(pin);
+  });
+
+  it('refuses a link bound to another epoch authenticator', async () => {
+    const { page, projectId, revisionId } = await lostSaveState({
+      middle: (laptop, projectId, named, namedHash) =>
+        handVersion(
+          laptop,
+          projectId,
+          {
+            documentVersion: named.version + 1,
+            keyEpoch: 0,
+            previousVersionHash: fromHex(namedHash),
+            epochBindingHash: new Uint8Array(32).fill(7)
+          },
+          { expectedVersion: named.version, document: edited(named, 'Middle') }
+        )
+    });
+    // A current-head read checks only the head's own binding, so the head
+    // opened; the recovery read checks every link's.
+    const pin = await page.pins.read(OWNER, projectId);
+    await recoveryRefusal(
+      page.store.recoverRevision!(projectId, revisionId),
+      'credential'
+    );
+    expect(await page.pins.read(OWNER, projectId)).toEqual(pin);
+  });
+
+  it('refuses a verified ancestor that is not the requested save state', async () => {
+    const { srv, page, projectId, named, revisionId } = await lostSaveState({
+      middleNamed: true
+    });
+    const pin = await page.pins.read(OWNER, projectId);
+    // The account points the save state at the next named save: signed, in
+    // the chain to the head, retained, but another save state.
+    const other = named.version + 1;
+    srv.db
+      .prepare(
+        'DELETE FROM e2ee_project_revisions WHERE project_id = ? AND document_version = ?'
+      )
+      .run(projectId, other);
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_revisions SET document_version = ?, version_hash = ?
+         WHERE project_id = ? AND revision_id = ?`
+      )
+      .run(other, hashAt(srv, projectId, other), projectId, revisionId);
+    await recoveryRefusal(
+      page.store.recoverRevision!(projectId, revisionId),
+      'revision-mismatch'
+    );
+    expect(await page.pins.read(OWNER, projectId)).toEqual(pin);
+  });
+
+  it('refuses a save state its head does map, when the account sends another version', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const named = await laptop.store.saveRevision({
+      projectId,
+      reason: 'Mapped',
+      expectedVersion: v1.version,
+      document: edited(v1, 'Named')
+    });
+    const revisionId = named.revisions.at(-1)!.revisionId;
+    const later = await laptop.store.saveRevision({
+      projectId,
+      reason: 'Later',
+      expectedVersion: named.version,
+      document: edited(named, 'Later')
+    });
+    srv.db
+      .prepare(
+        'DELETE FROM e2ee_project_revisions WHERE project_id = ? AND document_version = ?'
+      )
+      .run(projectId, later.version);
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_revisions SET document_version = ?, version_hash = ?
+         WHERE project_id = ? AND revision_id = ?`
+      )
+      .run(
+        later.version,
+        hashAt(srv, projectId, later.version),
+        projectId,
+        revisionId
+      );
+    // The signed map outranks the chain: no fallback past it.
+    await recoveryRefusal(
+      laptop.store.recoverRevision!(projectId, revisionId),
+      'revision-mismatch'
+    );
+  });
 });

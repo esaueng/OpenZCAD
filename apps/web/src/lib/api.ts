@@ -2176,6 +2176,35 @@ export const api = {
       (store) => store.loadRevision(projectId, revisionId),
       { fallback: true }
     ),
+  /**
+   * An encrypted project's save state that its trusted head's signed map
+   * no longer names, proven instead by the signed history joining it to
+   * that head (ADR-024 historical read). Read only: the project, its head
+   * and this browser's pin are unchanged whatever the outcome; a refusal
+   * names its reason (`details.e2eeRecovery`). Plaintext projects have no
+   * such map, so there is nothing to recover.
+   */
+  recoverRevision: (projectId: string, revisionId: string) =>
+    byFormat(
+      projectId,
+      () =>
+        Promise.reject(
+          new ApiError(
+            400,
+            'Only end-to-end encrypted save states are recovered from their signed history.'
+          )
+        ),
+      async (store) => {
+        if (!store.recoverRevision) {
+          throw new ApiError(
+            400,
+            'This page cannot recover encrypted save states.'
+          );
+        }
+        return store.recoverRevision(projectId, revisionId);
+      },
+      { fallback: false }
+    ),
   updateProject: (payload: UpdateProjectRequest, signal?: AbortSignal) =>
     requestJson<UpdateProjectResponse>(
       `/api/projects/${encodeURIComponent(payload.projectId)}`,
