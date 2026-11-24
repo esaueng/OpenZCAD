@@ -65,8 +65,12 @@ export async function adoptAccountCopyLocally(
     if (!isCurrent()) return false;
     if (!stamped) steps.viewUnitsUnknown?.(replaced.projectId);
   }
-  await steps.saveLocalProject(adopted);
+  const written = await steps.saveLocalProject(adopted);
   if (!isCurrent()) return false;
+  // Not written (another tab owns this project's device copy and keeps it
+  // current): the device did not come to agree with the account, so the
+  // baseline must not say it did.
+  if (written === false) return true;
   await steps.saveLastSyncedVersion(adopted.projectId, adopted.version);
   return isCurrent();
 }
