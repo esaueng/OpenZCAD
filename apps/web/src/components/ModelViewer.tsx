@@ -282,6 +282,7 @@ import {
   SELECTION_SEMANTICS,
   AMBIENT_OCCLUSION,
   SettledAmbientOcclusion,
+  TranslucentEdgeDepth,
   contextBodyColor,
   recededBodyColor,
   recedeLevelOf,
@@ -3711,6 +3712,10 @@ export function ModelViewer({
         })
       : null;
     let ambientOcclusionState: string | null = null;
+    // A translucent body's own back and inner-wall edges draw faint, as if
+    // behind its glass (#2018; viewport render/translucentEdges.ts). No
+    // pass and no target while no body is translucent.
+    const translucentEdges = new TranslucentEdgeDepth(renderer);
     const interactionShaderWarmup = new InteractionShaderWarmup(
       renderer,
       scene
@@ -14715,13 +14720,20 @@ export function ModelViewer({
         );
       }
       let renderStarted = performance.now();
+      const translucentEdgeFrame = {
+        camera: context.activeCamera,
+        overlays: context.edgeOverlaysByBodyId.values(),
+        enabled: !xrayRef.current && displayModeRef.current !== 'wireframe'
+      };
+      const renderFrame = () =>
+        translucentEdges.draw(translucentEdgeFrame, () =>
+          renderer.render(scene, context.activeCamera)
+        );
       // The first draw compiles every material's shaders and uploads the
       // environment map, so it costs far more than steady-state frames.
       if (firstFrame) {
         firstFrame = false;
-        timed('viewer.firstFrame', () =>
-          renderer.render(scene, context.activeCamera)
-        );
+        timed('viewer.firstFrame', renderFrame);
         mark('viewer.firstFrame.ready');
         measure(
           'viewer.interactive',
@@ -14730,7 +14742,7 @@ export function ModelViewer({
         );
       } else {
         renderStarted = performance.now();
-        const drawScene = () => renderer.render(scene, context.activeCamera);
+        const drawScene = renderFrame;
         if (navigating && shadedEdges && ratio < fullPixelRatio) {
           withNavigationEdges(
             context.edgeOverlaysByBodyId.values(),
@@ -14947,6 +14959,7 @@ export function ModelViewer({
       stationaryDraws.reset();
       interactionShaderWarmup.dispose();
       ambientOcclusion?.dispose();
+      translucentEdges.dispose();
       document.removeEventListener(
         'visibilitychange',
         resetAnimationContinuity

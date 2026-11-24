@@ -18,6 +18,7 @@ export * from './render/selectionTint';
 export * from './render/edgeOverlay';
 export * from './render/navigationEdges';
 export * from './render/ambientOcclusion';
+export * from './render/translucentEdges';
 export {
   installSilhouetteUpdates,
   updateSilhouettes
