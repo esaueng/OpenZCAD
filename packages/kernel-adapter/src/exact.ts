@@ -5112,9 +5112,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             )
           );
           measured = prepared.geometry;
-          // I03 stored-unit re-capture only: the oracle samples this body's
+          // I03 stored-unit re-capture only: the oracle compares this body's
           // tessellated faces while their handles are live.
-          referenceRecaptureHooks()?.noteBodyFaces?.(bodyId, kernel, faces);
+          referenceRecaptureHooks()?.noteBodyFaces?.(
+            bodyId,
+            kernel,
+            shape.solids,
+            faces
+          );
           completeMeasurement = async () => {
             for (const job of prepared.analysis) {
               await scheduling.checkpoint();

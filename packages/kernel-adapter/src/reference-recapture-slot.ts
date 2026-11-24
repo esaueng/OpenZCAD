@@ -70,14 +70,16 @@ export interface ReferenceRecaptureHooks {
    */
   noteBlendOrientation?(report: BlendOrientationReport): void;
   /**
-   * A measured body's face handles in `topology.faces` order, reported by
-   * the exact measurement while its kernel still holds them. The geometry
-   * oracle samples the faces whose area is a tessellation estimate, which
-   * cannot be compared across units (`units-reference-recapture.ts`).
+   * A measured body's solids and its face handles in `topology.faces`
+   * order, reported by the exact measurement while its kernel still holds
+   * them. The geometry oracle compares the faces whose area is a
+   * tessellation estimate, which cannot be compared across units by area
+   * (`units-reference-recapture.ts`).
    */
   noteBodyFaces?(
     bodyId: BodyId,
     kernel: RemusKernel,
+    solids: readonly number[],
     faces: readonly number[]
   ): void;
 }
