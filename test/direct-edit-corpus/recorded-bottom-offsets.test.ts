@@ -23,7 +23,7 @@ import {
   referencePart,
   type ReferencePart
 } from './reference-parts';
-import { faceSelector } from './resolve';
+import { edgeCenter, faceSelector } from './resolve';
 
 /**
  * CAD part QA P0, observation O2: the recording applied "Offset face by
@@ -113,7 +113,11 @@ async function offsetBottom(
       category: chamferPin.category,
       code: chamferPin.code
     });
-    // A refusal changes nothing: the starting revision rebuilds as it was.
+    // A refusal changes nothing: the refused draft keeps the starting body,
+    // and the starting revision rebuilds as it was.
+    const fallback = derived.bodyRepresentations[part.bodyId];
+    expect(fallback).toBeDefined();
+    sameSnapshot(fallback!, part.body);
     const kept = await sync(session, part.document, part.bodyId);
     sameSnapshot(kept.bodyRepresentations[part.bodyId]!, part.body);
     return { outcome: 'refused', body: part.body };
@@ -137,6 +141,34 @@ async function offsetBottom(
     bottom.geometry!.center.y,
     7
   );
+  // The bottom outline itself, not just its area and centre: every edge
+  // bounding the moved face sits where a bottom-boundary edge sat, raised by
+  // |distance|. A rotated or mirrored footprint (the post at another
+  // corner) keeps the area and centre but fails here.
+  const outline = (body: BodyRepresentation, z: number) =>
+    body
+      .topology!.edges.filter(
+        (edge) =>
+          edge.displayRole !== 'seam' && Math.abs(edgeCenter(edge).z - z) < 1e-7
+      )
+      .map((edge) => {
+        const { x, y } = edgeCenter(edge);
+        return `${x.toFixed(6)},${y.toFixed(6)}`;
+      })
+      .sort();
+  const startOutline = outline(part.body, 0);
+  expect(startOutline.length).toBeGreaterThan(0);
+  expect(outline(after, -distance)).toEqual(startOutline);
+  // The post did not move: the top faces keep their full positions.
+  const tops = (body: BodyRepresentation) =>
+    planes(body, 1)
+      .map(({ geometry }) =>
+        [geometry!.center.x, geometry!.center.y, geometry!.center.z]
+          .map((value) => value.toFixed(6))
+          .join(',')
+      )
+      .sort();
+  expect(tops(after)).toEqual(tops(part.body));
   expect(cones(after)).toHaveLength(6);
   for (const cone of cones(after))
     expect(cone.geometry!.center.z).toBeCloseTo(BASE_CHAMFER / 2 - distance, 7);
