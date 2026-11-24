@@ -18,6 +18,7 @@ import {
 } from '../input/bindings';
 import type { OrbitMode, ProjectionMode } from '../types';
 import {
+  readWheelSample,
   WheelGestureClassifier,
   type PointerNavigationMode,
   type WheelDevice
@@ -422,15 +423,9 @@ export class CameraController {
       return;
     }
     const { intent, learned } = this.wheelGesture.classify(
-      {
-        deltaX: event.deltaX,
-        deltaY: event.deltaY,
-        deltaMode: event.deltaMode,
-        ctrlKey: event.ctrlKey,
-        controlKeyHeld: this.controlKeyActive
-      },
+      readWheelSample(event, this.controlKeyActive),
       this.options.pointerNavigation?.() ?? 'auto',
-      performance.now()
+      event.timeStamp ?? performance.now()
     );
     if (learned !== null) {
       this.options.wheelDeviceMemory?.write(learned);
