@@ -1,5 +1,0 @@
----
-row: I03
----
-
-Display units reach the read-outs (no schema change): the Inspector's body measurements (size, volume, centre of mass, unit-density inertia; mass and inertia units follow the display unit), face and edge figures, recognized-feature dimensions and stored direct-edit values; History row values (lengths converted, angles and counts untouched); the parameter table (a length parameter reads converted with its unit, its expression as stored; its minimum too) and the Tweak panel's units note; the viewport rule, which chooses a round step in the display unit; the on-canvas offset, radius, edge-radius and primitive-dimension chips (the primitive callout's inline entry reads and commits in the display unit); and the status messages that report an applied length. Fixed: a refusal's "Try" size in the in-place Options panel was read in the display unit rather than as the stored size it is (`displayEntryText`). Coverage: `apps/web/src/components/displayUnitsReadouts.test.tsx`. Still in the stored unit, correctly labelled: drawing sheets (each has its own Units setting), the direct-edit Diameter and Offset fields in the Inspector, and refusal sizes.
