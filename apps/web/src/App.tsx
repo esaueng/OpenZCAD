@@ -267,6 +267,7 @@ import {
   staleDirectEditFaceRepair,
   withEchoedSavePoints,
   withoutDerivedProjection,
+  initiallyHiddenBodyIds,
   isSharedWithoutHistory,
   type ExtrudeInput,
   type StaleDirectEditFaceRepair,
@@ -11593,7 +11594,15 @@ export function App() {
           pointerNavigation: appSettings.viewport.pointerNavigation
         },
         normalized.units,
-        legacyUnits
+        legacyUnits,
+        // A model shared without history starts with the bodies its owner
+        // hid hidden, and so does the first view of a copy of it. A link's
+        // frozen model keeps the owner's project id, so a view this device
+        // saved for that project names other bodies: the mark wins there.
+        {
+          bodyIds: initiallyHiddenBodyIds(normalized),
+          overrideSaved: isSharedWithoutHistory(normalized)
+        }
       );
       // The project on screen, now in another unit (an account refresh of a
       // conversion made elsewhere): the mounted viewer does not reread its
@@ -42169,7 +42178,16 @@ export function App() {
                     throw new Error('Open the project before sharing it.');
                   const { freezeModelForSharing } =
                     await import('./lib/frozenShareModel');
-                  return freezeModelForSharing(current, geometry);
+                  // The bodies the owner hid start hidden for the visitor
+                  // too; a temporary isolation is not a choice to hide.
+                  return freezeModelForSharing(
+                    current,
+                    geometry,
+                    persistedHiddenBodyIds(
+                      localHiddenBodyIds,
+                      currentBodyIsolation
+                    )
+                  );
                 }}
                 onClose={() => setSharingOpen(false)}
               />

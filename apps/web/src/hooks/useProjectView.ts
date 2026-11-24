@@ -84,7 +84,14 @@ export interface ProjectView {
     projectId: string,
     defaults: ProjectViewDefaults,
     units?: UnitSystem,
-    legacyUnits?: UnitSystem | 'unknown'
+    legacyUnits?: UnitSystem | 'unknown',
+    /**
+     * Bodies the document asks a first view to hide (a model shared without
+     * history keeps the owner's hidden bodies hidden). Used when this device
+     * has no hidden set of its own for the project, or always when
+     * `overrideSaved` is set.
+     */
+    initialHidden?: { bodyIds: readonly string[]; overrideSaved?: boolean }
   ): { pose: ViewportCameraState; projection: ProjectionMode } | null;
   /** The viewport reported a live pose; keep it immediately available. */
   onCameraChange(projectId: string | null, camera: ViewportCameraState): void;
@@ -185,7 +192,21 @@ export function useProjectView(
     };
   }, []);
 
-  const savedHidden = savedHiddenBodyIds?.(hiddenBodyIds) ?? hiddenBodyIds;
+  /**
+   * A view whose hidden set the document overrode (a model shared without
+   * history, which keeps its owner's project id) saves the set this device
+   * already had, never the shared model's own body ids: those would replace
+   * the owner's choices for their real project.
+   */
+  const keptHiddenRef = useRef<{
+    projectId: string;
+    ids: ReadonlySet<string>;
+  } | null>(null);
+  const kept = keptHiddenRef.current;
+  const savedHidden =
+    kept && kept.projectId === projectId
+      ? kept.ids
+      : (savedHiddenBodyIds?.(hiddenBodyIds) ?? hiddenBodyIds);
 
   function hiddenReferences(): ProjectViewState['hiddenReferences'] {
     return hiddenDatumIds.size || hiddenReferenceImageIds.size
@@ -268,7 +289,7 @@ export function useProjectView(
     setHiddenDatumIds,
     hiddenReferenceImageIds,
     setHiddenReferenceImageIds,
-    restore(id, defaults, units, legacyUnits) {
+    restore(id, defaults, units, legacyUnits, initialHidden) {
       const shownUnits =
         restoredProjectRef.current === id ? unitsRef.current : null;
       const shownCamera = cameraRef.current;
@@ -316,7 +337,16 @@ export function useProjectView(
         orbitMode: defaults.orbitMode,
         pointerNavigation: defaults.pointerNavigation
       });
-      setHiddenBodyIds(new Set(saved?.hiddenBodyIds ?? []));
+      keptHiddenRef.current = initialHidden?.overrideSaved
+        ? { projectId: id, ids: new Set(saved?.hiddenBodyIds ?? []) }
+        : null;
+      setHiddenBodyIds(
+        new Set(
+          initialHidden && (initialHidden.overrideSaved || !saved)
+            ? initialHidden.bodyIds
+            : (saved?.hiddenBodyIds ?? [])
+        )
+      );
       setSketchVisibility(saved?.sketchVisibility ?? NO_SKETCH_VISIBILITY);
       setHiddenDatumIds(new Set(saved?.hiddenReferences?.datumIds));
       setHiddenReferenceImageIds(new Set(saved?.hiddenReferences?.imageIds));

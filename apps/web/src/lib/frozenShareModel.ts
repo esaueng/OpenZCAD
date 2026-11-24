@@ -26,7 +26,12 @@ export type FrozenShareGeometry = Pick<
 
 export async function freezeModelForSharing(
   source: ProjectDocument,
-  geometry: FrozenShareGeometry
+  geometry: FrozenShareGeometry,
+  /**
+   * The bodies the owner has hidden on this device. They are still shared,
+   * but start hidden for the visitor, as the owner sees the model.
+   */
+  hiddenBodyIds: ReadonlySet<string> = new Set()
 ): Promise<ProjectDocument> {
   // A mesh reference has no exact solid to write; it stays with the owner.
   const shown = (await geometry.exportBodies(source)).filter(
@@ -63,7 +68,8 @@ export async function freezeModelForSharing(
         node?.metadata,
         node ? featureKinds.get(node.featureId) : undefined
       ),
-      opacity: typeof opacity === 'number' ? opacity : null
+      opacity: typeof opacity === 'number' ? opacity : null,
+      ...(hiddenBodyIds.has(bodyId) ? { hidden: true } : {})
     });
   }
   return frozenShareDocument(source, bodies);

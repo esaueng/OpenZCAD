@@ -11,6 +11,7 @@ import {
   frozenShareDocument,
   frozenShareDocumentProblem,
   importStepBody,
+  initiallyHiddenBodyIds,
   isSharedWithoutHistory,
   listNodesByKind,
   sharedProjectSnapshotDocument,
@@ -59,6 +60,26 @@ describe('frozenShareDocument', () => {
     });
     expect(pin?.metadata?.colorChosen).toBeUndefined();
     expect(isSharedWithoutHistory(document)).toBe(true);
+    expect(frozenShareDocumentProblem(document)).toBeNull();
+  });
+
+  it('marks the bodies the owner hid, and only those', () => {
+    const document = frozenShareDocument(
+      createProjectDocument('Bracket', owner),
+      [
+        { name: 'Plate', stepText: STEP, color: null, opacity: null },
+        {
+          name: 'Cover',
+          stepText: STEP,
+          color: null,
+          opacity: null,
+          hidden: true
+        }
+      ]
+    );
+    const [plate, cover] = listNodesByKind(document, 'body');
+    expect(initiallyHiddenBodyIds(document)).toEqual([cover!.bodyId]);
+    expect(plate?.metadata?.initiallyHidden).toBeUndefined();
     expect(frozenShareDocumentProblem(document)).toBeNull();
   });
 
@@ -144,6 +165,13 @@ describe('frozenShareDocumentProblem', () => {
       }
     ],
     [
+      'a hidden mark that carries a value',
+      (document) => {
+        const body = listNodesByKind(document, 'body')[0]!;
+        body.metadata = { ...body.metadata, initiallyHidden: 'secret' };
+      }
+    ],
+    [
       'extra feature metadata',
       (document) => {
         const feature = listNodesByKind(document, 'feature')[0]!;
@@ -170,6 +198,27 @@ describe('a copy of a model shared without history', () => {
     expect(copy.parameterOrder).toEqual([]);
     // Only the copy's own first save state: nothing of the owner's.
     expect(copy.revisions).toHaveLength(1);
+  });
+
+  it('keeps which bodies start hidden', () => {
+    const shared = frozenShareDocument(
+      createProjectDocument('Bracket', owner),
+      [
+        {
+          name: 'Cover',
+          stepText: STEP,
+          color: null,
+          opacity: null,
+          hidden: true
+        }
+      ]
+    );
+    const copy = withoutSharedHistoryMark(
+      duplicateProjectDocument(shared, 'Bracket', toUserId('user_visitor'))
+    );
+    expect(initiallyHiddenBodyIds(copy)).toEqual(
+      listNodesByKind(copy, 'body').map((node) => node.bodyId)
+    );
   });
 
   it('leaves an ordinary document alone', () => {

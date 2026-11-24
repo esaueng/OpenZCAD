@@ -4,6 +4,7 @@ import {
   createProjectDocument,
   frozenShareDocumentProblem,
   importStepBody,
+  initiallyHiddenBodyIds,
   isSharedWithoutHistory,
   listNodesByKind
 } from '@openzcad/document-core';
@@ -140,6 +141,20 @@ describe('freezeModelForSharing', () => {
       geometry(source, { meshReference: second!.bodyId }).api
     );
     expect(listNodesByKind(mesh, 'feature')).toHaveLength(1);
+  });
+
+  it('shares the bodies the owner hid, starting hidden', async () => {
+    const source = ownerProject();
+    const [, pin] = listNodesByKind(source, 'body');
+    const frozen = await freezeModelForSharing(
+      source,
+      geometry(source).api,
+      new Set([pin!.bodyId])
+    );
+    const [, frozenPin] = listNodesByKind(frozen, 'body');
+    expect(listNodesByKind(frozen, 'feature')).toHaveLength(2);
+    expect(initiallyHiddenBodyIds(frozen)).toEqual([frozenPin!.bodyId]);
+    expect(frozenShareDocumentProblem(frozen)).toBeNull();
   });
 
   it('refuses a model with no solid body', async () => {

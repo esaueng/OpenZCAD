@@ -46,7 +46,7 @@ export function SharedLinkCopyDialog({
         <h2 id="shared-link-copy-title">Make a copy</h2>
         <p>
           {withoutHistory
-            ? 'The copy is yours: it holds the finished model as imported solids, without the owner’s features, sketches or parameters, and opens in Build mode.'
+            ? 'The copy is yours: it holds the finished model as imported solids, without the owner’s features, sketches or parameters, and opens in Build mode. Its history lists one imported solid per body.'
             : 'The copy is yours: it keeps the model, its parameters and history, and opens in Build mode.'}{' '}
           Later changes the owner makes don&apos;t reach it.
         </p>
