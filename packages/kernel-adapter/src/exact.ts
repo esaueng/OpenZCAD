@@ -235,6 +235,7 @@ import {
   measureOwnedFaceGeometry,
   withFaceGeometryMemo
 } from './exact-measure';
+import { referenceRecaptureHooks } from './reference-recapture-slot';
 import {
   PreviewFaceGeometryCache,
   faceContentDigestsOf
@@ -5111,6 +5112,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             )
           );
           measured = prepared.geometry;
+          // I03 stored-unit re-capture only: the oracle samples this body's
+          // tessellated faces while their handles are live.
+          referenceRecaptureHooks()?.noteBodyFaces?.(bodyId, kernel, faces);
           completeMeasurement = async () => {
             for (const job of prepared.analysis) {
               await scheduling.checkpoint();

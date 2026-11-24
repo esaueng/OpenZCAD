@@ -87,6 +87,9 @@ import {
   type FingerprintScheme,
   type ReferenceRecaptureHooks
 } from './reference-recapture-slot';
+import { measureAreaProvenance } from './exact-measure';
+import { MEASUREMENT_DEFLECTION } from './measurement-deflection';
+import type { RemusKernel } from './remus-runtime';
 import {
   topologyHashOfWitness,
   type LegacyTopologyHashReference,
@@ -523,6 +526,141 @@ function logBlendOrientation(
   log.set(feature, [...(log.get(feature) ?? []), report]);
 }
 
+// ---------------------------------------------------------------------------
+// Tessellated-area faces (oracle 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Points on one face whose area the kernel only estimates, in source units.
+ *
+ * `faceArea` is exact for planes and analytic surfaces, but on a NURBS face
+ * it integrates a tessellation at the absolute chord `deflection` the
+ * projection passes, {@link MEASUREMENT_DEFLECTION} model units: 0.08 mm in
+ * a millimetre document, 2.03 mm in an inch one. The same blend therefore
+ * measures a different area in each unit. Measured on a 40 × 12 × 10 mm box
+ * with one edge filleted 1 → 3 mm (a B-spline blend face), the area at
+ * 0.08 units is 125.459 mm² built in mm, 115.899 in inches and 125.140 in
+ * centimetres, and converges to 125.677 mm² in all three as the deflection
+ * shrinks; the volume agrees to 1e-15 and points sampled on the mm face lie
+ * within 2e-14 mm of the inch and cm faces. The difference is the
+ * measurement, not the shape, so those faces are compared by where their
+ * surfaces are instead of by their areas.
+ */
+export interface TessellatedFaceSample {
+  surfaceType: string;
+  /** `[x, y, z, …]`: tessellation vertices, which lie on the surface. */
+  points: Float64Array;
+}
+
+/** Most points kept per face; evenly strided from the tessellation. */
+const FACE_SAMPLE_POINTS = 256;
+
+/** Whether the kernel's area for this face depends on the deflection. */
+function hasTessellatedArea(kernel: RemusKernel, face: number): string | null {
+  const surfaceType = kernel.getSurfaceType(face);
+  return measureAreaProvenance(kernel, face, surfaceType) === undefined
+    ? surfaceType
+    : null;
+}
+
+/** The body's tessellated-area faces, by face index; null when unsampled. */
+function sampleTessellatedFaces(
+  kernel: RemusKernel,
+  faces: readonly number[]
+): Map<number, TessellatedFaceSample> | null {
+  const samples = new Map<number, TessellatedFaceSample>();
+  try {
+    for (const [index, face] of faces.entries()) {
+      const surfaceType = hasTessellatedArea(kernel, face);
+      if (surfaceType === null) continue;
+      // Density relative to the face, so it does not depend on the unit.
+      const size = Math.sqrt(
+        Math.max(kernel.faceArea(face, MEASUREMENT_DEFLECTION), 0)
+      );
+      const mesh = kernel.tessellateFace(face, Math.max(size * 1e-2, 1e-9));
+      let positions: Float64Array;
+      try {
+        positions = mesh.positions;
+      } finally {
+        mesh.free();
+      }
+      const count = positions.length / 3;
+      if (count === 0) return null;
+      const stride = Math.max(1, Math.ceil(count / FACE_SAMPLE_POINTS));
+      const points: number[] = [];
+      for (let vertex = 0; vertex < count; vertex += stride)
+        points.push(
+          positions[vertex * 3]!,
+          positions[vertex * 3 + 1]!,
+          positions[vertex * 3 + 2]!
+        );
+      samples.set(index, { surfaceType, points: Float64Array.from(points) });
+    }
+  } catch {
+    // A face that cannot be sampled leaves the body to the area check.
+    return null;
+  }
+  return samples;
+}
+
+/**
+ * For every source sample set, the largest distance of its points scaled by
+ * `factor` to each converted tessellated-area face of the same surface
+ * class, in target units. A distance past a loose cutoff stops early and is
+ * recorded as infinite, which only refuses. Null when unmeasurable.
+ */
+function tessellatedFaceDistances(
+  kernel: RemusKernel,
+  faces: readonly number[],
+  samples: ReadonlyMap<number, TessellatedFaceSample>,
+  factor: number
+): Map<number, Map<number, number>> | null {
+  const distances = new Map<number, Map<number, number>>();
+  try {
+    const targets = faces.flatMap((face, index) => {
+      const surfaceType = hasTessellatedArea(kernel, face);
+      return surfaceType === null ? [] : [{ face, index, surfaceType }];
+    });
+    for (const [source, sample] of samples) {
+      const row = new Map<number, number>();
+      let extent = 0;
+      for (const value of sample.points)
+        extent = Math.max(extent, Math.abs(value * factor));
+      // Far looser than the oracle's 1e-6 + 1e-9 × scale on any body these
+      // points lie in; it only saves projecting the rest of a far face.
+      const cutoff = 1e-5 + 1e-6 * extent;
+      for (const target of targets) {
+        if (target.surfaceType !== sample.surfaceType) continue;
+        let worst = 0;
+        for (
+          let at = 0;
+          at < sample.points.length && worst <= cutoff;
+          at += 3
+        ) {
+          const projected = kernel.projectPointOnSurface(
+            target.face,
+            sample.points[at]! * factor,
+            sample.points[at + 1]! * factor,
+            sample.points[at + 2]! * factor
+          );
+          const distance = projected[5];
+          worst = Math.max(
+            worst,
+            distance !== undefined && Number.isFinite(distance)
+              ? distance
+              : Infinity
+          );
+        }
+        row.set(target.index, worst <= cutoff ? worst : Infinity);
+      }
+      distances.set(source, row);
+    }
+  } catch {
+    return null;
+  }
+  return distances;
+}
+
 /**
  * Records what each stored identity resolves to, per feature. Used for the
  * source build and, unchanged, for the verification build, where it shows
@@ -532,9 +670,46 @@ class RecordingSession implements ReferenceRecaptureHooks {
   readonly topology = new Map<string, SourceTopologyRecord[]>();
   readonly profiles = new Map<string, SourceProfileRecord[]>();
   readonly blends: BlendOrientationLog = new Map();
+  /** Per body, points on each tessellated-area face (source build). */
+  readonly faceSamples = new Map<BodyId, Map<number, TessellatedFaceSample>>();
+  /** Per body, those points' distances to this build's faces (verification). */
+  readonly faceDistances: Map<BodyId, Map<number, Map<number, number>>> =
+    new Map();
+
+  /**
+   * `against`: the source build's samples and the factor to scale them by,
+   * for the verification build; absent, this build records its own.
+   */
+  constructor(
+    private readonly against?: {
+      samples: ReadonlyMap<BodyId, ReadonlyMap<number, TessellatedFaceSample>>;
+      factor: number;
+    }
+  ) {}
 
   noteBlendOrientation(report: BlendOrientationReport): void {
     logBlendOrientation(this.blends, report);
+  }
+
+  noteBodyFaces(
+    bodyId: BodyId,
+    kernel: RemusKernel,
+    faces: readonly number[]
+  ): void {
+    if (!this.against) {
+      const samples = sampleTessellatedFaces(kernel, faces);
+      if (samples) this.faceSamples.set(bodyId, samples);
+      return;
+    }
+    const samples = this.against.samples.get(bodyId);
+    if (!samples) return;
+    const distances = tessellatedFaceDistances(
+      kernel,
+      faces,
+      samples,
+      this.against.factor
+    );
+    if (distances) this.faceDistances.set(bodyId, distances);
   }
 
   private addTopology(key: string, record: SourceTopologyRecord): void {
@@ -1000,15 +1175,90 @@ export interface ConversionReferenceRefusal {
   message: string;
 }
 
-function faceAreaOf(body: BodyRepresentation): number | undefined {
+/** Summed face area, leaving out the faces at `skip` (by index). */
+function faceAreaOf(
+  body: BodyRepresentation,
+  skip?: ReadonlySet<number>
+): number | undefined {
   const faces = body.topology?.faces;
   if (!faces || faces.length === 0) return undefined;
   let area = 0;
-  for (const face of faces) {
+  for (const [index, face] of faces.entries()) {
     if (!face.geometry) return undefined;
-    area += face.geometry.area;
+    if (!skip?.has(index)) area += face.geometry.area;
   }
   return area;
+}
+
+/**
+ * Oracle 2's evidence for the faces whose area is a tessellation estimate
+ * (see {@link TessellatedFaceSample}): per body, for each such source face
+ * by index, the largest distance of its sampled points scaled by k to each
+ * converted face of its surface class, by index, in target units. A body
+ * without an entry, or whose entry does not cover exactly those faces, has
+ * every area compared as usual.
+ */
+export type TessellatedFaceEvidence = ReadonlyMap<
+  BodyId,
+  ReadonlyMap<number, ReadonlyMap<number, number>>
+>;
+
+function tessellatedFaceEvidence(
+  samples: ReadonlyMap<BodyId, ReadonlyMap<number, TessellatedFaceSample>>,
+  distances: ReadonlyMap<
+    BodyId,
+    ReadonlyMap<number, ReadonlyMap<number, number>>
+  >
+): TessellatedFaceEvidence {
+  const evidence = new Map<
+    BodyId,
+    ReadonlyMap<number, ReadonlyMap<number, number>>
+  >();
+  for (const [body, sampled] of samples) {
+    const measured = distances.get(body);
+    if (
+      measured &&
+      measured.size === sampled.size &&
+      [...sampled.keys()].every((index) => measured.has(index))
+    )
+      evidence.set(body, measured);
+  }
+  return evidence;
+}
+
+/** A body's faces the kernel measures by tessellation, by index. */
+function tessellatedIndices(body: BodyRepresentation): Set<number> {
+  const indices = new Set<number>();
+  for (const [index, face] of (body.topology?.faces ?? []).entries())
+    if (face.geometry && face.geometry.areaProvenance === undefined)
+      indices.add(index);
+  return indices;
+}
+
+interface TessellatedFaces {
+  source: ReadonlySet<number>;
+  converted: ReadonlySet<number>;
+  distances: ReadonlyMap<number, ReadonlyMap<number, number>>;
+}
+
+/**
+ * The evidence for one body, when it covers exactly the source faces the
+ * projection marks as tessellated (no `areaProvenance`); otherwise null.
+ */
+function tessellatedFacesOf(
+  from: BodyRepresentation,
+  to: BodyRepresentation,
+  distances: ReadonlyMap<number, ReadonlyMap<number, number>> | undefined
+): TessellatedFaces | null {
+  if (!distances) return null;
+  const source = tessellatedIndices(from);
+  if (
+    source.size === 0 ||
+    source.size !== distances.size ||
+    ![...source].every((index) => distances.has(index))
+  )
+    return null;
+  return { source, converted: tessellatedIndices(to), distances };
 }
 
 function relativeMismatch(
@@ -1028,6 +1278,11 @@ export interface GeometryOracleStats {
   areas: number;
   /** Faces compared one by one (area, surface class, centre, centroid). */
   faces: number;
+  /**
+   * Of those, faces whose area is a tessellation estimate, compared by
+   * sampled points on the surface instead of by area.
+   */
+  sampledFaces: number;
   /** Datum planes, axes, points and coordinate systems compared. */
   datums: number;
 }
@@ -1182,18 +1437,21 @@ function measuredFaces(body: BodyRepresentation): MeasuredFace[] | undefined {
  * ×k). Totals cannot see a blend built mirrored on a symmetric body: an
  * asymmetric fillet or chamfer whose sides swapped keeps the volume, the
  * total area and the counts, but moves the area centroid of every face it
- * trims. Returns how many faces were compared.
+ * trims. A face whose area is a tessellation estimate is matched by its
+ * sampled points instead of its area (`tessellated`). Returns how many
+ * faces were compared, and how many of them by samples.
  */
 function compareFaces(
   from: BodyRepresentation,
   to: BodyRepresentation,
   factor: number,
   scale: number,
-  mismatch: (field: string, message: string) => void
-): number {
+  mismatch: (field: string, message: string) => void,
+  tessellated: TessellatedFaces | null
+): { faces: number; sampledFaces: number } {
   const source = measuredFaces(from);
   const converted = measuredFaces(to);
-  if (!source || !converted) return 0;
+  if (!source || !converted) return { faces: 0, sampledFaces: 0 };
   const vector = (value: Vector3 | undefined): number[] | undefined =>
     value ? [value.x, value.y, value.z] : undefined;
   // Positions here tell faces apart; the box and volume checks carry the
@@ -1221,23 +1479,59 @@ function compareFaces(
       );
     });
   };
-  const alike = (a: MeasuredFace, b: MeasuredFace, k: number) =>
+  // A tessellated face's area is not comparable across units (see
+  // TessellatedFaceSample), so across the builds it is matched instead by
+  // its sampled points lying on the converted surface, within the bounding
+  // box's kernel tolerance. Within one build its area still tells twins
+  // apart.
+  const sameArea = (
+    a: MeasuredFace,
+    b: MeasuredFace,
+    k: number,
+    across: boolean
+  ) => {
+    if (
+      !across ||
+      !tessellated ||
+      (!tessellated.source.has(a.index) && !tessellated.converted.has(b.index))
+    )
+      return !relativeMismatch(
+        b.area,
+        a.area * k * k,
+        UNIT_CONVERSION_MEASURE_RTOL
+      );
+    if (!tessellated.source.has(a.index) || !tessellated.converted.has(b.index))
+      return false;
+    const distance = tessellated.distances.get(a.index)?.get(b.index);
+    return distance !== undefined && distance <= bboxTolerance(scale);
+  };
+  const alike = (
+    a: MeasuredFace,
+    b: MeasuredFace,
+    k: number,
+    across: boolean
+  ) =>
     a.surfaceType === b.surfaceType &&
-    !relativeMismatch(b.area, a.area * k * k, UNIT_CONVERSION_MEASURE_RTOL) &&
+    sameArea(a, b, k, across) &&
     close(b.center, a.center, k, 1e-6 * scale) &&
     close(b.centroid, a.centroid, k, Math.max(slack(a), slack(b)));
+  let sampledFaces = 0;
   for (const face of source) {
-    const twins = source.filter((other) => alike(face, other, 1)).length;
+    const bySamples = tessellated?.source.has(face.index) ?? false;
+    if (bySamples) sampledFaces += 1;
+    const twins = source.filter((other) => alike(face, other, 1, false)).length;
     const matches = converted.filter((other) =>
-      alike(face, other, factor)
+      alike(face, other, factor, true)
     ).length;
     if (matches !== twins)
       mismatch(
         `faces.${face.index}`,
-        `The ${face.surfaceType} face ${face.index} (area ${face.area}) is matched by ${matches} converted face(s) of its area and position scaled by ${factor}, not ${twins}.`
+        bySamples
+          ? `The ${face.surfaceType} face ${face.index} is matched by ${matches} converted face(s) whose surface holds its sampled points and whose position is its own scaled by ${factor}, not ${twins}.`
+          : `The ${face.surfaceType} face ${face.index} (area ${face.area}) is matched by ${matches} converted face(s) of its area and position scaled by ${factor}, not ${twins}.`
       );
   }
-  return source.length;
+  return { faces: source.length, sampledFaces };
 }
 
 /**
@@ -1248,12 +1542,16 @@ function compareFaces(
  * {@link UNIT_CONVERSION_MEASURE_RTOL}; face, edge and vertex counts and
  * the consumed/exportable flags exactly; and the exportable body set and
  * the warnings exactly. The projection publishes no per-body solid count,
- * so solids are covered by the body set and the topology counts.
+ * so solids are covered by the body set and the topology counts. With
+ * `tessellatedEvidence` for a body, the faces whose area the kernel only
+ * estimates by tessellation leave the area total and are matched by sampled
+ * points on their surfaces instead (see {@link TessellatedFaceSample}).
  */
 export function unitConversionGeometryOracle(
   source: DerivedState,
   converted: DerivedState,
-  factor: number
+  factor: number,
+  tessellatedEvidence: TessellatedFaceEvidence = new Map()
 ): { refusals: ConversionReferenceRefusal[]; stats: GeometryOracleStats } {
   const refusals: ConversionReferenceRefusal[] = [];
   const stats: GeometryOracleStats = {
@@ -1261,6 +1559,7 @@ export function unitConversionGeometryOracle(
     volumes: 0,
     areas: 0,
     faces: 0,
+    sampledFaces: 0,
     datums: 0
   };
   const mismatch = (subject: string, field: string, message: string) =>
@@ -1349,8 +1648,21 @@ export function unitConversionGeometryOracle(
           `The volume is ${to.volume}, not ${from.volume} × k³ = ${expected}.`
         );
     }
-    const areaFrom = faceAreaOf(from);
-    const areaTo = faceAreaOf(to);
+    // Tessellated faces leave the total: their areas are compared by
+    // sampled points face by face below, and refused there if they differ.
+    const tessellated = tessellatedFacesOf(
+      from,
+      to,
+      tessellatedEvidence.get(id)
+    );
+    if (tessellated && tessellated.source.size !== tessellated.converted.size)
+      mismatch(
+        subject,
+        'sampledFaces',
+        `${tessellated.source.size} faces measured by tessellation became ${tessellated.converted.size}.`
+      );
+    const areaFrom = faceAreaOf(from, tessellated?.source);
+    const areaTo = faceAreaOf(to, tessellated?.converted);
     if ((areaFrom === undefined) !== (areaTo === undefined))
       mismatch(subject, 'area', 'Only one build measured the face areas.');
     else if (areaFrom !== undefined && areaTo !== undefined) {
@@ -1365,10 +1677,18 @@ export function unitConversionGeometryOracle(
     }
     // Face by face only for a body whose totals matched: past a total that
     // already refused, every face it changed would repeat the refusal.
-    if (refusals.length === before)
-      stats.faces += compareFaces(from, to, factor, scale, (field, message) =>
-        mismatch(subject, field, message)
+    if (refusals.length === before) {
+      const compared = compareFaces(
+        from,
+        to,
+        factor,
+        scale,
+        (field, message) => mismatch(subject, field, message),
+        tessellated
       );
+      stats.faces += compared.faces;
+      stats.sampledFaces += compared.sampledFaces;
+    }
   }
   stats.datums = compareDatums(source, converted, factor, mismatch);
   const exportFrom = [...source.exportableBodyIds].sort();
@@ -1677,7 +1997,14 @@ async function recapture(
       profileId: sites.filter((site) => site.kind === 'profile-id').length,
       edgeEnd: sites.filter((site) => site.kind === 'edge-end').length
     },
-    geometry: { bodies: 0, volumes: 0, areas: 0, faces: 0, datums: 0 },
+    geometry: {
+      bodies: 0,
+      volumes: 0,
+      areas: 0,
+      faces: 0,
+      sampledFaces: 0,
+      datums: 0
+    },
     timings: {
       source: sourceBuild.milliseconds,
       translate: translateBuild.milliseconds,
@@ -1842,7 +2169,10 @@ async function recapture(
 
   // Oracle 3: built as stored, nothing translated, every identity resolves
   // in its own feature, to the entity it was re-captured to.
-  const verifying = new RecordingSession();
+  const verifying = new RecordingSession({
+    samples: recorded.faceSamples,
+    factor
+  });
   const verifyBuild = await coldBuild(
     claim,
     applied.document,
@@ -1906,7 +2236,8 @@ async function recapture(
   const oracle = unitConversionGeometryOracle(
     sourceBuild.derived,
     derived,
-    factor
+    factor,
+    tessellatedFaceEvidence(recorded.faceSamples, verifying.faceDistances)
   );
   report.geometry = oracle.stats;
   refusals.push(...oracle.refusals);

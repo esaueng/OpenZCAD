@@ -57,6 +57,7 @@ import {
   toUserId,
   type BodyId,
   type DerivedState,
+  type EdgeTopology,
   type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
   type FaceWitnessV1,
@@ -993,7 +994,8 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
         targetBodyId: BodyId;
         edgeHashes: number[];
         edgeReferences: EdgeTopologyReferenceV5[];
-      }
+      },
+      picked: EdgeTopology
     ) => ProjectDocument
   ): Promise<ProjectDocument> {
     const base = addPrimitiveFeature(
@@ -1009,12 +1011,16 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
     const picked = (built.bodyRepresentations[bodyId]?.topology?.edges ?? [])
       .filter((candidate) => candidate.displayRole !== 'seam')
       .find((candidate) => candidate.reference)!;
-    const document = blend(base, {
-      name: 'Blend',
-      targetBodyId: bodyId,
-      edgeHashes: [picked.hash],
-      edgeReferences: [picked.reference!]
-    });
+    const document = blend(
+      base,
+      {
+        name: 'Blend',
+        targetBodyId: bodyId,
+        edgeHashes: [picked.hash],
+        edgeReferences: [picked.reference!]
+      },
+      picked
+    );
     expect((await buildOnce(document)).warnings).toEqual([]);
     return document;
   }
@@ -1023,6 +1029,33 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
     blendedBox(
       (document, input) =>
         filletEdges(document, { ...input, size: 1, endRadius: 3 }).document
+    );
+  /** Whether the kernel draws `edge` from its witness end 0 to end 1. */
+  const runOf = (edge: EdgeTopology): boolean => {
+    const witness = edge.reference!.witness;
+    if (witness.closed) throw new Error('Expected an open edge.');
+    const far = edge.points.slice(-3);
+    const near = (end: 0 | 1) => {
+      const [x, y, z] = witness.endpoints[end].map((value) => value * 1e-6);
+      return Math.hypot(far[0]! - x!, far[1]! - y!, far[2]! - z!);
+    };
+    return near(1) < near(0);
+  };
+  /** M03 (v151): a radius set at each corner of the edge, not start → end. */
+  const perCornerFillet = () =>
+    blendedBox(
+      (document, input, picked) =>
+        filletEdges(document, {
+          ...input,
+          size: 1,
+          endRadius: 1,
+          radiusLaw: 'linear',
+          vertexRadii: [
+            { edge: 0, end: 0, radius: 1.5 },
+            { edge: 0, end: 1, radius: 3.5 }
+          ],
+          edgeRuns: [runOf(picked)]
+        }).document
     );
   const twoDistanceChamfer = () =>
     blendedBox(
@@ -1088,16 +1121,118 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
     expect(result.ok && result.report.geometry.faces).toBeGreaterThan(0);
   });
 
-  it('passes a variable fillet’s orientation, which the area oracle then refuses', async () => {
-    // Remus fits the variable blend face to a B-spline within a tolerance
-    // that does not scale with the unit, so its area differs between the
-    // two builds well past 1e-6 and the existing oracle refuses it. The
-    // orientation check itself accepts the unreversed edge.
+  it('re-captures a variable fillet, matching its B-spline face by samples', async () => {
+    // The blend face is a B-spline whose area the kernel integrates over a
+    // tessellation at a deflection fixed in model units, so the area itself
+    // differs between the builds (about 0.5% in inches); the surface does
+    // not, and the oracle compares that instead.
     const source = await variableFillet();
     const there = convertDocumentUnits(source, 'inch');
     if (!there.ok) throw new Error('conversion refused');
     const result = await computeConversionReferenceMap(source, there.document);
-    expect(codes(result)).toEqual(['geometry-mismatch Block Body area']);
+    expect(codes(result)).toEqual([]);
+    expect(result.ok && result.report.geometry.sampledFaces).toBe(1);
+  });
+
+  for (const unit of ['inch', 'cm'] as const)
+    it(`re-captures a fillet with a radius at each corner into ${unit}`, async () => {
+      const source = await perCornerFillet();
+      const there = convertDocumentUnits(source, unit);
+      if (!there.ok) throw new Error('conversion refused');
+      const result = await computeConversionReferenceMap(
+        source,
+        there.document
+      );
+      expect(codes(result)).toEqual([]);
+      if (!result.ok) return;
+      expect(result.report.geometry.sampledFaces).toBe(1);
+      expect(result.report.geometry.faces).toBeGreaterThan(1);
+      const converted = (await buildOnce(result.document)).bodyRepresentations;
+      const before = (await buildOnce(source)).bodyRepresentations;
+      const k = result.report.factor;
+      for (const [id, body] of Object.entries(before))
+        expect(converted[id as BodyId]!.volume).toBeCloseTo(
+          body.volume * k ** 3,
+          9
+        );
+    });
+
+  it('still refuses a per-corner fillet whose sampled face is elsewhere', () => {
+    // The evidence the builds measured, with the blend face's samples
+    // reported off the converted surface: the face, not just the area,
+    // must agree.
+    const blend = (unit: number) => {
+      const face = (
+        surfaceType: string,
+        area: number,
+        center: number,
+        exact: boolean
+      ) => ({
+        hash: 0,
+        topologyId: 'face:0',
+        triangleStart: 0,
+        triangleCount: 0,
+        geometry: {
+          surfaceType,
+          area: area * unit * unit,
+          ...(exact ? { areaProvenance: 'exact' as const } : {}),
+          center: { x: center * unit, y: 0, z: 0 }
+        }
+      });
+      return {
+        bodyRepresentations: {
+          ['body_a' as BodyId]: {
+            bodyId: 'body_a' as BodyId,
+            name: 'Block',
+            source: 'primitive',
+            mesh: { kind: 'mesh', vertices: [], indices: [] },
+            faceCount: 2,
+            color: '#888888',
+            exportableStep: true,
+            consumed: false,
+            volume: 10 * unit ** 3,
+            bbox: {
+              min: { x: 0, y: 0, z: 0 },
+              max: { x: 4 * unit, y: 1 * unit, z: 1 * unit }
+            },
+            topology: {
+              // The B-spline face measures a different area in each unit.
+              faces: [
+                face('plane', 4, 2, true),
+                face('bspline', unit === 1 ? 125.46 : 115.9, 1, false)
+              ],
+              edges: []
+            }
+          }
+        },
+        exportableBodyIds: ['body_a' as BodyId],
+        warnings: []
+      } as unknown as DerivedState;
+    };
+    const k = 1 / 25.4;
+    const evidence = (distance: number) =>
+      new Map([['body_a' as BodyId, new Map([[1, new Map([[1, distance]])]])]]);
+    expect(
+      unitConversionGeometryOracle(blend(1), blend(k), k).refusals.map(
+        (refusal) => refusal.field
+      )
+    ).toEqual(['area']);
+    const kept = unitConversionGeometryOracle(
+      blend(1),
+      blend(k),
+      k,
+      evidence(1e-14)
+    );
+    expect(kept.refusals).toEqual([]);
+    expect(kept.stats.sampledFaces).toBe(1);
+    expect(
+      unitConversionGeometryOracle(
+        blend(1),
+        blend(k),
+        k,
+        evidence(1e-4)
+      ).refusals.map((refusal) => refusal.field)
+    ).toEqual(['faces.1']);
   });
 
   it('refuses a variable fillet whose edge the converted build runs the other way', async () => {
