@@ -254,9 +254,11 @@ test.describe('picked native detail deletion', { tag: '@ci-smoke' }, () => {
       .toBe(true);
     await expect(dialog).toContainText('Hole rim fillet');
     await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
-    await expect(page.getByRole('contentinfo')).toContainText(
-      /Cannot remove.*Hole rim fillet/
-    );
+    // The offer below can mount before this read and make the background
+    // inert and aria-hidden, footer included, so read it including hidden.
+    await expect(
+      page.getByRole('contentinfo', { includeHidden: true })
+    ).toContainText(/Cannot remove.*Hole rim fillet/);
     // The refusal then offers to delete the fillet too, in a modal that
     // mounts just after the status line and hides the History panel from
     // the accessibility tree. Waiting on that offer and declining it is what
