@@ -33565,6 +33565,23 @@ export function App() {
   }
 
   /**
+   * The release says a collision the mesh does not show as its preview
+   * does. Only the sentence: no travel estimate joins the recorded detail.
+   */
+  function rewordSweepRefusal(
+    sweepReading: (() => FaceSweepReading | undefined) | undefined,
+    offset: number
+  ): void {
+    const release = pendingDirectEditRef.current;
+    if (!sweepReading || release?.value !== offset) return;
+    release.rewordRefusal = (diagnostic) =>
+      withFaceSweepReading(diagnostic, () => {
+        const reading = sweepReading();
+        return reading?.kind === 'clear' ? reading : undefined;
+      });
+  }
+
+  /**
    * Face-offset commit as a validated direct edit. `exact` preserves a typed
    * expression as the stored parametric value; plain drags store the number.
    */
@@ -33676,6 +33693,7 @@ export function App() {
     // already running for it; anywhere else, the new value replaces it.
     if (resumeRelease && retaken) {
       if (!retakenRelease.commit(retaken)) return 'blocked';
+      rewordSweepRefusal(plan.sweepReading, offset);
       return 'started';
     }
     // A plain face offset released from a Total reading names that Total
@@ -33700,16 +33718,8 @@ export function App() {
       undefined,
       reuse ? reuse.validationTargets : plan.validationTargets
     );
-    // The release says a collision the mesh does not show as its preview
-    // does. Only the sentence: no travel estimate joins the recorded detail.
-    const sweepReading = reuse ? reuse.sweepReading : plan.sweepReading;
+    rewordSweepRefusal(reuse ? reuse.sweepReading : plan.sweepReading, offset);
     const release = pendingDirectEditRef.current;
-    if (sweepReading && release?.value === offset)
-      release.rewordRefusal = (diagnostic) =>
-        withFaceSweepReading(diagnostic, () => {
-          const reading = sweepReading();
-          return reading?.kind === 'clear' ? reading : undefined;
-        });
     if (releasedFrame) {
       if (release) release.cancelReleasedDisplay = releasedFrame.cancel;
       else releasedFrame.cancel();

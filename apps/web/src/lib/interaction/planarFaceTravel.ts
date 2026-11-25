@@ -233,7 +233,9 @@ export function planarFaceSweepClear(
     if (reach >= known.unmeasurableFrom) return null;
     // The wider search can exceed the work budget where the asked one
     // would not; fall back to the asked reach before giving up.
-    let searched = Math.min(2 * reach, known.unmeasurableFrom);
+    // A doubled slab already over budget is not tried again: past that
+    // point each frame costs one search, of the reach it asks about.
+    let searched = 2 * reach < known.unmeasurableFrom ? 2 * reach : reach;
     let travel = measure(representation, face, slab(offset, searched));
     if (!travel && searched > reach) {
       known.unmeasurableFrom = searched;
@@ -262,6 +264,47 @@ function toleranceOf(representation: BodyRepresentation): number {
   return Number.isFinite(extent)
     ? Math.max(extent * CHORD_ALLOWANCE_RATIO, 1e-5)
     : 1e-5;
+}
+
+type Point3 = [number, number, number];
+
+/** The polygon's part with height (third coordinate) on `keep`'s side. */
+function clipHeight(
+  polygon: Point3[],
+  bound: number,
+  keep: (height: number) => boolean
+): Point3[] {
+  const result: Point3[] = [];
+  for (let i = 0; i < polygon.length; i += 1) {
+    const p = polygon[i]!;
+    const q = polygon[(i + 1) % polygon.length]!;
+    const pIn = keep(p[2]);
+    const qIn = keep(q[2]);
+    if (pIn) result.push(p);
+    if (pIn !== qIn) {
+      const t = (bound - p[2]) / (q[2] - p[2]);
+      result.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t, bound]);
+    }
+  }
+  return result;
+}
+
+/** A triangle's part between two heights, as a fan of triangles. */
+function clipToSlab(
+  triangle: Point3[],
+  low: number,
+  high: number
+): Array<[Point3, Point3, Point3]> {
+  let polygon = triangle;
+  if (Number.isFinite(low))
+    polygon = clipHeight(polygon, low, (height) => height >= low);
+  if (Number.isFinite(high))
+    polygon = clipHeight(polygon, high, (height) => height <= high);
+  const fan: Array<[Point3, Point3, Point3]> = [];
+  for (let i = 1; i + 1 < polygon.length; i += 1) {
+    fan.push([polygon[0]!, polygon[i]!, polygon[i + 1]!]);
+  }
+  return fan;
 }
 
 /**
@@ -346,7 +389,11 @@ function measure(
   const flat = Math.max(1e-6, span * 1e-7);
   const inside = span * 1e-9;
 
-  const [low, high] = window;
+  // A windowed slab starts just past the face's own plane, so a triangle
+  // that leaves the plane over the face is cut where it is measurably
+  // above (or below) it, and that cut is sampled.
+  const low = window[0] >= 0 ? Math.max(window[0], 2 * flat) : window[0];
+  const high = window[1] <= 0 ? Math.min(window[1], -2 * flat) : window[1];
   const excluded = new Uint8Array(indices.length / 3);
   for (const other of topology.faces) {
     if (!adjacent.has(other.hash)) continue;
@@ -376,10 +423,28 @@ function measure(
     ) {
       continue;
     }
-    obstacles.push({
-      triangle: { ax: a[0], ay: a[1], bx: b[0], by: b[1], cx: c[0], cy: c[1] },
-      heights: [a[2], b[2], c[2]]
-    });
+    // A windowed search measures only the part of each triangle inside the
+    // slab. Samples sit at vertices of the overlap with the face, so a
+    // triangle rising through the slab — from the face's own plane at a
+    // shared corner to past the move, say — would otherwise be sampled only
+    // outside it and read as clear.
+    const pieces: Array<[Point3, Point3, Point3]> =
+      Number.isFinite(low) || Number.isFinite(high)
+        ? clipToSlab([a, b, c], low, high)
+        : [[a, b, c]];
+    for (const [p, q, r] of pieces) {
+      obstacles.push({
+        triangle: {
+          ax: p[0],
+          ay: p[1],
+          bx: q[0],
+          by: q[1],
+          cx: r[0],
+          cy: r[1]
+        },
+        heights: [p[2], q[2], r[2]]
+      });
+    }
   }
   if (obstacles.length * footprint.length * 12 > WORK_BUDGET) {
     return null;

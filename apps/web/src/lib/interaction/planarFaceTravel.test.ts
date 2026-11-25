@@ -235,6 +235,19 @@ describe('planarFaceSweepClear', () => {
     const plate = body([TOP, BOTTOM, SIDE], null);
     expect(planarFaceSweepClear(plate, topOf(plate), 1)).toBeNull();
   });
+
+  it('sees a face that rises through the slab from a shared corner', () => {
+    // Touches the top face only at its corner (0, 0, 2) and climbs to 10
+    // above it over the face: every sample is on the plane or past a 1 mm
+    // move, yet the swept face meets it at once.
+    const ramp: FaceSpec = {
+      hash: 4,
+      quad: [v(0, 0, 2), v(6, 0, 12), v(6, 6, 12), v(0, 6, 12)],
+      normal: v(-0.857, 0, 0.514)
+    };
+    const plate = body([TOP, BOTTOM, SIDE, ramp], ADJACENCY);
+    expect(planarFaceSweepClear(plate, topOf(plate), 1)).toBe(false);
+  });
 });
 
 /**
