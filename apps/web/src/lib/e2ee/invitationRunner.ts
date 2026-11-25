@@ -317,7 +317,9 @@ export async function invitationGatesOpen(
   });
   if (response.status === 404) return false;
   if (!response.ok) {
-    throw new Error(`The encryption gates could not be read (${response.status}).`);
+    throw new Error(
+      `The encryption gates could not be read (${response.status}).`
+    );
   }
   let config: Partial<E2eeConfigResponse> | null;
   try {

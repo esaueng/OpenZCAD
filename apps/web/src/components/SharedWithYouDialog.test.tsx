@@ -327,7 +327,9 @@ describe('SharedWithYouDialog', () => {
     const { rerender } = render(
       <SharedWithYouDialog key={TOKEN} token={TOKEN} {...props} />
     );
-    await waitFor(() => expect(acceptEncryptedInvitation).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(acceptEncryptedInvitation).toHaveBeenCalledOnce()
+    );
     // The second link arrives while the first is still being accepted.
     pendingEncryptedInvitation.mockReturnValue(second);
     rerender(<SharedWithYouDialog key={second} token={second} {...props} />);

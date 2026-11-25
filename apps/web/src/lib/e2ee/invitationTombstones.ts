@@ -138,7 +138,7 @@ export function sealedInvitationTombstones(
     } finally {
       key.fill(0);
     }
-    let book: Book | null = null;
+    let book: Book | null;
     try {
       book = parseBook(JSON.parse(new TextDecoder().decode(plaintext)));
     } catch {

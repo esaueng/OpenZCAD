@@ -103,7 +103,11 @@ function parseSave(body: Record<string, unknown>): {
     4
   ).getUint32(0);
   if (sequence < 1) invalid('A sealed record has sequence 0.');
-  return { expectedRevision: expectedRevision as number, record: text, sequence };
+  return {
+    expectedRevision: expectedRevision as number,
+    record: text,
+    sequence
+  };
 }
 
 export async function loadInvitationTombstones(

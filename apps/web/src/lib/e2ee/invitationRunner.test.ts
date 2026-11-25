@@ -218,7 +218,9 @@ describe('the invitation runner', () => {
       invitationGatesOpen(answer(200, { enabled: true, projectsEnabled: true }))
     ).resolves.toBe(true);
     await expect(
-      invitationGatesOpen(answer(200, { enabled: true, projectsEnabled: false }))
+      invitationGatesOpen(
+        answer(200, { enabled: true, projectsEnabled: false })
+      )
     ).resolves.toBe(false);
     await expect(invitationGatesOpen(answer(404))).resolves.toBe(false);
     await expect(invitationGatesOpen(answer(200))).resolves.toBe(false);

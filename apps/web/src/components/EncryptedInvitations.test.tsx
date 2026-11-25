@@ -37,7 +37,7 @@ vi.mock('../lib/e2ee/invitationRunner', () => ({
 vi.mock('../lib/e2ee/invitations', () => ({
   confirmEncryptedInvitation: (...args: unknown[]) =>
     confirmEncryptedInvitation(...args),
-  addInvitedMember: (...args: unknown[]) => addInvitedMember(...args),
+  addInvitedMember: (...args: unknown[]) => addInvitedMember(...args)
 }));
 vi.mock('../lib/e2ee/invitationTombstones', () => ({
   cancelInvitation: (...args: unknown[]) => declineInvitation(...args)
