@@ -256,6 +256,8 @@ import {
   type MovePreview,
   type DepthCycle,
   type DragRig,
+  retireRig,
+  stepRetiringRigs,
   type MoveSnap,
   type ViewportScale,
   type PickCandidate,
@@ -2453,33 +2455,6 @@ function sameEdgeRigPlacement(a: EdgeRigPlacement, b: EdgeRigPlacement) {
     Math.abs((a.reach ?? 1) - (b.reach ?? 1)) < 1e-9 &&
     Math.abs((a.baseValue ?? 0) - (b.baseValue ?? 0)) < 1e-9
   );
-}
-
-function retireRig(rig: DragRig, retiring: DragRig[]): void {
-  if (!rig.beginExit || !rig.isGone) {
-    rig.dispose();
-    return;
-  }
-  rig.beginExit();
-  retiring.push(rig);
-}
-
-/** Disposes faded-out rigs, and reports whether any are still leaving. */
-function stepRetiringRigs(retiring: DragRig[], dtMs: number): boolean {
-  let animating = false;
-  for (let index = retiring.length - 1; index >= 0; index -= 1) {
-    const rig = retiring[index]!;
-    const moved = rig.step?.(dtMs) ?? false;
-    // A leaving rig that reports no motion will never report gone either;
-    // holding it would pin the loop and leave a half-faded ghost on screen.
-    if (rig.isGone?.() || !moved) {
-      rig.dispose();
-      retiring.splice(index, 1);
-    } else {
-      animating = true;
-    }
-  }
-  return animating;
 }
 
 /** Screen gap between a pin's centre and its value chip. */

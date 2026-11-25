@@ -9,6 +9,26 @@ export function isTypingTarget(target: HTMLElement | null): boolean {
   );
 }
 
+/**
+ * Marks a control whose Enter is its own wherever focus reached it from:
+ * the workspace's key handler leaves Enter on it to the control rather than
+ * finishing a running command (Done on a Box), a Move or an Extrude, or
+ * opening a pick's value entry. The top bar's "Edit not applied" and
+ * History's reopen buttons carry it, so Enter there asks for the refused
+ * edit, and that request is refused over work in progress rather than the
+ * key creating it.
+ */
+export const OWN_ENTER_ATTRIBUTE = 'data-own-enter';
+
+/** Whether Enter on `target` belongs to a control marked as owning it. */
+export function controlOwnsEnter(target: EventTarget | null): boolean {
+  return (
+    typeof Element !== 'undefined' &&
+    target instanceof Element &&
+    target.closest(`[${OWN_ENTER_ATTRIBUTE}]`) !== null
+  );
+}
+
 export function exactEntryShortcut(
   interaction: InteractionState,
   event: Pick<

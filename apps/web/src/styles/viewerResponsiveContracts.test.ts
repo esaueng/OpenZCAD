@@ -178,6 +178,35 @@ describe('a refusal in the command strip (F014)', () => {
 });
 
 describe('a refusal in the bottom lane', () => {
+  // Preview review at 390px: the Why opened 400px wide from where the line
+  // started, 51px past the window's edge, and the rim's two choices stood
+  // over "Choice required" in a row that never wrapped.
+  it('keeps a phone-width explanation and rim choice inside the card', () => {
+    const css = sheet('edit-control.css');
+    const card = '.workspace-hint:is(.is-selection, .is-raised)';
+    expect(
+      rules(css, `${card}\n  .edit-refusal.is-bar\n  .edit-refusal-row`).join(
+        '\n'
+      )
+    ).toMatch(/flex-wrap:\s*wrap/);
+    const phone = media(css, '(max-width: 520px)');
+    expect(rules(phone, `${card} .edit-refusal.is-bar`).join('\n')).toMatch(
+      /flex:\s*1 1 100%/
+    );
+    const why = rules(
+      phone,
+      `${card}\n    .edit-refusal.is-bar\n    .edit-refusal-card`
+    ).join('\n');
+    expect(why).toMatch(/right:\s*0/);
+    expect(why).toMatch(/width:\s*auto/);
+    expect(
+      rules(
+        phone,
+        `${card}\n    .edit-refusal.is-bar[data-status='choice-required']\n    .edit-refusal-line`
+      ).join('\n')
+    ).toMatch(/flex-basis:\s*100%/);
+  });
+
   it('lets the explanation extend above the guidance row', () => {
     expect(
       rules(sheet('edit-control.css'), '.workspace-hint.has-notice').join('\n')

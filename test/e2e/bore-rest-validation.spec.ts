@@ -407,8 +407,9 @@ for (const completed of [true, false]) {
           page.getByRole('button', { name: 'Edit not applied' })
         ).toBeVisible({ timeout: 30_000 });
         const notice = page.getByRole('button', { name: 'Edit not applied' });
+        // The chip's title is the refusal, then what a click on it does.
         const refusalText = (await notice.getAttribute('title'))!.replace(
-          ' Open the activity log for details.',
+          / (?:Open the activity log for details|Reopen the edit to see why and choose what to do)\.$/,
           ''
         );
         // Escape dismisses the failed edit and its notice together (#1596);

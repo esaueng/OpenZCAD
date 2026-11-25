@@ -496,6 +496,7 @@ import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSection } from './hooks/useRememberedSection';
 import { newBlendFacePick } from './lib/blendRearm';
 import {
+  controlOwnsEnter,
   exactEntryShortcut,
   inPlaceTypedEntryKey,
   isTypingTarget
@@ -986,6 +987,10 @@ import {
   interactionReducer,
   commandSessionFor,
   holdsRefusal,
+  isParkableRefusal,
+  refusalCancelledInPlace,
+  workspaceAtRestForReopen,
+  startsEditAttempt,
   movedOnFromRefusal,
   refusalSubjectKey,
   refusalDiscardedByHistoryStep,
@@ -1526,6 +1531,23 @@ const LazySelectionReadout = lazyWithStaleChunkNotice(() =>
     default: module.SelectionReadout
   }))
 );
+/**
+ * A failed edit set aside when the selection left it: the operation exactly
+ * as it failed, and the workspace pick it was made on, so reopening brings
+ * back the same card, value, Why and choices on the same faces or edges.
+ */
+interface ParkedRefusal {
+  interaction: InteractionState;
+  selection: {
+    topology: TopologySelection | null;
+    edges: TopologySelection[];
+    bodyIds: BodyId[];
+    boxFaces: { bodyIds: BodyId[]; faces: TopologySelection[] } | null;
+    profiles: RegionPickData[];
+    featureNode: { id: string; source: FeatureSelectionSource } | null;
+  };
+}
+
 const LazyEditRefusal = lazyWithStaleChunkNotice(() =>
   import('./components/EditRefusal').then((module) => ({
     default: module.EditRefusal
@@ -5998,17 +6020,42 @@ export function App() {
     candidate: RadiusPreviewCandidate;
     derived: ProjectDocument['derived'];
   } | null>(null);
+  /**
+   * The latest edit that was not applied, behind the top bar's "Edit not
+   * applied". It holds the failed operation itself (`parked`) and the
+   * selection it was made on, so a click empty space, another pick or a
+   * panel that took over does not throw the failure, its Why or a pending
+   * rim choice away: the chip and its History row reopen it. It ends when
+   * the user answers it (a choice or a retry builds), cancels it (Esc, the
+   * card's close, Undo), starts another edit, or the model changes under it.
+   */
   const [lastDirectEditFailure, setLastDirectEditFailure] = useState<{
     projectId: ProjectDocument['projectId'];
     version: number;
     message: string;
-    /** The refused operation's selection; picking another retires it. */
-    selectionKey: string | null;
+    /** The command's name, for the History row and the chip's tooltip. */
+    title: string;
+    /** The failed operation and its pick; null when only the log has it. */
+    parked: ParkedRefusal | null;
   } | null>(null);
   useEffect(
     () => setLastDirectEditFailure(null),
     [doc?.projectId, doc?.version]
   );
+  /**
+   * A request to open the Why of the failed operation it names, once that
+   * operation's card is on screen. Counted, so asking again reopens a Why
+   * that was closed; bound to the operation, so a later refusal opens shut.
+   */
+  const [refusalReveal, setRefusalReveal] = useState<{
+    interaction: InteractionState;
+    count: number;
+  } | null>(null);
+  const revealParkedWhy = (target: InteractionState) =>
+    setRefusalReveal((current) => ({
+      interaction: target,
+      count: (current?.count ?? 0) + 1
+    }));
   // What is picked now, for retiring a refusal the user has moved on from.
   // A face set and a History pick leave the machine idle, so the workspace's
   // own selection stands in for them. A body ID alone does not: deselecting
@@ -6021,9 +6068,9 @@ export function App() {
         : selectedFeatureNode?.source === 'pinned'
           ? JSON.stringify(['feature', selectedFeatureNode.id])
           : null;
-  // Also checked when a refusal lands. An edit still being checked notes a
-  // pick away from it, so its late refusal posts no chip (see
-  // `selectionMovedOn`), even if that pick was cleared before it landed.
+  // An edit still being checked notes a pick away from it, so its late
+  // refusal posts no chip (see `selectionMovedOn`), even if that pick was
+  // cleared before it landed. A refusal that has landed is parked instead.
   useEffect(() => {
     const pending = pendingDirectEditRef.current;
     if (
@@ -6033,13 +6080,59 @@ export function App() {
       pending.selectionMovedOn = true;
       pending.cancelReleasedDisplay?.();
     }
-    if (
-      lastDirectEditFailure &&
-      movedOnFromRefusal(refusalSubject, lastDirectEditFailure.selectionKey)
-    ) {
+  }, [refusalSubject]);
+  // Every failed operation is parked as it lands — a refused release, a
+  // refused frame let go, a rim that needs a choice — with the pick it was
+  // made on, so leaving it never loses it. A new attempt supersedes it.
+  // Declared after the version reset above, so a refusal and a version
+  // change in one commit keep the refusal.
+  const parkingSeenInteraction = useRef(interaction);
+  useEffect(() => {
+    const previous = parkingSeenInteraction.current;
+    parkingSeenInteraction.current = interaction;
+    if (!doc) return;
+    if (refusalCancelledInPlace(previous, interaction)) {
+      // Given up where it stands (its value entry's Escape, a cancelled
+      // drag over it): Esc discards a failed edit, so the chip goes too.
+      setLastDirectEditFailure(null);
+    } else if (isParkableRefusal(interaction)) {
+      const parked: ParkedRefusal = {
+        interaction,
+        selection: {
+          topology: selectedTopology,
+          edges: selectedEdges,
+          bodyIds: selectedBodyIds,
+          boxFaces,
+          profiles: selectedProfiles,
+          featureNode: selectedFeatureNode
+        }
+      };
+      setLastDirectEditFailure({
+        projectId: doc.projectId,
+        version: doc.version,
+        message: shownOffsetLimit(interaction.error).message,
+        title: commandSessionFor(interaction)?.title ?? 'Edit',
+        parked
+      });
+    } else if (startsEditAttempt(interaction)) {
       setLastDirectEditFailure(null);
     }
-  }, [refusalSubject, lastDirectEditFailure]);
+    // Only a change of the operation's state parks or supersedes: the pick
+    // is read as it stands when the failure lands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interaction]);
+  // A failed edit set aside while nothing is armed: History keeps its "not
+  // built" row (a link back to it) and Undo discards it, as both do while
+  // its card is open. With another pick armed, that pick owns History's
+  // trailing row and the chip alone leads back.
+  const shownParkedRefusal =
+    doc &&
+    interaction.mode === 'idle' &&
+    lastDirectEditFailure?.parked &&
+    lastDirectEditFailure.projectId === doc.projectId &&
+    lastDirectEditFailure.version === doc.version
+      ? lastDirectEditFailure
+      : null;
 
   /** Full blend/extrude preview results may still be reused on release. */
   const previewRebuilds = useRef(
@@ -6812,11 +6905,15 @@ export function App() {
         pending.document.version === current.version &&
         !pending.selectionMovedOn
       ) {
+        // Parked with its operation once the failure lands on the pick
+        // below; a refusal of an edit that no longer owns the pick has
+        // only the log to lead to.
         setLastDirectEditFailure({
           projectId: current.projectId,
           version: current.version,
           message: shownMessage,
-          selectionKey: refusalSubjectKey(pending.interaction)
+          title: commandSessionFor(pending.interaction)?.title ?? 'Edit',
+          parked: null
         });
       }
       recordDirectEditOutcome('refused', {
@@ -14710,6 +14807,70 @@ export function App() {
     );
   }
 
+  /**
+   * The top bar's "Edit not applied", and its History row: brings back the
+   * failed edit the selection left — its pick, value, card, Why and any rim
+   * choice — and opens its Why. A refusal already on screen just opens its
+   * Why. One the workspace no longer holds (refused after its pick was
+   * replaced) has only the Activity log to lead to.
+   */
+  function reopenEditRefusal() {
+    const failure = lastDirectEditFailure;
+    const parked = failure?.parked;
+    const base = managerRef.current?.document;
+    if (
+      !failure ||
+      !parked ||
+      !base ||
+      failure.projectId !== base.projectId ||
+      failure.version !== base.version
+    ) {
+      openActivityLog();
+      return;
+    }
+    const current = interactionRef.current;
+    if (current === parked.interaction) {
+      revealParkedWhy(parked.interaction);
+      return;
+    }
+    // Only over a workspace at rest: everything below tears down what is
+    // open, so anything not provably idle keeps the refusal parked.
+    if (
+      !workspaceAtRestForReopen(current, {
+        keypadOpen: keypadRef.current !== null,
+        exactEntryQueued: exactEntryQueue.queued,
+        commandRunning: inPlaceRef.current.active,
+        toolOpen: tool !== null,
+        featureEditOpen:
+          extrudeEditRef.current !== null || modelingEditFeature !== null,
+        moveOpen: movePreview !== null,
+        repairPickOpen:
+          faceRepair !== null || datumRepair !== null || toFacePick !== null,
+        modelPreviewShown:
+          previewDoc !== null || savePreview !== null || drawingPreview !== null
+      })
+    ) {
+      setStatus(
+        `Finish or cancel the edit in progress to return to the ${failure.title} that was not applied.`
+      );
+      return;
+    }
+    cancelPendingRegionExtrusion();
+    cancelDirectManipulationRef.current?.();
+    clearDirectEditPreviews();
+    setKeypad(null);
+    closeFeaturePanel();
+    const { selection } = parked;
+    setSelectedTopology(selection.topology);
+    setSelectedEdges(selection.edges);
+    setSelectedBodyIds(selection.bodyIds);
+    setBoxFaces(selection.boxFaces);
+    setSelectedProfiles(selection.profiles);
+    setSelectedFeatureNode(selection.featureNode);
+    dispatchInteraction({ type: 'reopen-refusal', state: parked.interaction });
+    revealParkedWhy(parked.interaction);
+  }
+
   function cancelPanel() {
     // Dismissing a failed edit dismisses its "Edit not applied" notice too
     // (#1596); the Activity log keeps the full refusal. A refusal left behind
@@ -19383,7 +19544,15 @@ export function App() {
    */
   function discardHeldRefusal(step: 'undo' | 'redo'): boolean {
     const title = refusalDiscardedByHistoryStep(interactionRef.current);
-    if (title === null) return false;
+    if (title === null) {
+      // A failed edit set aside is still the last row in History, so Undo
+      // means it as it does while its card is open.
+      const parked = shownParkedRefusal;
+      if (!parked) return false;
+      setLastDirectEditFailure(null);
+      setStatus(discardedRefusalMessage(step, parked.title));
+      return true;
+    }
     // A drag that retook a validating release would land that release when
     // the drag is cancelled; Undo leaves history alone, so it goes too.
     retakenRelease.drop('offset-face');
@@ -36938,11 +37107,15 @@ export function App() {
         // clicked, still leaves Enter to the command (U01). The modeling
         // guide's buttons too, now that it stays up through the command
         // (#1947): Enter on Skip created the Box and left the guide open.
+        // And the refused edit's reopen buttons (the top bar's "Edit not
+        // applied", History's), which ask for it and are refused over the
+        // command: Enter on them created the Box.
         const control =
-          target instanceof Element &&
-          target.closest(
-            '[aria-haspopup], [role="menu"], .in-place-command, .workspace-tour'
-          ) !== null;
+          controlOwnsEnter(target) ||
+          (target instanceof Element &&
+            target.closest(
+              '[aria-haspopup], [role="menu"], .in-place-command, .workspace-tour'
+            ) !== null);
         if (event.key === 'Enter' && !typing && !control) {
           event.preventDefault();
           inPlace.done();
@@ -36997,6 +37170,7 @@ export function App() {
         (interaction.mode === 'region' || extrudeEditRef.current) &&
         event.key === 'Enter' &&
         !typing &&
+        !controlOwnsEnter(target) &&
         !(
           target instanceof Element &&
           target.closest(
@@ -37027,9 +37201,12 @@ export function App() {
           return;
         }
         // As for an in-place command: Enter on the Move bar's own controls
-        // (Options, Cancel, Done) acts for that control, not the Move.
+        // (Options, Cancel, Done) acts for that control, not the Move; so
+        // does Enter on a refused edit's reopen button.
         const moveControl =
-          target instanceof Element && target.closest('.move-command') !== null;
+          controlOwnsEnter(target) ||
+          (target instanceof Element &&
+            target.closest('.move-command') !== null);
         if (event.key === 'Enter' && !typing && !moveControl) {
           event.preventDefault();
           confirmMove();
@@ -37337,7 +37514,8 @@ export function App() {
         keypad !== null,
         modelingLocked
       );
-      if (exactEntry) {
+      // Enter on a reopen button is that button's, not the pick's value entry.
+      if (exactEntry && !(event.key === 'Enter' && controlOwnsEnter(target))) {
         event.preventDefault();
         if (interaction.mode === 'region' && extrudeBarFailedRef.current) {
           setStatus(EXTRUDE_ENTRY_UNAVAILABLE);
@@ -37355,6 +37533,13 @@ export function App() {
         );
         return;
       }
+      // Nothing picked in the workspace: Escape's last rungs need it.
+      const nothingPicked =
+        !selectedTopology &&
+        selectedEdges.length === 0 &&
+        selectedBodyIds.length === 0 &&
+        !selectedSketchProfileId &&
+        selectedProfiles.length === 0;
       switch (meta || event.altKey ? null : event.key) {
         case 'Escape':
           if (cancelPendingRegionExtrusion()) {
@@ -37477,14 +37662,18 @@ export function App() {
             interaction.boxSelectProfiles
           ) {
             cancelPanel();
+          } else if (nothingPicked && shownParkedRefusal) {
+            // A failed edit set aside (the chip and History's "not built"
+            // row) is a rung of its own: once the pick is cleared, Esc
+            // discards it, before it would put the Tools drawer away.
+            setLastDirectEditFailure(null);
+            setStatus(
+              `Discarded the failed ${shownParkedRefusal.title} · the model is unchanged.`
+            );
           } else if (
             toolFold.commandFoldOpen &&
             resolvedWorkspaceMode === 'build' &&
-            !selectedTopology &&
-            selectedEdges.length === 0 &&
-            selectedBodyIds.length === 0 &&
-            !selectedSketchProfileId &&
-            selectedProfiles.length === 0
+            nothingPicked
           ) {
             // The last rung: nothing armed and nothing picked, so the key is
             // nobody else's and it puts the Tools drawer away. The drawer is
@@ -39603,8 +39792,24 @@ export function App() {
       }
       onPmiCommand={executeCommand}
       warnings={diagnostics}
-      pendingHistoryStep={pendingHistoryStepFor(commandSession)}
-      editingHistoryFeatureId={editedFeatureIdFor(interaction, offsetPlanEdit)}
+      pendingHistoryStep={
+        pendingHistoryStepFor(commandSession) ??
+        (shownParkedRefusal
+          ? {
+              title: shownParkedRefusal.title,
+              message: shownParkedRefusal.message,
+              onReopen: reopenEditRefusal
+            }
+          : null)
+      }
+      editingHistoryFeatureId={
+        shownParkedRefusal?.parked
+          ? editedFeatureIdFor(
+              shownParkedRefusal.parked.interaction,
+              offsetPlanEdit
+            )
+          : editedFeatureIdFor(interaction, offsetPlanEdit)
+      }
       historyDetails={
         <FeatureHistoryPanel
           document={doc}
@@ -40012,7 +40217,8 @@ export function App() {
               ? lastDirectEditFailure.message
               : null
           }
-          onReviewEditFailure={openActivityLog}
+          editRefusalReopens={Boolean(lastDirectEditFailure?.parked)}
+          onReviewEditFailure={reopenEditRefusal}
           onReviewConflict={
             collaboration.conflict?.projectId === doc.projectId &&
             dismissedRoomConflict === roomConflictKey
@@ -42166,6 +42372,11 @@ export function App() {
                 <EditRefusal
                   operation={calloutWithOperation.operation}
                   variant="bar"
+                  revealRequest={
+                    refusalReveal?.interaction === interaction
+                      ? refusalReveal.count
+                      : 0
+                  }
                   unitLabel={displayLengthName(doc.units)}
                   onTrySize={tryRefusalSize}
                   onPickAnother={pickAnotherAfterRefusal}

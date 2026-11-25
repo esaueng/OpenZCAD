@@ -56,6 +56,20 @@ describe('deferred exact entry', () => {
     expect(h.queue.cancel()).toBe(false);
   });
 
+  // A parked refusal is not reopened over digits typed at a pick whose entry
+  // has not opened yet: they are a value in progress.
+  it('says while typed input waits for its entry to open', () => {
+    const h = setup();
+    expect(h.queue.queued).toBe(false);
+    h.queue.push('extrude:first', '4');
+    expect(h.queue.queued).toBe(true);
+    h.ready();
+    h.frame();
+    expect(h.queue.queued).toBe(false);
+    h.queue.push('extrude:first', '5');
+    expect(h.queue.queued).toBe(false);
+  });
+
   it('retains all signed digits until the current rig accepts entry', () => {
     const h = setup();
     h.queue.push('extrude:first', '-');

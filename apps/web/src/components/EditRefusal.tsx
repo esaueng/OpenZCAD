@@ -30,6 +30,12 @@ export interface EditRefusalProps {
   lineId?: string;
   /** Whether the explanation is open: the key hints say what Esc does. */
   onOpenChange?(open: boolean): void;
+  /**
+   * Opens the explanation when it changes to a positive count, including on
+   * mount: the top bar's "Edit not applied" asks for the Why it stands for.
+   * Zero asks for nothing.
+   */
+  revealRequest?: number;
 }
 
 /**
@@ -53,7 +59,8 @@ export function EditRefusal({
   onPickAnother,
   pickAnotherLabel = 'Pick another',
   lineId,
-  onOpenChange
+  onOpenChange,
+  revealRequest = 0
 }: EditRefusalProps) {
   const error = operation.error;
   const ownLineId = useId();
@@ -79,6 +86,14 @@ export function EditRefusal({
     onOpenChangeRef.current?.(open);
   }, [open]);
   useEffect(() => () => onOpenChangeRef.current?.(false), []);
+
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
+  useEffect(() => {
+    if (revealRequest <= 0) return;
+    setWhy({ identity: identityRef.current, open: true, details: false });
+    whyRef.current?.focus();
+  }, [revealRequest]);
 
   useEffect(() => {
     if (!open) return;
