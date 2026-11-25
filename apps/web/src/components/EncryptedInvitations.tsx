@@ -1,5 +1,4 @@
 import {
-  lazy,
   Suspense,
   useCallback,
   useEffect,
@@ -31,11 +30,12 @@ import {
   type InvitationPassResult
 } from '../lib/e2ee/invitationRunner';
 import { desktopFetch } from '../lib/desktopBridge';
+import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import type { AuthorizeRequest } from './encryption/AuthorizeDialog';
 import { Group, Notice, SettingRow } from './settingsControls';
 
 /** The passkey-or-recovery-key confirmation, loaded with its crypto. */
-const LazyAuthorizeDialog = lazy(() =>
+const LazyAuthorizeDialog = lazyWithStaleChunkNotice(() =>
   import('./encryption/AuthorizeDialog').then((module) => ({
     default: module.AuthorizeDialog
   }))

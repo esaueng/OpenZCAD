@@ -11,6 +11,7 @@ import {
 import { invalidateAccountKeyReads, unlockedAccount } from './unlockedKeys';
 import type { MigrationController } from './projectMigrations';
 import { AUTOMATIC_MIGRATION_LOAD_ERROR } from './automaticMigrationLoader';
+import { setupInProgress, subscribeSetupReleased } from './setupInProgress';
 
 export { AUTOMATIC_MIGRATION_LOAD_ERROR };
 
@@ -118,6 +119,9 @@ export function automaticProjectMigration(
 
   async function attempt() {
     if (disposed || started || !isKeySessionActive()) return;
+    // The setup dialog decides about existing projects on its last screen;
+    // releasing it checks again (`setupInProgress.ts`).
+    if (setupInProgress(userId)) return;
     const stop = (active = new AbortController());
     const revision = getKeySessionRevision();
     const current = () =>
@@ -146,8 +150,9 @@ export function automaticProjectMigration(
         started = true;
         return;
       }
+      if (setupInProgress(userId)) return;
       await prepared.refresh();
-      if (!current()) return;
+      if (!current() || setupInProgress(userId)) return;
       const state = prepared.getState();
       if (state.error) {
         attention(state.error);
@@ -194,6 +199,9 @@ export function automaticProjectMigration(
   const unsubscribeState = subscribeEncryptionState(userId, () => {
     void check();
   });
+  const unsubscribeSetup = subscribeSetupReleased(userId, () => {
+    void check();
+  });
   const unsubscribeSession = subscribeKeySession((event) => {
     if (event.phase === 'ready') void check();
     else {
@@ -213,6 +221,7 @@ export function automaticProjectMigration(
       active?.abort();
       invalidateAccountKeyReads(userId, scope);
       unsubscribeState();
+      unsubscribeSetup();
       unsubscribeSession();
       if (typeof window !== 'undefined')
         window.removeEventListener('online', online);

@@ -1,5 +1,4 @@
 import {
-  lazy,
   Suspense,
   useCallback,
   useEffect,
@@ -57,6 +56,7 @@ import {
 import type { OwnerInvitation, PersonTrust } from '../lib/e2ee/invitations';
 import type { UnlockAuthorization } from '../lib/e2ee/accountKeys';
 import type { AuthorizeRequest } from './encryption/AuthorizeDialog';
+import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { useEncryptionStatus } from '../lib/e2ee/encryptionStatus';
 import { describeFailure, type PlainFailure } from '../lib/plainFailure';
 import { FailureDetails } from './FailureDetails';
@@ -64,7 +64,7 @@ import { PrivateEmailInput, usePersonalInfoVisible } from './PersonalInfo';
 
 const defaultClient = createProjectSharingClient();
 /** The passkey-or-recovery-key confirmation, loaded with its crypto. */
-const LazyAuthorizeDialog = lazy(() =>
+const LazyAuthorizeDialog = lazyWithStaleChunkNotice(() =>
   import('./encryption/AuthorizeDialog').then((module) => ({
     default: module.AuthorizeDialog
   }))

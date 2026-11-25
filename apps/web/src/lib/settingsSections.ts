@@ -241,8 +241,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Revoke read-only access',
       'Compare these digits',
       'Continue your approval request',
+      'Unlock with your passkey',
       'Approve from another device',
-      'Use your passkey',
       'Use your recovery key'
     ],
     searchTerms: [

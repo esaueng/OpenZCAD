@@ -286,32 +286,15 @@ test(
     await expect(bob.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
     expect(new URL(bob.url()).hash).toBe('');
 
-    // He sets encryption up in the setup dialog and comes back to it.
-    await turnOn.click();
-    const bobBody = bob.locator('body');
-    await bobBody.getByRole('button', { name: 'Start', exact: true }).click();
-    const bobRecoveryKey = (await bobBody
-      .getByLabel('Recovery key', { exact: true })
-      .textContent())!;
-    await bobBody
-      .getByRole('checkbox', { name: /I saved my recovery key/ })
-      .check();
-    await bobBody
-      .getByRole('button', { name: 'Continue', exact: true })
-      .click();
-    await bobBody.getByLabel('Confirm recovery key').fill(bobRecoveryKey);
-    await bobBody
-      .getByRole('button', { name: 'Turn on encryption', exact: true })
-      .click();
-    // The optional passkey and projects steps (`finishSetupDialog`, which
-    // expects no encryption dialog after: the landing is one).
-    const skip = bobBody.getByRole('button', { name: 'Skip', exact: true });
-    const done = bobBody.getByRole('button', { name: 'Done', exact: true });
-    await expect(skip.or(done).first()).toBeVisible({
-      timeout: SYNC_BUDGET_MS
-    });
-    if (await skip.isVisible()) await skip.click();
-    await done.click({ timeout: SYNC_BUDGET_MS });
+    // He turns encryption on (seeded here; the setup dialog has its own
+    // specs) and comes back to the landing.
+    const bobRecoveryKey = (
+      await seedE2eeDevice(bob, server, {
+        label: 'Bob browser',
+        userId: BOB_ID
+      })
+    ).recoveryKey;
+    await bob.reload();
 
     // Unlocked, the landing accepts the link by itself: no Accept click, and
     // nobody compares codes. Alice is new to him: one signature pins her,

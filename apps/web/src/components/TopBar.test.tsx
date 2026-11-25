@@ -477,6 +477,7 @@ describe('TopBar identity room', () => {
     renderTopBar({ signedIn: true, saveToAccount: true });
     expect(topbar().dataset.nameRoom).toBeUndefined();
     expect(topbar().dataset.saveRoom).toBeUndefined();
+    expect(topbar().dataset.labelRoom).toBeUndefined();
   });
 
   it('drops the wordmark first and keeps the action in words', () => {
@@ -487,11 +488,20 @@ describe('TopBar identity room', () => {
     expect(topbar().dataset.saveRoom).toBeUndefined();
   });
 
+  it('keeps the mode and action labels while the folded status frees enough room', () => {
+    // Cut until the actionable status folds.
+    stubNameOverflow((bar) => bar.dataset.saveRoom !== 'glyph');
+    renderTopBar({ signedIn: true, saveToAccount: true });
+    expect(topbar().dataset.saveRoom).toBe('glyph');
+    expect(topbar().dataset.labelRoom).toBeUndefined();
+  });
+
   it('folds an actionable status to its glyph where the name is still cut', () => {
     stubNameOverflow(() => true);
     renderTopBar({ signedIn: true, saveToAccount: true });
     expect(topbar().dataset.nameRoom).toBe('tight');
     expect(topbar().dataset.saveRoom).toBe('glyph');
+    expect(topbar().dataset.labelRoom).toBe('glyph');
     // The words stay in its name and it still saves.
     expect(
       screen.getByRole('button', { name: 'Save to my account' })
