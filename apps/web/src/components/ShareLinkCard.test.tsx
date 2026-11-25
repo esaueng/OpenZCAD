@@ -141,12 +141,87 @@ describe('ShareLinkCopyButton', () => {
 });
 
 describe('ShareLinkComposer', () => {
+  // L11 (§4): Create link makes a link at once; the options wait behind
+  // Options….
+  it.each([
+    [true, { mode: 'view', comments: false, history: false, name: '' }],
+    [false, { mode: 'view', comments: false, history: true, name: '' }]
+  ] as const)(
+    'creates a view-only link in one click (history can be left out: %s)',
+    async (canExcludeHistory, draft) => {
+      const onCreate = vi.fn();
+      const onExpandedChange = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ShareLinkComposer
+          canExcludeHistory={canExcludeHistory}
+          expanded={false}
+          onExpandedChange={onExpandedChange}
+          nameable
+          commentsHint="Visitors see only this link’s comments."
+          footnote="End-to-end encrypted: the key is in the link."
+          onCreate={onCreate}
+        />
+      );
+      expect(
+        screen.queryByRole('textbox', { name: 'Link name' })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('checkbox', { name: 'Visitors can comment' })
+      ).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Create link' }));
+      expect(onCreate).toHaveBeenCalledOnce();
+      expect(onCreate).toHaveBeenCalledWith(draft);
+      const options = screen.getByRole('button', { name: 'Options…' });
+      expect(options).toHaveAttribute('aria-expanded', 'false');
+      await user.click(options);
+      expect(onExpandedChange).toHaveBeenCalledWith(true);
+    }
+  );
+
+  it('waits on a history blocker in one click only where history must stay', async () => {
+    const blocker = <p role="alert">Save the source files first.</p>;
+    const { rerender } = render(
+      <ShareLinkComposer
+        canExcludeHistory
+        expanded={false}
+        onExpandedChange={vi.fn()}
+        nameable
+        commentsHint="Visitors see only this link’s comments."
+        footnote="Links expire after 30 days."
+        historyBlocker={blocker}
+        onCreate={vi.fn()}
+      />
+    );
+    // The one-click link leaves history out, so nothing blocks it.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create link' })).toBeEnabled();
+    rerender(
+      <ShareLinkComposer
+        canExcludeHistory={false}
+        expanded={false}
+        onExpandedChange={vi.fn()}
+        nameable
+        commentsHint="Visitors see only this link’s comments."
+        footnote="Links expire after 30 days."
+        historyBlocker={blocker}
+        onCreate={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Save the source files first.'
+    );
+    expect(screen.getByRole('button', { name: 'Create link' })).toBeDisabled();
+  });
+
   it('waits on a history blocker only while history is included', async () => {
     const onCreate = vi.fn();
     const user = userEvent.setup();
     render(
       <ShareLinkComposer
         canExcludeHistory
+        expanded
+        onExpandedChange={vi.fn()}
         nameable
         commentsHint="Visitors see only this link’s comments."
         footnote="Links expire after 30 days."
@@ -176,14 +251,16 @@ describe('ShareLinkComposer', () => {
 
   it('keeps its options usable while only Create link waits', async () => {
     const onCreate = vi.fn();
+    const onExpandedChange = vi.fn();
     render(
       <ShareLinkComposer
         canExcludeHistory={false}
+        expanded
+        onExpandedChange={onExpandedChange}
         nameable={false}
         createDisabled
         commentsHint="Visitors see only this link’s comments."
         footnote="End-to-end encrypted: the key is in the link."
-        onCancel={vi.fn()}
         onCreate={onCreate}
       />
     );
@@ -198,5 +275,9 @@ describe('ShareLinkComposer', () => {
     ).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Create link' })).toBeDisabled();
+    // Cancel closes the options back to one-click Create link.
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onExpandedChange).toHaveBeenCalledWith(false);
+    expect(onCreate).not.toHaveBeenCalled();
   });
 });

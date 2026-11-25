@@ -150,14 +150,21 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
   );
   const ctx = useMemo<E2eeContext>(() => {
     const revision = getKeySessionRevision();
-    return {
+    const context: E2eeContext = {
       userId,
       readScope: lifetime,
       api: createE2eeApi(),
       store: deviceKeyStore(),
       createDeviceKeys: deviceKeyFactory(),
-      isCurrent: () => lifetime.active && isCurrentKeySession(revision)
+      isCurrent: () => lifetime.active && isCurrentKeySession(revision),
+      // L11 (D4): every action authorized here renews the share delegation
+      // in passing when it is due.
+      afterIdentityKey: (step) =>
+        import('../lib/e2ee/shareDelegationInPassing').then((page) =>
+          page.renewShareDelegationInPassing(context, step)
+        )
     };
+    return context;
   }, [userId, lifetime]);
   const [state, setState] = useState<EncryptionState | null>(null);
   const [error, setError] = useState<string | null>(null);

@@ -137,13 +137,20 @@ export async function ownerWithShareLink(
     content = 'box',
     viewport,
     hasTouch = false,
-    comments = false
+    comments = false,
+    oneClick = false
   }: {
     content?: 'box' | 'step';
     viewport?: { width: number; height: number };
     hasTouch?: boolean;
     /** L08: tick "Visitors can comment" before creating the link. */
     comments?: boolean;
+    /**
+     * L11: Create link at once, which makes a view-only link without
+     * history. Otherwise the link is made from Options…, view only with
+     * its history.
+     */
+    oneClick?: boolean;
   } = {}
 ): Promise<OwnerWithLink> {
   const server = createE2eeServer({ projectsEnabled: true });
@@ -216,6 +223,8 @@ export async function ownerWithShareLink(
   await expect(
     links.getByRole('button', { name: 'Confirm sharing…' })
   ).toHaveCount(0);
+  if (!oneClick || comments)
+    await links.getByRole('button', { name: 'Options…' }).click();
   if (comments)
     await links
       .getByRole('checkbox', { name: /^Visitors can comment/ })

@@ -109,12 +109,20 @@ export type AdapterRefusalCode = keyof typeof ADAPTER_REFUSALS;
  *
  * `message` is the sentence the user reads, exactly as before; `kernelCode`
  * holds the adapter's code because no kernel code exists for it.
+ * `causeCode`, when given, is the cause within that code (a refused edge
+ * carry says why: `carry_provenance_changed`), and travels as the warning
+ * record's `reason` the way a kernel's `details.reason` does.
  */
 export class AdapterRefusal extends KernelRefusal {
   readonly adapterCode: AdapterRefusalCode;
   readonly operation?: string;
 
-  constructor(code: AdapterRefusalCode, message: string, cause?: unknown) {
+  constructor(
+    code: AdapterRefusalCode,
+    message: string,
+    cause?: unknown,
+    causeCode?: string
+  ) {
     const spec: AdapterRefusalSpec = ADAPTER_REFUSALS[code];
     super({
       family: spec.family,
@@ -123,6 +131,7 @@ export class AdapterRefusal extends KernelRefusal {
       kernelMessage: message,
       reason: message,
       message,
+      ...(causeCode === undefined ? {} : { kernelReason: causeCode }),
       ...(cause === undefined ? {} : { cause })
     });
     this.name = 'AdapterRefusal';

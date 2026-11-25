@@ -35,7 +35,8 @@ vi.mock('../lib/e2ee/shareLinks', () => ({
       }
     ]
   }),
-  delegationNeedsRenewal: () => false
+  delegationNeedsRenewal: () => false,
+  delegationNeedsConfirming: () => false
 }));
 
 it.each([

@@ -178,6 +178,16 @@ async function openLinks(
   await user.click(await screen.findByRole('tab', { name: /^Links/ }));
 }
 
+/**
+ * Opens a new link's options (L11: Create link alone makes a view-only link
+ * at once).
+ */
+async function openLinkOptions(
+  user: { click(element: Element): Promise<void> } = userEvent
+) {
+  await user.click(await screen.findByRole('button', { name: 'Options…' }));
+}
+
 /** Opens a link's card, which holds its name, settings and actions. */
 async function openCard(
   name: string | RegExp,
@@ -565,13 +575,13 @@ describe('ProjectSharingDialog', () => {
       screen.getByRole('region', { name: 'General access' })
     ).toBeVisible();
     expect(screen.getByRole('button', { name: /^View link · / })).toBeVisible();
-    // With a link listed, the new-link card waits behind New link.
+    // Create link is one click; its options wait behind Options….
     expect(
-      screen.queryByRole('button', { name: 'Create link' })
+      screen.queryByRole('radiogroup', { name: 'Link access' })
     ).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'New link' }));
+    await openLinkOptions(user);
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.getByRole('button', { name: 'New link' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Options…' })).toBeVisible();
 
     linksTab.focus();
     await user.keyboard('{ArrowLeft}');
@@ -720,6 +730,7 @@ describe('ProjectSharingDialog', () => {
       />
     );
     await openLinks(user);
+    await openLinkOptions(user);
     const comments = await screen.findByRole('checkbox', {
       name: /Visitors can comment/
     });
@@ -755,10 +766,11 @@ describe('ProjectSharingDialog', () => {
       />
     );
     await openLinks(user);
+    await openLinkOptions(user);
     const access = await screen.findByRole('radiogroup', {
       name: 'Link access'
     });
-    // A plaintext link still defaults to Tweak.
+    // A plaintext link's options still default to Tweak.
     expect(within(access).getByRole('radio', { name: 'Tweak' })).toBeChecked();
     await user.click(within(access).getByRole('radio', { name: 'View' }));
     expect(access).toHaveAccessibleDescription(
@@ -805,19 +817,16 @@ describe('ProjectSharingDialog', () => {
     ).toBeEnabled();
     expect(screen.getByText('Only invited people')).toBeVisible();
     expect(
-      screen.getByRole('radiogroup', { name: 'Link access' })
-    ).toHaveAccessibleDescription(
-      'Visitors can also change parameters. Their changes stay with them.'
-    );
-    expect(
       screen.queryByRole('button', { name: /Revoke share link/ })
     ).not.toBeInTheDocument();
 
+    // L11: one click makes a view-only link (with history where the model
+    // cannot leave it out).
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     await waitFor(() =>
       expect(links.createProjectShareLink).toHaveBeenCalledWith(
         base.projectId,
-        'tweak'
+        'view'
       )
     );
     expect(beforeCreate).toHaveBeenCalledOnce();
@@ -832,16 +841,16 @@ describe('ProjectSharingDialog', () => {
     );
     expect(screen.getByRole('button', { name: 'Copied' })).toBeVisible();
     expect(
-      screen.getByText('Tweak link · shown once — copy it now.')
+      screen.getByText('View link · shown once — copy it now.')
     ).toBeVisible();
     expect(screen.getByText('Anyone with a link · 1 active')).toBeVisible();
     expect(
-      screen.getByRole('button', { name: /^Tweak link · / })
-    ).toHaveAccessibleDescription('Tweak · Expires in 30d');
+      screen.getByRole('button', { name: /^View link · / })
+    ).toHaveAccessibleDescription('View · Expires in 30d');
     // A plaintext link's address is shown once, so its card has no Copy.
     expect(screen.getAllByRole('button', { name: /^Cop/ })).toHaveLength(1);
 
-    await openCard(/^Tweak link · /, user);
+    await openCard(/^View link · /, user);
     await user.click(
       screen.getByRole('button', { name: /Revoke share link created/ })
     );
@@ -949,6 +958,7 @@ describe('ProjectSharingDialog', () => {
 
     // The new link is named before it is made, in one request.
     await openLinks(user);
+    await openLinkOptions(user);
     await user.type(
       await screen.findByRole('textbox', { name: 'Link name' }),
       '  Supplier   review '
@@ -1913,7 +1923,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
   it('includes history by default and offers no choice where a model cannot be frozen', async () => {
     const links = shareLinkClient();
     const base = await open(links);
-    await screen.findByRole('button', { name: 'Create link' });
+    await openLinkOptions();
     expect(
       screen.queryByRole('checkbox', { name: 'Include history' })
     ).not.toBeInTheDocument();
@@ -1926,10 +1936,31 @@ describe('ProjectSharingDialog links without history (L08)', () => {
     );
   });
 
+  it('makes a view-only link without history in one click (L11)', async () => {
+    const links = shareLinkClient();
+    let frozen: ProjectDocument | null = null;
+    const onFreezeModel = vi.fn(async () => (frozen = frozenOf(base)));
+    const base: ProjectDocument = await open(links, { onFreezeModel });
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    await waitFor(() =>
+      expect(links.createProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'view',
+        null,
+        false,
+        frozen
+      )
+    );
+    expect(onFreezeModel).toHaveBeenCalledWith({ parameters: false });
+  });
+
   it('keeps today’s link when Include history stays ticked', async () => {
     const links = shareLinkClient();
     const onFreezeModel = vi.fn();
     const base = await open(links, { onFreezeModel });
+    await openLinkOptions();
     expect(
       await screen.findByRole('checkbox', { name: 'Include history' })
     ).toBeChecked();
@@ -1955,6 +1986,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
       localImportSourceNames: ['bracket.step'],
       onFreezeModel: vi.fn(async () => (frozen = frozenOf(base)))
     });
+    await openLinkOptions(user);
     const history = await screen.findByRole('checkbox', {
       name: 'Include history'
     });
@@ -1991,6 +2023,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
     const user = userEvent.setup();
     const onFreezeModel = vi.fn(async () => frozenOf(base));
     const base: ProjectDocument = await open(links, { onFreezeModel });
+    await openLinkOptions(user);
     await user.click(
       await screen.findByRole('checkbox', { name: 'Include history' })
     );
@@ -2029,6 +2062,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
         throw new Error('This model has no solid body to share.');
       })
     });
+    await openLinkOptions(user);
     await user.click(
       await screen.findByRole('checkbox', { name: 'Include history' })
     );
@@ -2050,6 +2084,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
         return next;
       })
     });
+    await openLinkOptions(user);
     await user.click(
       await screen.findByRole('checkbox', { name: 'Include history' })
     );
@@ -2075,6 +2110,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
   it('offers no Update on a link that shares its history', async () => {
     const links = shareLinkClient();
     const base = await open(links, { onFreezeModel: vi.fn() });
+    await openLinkOptions();
     await userEvent.click(
       await screen.findByRole('button', { name: 'Create link' })
     );
