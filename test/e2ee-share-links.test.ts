@@ -62,6 +62,7 @@ import type {
   E2eeContext
 } from '../apps/web/src/lib/e2ee/accountKeys';
 import { renewShareDelegationAfterRemoval } from '../apps/web/src/lib/e2ee/pageDeviceRemoval';
+import { renewShareDelegationInPassing as renewPageShareDelegationInPassing } from '../apps/web/src/lib/e2ee/shareDelegationInPassing';
 import { sealDocumentJob } from '../apps/web/src/lib/e2ee/decodeJobs';
 import { EncryptedProjectIntegrityError } from '../apps/web/src/lib/e2ee/encryptedProjectStore';
 import { memoryVersionPins } from '../apps/web/src/lib/e2ee/versionPins';
@@ -82,12 +83,14 @@ import {
 import { openSharedSnapshot } from '../apps/web/src/lib/e2ee/sharedSnapshot';
 import {
   createShareLink,
+  delegationNeedsConfirming,
   issueShareAuthorities,
   listShareLinks,
   maintainShareLinks,
   publishShareSnapshots,
   reissueShareLinks,
   renewShareDelegation,
+  renewShareDelegationInPassing,
   refreshOwnerShareAuthorities,
   revokeShareLink,
   ShareLinksError,
@@ -3540,3 +3543,163 @@ describe('share snapshot objects (slice 8-C1)', { timeout: 120_000 }, () => {
     expect(snapshotObjects(srv, projectId)).toEqual([]);
   });
 });
+
+describe(
+  'renewing the delegation in passing (L11 D4)',
+  { timeout: 120_000 },
+  () => {
+    const sign =
+      (d: Device) => (value: Parameters<typeof signShareDelegation>[1]) =>
+        signShareDelegation(d.account.identityPrivateKey, value);
+
+    /** A delegation of every owner device, issued `ago` before now. */
+    async function storeDelegation(d: Device, sequence: number, ago: number) {
+      const issuedAt = Date.now() - ago;
+      const signed = await signShareDelegation(d.account.identityPrivateKey, {
+        identityKeyHash: owner.list.identityKeyHash,
+        sequence,
+        issuedAt,
+        expiresAt: issuedAt + 30 * DAY,
+        deviceKeys: owner.list.devices.map((device) => device.signingKey)
+      });
+      await d.shareLinks.api.putDelegation({
+        statement: toBase64Url(signed.statement),
+        signature: toBase64Url(signed.signature)
+      });
+    }
+
+    it('renews with less than 14 days left, not with more, and asks only once expired', async () => {
+      let clock = Date.now();
+      const { srv, laptop, projectId } = await linkedProject(() => clock);
+      // No delegation yet (no link was ever confirmed): nothing is signed.
+      expect(
+        await renewShareDelegationInPassing(laptop.shareLinks, sign(laptop))
+      ).toBeNull();
+      expect((await shareDelegationState(laptop.shareLinks)).status).toBe(
+        'missing'
+      );
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+
+      // 15 days left: valid, and nothing is signed in passing.
+      await storeDelegation(laptop, 0, 15 * DAY);
+      clock = Date.now();
+      expect((await shareDelegationState(laptop.shareLinks)).status).toBe(
+        'valid'
+      );
+      expect(
+        await renewShareDelegationInPassing(laptop.shareLinks, sign(laptop))
+      ).toBeNull();
+      expect(
+        (await shareDelegationState(laptop.shareLinks)).delegation!.sequence
+      ).toBe(0);
+
+      // 13 days left: still trusted, so Create link does not ask...
+      await storeDelegation(laptop, 1, 17 * DAY);
+      clock = Date.now();
+      const expiring = await shareDelegationState(laptop.shareLinks);
+      expect(expiring.status).toBe('expiring');
+      expect(delegationNeedsConfirming(expiring)).toBe(false);
+      // ...and an action that opened the identity key renews it, for the
+      // same 30-day maximum.
+      const renewed = await renewShareDelegationInPassing(
+        laptop.shareLinks,
+        sign(laptop)
+      );
+      expect(renewed!.status).toBe('valid');
+      expect(renewed!.delegation!.sequence).toBe(2);
+      expect(renewed!.delegation!.expiresAt).toBe(clock + 30 * DAY);
+      await issueShareAuthorities(laptop.shareLinks, projectId);
+      expect((await visit(srv, created.url)).verified.shareId).toBe(
+        created.shareId
+      );
+
+      // Expired: only now does sharing ask before a link is created.
+      clock = renewed!.delegation!.expiresAt;
+      const expired = await shareDelegationState(laptop.shareLinks);
+      expect(expired.status).toBe('expired');
+      expect(delegationNeedsConfirming(expired)).toBe(true);
+    });
+
+    it('signs nothing for an account without links or encrypted projects, and reports a refused renewal', async () => {
+      const clock = Date.now();
+      const { laptop } = await linkedProject(() => clock);
+      const open = {
+        api: { config: async () => ({ enabled: true, projectsEnabled: true }) }
+      } as unknown as E2eeContext;
+      const step = {
+        identityPrivateKey: owner.identityPrivateKey,
+        account: {
+          userId: OWNER,
+          list: owner.list,
+          generation: 1,
+          deviceStatus: 'certified',
+          device: {
+            deviceId: 'owner_laptop',
+            signing: owner.devices.get('owner_laptop')!.signing
+          }
+        } as unknown as AccountView
+      };
+      expect(
+        await renewPageShareDelegationInPassing(
+          open,
+          step,
+          laptop.shareLinks.api
+        )
+      ).toBe(false);
+      // Due (it names one device fewer than the owner has)...
+      const partial = await signShareDelegation(owner.identityPrivateKey, {
+        identityKeyHash: owner.list.identityKeyHash,
+        sequence: 0,
+        issuedAt: clock,
+        expiresAt: clock + 30 * DAY,
+        deviceKeys: [owner.list.devices[0]!.signingKey]
+      });
+      await laptop.shareLinks.api.putDelegation({
+        statement: toBase64Url(partial.statement),
+        signature: toBase64Url(partial.signature)
+      });
+      expect((await shareDelegationState(laptop.shareLinks)).status).toBe(
+        'stale-devices'
+      );
+      // ...but encrypted projects are closed: no share-link route is asked.
+      const untouched = {
+        ...laptop.shareLinks.api,
+        delegation: vi.fn(laptop.shareLinks.api.delegation)
+      };
+      expect(
+        await renewPageShareDelegationInPassing(
+          {
+            api: { config: async () => ({ enabled: true }) }
+          } as unknown as E2eeContext,
+          step,
+          untouched
+        )
+      ).toBe(false);
+      expect(untouched.delegation).not.toHaveBeenCalled();
+      // The server refuses: the caller sees the failure and ignores it.
+      await expect(
+        renewPageShareDelegationInPassing(open, step, {
+          ...laptop.shareLinks.api,
+          putDelegation: async () => {
+            throw new Error('Share delegation unavailable');
+          }
+        })
+      ).rejects.toThrow('Share delegation unavailable');
+      // Accepted, it names every certified device again.
+      expect(
+        await renewPageShareDelegationInPassing(
+          open,
+          step,
+          laptop.shareLinks.api
+        )
+      ).toBe(true);
+      expect((await shareDelegationState(laptop.shareLinks)).status).toBe(
+        'valid'
+      );
+    });
+  }
+);

@@ -167,6 +167,51 @@ export interface E2eeContext {
    * device approval write where its contacts-list trust starts.
    */
   readonly contactPins?: ContactPinStore;
+  /**
+   * L11 (D4): runs once an action the identity key authorized has
+   * succeeded, with that key still open and the account as the action left
+   * it (the page renews its share delegation here). Best effort: it never
+   * fails the action, and the key is not kept past it.
+   */
+  readonly afterIdentityKey?: (step: {
+    readonly account: AccountView;
+    readonly identityPrivateKey: CryptoKey;
+  }) => Promise<unknown>;
+}
+
+/**
+ * How long an action waits for `afterIdentityKey` before it finishes anyway
+ * (judgment). A follow-up still running then finishes on its own.
+ */
+const AFTER_IDENTITY_KEY_TIMEOUT_MS = 5_000;
+
+/**
+ * `ctx.afterIdentityKey` for an action that has succeeded, before it
+ * returns (so the key is open no longer than the action). Never throws.
+ */
+async function afterIdentityKey(
+  ctx: E2eeContext,
+  state: EncryptionState | AccountView,
+  identityPrivateKey: CryptoKey
+): Promise<void> {
+  const account =
+    'kind' in state ? (state.kind === 'ready' ? state.account : null) : state;
+  if (!ctx.afterIdentityKey || !account || account.userId !== ctx.userId)
+    return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    requireActiveKeyContext(ctx);
+    await Promise.race([
+      ctx.afterIdentityKey({ account, identityPrivateKey }),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, AFTER_IDENTITY_KEY_TIMEOUT_MS);
+      })
+    ]);
+  } catch {
+    // The action itself succeeded; what follows it is optional.
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const contactPinsOf = (ctx: E2eeContext): ContactPinStore =>
@@ -963,7 +1008,9 @@ export async function withIdentityKey<T>(
   );
   accountKey.fill(0);
   requireActiveKeyContext(scoped);
-  return sign(identityPrivateKey);
+  const signed = await sign(identityPrivateKey);
+  await afterIdentityKey(scoped, account, identityPrivateKey);
+  return signed;
 }
 
 /** Opens identity material for one operation; the target wrap binds its hash. */
@@ -1317,7 +1364,9 @@ async function addPasskeyLocked(
       pin: account.list.pin,
       written: signed.entry
     });
-    return await loadEncryption(ctx);
+    const next = await loadEncryption(ctx);
+    await afterIdentityKey(ctx, next, opened.identityPrivateKey);
+    return next;
   } catch (error) {
     throw enrollment
       ? failedPasskeyEnrollment(error, enrollment.label, enrollment.targetId)
@@ -1371,7 +1420,9 @@ async function enrollWithUnlockMethodLocked(
         await persistDeviceList(ctx, account.list, {
           replaceIdentityFrom: account.persistedPin
         });
-        return loadEncryption(ctx);
+        const next = await loadEncryption(ctx);
+        await afterIdentityKey(ctx, next, identityPrivateKey);
+        return next;
       } finally {
         accountKey.fill(0);
       }
@@ -1446,7 +1497,10 @@ async function enrollWithUnlockMethodLocked(
       replaceIdentityFrom: account.persistedPin,
       written: signed.entry
     });
-    return loadEncryption(ctx);
+    // This device is in the list now, so a renewal names it too.
+    const next = await loadEncryption(ctx);
+    await afterIdentityKey(ctx, next, identityPrivateKey);
+    return next;
   } finally {
     accountKey.fill(0);
   }
@@ -1709,6 +1763,8 @@ async function rotateAccountKeysLocked(
         written
       });
     }
+    // After the removal: what follows signs for the surviving list only.
+    await afterIdentityKey(ctx, state, identityPrivateKey);
     return state;
   } finally {
     oldAccountKey.fill(0);
@@ -1777,10 +1833,12 @@ export async function signGroupResetWithIdentity(
     );
     accountKey.fill(0);
     requireActiveKeyContext(opContext);
-    return signGroupReset(identityPrivateKey, {
+    const signed = await signGroupReset(identityPrivateKey, {
       ...reset,
       generation: account.generation
     });
+    await afterIdentityKey(opContext, account, identityPrivateKey);
+    return signed;
   });
 }
 
@@ -1795,7 +1853,8 @@ export async function signGroupResetWithIdentity(
  * history), so keys wrapped under it stay reachable.
  *
  * Holds the same device lock as the other rotations, so it never races a
- * removal or another replacement from this browser.
+ * removal or another replacement from this browser. It runs no
+ * `afterIdentityKey`: the old identity's share delegation retires with it.
  */
 export async function replaceRecoveryKey(
   ctx: E2eeContext,
@@ -3135,6 +3194,8 @@ async function approveDeviceWith(
   let list = account.list;
   let certified = false;
   let sealedAccountKey: string | undefined;
+  // Open only while this approval runs (`afterIdentityKey` below).
+  let identityKey: CryptoKey | null = null;
   // A device already certified with exactly these keys asks again to have
   // its contacts head confirmed (ADR-024, verified pins): approve it as
   // certified, with no new certification and no sealed account key. (With
@@ -3197,6 +3258,7 @@ async function approveDeviceWith(
         }
       ]
     });
+    identityKey = identityPrivateKey;
     const signed = await signDeviceListEntry(identityPrivateKey, entry);
     const wrapped = await sealKey(unlockKey, accountKey, {
       purpose: 'account-key',
@@ -3255,7 +3317,10 @@ async function approveDeviceWith(
   if (compareApprovals.get(comparisonId(ctx, approval.id)) === exchange) {
     compareApprovals.delete(comparisonId(ctx, approval.id));
   }
-  return loadEncryption(ctx);
+  const next = await loadEncryption(ctx);
+  // The approved device is certified now, so a renewal names it too.
+  if (identityKey) await afterIdentityKey(ctx, next, identityKey);
+  return next;
 }
 
 /**

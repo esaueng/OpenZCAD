@@ -60,6 +60,7 @@ import {
   requestApproval,
   setUpEncryption,
   unlockedEncryptionKey,
+  withIdentityKey,
   type AccountView,
   type E2eeContext,
   type EncryptionState
@@ -7046,5 +7047,132 @@ describe('approval always certifies', () => {
       await enrollWithPasskey(fresh.ctx, fresh.account, 'Tablet')
     );
     expect(enrolled.deviceStatus).toBe('certified');
+  });
+});
+
+describe('what follows an identity-authorized action (L11 D4)', () => {
+  /** Records each `afterIdentityKey` call: the devices it saw, and the key. */
+  function following(fail = false) {
+    const calls: { devices: string[]; key: CryptoKey }[] = [];
+    return {
+      calls,
+      afterIdentityKey: async (step: {
+        account: AccountView;
+        identityPrivateKey: CryptoKey;
+      }) => {
+        calls.push({
+          devices: step.account.list.devices.map((d) => d.label).sort(),
+          key: step.identityPrivateKey
+        });
+        if (fail) throw new Error('Share delegation unavailable');
+      }
+    };
+  }
+
+  it('follows a new device unlocking with the recovery key, naming it', async () => {
+    const srv = server();
+    const { recovery } = await setUp(srv);
+    const follow = following();
+    const phone = { ...device(srv), afterIdentityKey: follow.afterIdentityKey };
+    const account = ready(
+      await enrollWithRecoveryKey(
+        phone,
+        ready(await loadEncryption(phone)),
+        recovery.secret,
+        'Phone'
+      )
+    );
+    expect(account.deviceStatus).toBe('certified');
+    expect(follow.calls.map((call) => call.devices)).toEqual([
+      ['Laptop', 'Phone']
+    ]);
+    expect(follow.calls[0]!.key.type).toBe('private');
+  });
+
+  it('follows a removal with the surviving devices only', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const follow = following();
+    const after = ready(
+      await removeDevice(
+        { ...laptop, afterIdentityKey: follow.afterIdentityKey },
+        ready(await loadEncryption(laptop)),
+        phone.account.device!.deviceId,
+        recovery.secret
+      )
+    );
+    expect(after.list.devices.map((d) => d.label)).toEqual(['Laptop']);
+    expect(follow.calls.map((call) => call.devices)).toEqual([['Laptop']]);
+  });
+
+  it('follows an approval, naming the approved device', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const phone = device(srv);
+    const request = await requestApproval(
+      phone,
+      ready(await loadEncryption(phone)),
+      'Phone'
+    );
+    if (request.step !== 'waiting') throw new Error('expected a request');
+    const follow = following();
+    const [pending] = (await laptop.api.listApprovals()).approvals;
+    ready(
+      await approveDevice(
+        { ...laptop, afterIdentityKey: follow.afterIdentityKey },
+        ready(await loadEncryption(laptop)),
+        pending!,
+        { kind: 'scan', code: request.scanCode },
+        recovery.secret
+      )
+    );
+    expect(follow.calls.map((call) => call.devices)).toEqual([
+      ['Laptop', 'Phone']
+    ]);
+  });
+
+  it('never fails the action it follows', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const follow = following(true);
+    const phone = { ...device(srv), afterIdentityKey: follow.afterIdentityKey };
+    const account = ready(
+      await enrollWithRecoveryKey(
+        phone,
+        ready(await loadEncryption(phone)),
+        recovery.secret,
+        'Phone'
+      )
+    );
+    expect(account.deviceStatus).toBe('certified');
+    expect(follow.calls).toHaveLength(1);
+    // A signature it follows still comes back.
+    await expect(
+      withIdentityKey(
+        { ...laptop, afterIdentityKey: follow.afterIdentityKey },
+        ready(await loadEncryption(laptop)),
+        recovery.secret,
+        async () => 'signed'
+      )
+    ).resolves.toBe('signed');
+    expect(follow.calls).toHaveLength(2);
+  });
+
+  it('does not run when the action fails', async () => {
+    const srv = server();
+    await setUp(srv);
+    const follow = following();
+    const phone = { ...device(srv), afterIdentityKey: follow.afterIdentityKey };
+    await flowRefusal(
+      enrollWithRecoveryKey(
+        phone,
+        ready(await loadEncryption(phone)),
+        generateSymmetricKey(),
+        'Phone'
+      ),
+      'wrong-recovery-key'
+    );
+    expect(follow.calls).toEqual([]);
   });
 });
