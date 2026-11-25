@@ -1301,3 +1301,42 @@ describe('EncryptedShareLinks one click and confirm by (L11 §4)', () => {
     expect(client.create).not.toHaveBeenCalled();
   });
 });
+
+describe('EncryptedShareLinks across an expiry (L11 review)', () => {
+  it('asks for the confirmation when it ended while the dialog stayed open', async () => {
+    const client = fakeClient([
+      {
+        ...active,
+        needsConfirmation: false,
+        confirmBy: null,
+        // The list said it held; by the click it has ended.
+        confirmedUntil: Date.now() - 1,
+        passkey: false
+      }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByRole('button', { name: 'Copy View only link' });
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    expect(
+      screen.getByRole('group', { name: 'Confirm sharing' })
+    ).toHaveTextContent('To create the link');
+    expect(client.create).not.toHaveBeenCalled();
+  });
+
+  it('creates at once while the confirmation still holds', async () => {
+    const client = fakeClient([
+      {
+        ...active,
+        needsConfirmation: false,
+        confirmedUntil: Date.now() + 20 * 86_400_000
+      }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByRole('button', { name: 'Copy View only link' });
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(client.create).toHaveBeenCalledWith('proj_x', 'view')
+    );
+    expect(client.confirm).not.toHaveBeenCalled();
+  });
+});

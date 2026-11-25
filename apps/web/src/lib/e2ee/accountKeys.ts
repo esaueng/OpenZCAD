@@ -169,25 +169,39 @@ export interface E2eeContext {
   readonly contactPins?: ContactPinStore;
   /**
    * L11 (D4): runs once an action the identity key authorized has
-   * succeeded, with that key still open and the account as the action left
-   * it (the page renews its share delegation here). Best effort: it never
-   * fails the action, and the key is not kept past it.
+   * succeeded on the server, with the account as the action left it (the
+   * page renews its share delegation here). Best effort: it never fails the
+   * action. It never holds the key itself: `useIdentityKey` hands it over
+   * for one call, and refuses once the action has returned (the wait timed
+   * out) or its session ended.
    */
-  readonly afterIdentityKey?: (step: {
-    readonly account: AccountView;
-    readonly identityPrivateKey: CryptoKey;
-  }) => Promise<unknown>;
+  readonly afterIdentityKey?: (step: IdentityKeyFollowUp) => Promise<unknown>;
+}
+
+/** What `E2eeContext.afterIdentityKey` gets from the action it follows. */
+export interface IdentityKeyFollowUp {
+  readonly account: AccountView;
+  /** Aborted once the action has returned. */
+  readonly signal: AbortSignal;
+  /**
+   * Calls `use` with the identity key at once, after checking that the
+   * action has not returned and its session is live; otherwise throws
+   * without calling it. `use` must start its signature in that call.
+   */
+  useIdentityKey<T>(
+    use: (identityPrivateKey: CryptoKey) => Promise<T>
+  ): Promise<T>;
 }
 
 /**
- * How long an action waits for `afterIdentityKey` before it finishes anyway
- * (judgment). A follow-up still running then finishes on its own.
+ * How long an action waits for `afterIdentityKey` before it returns anyway
+ * (judgment). The follow-up is aborted then, and can no longer use the key.
  */
-const AFTER_IDENTITY_KEY_TIMEOUT_MS = 5_000;
+export const AFTER_IDENTITY_KEY_TIMEOUT_MS = 5_000;
 
 /**
- * `ctx.afterIdentityKey` for an action that has succeeded, before it
- * returns (so the key is open no longer than the action). Never throws.
+ * `ctx.afterIdentityKey` for an action whose write has succeeded, before it
+ * returns: the key is never used once the action has returned. Never throws.
  */
 async function afterIdentityKey(
   ctx: E2eeContext,
@@ -198,11 +212,24 @@ async function afterIdentityKey(
     'kind' in state ? (state.kind === 'ready' ? state.account : null) : state;
   if (!ctx.afterIdentityKey || !account || account.userId !== ctx.userId)
     return;
+  const controller = new AbortController();
+  const { signal } = controller;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     requireActiveKeyContext(ctx);
     await Promise.race([
-      ctx.afterIdentityKey({ account, identityPrivateKey }),
+      ctx.afterIdentityKey({
+        account,
+        signal,
+        useIdentityKey: (use) => {
+          // Checked and handed over in one synchronous step, so nothing
+          // can end the action between the check and the signature.
+          if (signal.aborted)
+            throw new DOMException('The action has finished.', 'AbortError');
+          requireActiveKeyContext(ctx);
+          return use(identityPrivateKey);
+        }
+      }),
       new Promise((resolve) => {
         timer = setTimeout(resolve, AFTER_IDENTITY_KEY_TIMEOUT_MS);
       })
@@ -211,6 +238,7 @@ async function afterIdentityKey(
     // The action itself succeeded; what follows it is optional.
   } finally {
     clearTimeout(timer);
+    controller.abort();
   }
 }
 
@@ -992,6 +1020,8 @@ async function openIdentity(
  * for one signature outside the device list (a contacts entry, ADR-024
  * Phase 5), hands it to `sign`, and forgets it. The account key opened
  * alongside is zeroed at once: a contacts entry needs only the identity.
+ * `afterIdentityKey` runs once `sign` resolves, so `sign` must include the
+ * write the signature is for (the contacts append does).
  */
 export async function withIdentityKey<T>(
   ctx: E2eeContext,
@@ -1833,12 +1863,12 @@ export async function signGroupResetWithIdentity(
     );
     accountKey.fill(0);
     requireActiveKeyContext(opContext);
-    const signed = await signGroupReset(identityPrivateKey, {
+    // No `afterIdentityKey`: the reset is written only after this returns,
+    // and the Worker may still refuse it.
+    return signGroupReset(identityPrivateKey, {
       ...reset,
       generation: account.generation
     });
-    await afterIdentityKey(opContext, account, identityPrivateKey);
-    return signed;
   });
 }
 

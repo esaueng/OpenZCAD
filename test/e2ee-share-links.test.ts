@@ -3631,7 +3631,8 @@ describe(
         api: { config: async () => ({ enabled: true, projectsEnabled: true }) }
       } as unknown as E2eeContext;
       const step = {
-        identityPrivateKey: owner.identityPrivateKey,
+        useIdentityKey: <T>(use: (key: CryptoKey) => Promise<T>) =>
+          use(owner.identityPrivateKey),
         account: {
           userId: OWNER,
           list: owner.list,
@@ -3680,6 +3681,25 @@ describe(
         )
       ).toBe(false);
       expect(untouched.delegation).not.toHaveBeenCalled();
+      // The action has returned: the key is refused, so nothing is signed
+      // or stored.
+      const refusing = {
+        ...laptop.shareLinks.api,
+        putDelegation: vi.fn(laptop.shareLinks.api.putDelegation)
+      };
+      await expect(
+        renewPageShareDelegationInPassing(
+          open,
+          {
+            ...step,
+            useIdentityKey: async () => {
+              throw new DOMException('The action has finished.', 'AbortError');
+            }
+          },
+          refusing
+        )
+      ).rejects.toThrow('The action has finished.');
+      expect(refusing.putDelegation).not.toHaveBeenCalled();
       // The server refuses: the caller sees the failure and ignores it.
       await expect(
         renewPageShareDelegationInPassing(open, step, {

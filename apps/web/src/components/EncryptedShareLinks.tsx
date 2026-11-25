@@ -81,6 +81,11 @@ export interface EncryptedShareLinksState {
    */
   readonly confirmBy?: number | null;
   /**
+   * When the owner's current confirmation ends (valid or expiring), so a
+   * dialog left open past it asks again; null without one.
+   */
+  readonly confirmedUntil?: number | null;
+  /**
    * The account has a passkey, so Create link confirms with it straight
    * away; without one it asks for the recovery key.
    */
@@ -247,6 +252,10 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         view.isOwner && links.delegationNeedsConfirming(view.delegation),
       confirmBy:
         view.isOwner && view.delegation.status === 'expiring'
+          ? (view.delegation.delegation?.expiresAt ?? null)
+          : null,
+      confirmedUntil:
+        view.isOwner && !links.delegationNeedsConfirming(view.delegation)
           ? (view.delegation.delegation?.expiresAt ?? null)
           : null,
       passkey: hasPasskey(),
@@ -784,12 +793,31 @@ export function EncryptedShareLinks({
   }, [onSummary, linkCount, attention, error]);
 
   const requestCreate = (draft: ShareLinkDraft) => {
+    // A confirmation that ended while the dialog stayed open counts as
+    // expired now, not as the list last said.
+    const lapsed =
+      !!state &&
+      !state.needsConfirmation &&
+      state.confirmedUntil != null &&
+      Date.now() >= state.confirmedUntil;
+    if (lapsed)
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              needsConfirmation: true,
+              confirmBy: null,
+              confirmedUntil: null
+            }
+          : current
+      );
     // One action (design review I79): Create link asks for the
     // confirmation sharing needs, then makes the link.
-    if (!state?.needsConfirmation) {
+    if (!state?.needsConfirmation && !lapsed) {
       void run('create', () => createLink(draft));
       return;
     }
+    if (!state) return;
     pendingDraft.current = draft;
     setCreateAfterConfirm(true);
     if (!state.passkey) {

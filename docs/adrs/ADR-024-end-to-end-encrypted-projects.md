@@ -1972,16 +1972,21 @@ lifetime is still at most 30 days from when it was signed.
 - **Renewed in passing.** An action that already opens the identity key
   with a passkey or the recovery key (unlocking a new device, approving or
   removing a device, adding or removing a passkey, revoking read-only
-  devices, sealing contacts, resetting a project group) then also renews
+  devices, sealing contacts) then also renews
   the account's share delegation, if one is stored and it is due: less than
   14 days left, expired, or naming other devices than the certified ones.
   An account that never confirmed sharing has no delegation and gets none.
-  The renewal runs after the action succeeded, with the device list as the
-  action left it, so a removal never re-signs a delegation naming the
+  The renewal runs only after the action's server write succeeded (so not
+  for a group reset, which is written after its signature returns), with the
+  device list as the action left it, so a removal never re-signs a delegation naming the
   removed device, and an approval names the new device at once. It is best
   effort: a failed renewal never fails the action, and the action waits at
-  most five seconds for a slow one. The identity key is not kept for later:
-  the renewal is the action's last step (`afterIdentityKey` in
+  most five seconds for a slow one. The identity key is never used once the
+  action has returned: the renewal gets it only through the action, which
+  checks that it has not returned and that its session is live in the same
+  step that starts the signature, and refuses afterwards (a delegation
+  already signed may still be uploaded). The renewal is the action's last
+  step (`afterIdentityKey` in
   `accountKeys.ts`, `renewShareDelegationInPassing` in `shareLinks.ts` and
   `shareDelegationInPassing.ts`). The account must have encrypted projects
   open; the renewal starts no MLS session. Replacing the recovery key does not renew it:

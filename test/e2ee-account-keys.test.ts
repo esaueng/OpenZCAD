@@ -61,7 +61,9 @@ import {
   setUpEncryption,
   unlockedEncryptionKey,
   withIdentityKey,
+  AFTER_IDENTITY_KEY_TIMEOUT_MS,
   type AccountView,
+  type IdentityKeyFollowUp,
   type E2eeContext,
   type EncryptionState
 } from '../apps/web/src/lib/e2ee/accountKeys';
@@ -7056,13 +7058,10 @@ describe('what follows an identity-authorized action (L11 D4)', () => {
     const calls: { devices: string[]; key: CryptoKey }[] = [];
     return {
       calls,
-      afterIdentityKey: async (step: {
-        account: AccountView;
-        identityPrivateKey: CryptoKey;
-      }) => {
+      afterIdentityKey: async (step: IdentityKeyFollowUp) => {
         calls.push({
           devices: step.account.list.devices.map((d) => d.label).sort(),
-          key: step.identityPrivateKey
+          key: await step.useIdentityKey(async (key) => key)
         });
         if (fail) throw new Error('Share delegation unavailable');
       }
@@ -7174,5 +7173,93 @@ describe('what follows an identity-authorized action (L11 D4)', () => {
       'wrong-recovery-key'
     );
     expect(follow.calls).toEqual([]);
+  });
+
+  /**
+   * A follow-up that waits on `read` (a slow delegation read) and then
+   * signs, as the share delegation renewal does.
+   */
+  function slowFollowUp(read: Promise<void>) {
+    let finish!: () => void;
+    const seen = {
+      entered: false,
+      signed: false,
+      refused: null as unknown,
+      done: new Promise<void>((resolve) => (finish = resolve))
+    };
+    return {
+      seen,
+      afterIdentityKey: async (step: IdentityKeyFollowUp) => {
+        seen.entered = true;
+        try {
+          await read;
+          await step.useIdentityKey(async () => {
+            seen.signed = true;
+          });
+        } catch (error) {
+          seen.refused = error;
+        } finally {
+          finish();
+        }
+      }
+    };
+  }
+
+  it(
+    'never hands the key over once the action has returned after the wait',
+    { timeout: AFTER_IDENTITY_KEY_TIMEOUT_MS + 20_000 },
+    async () => {
+      const srv = server();
+      const { recovery, laptop } = await setUp(srv);
+      let release!: () => void;
+      const follow = slowFollowUp(
+        new Promise<void>((resolve) => (release = resolve))
+      );
+      const started = Date.now();
+      await expect(
+        withIdentityKey(
+          { ...laptop, afterIdentityKey: follow.afterIdentityKey },
+          ready(await loadEncryption(laptop)),
+          recovery.secret,
+          async () => 'signed'
+        )
+      ).resolves.toBe('signed');
+      expect(Date.now() - started).toBeGreaterThanOrEqual(
+        AFTER_IDENTITY_KEY_TIMEOUT_MS - 50
+      );
+      // The read answers only now: the key is refused, nothing is signed.
+      release();
+      await follow.seen.done;
+      expect(follow.seen.signed).toBe(false);
+      expect(follow.seen.refused).toBeInstanceOf(DOMException);
+    }
+  );
+
+  it('never hands the key over once the session ended during the wait', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    let live = true;
+    let release!: () => void;
+    const follow = slowFollowUp(
+      new Promise<void>((resolve) => (release = resolve))
+    );
+    const action = withIdentityKey(
+      {
+        ...laptop,
+        isCurrent: () => live,
+        afterIdentityKey: follow.afterIdentityKey
+      },
+      ready(await loadEncryption(laptop)),
+      recovery.secret,
+      async () => 'signed'
+    );
+    // Signed out while the follow-up waits on its read.
+    await vi.waitFor(() => expect(follow.seen.entered).toBe(true));
+    live = false;
+    release();
+    await follow.seen.done;
+    await expect(action).resolves.toBe('signed');
+    expect(follow.seen.signed).toBe(false);
+    expect(follow.seen.refused).toBeInstanceOf(EncryptionFlowError);
   });
 });
