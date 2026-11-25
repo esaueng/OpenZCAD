@@ -72,7 +72,7 @@ for (const units of ['mm', 'inch'] as const) {
             return canvas.getAttribute('data-e2e-handle-x');
           })
           .not.toBeNull();
-        await expect(mode).toHaveText(new RegExp(`^${reads}`));
+        await expect(mode).toHaveText(new RegExp(`^${reads} ▾`));
         if (reads === 'Offset') {
           await expect(value).toHaveText(/^\+0 /);
           await mode.click();
@@ -291,7 +291,7 @@ test(
 
     // Switched to Total, the same 5 is the size the face sets.
     await pickTop();
-    await expect(mode).toHaveText(/^Offset/);
+    await expect(mode).toHaveText(/^Offset ▾/);
     await mode.click();
     await expect(mode).toHaveText(/^Total/);
     await expect(value).toHaveText('29 mm');
