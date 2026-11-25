@@ -164,3 +164,42 @@ export function disposeRigGroups(...groups: THREE.Group[]) {
     });
   }
 }
+
+/**
+ * Takes a rig off screen: fades it out when it can leave, or disposes it.
+ *
+ * A rig showing the refused warning is disposed at once. Its face is no
+ * longer selected and the value it warned about is gone with the pick, so
+ * an orange handle fading over that face read as a failure still standing
+ * there.
+ */
+export function retireRig(rig: DragRig, retiring: DragRig[]): void {
+  if (
+    !rig.beginExit ||
+    !rig.isGone ||
+    rig.group.userData.previewWarning === true
+  ) {
+    rig.dispose();
+    return;
+  }
+  rig.beginExit();
+  retiring.push(rig);
+}
+
+/** Disposes faded-out rigs, and reports whether any are still leaving. */
+export function stepRetiringRigs(retiring: DragRig[], dtMs: number): boolean {
+  let animating = false;
+  for (let index = retiring.length - 1; index >= 0; index -= 1) {
+    const rig = retiring[index]!;
+    const moved = rig.step?.(dtMs) ?? false;
+    // A leaving rig that reports no motion will never report gone either;
+    // holding it would pin the loop and leave a half-faded ghost on screen.
+    if (rig.isGone?.() || !moved) {
+      rig.dispose();
+      retiring.splice(index, 1);
+    } else {
+      animating = true;
+    }
+  }
+  return animating;
+}

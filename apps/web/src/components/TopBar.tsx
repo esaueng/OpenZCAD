@@ -113,6 +113,11 @@ interface TopBarProps {
   /** A proposed direct edit has not passed validation or been saved yet. */
   editPending?: boolean;
   editRefusal?: string | null;
+  /**
+   * The chip reopens the failed edit itself (its card, Why and choices)
+   * rather than the Activity log.
+   */
+  editRefusalReopens?: boolean;
   onReviewEditFailure?(): void;
   /**
    * Reopens the conflict question left with "Decide later". With it, the
@@ -348,6 +353,7 @@ export function TopBar({
   geometryFailed = false,
   editPending = false,
   editRefusal: proposedEditRefusal = null,
+  editRefusalReopens = false,
   onReviewEditFailure,
   onReviewConflict,
   warningCount = 0,
@@ -664,7 +670,9 @@ export function TopBar({
     ? `${saveText} · ${modelReadiness}`
     : saveText;
   const saveTitle = editRefusal
-    ? `${editRefusal} Open the activity log for details.`
+    ? editRefusalReopens
+      ? `${editRefusal} Reopen the edit to see why and choose what to do.`
+      : `${editRefusal} Open the activity log for details.`
     : checkingEdit
       ? `The proposed edit is being checked before it is applied and saved. ${presentation.title}`
       : `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
@@ -916,6 +924,9 @@ export function TopBar({
           <button
             className={`save-state topbar-action is-${saveState}`}
             type="button"
+            // Enter on "Edit not applied" asks for the refused edit, never
+            // Done on a command that happens to be running (OWN_ENTER_ATTRIBUTE).
+            data-own-enter={reviewRefusal ? '' : undefined}
             disabled={!projectName}
             onClick={
               reviewRefusal

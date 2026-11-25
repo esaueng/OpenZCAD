@@ -24,6 +24,11 @@ export class DeferredExactEntry<Owner> {
     this.retry();
   }
 
+  /** Whether typed input is waiting for its entry to open. */
+  get queued(): boolean {
+    return this.pending !== null;
+  }
+
   /** Drops a waiting entry; true when there was one to drop. */
   cancel(): boolean {
     const dropped = this.pending !== null;

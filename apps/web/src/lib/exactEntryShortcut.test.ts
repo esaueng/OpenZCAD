@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  controlOwnsEnter,
   exactEntryShortcut,
   inPlaceTypedEntryKey,
   isTypingTarget
@@ -17,6 +18,22 @@ const armed = interactionReducer(IDLE, {
   }
 });
 const key = (value: string) => new KeyboardEvent('keydown', { key: value });
+
+// Review: with a Box command running, Enter on History's "Edit not applied"
+// reopen button was taken as Done and created the Box.
+describe('a control that owns its Enter', () => {
+  it('is the marked control or anything inside it, and nothing else', () => {
+    const host = document.createElement('div');
+    host.innerHTML =
+      '<button data-own-enter=""><span>edit not applied</span></button><button>Box</button>';
+    const [own, other] = host.querySelectorAll('button');
+    expect(controlOwnsEnter(own!)).toBe(true);
+    expect(controlOwnsEnter(own!.querySelector('span'))).toBe(true);
+    expect(controlOwnsEnter(other!)).toBe(false);
+    expect(controlOwnsEnter(null)).toBe(false);
+    expect(controlOwnsEnter(window)).toBe(false);
+  });
+});
 
 describe('exact entry shortcut ownership', () => {
   it.each(['0', '1', '4', '9', '-', '.'])(

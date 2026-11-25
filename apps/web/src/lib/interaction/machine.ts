@@ -575,6 +575,13 @@ export type InteractionEvent =
       value: number;
     }
   | { type: 'recover' }
+  /**
+   * Brings back a failed edit the selection left: the operation, its value
+   * and its refusal exactly as they were, so its card, Why and choices
+   * return. Refused unless the machine is at rest (`interactionAtRest`),
+   * and for anything but a failed operation.
+   */
+  | { type: 'reopen-refusal'; state: InteractionState }
   | { type: 'reset-value' }
   | { type: 'enter-sketch'; plane: SketchPlaneRef; sketchId?: string }
   | {
@@ -1089,6 +1096,10 @@ function reduceInteraction(
             lastValue: event.value,
             error: event.diagnostic
           };
+    case 'reopen-refusal':
+      return isParkableRefusal(event.state) && interactionAtRest(state)
+        ? event.state
+        : state;
     case 'recover':
       return isOperationState(state) && state.phase === 'failed'
         ? { ...state, phase: 'armed', error: null }
@@ -1808,13 +1819,17 @@ export function refusalSubjectKey(state: InteractionState): string | null {
 }
 
 /**
- * Whether the selection has moved on from a refused edit made on
- * `refusedKey`: `current` is the subject now picked (`refusalSubjectKey`, or
- * the workspace's own key for a pick the machine does not hold), null when
- * nothing is. Picking something else has; the chip described the earlier
- * pick and was stale beside the new one. A plain deselection has not; the
- * chip stays as its link to the refusal's Activity log entry (#1596).
- * Neither has re-picking the refused subject.
+ * Whether the selection has moved on from an edit made on `refusedKey`
+ * that is still being checked: `current` is the subject now picked
+ * (`refusalSubjectKey`, or the workspace's own key for a pick the machine
+ * does not hold), null when nothing is. Picking something else has, so a
+ * late refusal of that edit is reported in the status line only, never as
+ * the new pick's. A plain deselection has not, nor has re-picking the same
+ * subject.
+ *
+ * A refusal that has already landed is not retired by any selection change:
+ * it is parked with its operation and the top bar's "Edit not applied"
+ * reopens it (`isParkableRefusal`).
  */
 export function movedOnFromRefusal(
   current: string | null,
@@ -1836,6 +1851,132 @@ export function refusalDiscardedByHistoryStep(
   return holdsRefusal(state)
     ? (commandIdentityFor(state)?.title ?? 'edit')
     : null;
+}
+
+/**
+ * A failed edit that can be set aside and brought back: an operation in its
+ * failed phase, holding the refusal it failed with. That covers a release
+ * the exact check refused, a frame refused under the hand and then let go,
+ * and a rim the kernel needs a choice for.
+ */
+export function isParkableRefusal(state: InteractionState): state is Exclude<
+  InteractionState,
+  { mode: 'idle' } | { mode: 'sketch' }
+> & {
+  phase: 'failed';
+  error: CommandDiagnostic;
+} {
+  return (
+    isOperationState(state) && state.phase === 'failed' && state.error !== null
+  );
+}
+
+/**
+ * Whether the machine is at rest, so a parked refusal may replace what it
+ * holds. An allow-list, not a list of what to protect: reviews kept finding
+ * work a deny-list missed, so any state not named here (and any mode or phase
+ * added later) keeps the refusal parked. At rest is only:
+ *
+ * - idle, with nothing being picked for a command (Extrude's profile pick
+ *   sets `boxSelectProfiles`; any other flag on idle counts as work too);
+ * - a plain pick of a face or edges: armed, with no value and no refusal;
+ * - another refusal of a face or edges, which is only a selection.
+ *
+ * A region (Extrude on a sketch profile, with its options) is never at rest,
+ * nor is a sketch, a gesture under the hand, a typed value or a check.
+ */
+export function interactionAtRest(state: InteractionState): boolean {
+  switch (state.mode) {
+    case 'idle':
+      return Object.entries(state).every(
+        ([key, value]) => key === 'mode' || value === undefined
+      );
+    case 'face':
+    case 'edges':
+      switch (state.phase) {
+        case 'armed':
+          return state.error === null && state.lastValue === null;
+        case 'failed':
+          return isParkableRefusal(state);
+        default:
+          return false;
+      }
+    default:
+      return false;
+  }
+}
+
+/**
+ * The workspace's edit surfaces outside the machine, each true while it holds
+ * work a reopen would tear down: an open value entry (keypad) or one queued
+ * to open on the next frame, a running in-place command (Box, Shell, Hole…),
+ * a tool panel, an extrude or modeling feature being edited, a Move, a face
+ * or vertex pick that repairs a feature, and a model preview on the stage (an
+ * Assistant proposal, a save state) that the reopen's panel close would
+ * clear while its own control still says it is showing.
+ */
+export interface WorkspaceEditSurfaces {
+  keypadOpen: boolean;
+  exactEntryQueued: boolean;
+  commandRunning: boolean;
+  toolOpen: boolean;
+  featureEditOpen: boolean;
+  moveOpen: boolean;
+  repairPickOpen: boolean;
+  modelPreviewShown: boolean;
+}
+
+/**
+ * Whether a parked refusal may be reopened now: the machine is at rest
+ * (`interactionAtRest`) and every surface reports itself closed. A surface
+ * reported as anything but `false` (one added and left undefined) keeps the
+ * refusal parked, so a new surface is blocked until it is wired.
+ */
+export function workspaceAtRestForReopen(
+  state: InteractionState,
+  surfaces: Readonly<WorkspaceEditSurfaces>
+): boolean {
+  return (
+    interactionAtRest(state) &&
+    Object.values(surfaces).every((open) => open === false)
+  );
+}
+
+/**
+ * Whether `next` is the failed edit `previous` given up where it stands: the
+ * same pick, re-armed with its refused value and refusal dropped. That is
+ * how its value entry's Escape, a drag cancelled over it, or its card's
+ * close leaves a refusal (`reset-value`, or re-selecting the same target),
+ * so the parked failure ends with it. A clear (a click on empty space) goes
+ * idle instead and keeps it, and a pick of something else is another
+ * subject.
+ */
+export function refusalCancelledInPlace(
+  previous: InteractionState,
+  next: InteractionState
+): boolean {
+  return (
+    isParkableRefusal(previous) &&
+    isOperationState(next) &&
+    next.phase === 'armed' &&
+    next.error === null &&
+    refusalSubjectKey(next) === refusalSubjectKey(previous)
+  );
+}
+
+/**
+ * A new attempt at an edit has begun: a drag, a typed value, or a release
+ * being checked. It supersedes any failed edit set aside earlier: whatever
+ * it ends in (a commit, a refusal of its own, a cancel) replaces that
+ * failure as the latest word on the model.
+ */
+export function startsEditAttempt(state: InteractionState): boolean {
+  return (
+    isOperationState(state) &&
+    (state.phase === 'dragging' ||
+      state.phase === 'exact-entry' ||
+      state.phase === 'validating')
+  );
 }
 
 /**

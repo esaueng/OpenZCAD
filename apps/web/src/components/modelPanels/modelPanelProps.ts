@@ -42,6 +42,8 @@ import type { ConfigurationTableProps } from '../ConfigurationTable';
 export interface PendingHistoryStep {
   title: string;
   message: string;
+  /** A failed edit the selection left: the row brings it back. */
+  onReopen?: () => void;
 }
 
 export interface ModelPanelSource {

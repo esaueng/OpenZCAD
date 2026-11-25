@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import type { DragRig } from './DragRig';
+import { retireRig, stepRetiringRigs, type DragRig } from './DragRig';
 import {
   HANDLE_WARNING_COLOR,
   buildCylinderRadiusHandle,
@@ -627,5 +627,50 @@ describe('the edge-radius rig', () => {
     rig.step?.(1000);
     expect(shaft.material.color.getHex()).not.toBe(HANDLE_WARNING_COLOR);
     expect(rig.group.userData.previewWarning).toBe(false);
+  });
+});
+
+describe('retiring a handle', () => {
+  const disposals = (rig: DragRig) => {
+    let count = 0;
+    const dispose = rig.dispose.bind(rig);
+    rig.dispose = () => {
+      count += 1;
+      dispose();
+    };
+    return () => count;
+  };
+
+  it('fades an ordinary handle out before disposing it', () => {
+    const rig = offsetRig();
+    const disposed = disposals(rig);
+    rig.step?.(1000);
+    const retiring: DragRig[] = [];
+    retireRig(rig, retiring);
+    expect(retiring).toEqual([rig]);
+    expect(disposed()).toBe(0);
+    while (stepRetiringRigs(retiring, 16));
+    expect(retiring).toEqual([]);
+    expect(disposed()).toBe(1);
+  });
+
+  // Recording review: after a refused push/pull the face was deselected
+  // and its orange handle stayed drawn on it while it faded.
+  it('takes a handle showing a refusal away at once', () => {
+    for (const rig of [
+      offsetRig(),
+      buildEdgeRadiusHandle({
+        origin: { x: 1, y: 2, z: 3 },
+        direction: { x: 1, y: 0, z: 0 }
+      })
+    ]) {
+      const disposed = disposals(rig);
+      rig.step?.(1000);
+      rig.setWarning?.(true);
+      const retiring: DragRig[] = [];
+      retireRig(rig, retiring);
+      expect(retiring).toEqual([]);
+      expect(disposed()).toBe(1);
+    }
   });
 });

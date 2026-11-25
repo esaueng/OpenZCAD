@@ -273,8 +273,16 @@ export interface HistoryTimelineProps {
   brokenProjectionSketchIds?: ReadonlySet<string>;
   parameterValues: Record<string, number>;
   units: UnitSystem;
-  /** A refused operation, drawn after the last row until it re-arms. */
-  pendingStep?: { title: string; message: string } | null;
+  /**
+   * A refused operation, drawn after the last row until it re-arms, is
+   * answered or is cancelled. With `onReopen` it is a failed edit the
+   * selection left, and the row brings it back.
+   */
+  pendingStep?: {
+    title: string;
+    message: string;
+    onReopen?: () => void;
+  } | null;
   /**
    * The existing step a running command edits (Resize Body edits its Box).
    * Its row keeps its value in view while it is selected, and a refusal is
@@ -453,6 +461,8 @@ interface HistoryRowContext {
   onToggleFeatureSuppression: HistoryTimelineProps['onToggleFeatureSuppression'];
   onToggleSketchVisibility: HistoryTimelineProps['onToggleSketchVisibility'];
   onToggleBodyVisibility: HistoryTimelineProps['onToggleBodyVisibility'];
+  /** Brings back the refused edit of the row being edited, when set aside. */
+  reopenRefusal: (() => void) | undefined;
 }
 
 /**
@@ -535,6 +545,12 @@ interface HistoryRowProps {
   consumed: boolean;
   refusalTitle: string | null;
   refusalMessage: string | null;
+  /**
+   * The refusal is a failed edit the selection left: its badge is a button
+   * that brings it back (`context.reopenRefusal`), as the trailing "not
+   * built" row is for a new step.
+   */
+  refusalReopens: boolean;
   suppressed: boolean;
   rollbackActive: boolean;
   hidden: boolean;
@@ -628,6 +644,7 @@ const HistoryRow = memo(function HistoryRow({
   consumed,
   refusalTitle,
   refusalMessage,
+  refusalReopens,
   suppressed,
   rollbackActive,
   hidden,
@@ -832,7 +849,7 @@ const HistoryRow = memo(function HistoryRow({
                   {spoken.qualifier ? `, ${spoken.qualifier}` : ''}
                 </span>
               )}
-              {refusalTitle !== null && (
+              {refusalTitle !== null && !refusalReopens && (
                 <span
                   className="feature-flag error history-row-refused"
                   role="status"
@@ -842,6 +859,22 @@ const HistoryRow = memo(function HistoryRow({
                   <span>edit not applied</span>
                 </span>
               )}
+            </button>
+          )}
+          {refusalTitle !== null && refusalReopens && !renaming && (
+            // Beside the row's own button, not in it (a button cannot hold
+            // one): the step is still selected by its name, and this badge
+            // brings back the refused edit of it.
+            <button
+              type="button"
+              className="feature-flag error history-row-refused is-reopen"
+              data-own-enter=""
+              title={`${refusalTitle} not applied: ${refusalMessage} Reopen the edit to see why and choose what to do.`}
+              aria-label={`${refusalTitle}, edit not applied. Reopen it`}
+              onClick={() => context.current!.reopenRefusal?.()}
+            >
+              {ROW_ALERT_ICON}
+              <span>edit not applied</span>
             </button>
           )}
           {expanded && (
@@ -1804,7 +1837,8 @@ export function HistoryTimeline({
     onEditSketch,
     onToggleFeatureSuppression,
     onToggleSketchVisibility,
-    onToggleBodyVisibility
+    onToggleBodyVisibility,
+    reopenRefusal: pendingStep?.onReopen
   };
 
   return (
@@ -2010,6 +2044,7 @@ export function HistoryTimeline({
               consumed={consumed}
               refusalTitle={refusedEdit ? pendingStep.title : null}
               refusalMessage={refusedEdit ? pendingStep.message : null}
+              refusalReopens={refusedEdit && pendingStep.onReopen !== undefined}
               suppressed={suppressed}
               rollbackActive={index === committedEnd && committedEnd < last}
               hidden={hidden}
@@ -2061,10 +2096,24 @@ export function HistoryTimeline({
       </div>
       {pendingStep &&
         !filtering &&
-        !features.some((feature) => feature.featureId === editingFeatureId) && (
-          // Outside the list: the handle, spine and keyboard walk measure
-          // `.feature-row`s, and this is not a step that can be selected,
-          // rolled back to or reordered.
+        !features.some((feature) => feature.featureId === editingFeatureId) &&
+        // Outside the list: the handle, spine and keyboard walk measure
+        // `.feature-row`s, and this is not a step that can be selected,
+        // rolled back to or reordered.
+        (pendingStep.onReopen ? (
+          <button
+            type="button"
+            className="history-pending-row"
+            data-own-enter=""
+            title={`${pendingStep.message} Reopen the edit to see why and choose what to do.`}
+            aria-label={`${pendingStep.title}, not built. Reopen it`}
+            onClick={pendingStep.onReopen}
+          >
+            <AlertTriangle size={13} aria-hidden="true" />
+            <span className="history-pending-name">{pendingStep.title}</span>
+            <span className="history-pending-state">not built</span>
+          </button>
+        ) : (
           <div
             className="history-pending-row"
             role="status"
@@ -2074,7 +2123,7 @@ export function HistoryTimeline({
             <span className="history-pending-name">{pendingStep.title}</span>
             <span className="history-pending-state">not built</span>
           </div>
-        )}
+        ))}
       {features.length > 0 && (pendingFeature || latestOutOfView) && (
         // Floats at the foot of the panel, where the end is, and reserves no
         // row of its own; only while the end is out of view.

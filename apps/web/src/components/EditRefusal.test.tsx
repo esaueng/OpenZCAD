@@ -78,3 +78,40 @@ describe('EditRefusal reproduction export', () => {
     ).toBeNull();
   });
 });
+
+// Recording review: "Edit not applied" in the top bar led only to the log;
+// it now reopens the failed edit and asks its Why to open.
+describe('EditRefusal reveal request', () => {
+  it('opens the Why when asked, on mount and again after it was closed', () => {
+    const { rerender } = render(
+      <EditRefusal
+        operation={refused()}
+        variant="bar"
+        unitLabel="mm"
+        revealRequest={1}
+      />
+    );
+    const why = screen.getByRole('button', { name: 'Why?' });
+    expect(why).toHaveAttribute('aria-expanded', 'true');
+    expect(why).toHaveFocus();
+    fireEvent.click(why);
+    expect(why).toHaveAttribute('aria-expanded', 'false');
+    rerender(
+      <EditRefusal
+        operation={refused()}
+        variant="bar"
+        unitLabel="mm"
+        revealRequest={2}
+      />
+    );
+    expect(why).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('stays closed without a request', () => {
+    render(<EditRefusal operation={refused()} variant="bar" unitLabel="mm" />);
+    expect(screen.getByRole('button', { name: 'Why?' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+  });
+});

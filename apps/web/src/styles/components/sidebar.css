@@ -1325,6 +1325,24 @@
   cursor: help;
 }
 
+/* A failed edit the selection left: the row reopens it. */
+button.history-pending-row {
+  width: calc(100% - 20px);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+button.history-pending-row:hover {
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+
+button.history-pending-row:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
 .history-pending-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -1348,6 +1366,28 @@
   color: var(--color-error-text);
   font-size: var(--fs-xs);
   white-space: nowrap;
+}
+
+/* Set aside by a selection change, the badge brings the edit back. It sits
+   beside the row's own button, so it is a control of its own. */
+button.history-row-refused.is-reopen {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+button.history-row-refused.is-reopen:hover {
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+
+button.history-row-refused.is-reopen:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 /* The row's actions open over the value's end on hover or keyboard focus

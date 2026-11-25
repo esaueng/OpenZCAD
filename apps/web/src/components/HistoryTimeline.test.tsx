@@ -9,6 +9,7 @@ import {
 import userEvent from '@testing-library/user-event';
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { controlOwnsEnter } from '../lib/exactEntryShortcut';
 import {
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY
@@ -238,6 +239,67 @@ describe('HistoryTimeline', () => {
     );
     expect(container.querySelector('.history-pending-row')).not.toBeNull();
     expect(row('Feature 2')).not.toHaveClass('is-editing');
+  });
+
+  // Recording review: clicking empty space after "Choice required" took the
+  // "not built" row and its choice away. Set aside, the row stays and
+  // brings the edit back.
+  it('reopens a failed edit the selection left from its row', () => {
+    const onReopen = vi.fn();
+    const { container } = renderTimeline({
+      pendingStep: {
+        title: 'Offset Face',
+        message: 'Choose how the chamfered rim moves.',
+        onReopen
+      }
+    });
+    const reopen = screen.getByRole('button', {
+      name: 'Offset Face, not built. Reopen it'
+    });
+    expect(reopen).toHaveClass('history-pending-row');
+    // Review: Enter on it with a Box command running created the Box.
+    expect(controlOwnsEnter(reopen)).toBe(true);
+    expect(reopen).toHaveAttribute(
+      'title',
+      'Choose how the chamfered rim moves. Reopen the edit to see why and choose what to do.'
+    );
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(4);
+    fireEvent.click(reopen);
+    expect(onReopen).toHaveBeenCalledOnce();
+  });
+
+  // Review: a refused Resize Body set aside by a selection change marked its
+  // Box row "edit not applied", but nothing on that row brought it back, and
+  // the existing step hides the trailing "not built" row that did.
+  it('reopens a set-aside refused edit of an existing step from its badge', () => {
+    const onReopen = vi.fn();
+    const { container } = renderTimeline({
+      editingFeatureId: 'feature-2',
+      pendingStep: {
+        title: 'Resize Body',
+        message: '“Chamfer” can’t follow this change.',
+        onReopen
+      }
+    });
+    expect(container.querySelector('.history-pending-row')).toBeNull();
+    const edited = row('Feature 2');
+    const reopen = within(edited).getByRole('button', {
+      name: 'Resize Body, edit not applied. Reopen it'
+    });
+    expect(reopen).toHaveClass('history-row-refused');
+    expect(controlOwnsEnter(reopen)).toBe(true);
+    expect(reopen).toHaveTextContent('edit not applied');
+    expect(reopen).toHaveAttribute(
+      'title',
+      'Resize Body not applied: “Chamfer” can’t follow this change. Reopen the edit to see why and choose what to do.'
+    );
+    // Beside the row's own button, never nested in it.
+    expect(reopen.closest('.feature-row-main')).toBeNull();
+    expect(container.querySelectorAll('.history-row-refused')).toHaveLength(1);
+    reopen.focus();
+    expect(reopen).toHaveFocus();
+    fireEvent.click(reopen);
+    expect(onReopen).toHaveBeenCalledOnce();
   });
 
   it('names a Boolean row by the bodies it combined', () => {
