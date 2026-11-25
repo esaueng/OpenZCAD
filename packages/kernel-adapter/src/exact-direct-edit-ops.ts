@@ -134,6 +134,10 @@ import {
   holeMouthRimsCarried
 } from './exact-offset-face-hole-mouth';
 import {
+  detachedSupportCarry,
+  detachedSupportCarryRefusal
+} from './exact-offset-face-detached-carry';
+import {
   offsetBlendMoveRefusalOf,
   offsetFaceRefusalOf
 } from './exact-offset-face-refusal';
@@ -1956,6 +1960,15 @@ function offsetFaces(
         modelingOperationRefusal('offset_face', error, message, 'direct-edit')
       );
     }
+    // Same guard as a single offset: no detached support may ride along.
+    const carry = detachedSupportCarry(
+      kernel,
+      body,
+      Array.from(faces),
+      moved.solid,
+      scale(group[0]!.normal, offset)
+    );
+    if (carry) throw detachedSupportCarryRefusal(offset, carry);
     const exactMap =
       moved.relation && !moved.relation.inferred ? moved.relation : null;
     // Carry the faces still to move through this step's journal face map.
@@ -2674,6 +2687,19 @@ export function applyDirectEdit(
       )
     ) {
       throw holeChamferNotCarriedRefusal(offset);
+    }
+    // The kernel can also return a clean, exact body that translated a
+    // separate curved support (a boss joined to the face by a fillet) with
+    // the face instead of re-solving the blend between them.
+    if (exactCap === null && !sweptPastCollision) {
+      const carry = detachedSupportCarry(
+        kernel,
+        solid,
+        [face],
+        output,
+        scale(geometry.normal, offset)
+      );
+      if (carry) throw detachedSupportCarryRefusal(offset, carry);
     }
     // Closure and volume checks still accept Remus's triangulated fallback.
     // Preserve the last exact body instead of committing/exporting its facets.
