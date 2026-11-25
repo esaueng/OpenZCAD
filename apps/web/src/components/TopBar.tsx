@@ -287,7 +287,8 @@ function PresenceGlyph({
 /**
  * The wide bar spends about 170px on the wordmark and the "Saved" word. A
  * long project name would be cut short for them, so where it would be, the
- * bar drops both — as it does for every name below 1200px (responsive.css,
+ * bar drops both, then an actionable status's words, then the mode and
+ * action labels — as it does for every name below 1200px (responsive.css,
  * topbar.css). Measured with the full identity in place, so the answer
  * never depends on itself, and written straight to the header: the toggle
  * and the measure happen in one layout pass, with no render between.
@@ -306,6 +307,7 @@ function fitProjectName(topbar: HTMLElement) {
   const cut = () => name.scrollWidth > name.clientWidth;
   delete topbar.dataset.nameRoom;
   delete topbar.dataset.saveRoom;
+  delete topbar.dataset.labelRoom;
   if (!cut()) {
     return;
   }
@@ -313,8 +315,17 @@ function fitProjectName(topbar: HTMLElement) {
   // Still cut without them: an actionable status ("Save to my account")
   // folds to its glyph too (topbar.css). Below 1200px the wordmark is
   // already gone, so at a 1000px window this is the step that frees room.
+  if (!cut()) {
+    return;
+  }
+  topbar.dataset.saveRoom = 'glyph';
+  // Still cut: the mode switch and the action row shed their words, as the
+  // whole bar does below 960px (view-mode.css, responsive.css). The labelled
+  // switch is about 220px wider than its icons, and the flanks are equal,
+  // so the name gains half of that. The name outranks the labels: the
+  // tooltips and accessible names still carry them.
   if (cut()) {
-    topbar.dataset.saveRoom = 'glyph';
+    topbar.dataset.labelRoom = 'glyph';
   }
 }
 
@@ -854,6 +865,8 @@ export function TopBar({
   useLayoutEffect(() => {
     if (topbarRef.current) {
       fitProjectName(topbarRef.current);
+      // Fitting may drop or restore the mode labels, which moves the thumb.
+      placeModeThumb(topbarRef.current);
     }
   }, [
     projectName,
