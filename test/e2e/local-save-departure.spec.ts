@@ -478,14 +478,21 @@ async function takeOverFromSilentOwner(
   await expect(status).toContainText('Reload or close it to edit here.', {
     timeout: 15_000
   });
-  await second
-    .getByRole('button', { name: 'Take over editing', exact: true })
-    .click();
+  // Reached by keyboard too: moving focus to it does not ask again.
+  const takeOver = second.getByRole('button', {
+    name: 'Take over editing',
+    exact: true
+  });
+  await takeOver.focus();
+  await second.keyboard.press('Shift+Tab');
+  await second.keyboard.press('Tab');
+  await expect(takeOver).toBeVisible();
+  await takeOver.click();
   const confirm = second.getByRole('alertdialog', {
     name: 'Take over editing in this tab?'
   });
   await expect(confirm).toContainText(
-    "any edits it hasn't saved yet will be lost"
+    "edits it hasn't saved yet may be lost"
   );
   await confirm
     .getByRole('button', { name: 'Take over editing', exact: true })

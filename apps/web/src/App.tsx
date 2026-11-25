@@ -8712,6 +8712,8 @@ export function App() {
 
   /** True while Take over editing waits for the user's answer. */
   const editingTakeoverAskingRef = useRef(false);
+  /** True while Take over editing is offered beside the status. */
+  const editingTakeoverOfferedRef = useRef(false);
   /**
    * Takes the open project from a tab that never answered the request to
    * hand it over: asked first, since what that tab has not saved is lost.
@@ -8734,7 +8736,7 @@ export function App() {
     try {
       confirmed = await confirmInPage({
         title: 'Take over editing in this tab?',
-        body: "The other tab stops editing this project, and any edits it hasn't saved yet will be lost. Close that tab afterwards: one opened before this version of OpenZCAD can't tell that it was stopped.",
+        body: "The other tab stops editing this project, and edits it hasn't saved yet may be lost. A tab on this version of OpenZCAD keeps them as a separate project; one opened before it can't tell it was stopped, so close that tab afterwards.",
         confirmLabel: 'Take over editing'
       });
     } finally {
@@ -8948,6 +8950,16 @@ export function App() {
     // click of its own); arriving in the tab moves editing quietly.
     const focused = () => ask(false);
     const pressed = (event: Event) => {
+      // Moving focus (Tab, Shift+Tab) toward Take over editing is not an
+      // attempt to act: asking again would replace the notice, and the
+      // button with it, before focus got there.
+      if (
+        editingTakeoverOfferedRef.current &&
+        event instanceof KeyboardEvent &&
+        (event.key === 'Tab' || event.key === 'Shift')
+      ) {
+        return;
+      }
       // Take over editing is its own request, made on click: asked again
       // on its press, the notice it sits beside would be replaced first.
       if (
@@ -38100,6 +38112,15 @@ export function App() {
     : parameterPreview
       ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
       : status;
+  // Take over editing, beside the notice that the tab editing the project
+  // never answered: not for a busy owner (declined), which answers again,
+  // nor a shared or encrypted member's project, which keeps the one-tab lock.
+  const editingTakeoverOffered =
+    visibleStatus === PROJECT_EDITING_UNANSWERED_NOTICE &&
+    projectOpenElsewhere &&
+    !sharedAccountProject &&
+    !encryptedMemberProject;
+  editingTakeoverOfferedRef.current = editingTakeoverOffered;
   const tone: 'ready' | 'warning' | 'running' =
     textOutlineBudgetError || geometry.state.phase === 'failed'
       ? 'warning'
@@ -42022,14 +42043,8 @@ export function App() {
                 ? handleUndo
                 : undefined
             }
-            // Only once the tab editing the project never answered: a busy
-            // owner (declined) answers again, and a shared or encrypted
-            // member's project keeps the one-tab lock.
             statusAction={
-              visibleStatus === PROJECT_EDITING_UNANSWERED_NOTICE &&
-              projectOpenElsewhere &&
-              !sharedAccountProject &&
-              !encryptedMemberProject
+              editingTakeoverOffered
                 ? {
                     id: EDITING_TAKEOVER_ACTION,
                     label: 'Take over editing',

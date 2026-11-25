@@ -261,6 +261,10 @@
   box-shadow: var(--shadow-2);
   font-size: var(--fs-xs);
   font-weight: 600;
+  /* A fixed-height pill: a wrapped label ("Take over editing" on a phone)
+     spilled out of it. The status text beside it gives way instead. */
+  white-space: nowrap;
+  flex: none;
   cursor: pointer;
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
