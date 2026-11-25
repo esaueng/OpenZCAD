@@ -61,7 +61,7 @@ async function setHeight(page: Page, height: number) {
     if (!(await keypad.isVisible())) {
       // A face starts on Offset; this types the gear's Total height.
       const tag = page.getByTestId('direct-manipulation-mode');
-      if (/^Offset/.test(await tag.innerText({ timeout: 5000 })))
+      if (/^Offset ▾/.test(await tag.innerText({ timeout: 5000 })))
         await tag.click({ timeout: 5000 });
       await expect(tag).toHaveText(/^Total/, { timeout: 1000 });
       await page

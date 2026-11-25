@@ -319,6 +319,7 @@ import {
   laneLeavesRoom,
   pinChipPairStart,
   faceOffsetChipState,
+  offsetChipTag,
   offsetChipText,
   offsetLimitChipText,
   offsetTotalReading,
@@ -6199,19 +6200,23 @@ export function ModelViewer({
         event.stopPropagation();
         const span =
           offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
-        if (span !== null && span !== undefined) {
-          offsetChipModeRef.current =
-            offsetChipModeRef.current === 'total' ? 'offset' : 'total';
-          // The switch belongs to the face it was made on.
-          const handle = offsetHandleRef.current;
-          offsetChipChosenRef.current = offsetChipModeRef.current;
-          offsetChipFaceRef.current = handle;
-          // Open exact entry edits what the chip shows, so it switches with
-          // it: left alone it kept the other mode's label and prefill, and
-          // its Apply read the number in that mode.
-          if (keypadAnchorRef.current) openExactEntry();
-          requestRender();
+        if (span === null || span === undefined) {
+          // A face with no Total names its mode without a switch; like the
+          // radius line's name, the tag then opens exact entry.
+          handleChipClick();
+          return;
         }
+        offsetChipModeRef.current =
+          offsetChipModeRef.current === 'total' ? 'offset' : 'total';
+        // The switch belongs to the face it was made on.
+        const handle = offsetHandleRef.current;
+        offsetChipChosenRef.current = offsetChipModeRef.current;
+        offsetChipFaceRef.current = handle;
+        // Open exact entry edits what the chip shows, so it switches with
+        // it: left alone it kept the other mode's label and prefill, and
+        // its Apply read the number in that mode.
+        if (keypadAnchorRef.current) openExactEntry();
+        requestRender();
         return;
       }
       handleChipClick();
@@ -9668,25 +9673,31 @@ export function ModelViewer({
       chip.setAttribute('aria-invalid', String(offsetWarning));
       // What the tag beside the value says, when there is a line to name:
       // the radius line's Diameter/Radius, or the offset line's Total/Offset
-      // switch (only a switch when a span is known to switch to).
+      // switch (only a switch when a span is known to switch to; otherwise
+      // it still names Offset). A sketch region's arrow shares the face rig
+      // but reads only the signed distance, so it names no mode.
+      const offsetSpan =
+        offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
+      const faceOffsetTag =
+        rig?.kind === 'offset-face' &&
+        !(offsetRigRef.current && offsetRigRef.current === regionRigRef.current)
+          ? offsetChipTag(
+              offsetChipModeRef.current,
+              offsetSpan !== null && offsetSpan !== undefined
+            )
+          : null;
       let tagText: string | null = null;
       if (rig?.kind === 'cylinder-radius') {
         tagText =
           cylinderDimensionModeRef.current === 'diameter'
             ? 'Diameter'
             : 'Radius';
-      } else if (rig?.kind === 'offset-face' && lineAngle !== null) {
-        tagText =
-          offsetChipModeRef.current === 'total' ? 'Total ▾' : 'Offset ▾';
+      } else if (faceOffsetTag && lineAngle !== null) {
+        tagText = faceOffsetTag.text;
       }
       // The tag decides what a typed number means, so it says so on hover
       // rather than flipping between Total and Offset unexplained.
-      const tagTitle =
-        rig?.kind !== 'offset-face'
-          ? ''
-          : offsetChipModeRef.current === 'total'
-            ? 'Total: a typed value is the size this face sets · Switch to Offset to type how far it moves'
-            : 'Offset: a typed value is how far the face moves · Switch to Total to type the size it sets';
+      const tagTitle = faceOffsetTag?.title ?? '';
       if (radiusLabelChip.title !== tagTitle) radiusLabelChip.title = tagTitle;
       if (lineAngle !== null) {
         // Both pills ride the line, rotated to read along it: the tag first,
@@ -9766,8 +9777,6 @@ export function ModelViewer({
             : screen.x,
           screen.y
         );
-        const offsetSpan =
-          offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
         const edgeTag =
           rig?.kind === 'edge-radius' && !edgeHandleRef.current?.label
             ? edgeHandleOpRef.current === 'fillet'
@@ -9777,9 +9786,7 @@ export function ModelViewer({
         if (
           rig?.kind === 'cylinder-radius' ||
           edgeTag !== null ||
-          (rig?.kind === 'offset-face' &&
-            offsetSpan !== null &&
-            offsetSpan !== undefined)
+          faceOffsetTag !== null
         ) {
           // Beside the pin the tag stays reachable — the Total/Offset or
           // Fillet/Chamfer switch, or the Diameter/Radius name that also
@@ -9790,9 +9797,7 @@ export function ModelViewer({
               ? (tagText ?? '')
               : edgeTag !== null
                 ? edgeTag
-                : offsetChipModeRef.current === 'total'
-                  ? 'Total ▾'
-                  : 'Offset ▾'
+                : (faceOffsetTag?.text ?? '')
           );
           if (pinScreenAt) {
             // The pair reads tag then value and stays clear of the pin: on
