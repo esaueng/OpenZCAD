@@ -63,6 +63,7 @@
   "encrypted-projects.spec.ts": 14,
   "encrypted-room.spec.ts": 15,
   "encrypted-share-links.spec.ts": 21,
+  "encrypted-sharing.spec.ts": 60,
   "encrypted-link-comments.spec.ts": 25,
   "encrypted-content-blobs.spec.ts": 15,
   "encryption-device-approval.spec.ts": 7,

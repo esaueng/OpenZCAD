@@ -30,6 +30,7 @@ const seen = (overrides: Partial<ContactPin> = {}): ContactPin => ({
   keyChanged: false,
   seenAt: 100,
   verifiedHere: null,
+  trustedHere: null,
   ...overrides
 });
 
@@ -631,6 +632,80 @@ describe('contact pins', () => {
       );
       expect(
         (await pins.readContact('me', 'bob'))?.verifiedHere,
+        name
+      ).toBeNull();
+    }
+  });
+
+  it('write by compare-and-set and keep an alarm until an explicit Trust or Verify (PR 2057 review)', async () => {
+    for (const [name, pins] of await stores()) {
+      await pins.advanceContact('me', seen());
+      const read = await pins.readContact('me', 'bob');
+      // Another tab records an alarm for a replacement identity.
+      expect(
+        await pins.advanceContact(
+          'me',
+          seen({ identityKeyHash: H('c'), keyChanged: true }),
+          { replaceIdentity: true, expected: read }
+        ),
+        name
+      ).toBe(true);
+      // A stale tab that read the old pin cannot overwrite it.
+      expect(
+        await pins.advanceContact(
+          'me',
+          seen({ sequence: 3, entryHash: H('3') }),
+          { replaceIdentity: true, expected: read }
+        ),
+        name
+      ).toBe(false);
+      const alarmed = await pins.readContact('me', 'bob');
+      expect(alarmed, name).toMatchObject({
+        identityKeyHash: H('c'),
+        keyChanged: true
+      });
+      // A later lookup of the same identity keeps the alarm.
+      await pins.advanceContact(
+        'me',
+        seen({ identityKeyHash: H('c'), sequence: 3, entryHash: H('3') }),
+        { replaceIdentity: true, expected: alarmed }
+      );
+      expect((await pins.readContact('me', 'bob'))?.keyChanged, name).toBe(
+        true
+      );
+      // Only an explicit Trust or Verify clears it.
+      await pins.advanceContact(
+        'me',
+        seen({ identityKeyHash: H('c'), sequence: 3, entryHash: H('3') }),
+        { replaceIdentity: true, clearAlarm: true }
+      );
+      expect((await pins.readContact('me', 'bob'))?.keyChanged, name).toBe(
+        false
+      );
+    }
+  });
+
+  it('keep a trust signed here until the identity changes', async () => {
+    for (const [name, pins] of await stores()) {
+      await pins.advanceContact(
+        'me',
+        seen({ keyChanged: false, trustedHere: H('a') })
+      );
+      // Inspecting again keeps the trust, under the same identity only.
+      await pins.advanceContact(
+        'me',
+        seen({ sequence: 3, entryHash: H('3'), keyChanged: true })
+      );
+      expect((await pins.readContact('me', 'bob'))?.trustedHere, name).toBe(
+        H('a')
+      );
+      await pins.advanceContact(
+        'me',
+        seen({ identityKeyHash: H('c'), keyChanged: true }),
+        { replaceIdentity: true }
+      );
+      expect(
+        (await pins.readContact('me', 'bob'))?.trustedHere,
         name
       ).toBeNull();
     }

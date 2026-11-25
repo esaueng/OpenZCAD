@@ -3,8 +3,10 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor
+  waitFor,
+  within
 } from '@testing-library/react';
+import { generateRecoveryKey } from '@openzcad/crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InvitationPassResult } from '../lib/e2ee/invitationRunner';
 
@@ -19,6 +21,7 @@ import type { InvitationPassResult } from '../lib/e2ee/invitationRunner';
 const loadEncryption = vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const acceptEncryptedInvitation =
   vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const trustInvitationOwner = vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const syncInvitationsNow = vi.fn<() => Promise<InvitationPassResult | null>>();
 const clearPendingEncryptedInvitation = vi.fn<() => void>();
 const pendingEncryptedInvitation = vi.fn<() => string | null>();
@@ -28,7 +31,15 @@ const requestContactVerification = vi.fn<(userId: string) => void>();
 let passListener: ((result: InvitationPassResult) => void) | null = null;
 
 vi.mock('../lib/e2ee/accountKeys', () => ({
-  loadEncryption: (...args: unknown[]) => loadEncryption(...args)
+  loadEncryption: (...args: unknown[]) => loadEncryption(...args),
+  EncryptionFlowError: class EncryptionFlowError extends Error {
+    constructor(
+      readonly code: string,
+      message: string
+    ) {
+      super(message);
+    }
+  }
 }));
 vi.mock('../lib/e2ee/e2eeApi', () => ({ createE2eeApi: () => ({}) }));
 vi.mock('../lib/e2ee/keychainDeviceKeys', () => ({
@@ -45,7 +56,8 @@ vi.mock('../lib/e2ee/encryptedProjects', () => ({
 }));
 vi.mock('../lib/e2ee/invitations', () => ({
   acceptEncryptedInvitation: (...args: unknown[]) =>
-    acceptEncryptedInvitation(...args)
+    acceptEncryptedInvitation(...args),
+  trustInvitationOwner: (...args: unknown[]) => trustInvitationOwner(...args)
 }));
 vi.mock('../lib/e2ee/encryptedInvitationLink', () => ({
   clearPendingEncryptedInvitation: () => clearPendingEncryptedInvitation(),
@@ -131,6 +143,7 @@ function landing(
 beforeEach(() => {
   loadEncryption.mockReset();
   acceptEncryptedInvitation.mockReset();
+  trustInvitationOwner.mockReset();
   syncInvitationsNow.mockReset();
   syncInvitationsNow.mockResolvedValue(listed());
   clearPendingEncryptedInvitation.mockReset();
@@ -191,7 +204,80 @@ describe('SharedWithYouDialog', () => {
     expect(acceptEncryptedInvitation).not.toHaveBeenCalled();
   });
 
-  it('says what the owner verification still waits for, and leads there', async () => {
+  it('asks for an owner new to this account to be confirmed with one signature, never on its own (ADR-024 amendment 2026-11-25)', async () => {
+    loadEncryption.mockResolvedValue(ready);
+    acceptEncryptedInvitation.mockResolvedValue({ invitation, linked: true });
+    const entry = {
+      record: invitation,
+      state: 'confirm-owner',
+      ownerPinned: false
+    } as unknown as InvitationPassResult['incoming'][number];
+    syncInvitationsNow.mockResolvedValue(pass({ incoming: [entry] }));
+    let passed: unknown = null;
+    trustInvitationOwner.mockImplementation(async (...args: unknown[]) => {
+      passed = (args[2] as Uint8Array).slice();
+    });
+    const { formatted, secret } = await generateRecoveryKey();
+    landing();
+    expect(await screen.findByText(/is new to you/)).toBeTruthy();
+    expect(trustInvitationOwner).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Confirm the project owner'
+    });
+    fireEvent.change(within(dialog).getByLabelText('Recovery key'), {
+      target: { value: formatted }
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(trustInvitationOwner).toHaveBeenCalledOnce());
+    expect(trustInvitationOwner.mock.calls[0]![1]).toBe(entry);
+    expect(passed).toEqual(secret);
+  });
+
+  it('refuses to sign when the listing changes while the confirmation is open (PR 2057 review)', async () => {
+    loadEncryption.mockResolvedValue(ready);
+    acceptEncryptedInvitation.mockResolvedValue({ invitation, linked: true });
+    const entry = {
+      record: invitation,
+      state: 'confirm-owner',
+      ownerPinned: false,
+      statementHash: '11'.repeat(32),
+      ownerIdentityKeyHash: 'aa'.repeat(32)
+    } as unknown as InvitationPassResult['incoming'][number];
+    syncInvitationsNow.mockResolvedValue(pass({ incoming: [entry] }));
+    trustInvitationOwner.mockResolvedValue(undefined);
+    const { formatted } = await generateRecoveryKey();
+    landing();
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Confirm the project owner'
+    });
+    // A replacement statement, under another owner identity and the same
+    // invitation id and state, is listed while the dialog is open.
+    act(() =>
+      passListener?.(
+        pass({
+          incoming: [
+            {
+              ...entry,
+              statementHash: '22'.repeat(32),
+              ownerIdentityKeyHash: 'bb'.repeat(32)
+            }
+          ]
+        })
+      )
+    );
+    fireEvent.change(within(dialog).getByLabelText('Recovery key'), {
+      target: { value: formatted }
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    expect((await within(dialog).findByRole('alert')).textContent).toMatch(
+      /changed since you reviewed it/
+    );
+    expect(trustInvitationOwner).not.toHaveBeenCalled();
+  });
+
+  it('leads to the code comparison when the owner’s keys changed', async () => {
     loadEncryption.mockResolvedValue(ready);
     acceptEncryptedInvitation.mockResolvedValue({ invitation, linked: true });
     syncInvitationsNow.mockResolvedValue(
@@ -199,7 +285,7 @@ describe('SharedWithYouDialog', () => {
         incoming: [
           {
             record: invitation,
-            state: 'verify-owner'
+            state: 'owner-keys-changed'
           } as unknown as InvitationPassResult['incoming'][number]
         ]
       })

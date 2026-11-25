@@ -12,7 +12,11 @@ packet was written, and the review target commit (below) is what counts.
 The ADR is the design record. Where the code and the ADR differ, the code
 and the ADR's
 [amendment of 2026-10-24](../adrs/ADR-024-end-to-end-encrypted-projects.md#amendment-2026-10-24-project-data)
-describe what is built; please report any difference you find.
+describe what is built; please report any difference you find. Invitations
+follow the
+[amendment of 2026-11-25](../adrs/ADR-024-end-to-end-encrypted-projects.md#amendment-2026-11-25-trust-on-first-use-for-invitations)
+(trust on first use): nobody has to compare codes before an invitation
+completes, and a changed identity blocks instead (§3.10, §6, question 14).
 
 ## 1. Scope and target
 
@@ -355,12 +359,22 @@ the browser side first, then the Worker's defense in depth.
 
 - Identity-signed, hash-chained contacts list: `signContactsEntry`,
   `nextContactsEntry`, `verifyContactsList`, `contactDeviceListPin` in
-  `packages/crypto/src/contacts.ts`; comparison code
+  `packages/crypto/src/contacts.ts`. The 2026-11-25 amendment adds the
+  `trust` action (trusted on first use, not verified; record status
+  `trusted`), encoded as entry version 2 (`CONTACTS_ENTRY_VERSION_2`, the
+  version 1 layout with action 5; other actions stay version 1), with a
+  fixed vector in `vectors.test.ts`. A trust never follows a verification
+  of the same contact without its key change; comparison code
   `contactVerificationCode` (identity key plus device-list head) and
   `formatComparisonCode` in `codes.ts`, never below 128 bits.
-- Browser: `inspectContact`, `verifyContact`, `recordKeyChange`,
-  `untrustContact`, `verifiedEncryptionKey` in
-  `apps/web/src/lib/e2ee/contacts.ts`; seen pins and list pins in
+- Browser: `inspectContact` (`ContactView.pinned`: the signed list pins
+  this identity, verified or trusted, and it counts here), `verifyContact`,
+  `trustContact` (the signed first-use trust and Trust new keys, recording a
+  verified identity's key change first), `recordKeyChange`,
+  `untrustContact` and `verifiedEncryptionKey` (still verified only) in
+  `apps/web/src/lib/e2ee/contacts.ts`; seen pins (`ContactPin.trustedHere`:
+  a trust signed on this browser, which an unconfirmed list pin needs) and
+  list pins in
   `contactPins.ts` (database `openzcad-e2ee-contacts`); UI
   `EncryptionContacts.tsx`. Worker: `apps/web/worker/e2eeContacts.ts`.
 
@@ -455,17 +469,34 @@ the browser side first, then the Worker's defense in depth.
   signed acceptance
   (`signInvitationAcceptance`, `verifyInvitationAcceptance`, "OZJ") in
   `packages/crypto/src/invitations.ts`.
-- Browser: `inviteToEncryptedProject` (email-only unless the owner
-  explicitly picks a verified contact, which `invitableContacts` offers by
-  contact code for the typed address; then binds that identity),
+- Trust on first use (amendment 2026-11-25): nothing below requires a
+  verified contact any more; the signed contacts list is the only
+  cross-device trust store. Someone it pins (`InvitationPerson.firstUse`
+  `known`) is added or joined automatically; someone new (`confirm-new` for
+  the owner, `confirm-owner` or a Join for the invitee) only after the
+  user's one signed confirmation (`trustPerson`, `trustInvitationOwner`),
+  never in the background. Verification is shown (`acceptor.verified`,
+  `ownerVerified`, `peopleTrust`), and a person whose identity is not the
+  one pinned for them (`InvitationPerson.keyChanged`) is never added,
+  signed for or published for (`keys-changed`, `owner-keys-changed`),
+  rechecked at Commit time against the signed list and this browser's
+  contact pin.
+- Browser: `inviteToEncryptedProject` (email-only from the sharing dialog;
+  a caller may still bind a verified contact's identity, version 3),
   `acceptEncryptedInvitation` (records intent only when the returned
   statement names the opened link's token, and keeps that token's hash: a
-  link intent without it counts for nothing), `confirmEncryptedInvitation`
-  (the explicit Join, from the verified statement, naming the inviter by
-  their contact code), `publishInvitationKeyPackages`, `addInvitedMember`
-  (automatic only for a statement bound to the accepting identity in a
-  project whose removal history this browser saw; otherwise only with the
-  owner's `confirmedIdentity`), `declineInvitation`,
+  link intent without it counts for nothing; the opened link is the
+  acceptance, with no click), `confirmEncryptedInvitation`
+  (the explicit Join of a listed invitation, from the verified statement,
+  naming the inviter by their contact code), `publishInvitationKeyPackages`
+  (under an owner identity first seen now or unchanged), `addInvitedMember`
+  (automatic for any valid signed acceptance by an unchanged identity, and
+  for a version 3 statement only by the identity it names, in a project
+  whose removal history this browser saw and for an account it never saw
+  removed; otherwise only with the owner's `confirmedIdentity`; never for a
+  changed identity, nor for someone the signed list does not pin), the
+  signed confirmations `trustPerson` and `trustInvitationOwner`,
+  `declineInvitation`,
   `completeReadyInvitations`, `joinWelcomedProjects` and the removal checks
   and removal-history marks that gate automatic adds across tabs
   (`invitationRemovalChecks`, `recordRemovedMembers`) in
@@ -730,13 +761,19 @@ and on the scenario and archive tests.
 
 ## 6. Known limitations and deferrals
 
-- **Which contact an address belongs to.** Contacts' addresses are the
-  server's labels (the signed contacts list names identities, not
-  addresses), so an address match is never bound by itself: it is only
-  offered to the owner as an explicit choice, shown by that contact's code,
-  and the default is an email-only invitation. Every unbound acceptance
-  needs the owner's confirmation by contact code. A migration's member
-  roster is likewise approved by contact code and signed role before
+- **Trust on first use for invitations** (amendment 2026-11-25). Neither
+  side compares codes: each confirms a person new to them once, signing a
+  `trust` entry into their contacts list (one passkey touch per new
+  person), and people already pinned are added or joined automatically. A
+  server that is actively malicious at that first introduction (it also
+  sends the email) can substitute an identity of its own; that is
+  detectable afterwards (codes differ, the member shows as Not verified
+  under its own code), not prevented. Once pinned, a changed identity
+  blocks automatic adds and joins until the user reviews it or trusts the
+  new keys, both signed. The signed pins share the contacts list's
+  fork-consistency limit. Contacts' addresses remain the server's labels, so
+  an address match is never bound into a statement by itself. A migration's
+  member roster is still approved by contact code and signed role before
   cutover.
 - **Removal history on other owner devices.** Only an owner device that
   created a project's group (with this version) adds automatically there;
@@ -897,6 +934,15 @@ and on the scenario and archive tests.
     the reverse path safe to keep until 8-5 deletes it?
 13. **Reproducibility.** Does `packages/mls/build.sh --check` reproduce
     `pkg/` byte for byte on your machine at the review commit?
+14. **Trust on first use.** Beyond the stated first-introduction bound, can
+    the server get an identity added or joined without a valid signed
+    acceptance of the exact owner-signed statement, or get a person whose
+    pinned identity changed added, signed for or published for without the
+    user's signed Review or Trust new keys (`InvitationPerson.keyChanged`,
+    `ContactView.pinned`, the `trust` entry rules in `applyEntry`)? Can
+    anything but an explicit user action sign a `trust` entry? Do the pins
+    hold across tabs and across the owner's other devices, beyond the
+    contacts list's fork-consistency limit?
 
 ## 8. Finding intake
 

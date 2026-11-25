@@ -5,7 +5,10 @@
  * `encryptedProjectStore.ts`) with the in-process MLS engine against the
  * real Worker routes over SQLite (migrations through 0038). Who is a
  * verified contact (slice 5-1's mutual comparison, covered by its own
- * tests and by Playwright) is the one input given here directly.
+ * tests and by Playwright), and whose pinned identity changed (the
+ * contact pins, likewise), are the inputs given here directly. Since the
+ * 2026-11-25 ADR-024 amendment neither is a condition for joining: trust
+ * on first use, with a changed identity blocking.
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -53,6 +56,8 @@ import {
   sentInvitations,
   signInvitationStatement,
   syncInvitations,
+  trustInvitationOwner,
+  trustPerson,
   type InvitationContext,
   type InvitationPerson
 } from '../apps/web/src/lib/e2ee/invitations';
@@ -124,6 +129,12 @@ interface World {
   mail: { to: string; token: string; text: string }[];
   /** Who each account has verified (slice 5-1's signed contacts list). */
   verified: Map<string, Set<string>>;
+  /** Whose pinned identity each account sees changed, not trusted again. */
+  changed: Map<string, Set<string>>;
+  /** Who is new to each account: its signed contacts list pins nobody. */
+  fresh: Map<string, Set<string>>;
+  /** Every signed trust entry, as `by:whom:identity` with its authorization. */
+  signed: { entry: string; authorization: unknown }[];
 }
 
 function world(): World {
@@ -136,7 +147,14 @@ function world(): World {
       .prepare('UPDATE users SET email = ? WHERE id = ?')
       .run(email, userId);
   }
-  return { srv, mail: [], verified: new Map() };
+  return {
+    srv,
+    mail: [],
+    verified: new Map(),
+    changed: new Map(),
+    fresh: new Map(),
+    signed: []
+  };
 }
 
 function host(w: World, userId: string): E2eeInvitationHost {
@@ -216,7 +234,16 @@ function invitationsOf(
           .map(([userId]) => personOf(w, d.account.userId, userId))
           .filter((person): person is InvitationPerson =>
             Boolean(person?.status === 'verified')
-          )
+          ),
+      // The signed trust entry: pins them for every device of the account.
+      trust: async (userId, identityKeyHash, authorization) => {
+        w.signed.push({
+          entry: `${d.account.userId}:${userId}:${identityKeyHash}`,
+          authorization
+        });
+        w.fresh.get(d.account.userId)?.delete(userId);
+        w.changed.get(d.account.userId)?.delete(userId);
+      }
     }
   };
 }
@@ -228,12 +255,35 @@ function personOf(
 ): InvitationPerson | null {
   const account = ACCOUNTS().find((a) => a.userId === userId);
   if (!account) return null;
+  const keyChanged = w.changed.get(by)?.has(userId) ?? false;
   return {
     userId,
     email: EMAILS[userId] ?? null,
-    status: w.verified.get(by)?.has(userId) ? 'verified' : 'seen',
-    list: account.list
+    status:
+      w.verified.get(by)?.has(userId) && !keyChanged ? 'verified' : 'seen',
+    list: account.list,
+    keyChanged,
+    firstUse: w.fresh.get(by)?.has(userId) ? 'new' : 'known'
   };
+}
+
+/** `whom` is new to `by`: the signed contacts list pins nobody for them. */
+function newTo(w: World, by: string, whom: string) {
+  const set = w.fresh.get(by) ?? new Set<string>();
+  set.add(whom);
+  w.fresh.set(by, set);
+}
+
+/** `by` sees `whom`'s pinned identity replaced (until `trust`). */
+function keysChanged(w: World, by: string, whom: string) {
+  const set = w.changed.get(by) ?? new Set<string>();
+  set.add(whom);
+  w.changed.set(by, set);
+}
+
+/** `by` trusts `whom`'s new keys ("Trust new keys"). */
+function trust(w: World, by: string, whom: string) {
+  w.changed.get(by)?.delete(whom);
 }
 
 /** The owner's explicit confirmation of the invitee's identity. */
@@ -276,8 +326,8 @@ const groupEpoch = (srv: Server, projectId: string) =>
  * made by a laptop that marks its removal history in `store`, as the page
  * does: it created the group, so it saw every removal.
  */
-async function ownersProject(w: World) {
-  const laptop = emailDevice(w, owner, 'owner_laptop', { members: [other] });
+async function ownersProject(w: World, members: readonly Account[] = [other]) {
+  const laptop = emailDevice(w, owner, 'owner_laptop', { members });
   const store = memoryInvitationStore();
   Object.assign(laptop.groups, {
     removalChecks: invitationRemovalChecks(store, OWNER)
@@ -316,7 +366,7 @@ async function invited(
 }
 
 describe('the invitation flow in the browser (slice 5-3b)', () => {
-  it('invites, verifies both ways and adds an invitee whose devices join by Welcome or rejoin', async () => {
+  it('invites and adds an invitee on first use, with no code comparison, whose devices join by Welcome or rejoin', async () => {
     const w = world();
     const { laptop, projectId, ownerCtx, invitation, invitee, inviteeCtx } =
       await invited(w, 'editor', { bind: false });
@@ -332,14 +382,15 @@ describe('the invitation flow in the browser (slice 5-3b)', () => {
       { state: 'waiting-for-keys', email: INVITEE_EMAIL }
     ]);
 
-    // The invitee compares codes with the owner before publishing anything.
-    expect(await acceptedInvitations(inviteeCtx)).toMatchObject([
-      { state: 'verify-owner', ownerEmail: OWNER_EMAIL }
-    ]);
-    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([]);
-    verify(w, OTHER, OWNER);
+    // Trust on first use: nobody compared codes, yet the invitee's browser
+    // accepts the owner the signed statement names and publishes.
+    expect(w.verified.size).toBe(0);
     const [ready] = await acceptedInvitations(inviteeCtx);
-    expect(ready).toMatchObject({ state: 'ready' });
+    expect(ready).toMatchObject({
+      state: 'ready',
+      ownerEmail: OWNER_EMAIL,
+      ownerVerified: false
+    });
     expect(ready!.record.groupEpoch).toBe(1);
     // Each online device publishes its own KeyPackage (M3); the tablet is
     // offline and will rejoin.
@@ -357,63 +408,27 @@ describe('the invitation flow in the browser (slice 5-3b)', () => {
       { state: 'waiting-for-owner' }
     ]);
 
-    // The owner's next session: waiting for the owner to verify.
+    // The owner's next session adds them, unverified and unasked: the
+    // statement names no identity, but a device of the account that
+    // accepted signed the acceptance, and this browser saw every removal.
     const outgoing = await sentInvitations(ownerCtx);
     expect(outgoing).toMatchObject([
       {
-        state: 'waiting-for-verification',
-        record: { keyPackages: 2, claimedKeyPackages: 0 }
-      }
-    ]);
-    // An unverified invitee is never added, and nothing is claimed.
-    await expect(
-      addInvitedMember(ownerCtx, outgoing[0]!.record)
-    ).rejects.toSatisfy(
-      (error: unknown) =>
-        error instanceof InvitationError && error.code === 'not-verified'
-    );
-    expect(
-      rows<{ claimed_at: string | null }>(
-        w.srv,
-        'SELECT claimed_at FROM e2ee_key_packages WHERE project_id = ?',
-        projectId
-      )
-    ).toEqual([{ claimed_at: null }, { claimed_at: null }]);
-    expect(await completeReadyInvitations(ownerCtx, outgoing)).toMatchObject({
-      added: []
-    });
-    expect(groupEpoch(w.srv, projectId)).toBe(1);
-
-    // Verified. The invitation went out before, so it names no identity:
-    // whoever the server delivered the link to, the owner confirms the
-    // contact who accepted, by the code Contacts shows for them.
-    verify(w, OWNER, OTHER);
-    const sync = await syncInvitations(ownerCtx);
-    expect(sync.errors).toEqual([]);
-    expect(sync.added).toEqual([]);
-    expect(sync.outgoing).toMatchObject([
-      {
-        state: 'confirm-add',
+        state: 'ready',
+        record: { keyPackages: 2, claimedKeyPackages: 0 },
         statement: { role: 'editor', projectId },
         acceptor: {
           userId: OTHER,
           identityKeyHash: otherIdentity(),
           code: (await ownVerificationCode({ list: other.list } as AccountView))
-            .code
+            .code,
+          verified: false
         }
       }
     ]);
-    await expect(
-      addInvitedMember(ownerCtx, sync.outgoing[0]!.record)
-    ).rejects.toSatisfy(
-      (error: unknown) =>
-        error instanceof InvitationError && error.code === 'needs-confirmation'
-    );
-    expect(groupEpoch(w.srv, projectId)).toBe(1);
-    // The owner's confirmation claims, checks and adds both devices.
-    await addInvitedMember(ownerCtx, sync.outgoing[0]!.record, {
-      confirmedIdentity: otherIdentity()
-    });
+    const sync = await syncInvitations(ownerCtx);
+    expect(sync.errors).toEqual([]);
+    expect(sync.added).toEqual([invitation.invitationId]);
     expect(groupEpoch(w.srv, projectId)).toBe(2);
     expect(memberRole(w.srv, projectId, OTHER)).toBe('editor');
     expect(
@@ -786,6 +801,216 @@ describe('the invitation flow in the browser (slice 5-3b)', () => {
       (error: unknown) =>
         error instanceof InvitationError && error.code === 'statement-invalid'
     );
+  });
+});
+
+describe('trust on first use: a changed identity blocks (ADR-024 amendment 2026-11-25)', () => {
+  const refusedWith = (code: string) => (error: unknown) =>
+    error instanceof InvitationError && error.code === code;
+
+  it('never adds an invitee whose pinned identity changed until the owner trusts the new keys', async () => {
+    const w = world();
+    const { projectId, ownerCtx, invitation, inviteeCtx } = await invited(
+      w,
+      'editor',
+      { bind: false }
+    );
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([
+      invitation.invitationId
+    ]);
+    // The owner's browser had pinned another identity for them.
+    keysChanged(w, OWNER, OTHER);
+    const sync = await syncInvitations(ownerCtx);
+    expect(sync.errors).toEqual([]);
+    expect(sync.added).toEqual([]);
+    expect(sync.outgoing).toMatchObject([
+      {
+        state: 'keys-changed',
+        acceptor: { userId: OTHER, identityKeyHash: otherIdentity() }
+      }
+    ]);
+    // Not by the sweep, and not by a confirmation either: nothing claimed.
+    await expect(
+      addInvitedMember(ownerCtx, sync.outgoing[0]!.record)
+    ).rejects.toSatisfy(refusedWith('keys-changed'));
+    await expect(
+      addInvitedMember(ownerCtx, sync.outgoing[0]!.record, {
+        confirmedIdentity: otherIdentity()
+      })
+    ).rejects.toSatisfy(refusedWith('keys-changed'));
+    expect(
+      rows<{ claimed_at: string | null }>(
+        w.srv,
+        'SELECT claimed_at FROM e2ee_key_packages WHERE project_id = ?',
+        projectId
+      )
+    ).toEqual([{ claimed_at: null }]);
+    expect(groupEpoch(w.srv, projectId)).toBe(1);
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+
+    // "Trust new keys": a first use again, and the sweep adds them.
+    trust(w, OWNER, OTHER);
+    const again = await syncInvitations(ownerCtx);
+    expect(again.errors).toEqual([]);
+    expect(again.added).toEqual([invitation.invitationId]);
+    expect(memberRole(w.srv, projectId, OTHER)).toBe('editor');
+  });
+
+  it('stops an Add whose acceptor’s keys another tab flagged as changed while it ran (PR 2057 review)', async () => {
+    const w = world();
+    const { projectId, laptop, ownerCtx, invitation, inviteeCtx } =
+      await invited(w, 'editor', { bind: false });
+    await publishInvitationKeyPackages(inviteeCtx);
+    // Checked unchanged, then another tab records the alarm while this one
+    // claims the KeyPackages: the Commit-time check reads it again.
+    laptop.before = async (path, init) => {
+      if (init.method === 'POST' && path.endsWith('/key-packages/claim')) {
+        keysChanged(w, OWNER, OTHER);
+      }
+    };
+    const [pending] = await projectInvitations(ownerCtx, projectId);
+    expect(pending).toMatchObject({ state: 'ready' });
+    await expect(addInvitedMember(ownerCtx, pending!.record)).rejects.toSatisfy(
+      refusedWith('keys-changed')
+    );
+    laptop.before = undefined;
+    expect(groupEpoch(w.srv, projectId)).toBe(1);
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+    expect(
+      (await projectInvitations(ownerCtx, projectId))[0]!.record.invitationId
+    ).toBe(invitation.invitationId);
+  });
+
+  it('asks the owner to confirm someone new with one signature, then adds them; nothing in the background signs', async () => {
+    const w = world();
+    const { projectId, ownerCtx, invitation, inviteeCtx } = await invited(
+      w,
+      'editor',
+      { bind: false }
+    );
+    await publishInvitationKeyPackages(inviteeCtx);
+    // The signed contacts list pins nobody for them yet.
+    newTo(w, OWNER, OTHER);
+    const sync = await syncInvitations(ownerCtx);
+    expect(sync.errors).toEqual([]);
+    expect(sync.added).toEqual([]);
+    expect(sync.outgoing).toMatchObject([
+      {
+        state: 'confirm-new',
+        acceptor: {
+          userId: OTHER,
+          identityKeyHash: otherIdentity(),
+          pinned: false
+        }
+      }
+    ]);
+    expect(w.signed).toEqual([]);
+    // Not added unsigned, not even on a confirmation of the identity.
+    await expect(
+      addInvitedMember(ownerCtx, sync.outgoing[0]!.record)
+    ).rejects.toSatisfy(refusedWith('not-trusted'));
+    await expect(
+      addInvitedMember(ownerCtx, sync.outgoing[0]!.record, {
+        confirmedIdentity: otherIdentity()
+      })
+    ).rejects.toSatisfy(refusedWith('not-trusted'));
+    expect(
+      rows<{ claimed_at: string | null }>(
+        w.srv,
+        'SELECT claimed_at FROM e2ee_key_packages WHERE project_id = ?',
+        projectId
+      )
+    ).toEqual([{ claimed_at: null }]);
+    // The owner's confirmation: a signed trust (one touch), then the Add.
+    await trustPerson(ownerCtx, OTHER, otherIdentity(), 'passkey');
+    expect(w.signed).toEqual([
+      {
+        entry: `${OWNER}:${OTHER}:${otherIdentity()}`,
+        authorization: 'passkey'
+      }
+    ]);
+    await addInvitedMember(ownerCtx, sync.outgoing[0]!.record, {
+      confirmedIdentity: otherIdentity()
+    });
+    expect(memberRole(w.srv, projectId, OTHER)).toBe('editor');
+    expect(invitation.invitationId).toBe(sync.outgoing[0]!.record.invitationId);
+  });
+
+  it('joins only once the invitee confirmed an owner new to them, signed; a known owner needs nothing', async () => {
+    const w = world();
+    const { invitation, inviteeCtx } = await invited(w, 'viewer', {
+      bind: false
+    });
+    newTo(w, OTHER, OWNER);
+    const [listed] = await acceptedInvitations(inviteeCtx);
+    // The opened link is the acceptance; the owner still needs a signature.
+    expect(listed).toMatchObject({
+      state: 'confirm-owner',
+      ownerPinned: false
+    });
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([]);
+    expect((await syncInvitations(inviteeCtx)).errors).toEqual([]);
+    expect(w.signed).toEqual([]);
+    await expect(trustInvitationOwner(inviteeCtx, listed!)).rejects.toSatisfy(
+      refusedWith('not-trusted')
+    );
+    // Bound to the listing reviewed: another owner identity, or another
+    // statement under the same id, is never trusted (PR 2057 review).
+    await expect(
+      trustInvitationOwner(
+        inviteeCtx,
+        { ...listed!, ownerIdentityKeyHash: 'ab'.repeat(32) },
+        'passkey'
+      )
+    ).rejects.toSatisfy(refusedWith('keys-changed'));
+    await expect(
+      trustInvitationOwner(
+        inviteeCtx,
+        { ...listed!, statementHash: '00'.repeat(32) },
+        'passkey'
+      )
+    ).rejects.toSatisfy(refusedWith('statement-invalid'));
+    expect(w.signed).toEqual([]);
+    await trustInvitationOwner(inviteeCtx, listed!, 'passkey');
+    expect(w.signed.map((entry) => entry.entry)).toEqual([
+      `${OTHER}:${OWNER}:${toHex(owner.list.identityKeyHash)}`
+    ]);
+    expect(await acceptedInvitations(inviteeCtx)).toMatchObject([
+      { state: 'ready', ownerPinned: true }
+    ]);
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([
+      invitation.invitationId
+    ]);
+  });
+
+  it('joins on first use without verifying the owner, and never once the owner’s pinned identity changed', async () => {
+    const w = world();
+    const { invitation, inviteeCtx } = await invited(w, 'viewer', {
+      bind: false
+    });
+    keysChanged(w, OTHER, OWNER);
+    const [listed] = await acceptedInvitations(inviteeCtx);
+    expect(listed).toMatchObject({ state: 'owner-keys-changed' });
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([]);
+    // A listing a caller kept as ready is refused at publication too.
+    await expect(
+      publishInvitationKeyPackages(inviteeCtx, [{ ...listed!, state: 'ready' }])
+    ).rejects.toSatisfy(refusedWith('keys-changed'));
+    expect(
+      rows<{ acceptance_statement: string | null }>(
+        w.srv,
+        'SELECT acceptance_statement FROM e2ee_invitations WHERE invitation_id = ?',
+        invitation.invitationId
+      )
+    ).toEqual([{ acceptance_statement: null }]);
+
+    trust(w, OTHER, OWNER);
+    expect(await acceptedInvitations(inviteeCtx)).toMatchObject([
+      { state: 'ready', ownerVerified: false }
+    ]);
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([
+      invitation.invitationId
+    ]);
   });
 });
 
@@ -1483,14 +1708,11 @@ describe('the emailed link, bound into the owner-signed statement', () => {
     expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([
       signed.invitationId
     ]);
-    // It names no identity: the owner confirms the contact who accepted.
+    // It names no identity: whoever signed the acceptance is added on
+    // first use.
     const sync = await syncInvitations(ownerCtx);
     expect(sync.errors).toEqual([]);
-    expect(sync.added).toEqual([]);
-    expect(sync.outgoing).toMatchObject([{ state: 'confirm-add' }]);
-    await addInvitedMember(ownerCtx, sync.outgoing[0]!.record, {
-      confirmedIdentity: otherIdentity()
-    });
+    expect(sync.added).toEqual([signed.invitationId]);
     expect(memberRole(w.srv, projectId, OTHER)).toBe('viewer');
   });
 
@@ -1555,7 +1777,7 @@ describe('the emailed link, bound into the owner-signed statement', () => {
   });
 });
 
-describe('the owner’s confirmation: the server delivers the email', () => {
+describe('the server delivers the email: first use, bound invitations and confirmations', () => {
   const refusedWith = (code: string) => (error: unknown) =>
     error instanceof InvitationError && error.code === code;
 
@@ -1566,14 +1788,14 @@ describe('the owner’s confirmation: the server delivers the email', () => {
   /**
    * Bob's invitation, whose real link the server delivers to Carol: it
    * binds her account, tells her browser her session email is Bob's and
-   * answers the link with Bob's genuine statement. Carol and the owner are
-   * verified contacts, so her browser signs and publishes.
+   * answers the link with Bob's genuine statement, so her browser signs
+   * and publishes.
    */
   async function misdelivered(w: World, { bindBob }: { bindBob: boolean }) {
-    const project = await ownersProject(w);
+    // The owner's laptop reads Carol's device list too, once she is added.
+    const project = await ownersProject(w, [other, third]);
     const ownerCtx = invitationsOf(w, project.laptop, project.store);
-    verify(w, OWNER, THIRD);
-    verify(w, THIRD, OWNER);
+    // Nobody compared codes with Carol: trust on first use.
     if (bindBob) verify(w, OWNER, OTHER);
     const invitation = await inviteToEncryptedProject(
       ownerCtx,
@@ -1610,43 +1832,53 @@ describe('the owner’s confirmation: the server delivers the email', () => {
     return { ...project, ownerCtx, invitation, carolCtx };
   }
 
-  it('never adds the wrong recipient of an email-only invitation without the owner, who can decline', async () => {
+  it('adds whoever signed the acceptance of an email-only invitation, named by their own keys: the first-use bound', async () => {
     const w = world();
     const { projectId, ownerCtx, invitation } = await misdelivered(w, {
       bindBob: false
     });
     expect(fromBase64Url(invitation.statement)[3]).toBe(2);
-    const sync = await syncInvitations(ownerCtx);
-    expect(sync.errors).toEqual([]);
-    expect(sync.added).toEqual([]);
-    // The confirmation names who really accepted, from their verified
-    // keys: Carol's contact code, not the address the owner typed.
-    expect(sync.outgoing).toMatchObject([
-      {
-        state: 'confirm-add',
-        email: INVITEE_EMAIL,
-        acceptor: {
-          userId: THIRD,
-          identityKeyHash: toHex(third.list.identityKeyHash),
-          code: await contactsCode(third),
-          email: THIRD_EMAIL
-        }
+    // Trust on first use accepts this bound (ADR-024 amendment 2026-11-25):
+    // a server that delivers the link elsewhere at the first introduction
+    // gets that account added. It is detectable, not prevented: the owner
+    // sees who really accepted, from their own keys (Carol's contact code,
+    // not the address typed), and comparing codes would not match.
+    const [listed] = await projectInvitations(ownerCtx, projectId);
+    expect(listed).toMatchObject({
+      state: 'ready',
+      email: INVITEE_EMAIL,
+      acceptor: {
+        userId: THIRD,
+        identityKeyHash: toHex(third.list.identityKeyHash),
+        code: await contactsCode(third),
+        email: THIRD_EMAIL,
+        verified: false
       }
-    ]);
+    });
+    // A confirmation of someone else (the code the owner expected) still
+    // adds nobody: the acceptance must be by exactly the identity named.
     await expect(
-      addInvitedMember(ownerCtx, sync.outgoing[0]!.record)
-    ).rejects.toSatisfy(refusedWith('needs-confirmation'));
-    // A confirmation of someone else (the code the owner expected) adds
-    // nobody either.
-    await expect(
-      addInvitedMember(ownerCtx, sync.outgoing[0]!.record, {
+      addInvitedMember(ownerCtx, listed!.record, {
         confirmedIdentity: otherIdentity()
       })
     ).rejects.toSatisfy(refusedWith('acceptance-invalid'));
-    expect(memberRole(w.srv, projectId, THIRD)).toBeNull();
     expect(groupEpoch(w.srv, projectId)).toBe(1);
+    const sync = await syncInvitations(ownerCtx);
+    expect(sync.errors).toEqual([]);
+    expect(sync.added).toEqual([invitation.invitationId]);
+    expect(memberRole(w.srv, projectId, THIRD)).toBe('editor');
+  });
 
-    // Declining closes the invitation and drops its KeyPackages.
+  it('lets the owner decline an accepted invitation, dropping its KeyPackages', async () => {
+    const w = world();
+    const { projectId, ownerCtx, invitation } = await misdelivered(w, {
+      bindBob: false
+    });
+    // Carol's identity is not the one the owner's browser pinned for her.
+    keysChanged(w, OWNER, THIRD);
+    expect(await projectInvitations(ownerCtx, projectId)).toMatchObject([
+      { state: 'keys-changed' }
+    ]);
     await declineInvitation(ownerCtx, projectId, invitation.invitationId);
     expect(await projectInvitations(ownerCtx, projectId)).toMatchObject([
       { state: 'revoked' }
@@ -1661,6 +1893,7 @@ describe('the owner’s confirmation: the server delivers the email', () => {
     expect(
       await ownerCtx.store.claim(OWNER, invitation.invitationId)
     ).toBeNull();
+    trust(w, OWNER, THIRD);
     expect((await syncInvitations(ownerCtx)).added).toEqual([]);
     expect(memberRole(w.srv, projectId, THIRD)).toBeNull();
   });

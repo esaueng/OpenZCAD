@@ -353,6 +353,26 @@ describe('the invitation runner', () => {
     expect(h.runner.latest()?.joined).toEqual(['proj_9']);
   });
 
+  it('asks once for the owner’s Confirm of someone new, and never adds or signs for them (ADR-024 amendment 2026-11-25)', async () => {
+    const fresh = {
+      record: { projectId: 'proj_3', invitationId: 'inv_3' },
+      state: 'confirm-new',
+      email: 'alex@example.com',
+      acceptor: { email: 'alex@example.com', pinned: false }
+    } as unknown as OwnerInvitation;
+    const h = harness({ outcome: () => ran({ outgoing: [fresh] }) });
+    await flush();
+    expect(h.events).toEqual([
+      { kind: 'confirm', projectId: 'proj_3', invitationId: 'inv_3' }
+    ]);
+    // Asked once per invitation, however many passes still list it.
+    h.advance(INVITATION_RUNNER_INTERVAL_MS);
+    h.tick();
+    await flush();
+    expect(h.module.runInvitationPass).toHaveBeenCalledTimes(2);
+    expect(h.events).toHaveLength(1);
+  });
+
   it('stops for good when disposed', async () => {
     const h = harness();
     await flush();

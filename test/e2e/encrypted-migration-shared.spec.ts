@@ -15,6 +15,7 @@ import {
 } from './e2ee-fixtures';
 import {
   ALICE_EMAIL,
+  signWith,
   BOB_EMAIL,
   BOB_ID,
   COMMIT_BUDGET_MS,
@@ -224,24 +225,17 @@ test('encrypts a shared project once its member is ready, and the member opens i
     server.db.prepare('SELECT COUNT(*) AS n FROM e2ee_project_migrations').get()
   ).toEqual({ n: 0 });
 
-  // Bob compares codes with Alice and confirms the invitation, which the
-  // migration bound to his account without a link; his browser then
+  // Bob confirms the invitation, which the migration bound to his account
+  // without a link (one Join click; verifying Alice first is optional since
+  // the 2026-11-25 trust-on-first-use amendment); his browser then
   // publishes his keys.
   await bob.reload();
   const bobSettings = await openEncryptionSettings(bob);
-  await expect(
-    bobSettings.getByText(`${ALICE_EMAIL} invited you as an editor`)
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await bobSettings
-    .getByRole('button', { name: `Verify ${ALICE_EMAIL}` })
-    .first()
-    .click();
-  await verifyContact(bobSettings, ALICE_EMAIL, bobSeed.recoveryKey);
-  // The Join names the role the verified statement signs and shows Alice
-  // by the contact code Bob compared, not by the server's email text.
+  // The Join names the role the verified statement signs, and shows
+  // Alice's contact code.
   await expect(
     bobSettings.getByText(
-      /^Your verified contact invited you to project \S+ as an editor$/
+      /^alice@example\.com invited you to project \S+ as an editor$/
     )
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
   const join = bobSettings.getByRole('button', {
@@ -249,6 +243,13 @@ test('encrypts a shared project once its member is ready, and the member opens i
   });
   await expect(join).toBeVisible({ timeout: SYNC_BUDGET_MS });
   await join.click();
+  // Alice is new to Bob: the Join signs that he trusts her keys.
+  await signWith(
+    bob,
+    `Join ${ALICE_EMAIL}’s project`,
+    bobSeed.recoveryKey,
+    'Confirm'
+  );
   await expect
     .poll(
       () =>

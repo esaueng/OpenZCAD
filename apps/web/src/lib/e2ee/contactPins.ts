@@ -99,6 +99,14 @@ export interface ContactPin {
    * makes a verified contact count as verified.
    */
   readonly verifiedHere?: string | null;
+  /**
+   * The identity key hash this browser signed a trust-on-first-use entry
+   * for in the contacts list (ADR-024 amendment 2026-11-25), or null. On a
+   * browser whose list pin is unconfirmed, only this (or `verifiedHere`)
+   * makes a trusted record count. It never makes a contact verified, and
+   * is dropped when the identity changes.
+   */
+  readonly trustedHere?: string | null;
 }
 
 export interface ContactPinStore {
@@ -136,6 +144,18 @@ export interface ContactPinStore {
     next: ContactPin,
     options?: {
       readonly replaceIdentity?: boolean;
+      /**
+       * Compare-and-set: write only while the stored pin is still exactly
+       * this one (null: none stored), as the caller read it, in the same
+       * transaction. A tab that read an older pin cannot overwrite what
+       * another tab recorded since.
+       */
+      readonly expected?: ContactPin | null;
+      /**
+       * The caller is an explicit Trust or Verify: it may clear `keyChanged`.
+       * Any other write keeps an alarm already stored.
+       */
+      readonly clearAlarm?: boolean;
       /** Fence the write to the own-list authority checked by the caller. */
       readonly checkedList?: ContactsListPinRecord | null;
     }
@@ -222,6 +242,10 @@ function readContactPin(value: unknown): ContactPin | null {
         verifiedHere:
           typeof pin.verifiedHere === 'string' && HASH.test(pin.verifiedHere)
             ? pin.verifiedHere
+            : null,
+        trustedHere:
+          typeof pin.trustedHere === 'string' && HASH.test(pin.trustedHere)
+            ? pin.trustedHere
             : null
       }
     : null;
@@ -348,22 +372,56 @@ function withPending(
 export function advancedContactPin(
   current: ContactPin | null,
   next: ContactPin,
-  replaceIdentity = false
+  replaceIdentity = false,
+  options: {
+    readonly expected?: ContactPin | null;
+    readonly clearAlarm?: boolean;
+  } = {}
 ): ContactPin | null {
-  const valid = readContactPin(next);
-  if (!valid) return null;
+  const read = readContactPin(next);
+  if (!read) return null;
+  if (
+    options.expected !== undefined &&
+    !sameContactPin(current, options.expected)
+  ) {
+    return null;
+  }
+  // An alarm stays until an explicit Trust or Verify clears it.
+  const valid =
+    current?.keyChanged && !options.clearAlarm
+      ? { ...read, keyChanged: true }
+      : read;
   if (!current) return valid;
   if (current.identityKeyHash !== valid.identityKeyHash) {
     return replaceIdentity ? valid : null;
   }
   if (!follows(current, valid)) return null;
   // The first sighting of an identity stays its first sighting, and a
-  // comparison made here stays until the identity changes.
+  // comparison made here, or keys trusted here, stay until the identity
+  // changes.
   return {
     ...valid,
     seenAt: Math.min(current.seenAt, valid.seenAt),
-    verifiedHere: valid.verifiedHere ?? current.verifiedHere ?? null
+    verifiedHere: valid.verifiedHere ?? current.verifiedHere ?? null,
+    trustedHere: valid.trustedHere ?? current.trustedHere ?? null
   };
+}
+
+/** Whether two stored contact pins are the same record. */
+export function sameContactPin(
+  a: ContactPin | null | undefined,
+  b: ContactPin | null | undefined
+): boolean {
+  if (!a || !b) return !a && !b;
+  return (
+    a.contactUserId === b.contactUserId &&
+    a.identityKeyHash === b.identityKeyHash &&
+    a.sequence === b.sequence &&
+    a.entryHash === b.entryHash &&
+    a.keyChanged === b.keyChanged &&
+    (a.verifiedHere ?? null) === (b.verifiedHere ?? null) &&
+    (a.trustedHere ?? null) === (b.trustedHere ?? null)
+  );
 }
 
 function sameListPin(
@@ -411,7 +469,8 @@ export function memoryContactPins(): ContactPinStore {
       const stored = advancedContactPin(
         contacts.get(key) ?? null,
         next,
-        options.replaceIdentity
+        options.replaceIdentity,
+        options
       );
       if (stored) contacts.set(key, stored);
       return stored !== null;
@@ -535,7 +594,7 @@ export function indexedDbContactPins(): ContactPinStore {
           [userId, next.contactUserId],
           readContactPin,
           (current) =>
-            advancedContactPin(current, next, options.replaceIdentity),
+            advancedContactPin(current, next, options.replaceIdentity, options),
           options.checkedList === undefined
             ? undefined
             : { userId, expected: options.checkedList }

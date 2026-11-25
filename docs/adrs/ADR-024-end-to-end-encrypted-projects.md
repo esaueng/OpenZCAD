@@ -79,7 +79,13 @@ It does not protect against:
 - a server that keeps members on permanently separate branches of a project,
   or serves a stale history to a browser that has never seen the project.
   [Version integrity](#version-integrity) gives fork consistency and a manual
-  cross-check, not an automatic guarantee.
+  cross-check, not an automatic guarantee;
+- a server that is actively malicious at the moment two people are first
+  introduced by an invitation, and substitutes an identity of its own,
+  unless they compare codes. Since the
+  [amendment of 2026-11-25](#amendment-2026-11-25-trust-on-first-use-for-invitations) invitations
+  trust on first use; such a substitution is detectable afterwards, not
+  prevented.
 
 ## Decision
 
@@ -525,7 +531,10 @@ key of its own. Browsers therefore keep two kinds of pin for other people's
 keys:
 
 - **Seen:** a key the browser has been shown. It is displayed with a warning
-  and is never used to wrap a project key.
+  and is never used to wrap a project key. (Amended 2026-11-25: the user may
+  now trust a key on first use, a signed `trust` entry in the contacts list
+  below, distinct from a verification; see
+  [trust on first use for invitations](#amendment-2026-11-25-trust-on-first-use-for-invitations).)
 - **Verified:** a key whose full fingerprint the user has compared with its
   owner outside OpenZCAD, by QR in person or by reading digit groups over a
   call. A verification carries to the user's other devices and every later
@@ -581,7 +590,16 @@ comparison, which is safe only because of its commitment step.
   that has not opted in stays plaintext. Invitees must set up encryption
   before they can open an encrypted project.
 - **Invitations are signed by the owner, and a project key is only ever
-  wrapped to a verified key.** If the invitee already has keys and the owner
+  wrapped to a verified key.** _Amended by
+  [trust on first use for invitations](#amendment-2026-11-25-trust-on-first-use-for-invitations)
+  (2026-11-25): for an emailed invitation, and for its listed counterpart,
+  neither side has to compare codes. Someone the signed contacts list pins
+  (verified, or trusted on first use) is added or joined without asking;
+  someone new takes one signed confirmation (a `trust` entry, one passkey
+  touch); a pinned identity that changed blocks until reviewed or trusted
+  again, signed. The "email only" choice is gone. Every other check below
+  stands, and the migration's member approval is unchanged._ If the
+  invitee already has keys and the owner
   has verified them, from this or an earlier share, the owner's browser wraps
   at once. If the keys are only seen, or the invitee hasn't set up encryption
   yet, the invitation waits. The owner's next session completes it, but only
@@ -1973,6 +1991,104 @@ settings, which an account whose library is not encrypted stores readable.
   ciphertext. The account export includes the record as stored.
 - **Review.** This is a new account-key derivation and record format, so the
   Phase 8 outside review covers it with the other account records.
+
+## Amendment 2026-11-25: trust on first use for invitations
+
+Owner decisions D1 and D5 of the L11 sharing plan
+(`docs/plans/l11-sharing-and-encryption-overhaul.md`, PRs #2052 and
+#2057). An email invitation to someone new took three synchronous code
+comparisons across two people (the invitee verifying the owner, the owner
+verifying the invitee, then confirming the add) before anything was
+shared. This amendment replaces the rule that a project key is only wrapped
+to a verified key, and that an invitee joins only after verifying the
+owner, for invitations. It is the model of the large end-to-end encrypted
+messengers. Envelopes, the key hierarchy, MLS, wraps, removal, epochs,
+version integrity and share links are unchanged, and the server still holds
+only ciphertext.
+
+- **The signed contacts list is the one trust store.** Who is trusted, on
+  every device of the account, is what the identity-signed, hash-chained
+  [contacts list](#version-integrity) says: verified (codes compared, as
+  before), or `trusted`, a new entry state meaning "trusted on first use,
+  not verified". A `trust` entry pins the contact's identity key with the
+  head of their device list, under the list's existing signature,
+  fork-consistency and rollback checks. Its entry is version 2 of the
+  contacts entry format (the version 1 layout with action 5), and every
+  other action stays version 1, so lists without one read as before and an
+  older app refuses one by its version. A fixed vector pins the bytes. A
+  browser whose list pin is unconfirmed counts a trusted record, like a
+  verified one, only once it signed or compared codes for it there.
+  (A first design kept these pins in a separate record sealed under the
+  account key; three review rounds found that merging it across devices
+  could not be made rollback- and fork-safe. D5 replaced it with the
+  signed list.)
+- **Someone already pinned is added automatically.** An acceptance from a
+  person whose identity the signed list pins, trusted or verified, is added
+  with no prompt: the owner's browser checks that a certified device of
+  their device list signed an acceptance ("OZJ") of exactly the statement
+  this owner's device signed (by its hash, which covers the email hash and
+  the link token's hash) as the recipient of that email hash, then adds
+  them by one MLS Add Commit. The app's invitation sweep and any background
+  runner do this; none of them ever signs.
+- **Someone new takes one confirmation.** For a person the list does not
+  pin, the owner sees "_name_ accepted, confirm", and confirms with one
+  passkey touch, or the recovery key. That signs a `trust` entry for the
+  identity whose device signed the acceptance, and only then adds them.
+  Only an explicit owner action produces it, never the background. The
+  invitee likewise confirms an owner new to them once (folded into the Join
+  of a listed invitation, or a single Confirm after the opened link, which
+  is itself the acceptance: there is no separate Accept click); an owner
+  the invitee's list already pins needs no touch.
+- **A changed identity is an alarm.** When the identity the server shows is
+  not the one the signed list pins, or not the one this browser saw for
+  them (its local contact pin), nothing is added, signed for or published
+  for, confirmed or not (`keys-changed`, `owner-keys-changed`). The check
+  runs again at Commit time, on every attempt, so a change another tab saw
+  meanwhile stops an Add in progress; it never clears an alarm. The owner
+  sees "_name_'s encryption keys changed" with **Review** (the code
+  comparison, which signs a verification) and **Trust new keys** (a signed
+  `trust` entry that replaces the pinned identity, recording a verified
+  identity's key change first; still not verified). Only these clear an
+  alarm. A replaced identity is simply no longer the pinned one, so its old
+  verification or trust never counts again, on any device.
+- **Verification is optional, and shown.** Each member and accepted
+  invitation in the sharing dialog reads **Verified** or **Not verified**,
+  with **Verify…** opening the existing mutual comparison; Contacts shows a
+  trusted contact as Not verified. A trusted record never yields a key to
+  wrap to by itself (`verifiedEncryptionKey` stays verified-only).
+- **What stays.** Every check that is not about verification: the
+  statement's signature by a device the owner's list certifies and its
+  seven-day bound; the email hash; the link token's hash; the acceptance's
+  signature by a device the acceptor's list certifies, by exactly the
+  account the record names; a version 3 statement completed only by the
+  identity it names (`accepted-by-other`); each claimed KeyPackage's device,
+  leaf certification and epoch, checked against the invitee's signed device
+  list; and the removal gate. An account this browser saw removed from the
+  project is added back only on the owner's explicit confirmation, and an
+  owner device that has not seen the project's whole removal history asks
+  the owner for each add. The Worker's checks are unchanged.
+- **Scope.** Emailed invitations and their listed counterparts. The
+  migration of a shared plaintext project (slice 7-4) still has the owner
+  verify and approve each member by contact code before cutover.
+- **Cost.** One signature (a passkey touch, or the recovery key) per new
+  person, on each side, once per account rather than once per device or
+  project. People already pinned cost nothing.
+- **What this gives up.** A server that is actively malicious at the moment
+  of the first introduction can substitute its own identity for the
+  invitee's or the owner's. It sends the invitation email, so it can also
+  have another account open the link and sign the acceptance. Nobody
+  notices unless they compare codes. A passive or later compromise (a
+  database or storage breach, a curious operator, a network or server
+  observer) still sees only ciphertext, and the substitution is detectable
+  afterwards: the codes do not match, and the substituted member shows in
+  the member list as Not verified, under their own contact code. The
+  signed pins have the fork-consistency limit of the contacts list and the
+  device lists: a server can show a device that never saw a newer entry an
+  older list. Rejected: putting a decryption secret in the invitation
+  email, which the server writes and would read passively.
+- **Review.** This changes the trust model and the contacts entry format, so
+  the Phase 8 outside review covers it; the review packet's contacts and
+  invitation sections say what to check.
 
 ## Amendment 2026-11-25: share delegation renewed in passing, and one-click links
 
