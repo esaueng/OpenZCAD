@@ -183,7 +183,14 @@ export async function unitsConversionWriteAccess(
 
 /** Where the safety checkpoint is written; the device store by default. */
 export interface UnitsConversionPersistence {
-  saveProject(document: ProjectDocument): Promise<void>;
+  /**
+   * `fence` is checked where the write commits; false refuses it (see
+   * `saveLocalProject`).
+   */
+  saveProject(
+    document: ProjectDocument,
+    options?: { fence?: () => boolean }
+  ): Promise<void>;
   saveSaveStates(documents: readonly ProjectDocument[]): Promise<void>;
 }
 
@@ -452,7 +459,17 @@ export async function commitUnitsConversion(
   }
   try {
     if (options.deviceOnlyHistory) await persistence.saveSaveStates([guarded]);
-    else await persistence.saveProject(guarded);
+    else
+      await persistence.saveProject(
+        guarded,
+        access ? { fence: access.held } : {}
+      );
+  } catch (error) {
+    // Taken by another tab while the checkpoint waited to commit: nothing
+    // was written, and nothing is converted.
+    const lost = lostAccess();
+    if (lost) return { ok: false, refusals: [lost] };
+    throw error;
   } finally {
     // The write has landed (or failed): another tab may take the project
     // from here on, and the check below sees that it did.

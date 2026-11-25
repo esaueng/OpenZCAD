@@ -665,6 +665,40 @@ describe('commitUnitsConversion: the storage claim is held until the command run
     expect(manager.document).toBe(source);
   });
 
+  it('refuses a checkpoint fenced at commit by a takeover, converting nothing', async () => {
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    let held = true;
+    const fences: Array<(() => boolean) | undefined> = [];
+    const persistence: UnitsConversionPersistence = {
+      async saveProject(_document, options) {
+        fences.push(options?.fence);
+        // Another tab takes the project while the transaction opens.
+        held = false;
+        if (options?.fence && !options.fence()) throw new Error('fenced');
+      },
+      async saveSaveStates() {}
+    };
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        writeAccessLostMessage: 'Open in another tab.',
+        async confirmWriteAccess() {
+          return { kind: 'write-access', held: () => held, release: vi.fn() };
+        }
+      }
+    );
+    expect(fences).toHaveLength(1);
+    expect(fences[0]).toBeTypeOf('function');
+    expect(result).toMatchObject({
+      ok: false,
+      refusals: [{ code: 'second-tab', message: 'Open in another tab.' }]
+    });
+    expect(manager.document).toBe(source);
+  });
+
   it('does not execute when the claim is given up while the checkpoint is written', async () => {
     withLockManager();
     const source = boxDocument();

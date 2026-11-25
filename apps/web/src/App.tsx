@@ -19950,7 +19950,9 @@ export function App() {
       try {
         savingDocument = savingManager.document;
         setSaveState('saving');
-        await saveLocalProject(savingDocument);
+        // Fenced where the transaction opens: a takeover while it waited
+        // must not let this write land on the new owner's save.
+        await saveLocalProject(savingDocument, { fence: access.held });
       } finally {
         access.release();
       }
@@ -20129,7 +20131,17 @@ export function App() {
               'Save point not made. Your work is saved on this device.'
             );
           }
-          controller?.schedule(savingManager.document);
+          // Not from a tab another tab took the project from meanwhile:
+          // that tab sends the account its own copy.
+          const claim = projectOwnershipRef.current;
+          if (
+            !(
+              claim?.projectId === savingManager.document.projectId &&
+              !claim.owned
+            )
+          ) {
+            controller?.schedule(savingManager.document);
+          }
         }
         return;
       }
