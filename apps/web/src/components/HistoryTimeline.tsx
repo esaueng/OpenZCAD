@@ -868,6 +868,7 @@ const HistoryRow = memo(function HistoryRow({
             <button
               type="button"
               className="feature-flag error history-row-refused is-reopen"
+              data-own-enter=""
               title={`${refusalTitle} not applied: ${refusalMessage} Reopen the edit to see why and choose what to do.`}
               aria-label={`${refusalTitle}, edit not applied. Reopen it`}
               onClick={() => context.current!.reopenRefusal?.()}
@@ -2103,6 +2104,7 @@ export function HistoryTimeline({
           <button
             type="button"
             className="history-pending-row"
+            data-own-enter=""
             title={`${pendingStep.message} Reopen the edit to see why and choose what to do.`}
             aria-label={`${pendingStep.title}, not built. Reopen it`}
             onClick={pendingStep.onReopen}

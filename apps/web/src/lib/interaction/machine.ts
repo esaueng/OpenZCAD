@@ -578,7 +578,7 @@ export type InteractionEvent =
   /**
    * Brings back a failed edit the selection left: the operation, its value
    * and its refusal exactly as they were, so its card, Why and choices
-   * return. Refused while another edit is under the hand or being checked,
+   * return. Refused unless the machine is at rest (`interactionAtRest`),
    * and for anything but a failed operation.
    */
   | { type: 'reopen-refusal'; state: InteractionState }
@@ -1097,7 +1097,7 @@ function reduceInteraction(
             error: event.diagnostic
           };
     case 'reopen-refusal':
-      return isParkableRefusal(event.state) && canReopenRefusalOver(state)
+      return isParkableRefusal(event.state) && interactionAtRest(state)
         ? event.state
         : state;
     case 'recover':
@@ -1872,52 +1872,74 @@ export function isParkableRefusal(state: InteractionState): state is Exclude<
 }
 
 /**
- * Whether a parked refusal may replace what the machine holds now. Not over
- * a sketch, a gesture under the hand, a typed value, or an edit being
- * checked: each is newer work the user is in the middle of. An armed pick
- * or another refusal is only a selection, and gives way.
+ * Whether the machine is at rest, so a parked refusal may replace what it
+ * holds. An allow-list, not a list of what to protect: reviews kept finding
+ * work a deny-list missed, so any state not named here (and any mode or phase
+ * added later) keeps the refusal parked. At rest is only:
+ *
+ * - idle, with nothing being picked for a command (Extrude's profile pick
+ *   sets `boxSelectProfiles`; any other flag on idle counts as work too);
+ * - a plain pick of a face or edges: armed, with no value and no refusal;
+ * - another refusal of a face or edges, which is only a selection.
+ *
+ * A region (Extrude on a sketch profile, with its options) is never at rest,
+ * nor is a sketch, a gesture under the hand, a typed value or a check.
  */
-export function canReopenRefusalOver(state: InteractionState): boolean {
-  if (state.mode === 'sketch') return false;
-  if (!isOperationState(state)) return true;
-  return (
-    state.phase !== 'dragging' &&
-    state.phase !== 'validating' &&
-    state.phase !== 'exact-entry'
-  );
+export function interactionAtRest(state: InteractionState): boolean {
+  switch (state.mode) {
+    case 'idle':
+      return Object.entries(state).every(
+        ([key, value]) => key === 'mode' || value === undefined
+      );
+    case 'face':
+    case 'edges':
+      switch (state.phase) {
+        case 'armed':
+          return state.error === null && state.lastValue === null;
+        case 'failed':
+          return isParkableRefusal(state);
+        default:
+          return false;
+      }
+    default:
+      return false;
+  }
 }
 
 /**
- * The workspace surfaces outside the machine that hold an edit in progress.
- * Reopening a parked refusal replaces the pick and closes panels, so any of
- * these open would be torn down along with what the user typed or armed:
- * an open value entry (keypad), a running in-place command (Shell, Hole…),
- * a tool panel, an extrude or datum being edited, a Move, or a face or
- * vertex pick that repairs a feature.
+ * The workspace's edit surfaces outside the machine, each true while it holds
+ * work a reopen would tear down: an open value entry (keypad) or one queued
+ * to open on the next frame, a running in-place command (Box, Shell, Hole…),
+ * a tool panel, an extrude or modeling feature being edited, a Move, a face
+ * or vertex pick that repairs a feature, and a model preview on the stage (an
+ * Assistant proposal, a save state) that the reopen's panel close would
+ * clear while its own control still says it is showing.
  */
-export interface EditSurfaces {
+export interface WorkspaceEditSurfaces {
   keypadOpen: boolean;
+  exactEntryQueued: boolean;
   commandRunning: boolean;
   toolOpen: boolean;
   featureEditOpen: boolean;
   moveOpen: boolean;
   repairPickOpen: boolean;
+  modelPreviewShown: boolean;
 }
 
 /**
- * What keeps a parked refusal from being reopened now, or null when nothing
- * does: the machine holding newer work (`canReopenRefusalOver`), or an edit
- * in progress on a surface the reopen would close.
+ * Whether a parked refusal may be reopened now: the machine is at rest
+ * (`interactionAtRest`) and every surface reports itself closed. A surface
+ * reported as anything but `false` (one added and left undefined) keeps the
+ * refusal parked, so a new surface is blocked until it is wired.
  */
-export function refusalReopenBlocker(
+export function workspaceAtRestForReopen(
   state: InteractionState,
-  surfaces: EditSurfaces
-): 'interaction' | keyof EditSurfaces | null {
-  if (!canReopenRefusalOver(state)) return 'interaction';
-  for (const key of Object.keys(surfaces) as (keyof EditSurfaces)[]) {
-    if (surfaces[key]) return key;
-  }
-  return null;
+  surfaces: Readonly<WorkspaceEditSurfaces>
+): boolean {
+  return (
+    interactionAtRest(state) &&
+    Object.values(surfaces).every((open) => open === false)
+  );
 }
 
 /**

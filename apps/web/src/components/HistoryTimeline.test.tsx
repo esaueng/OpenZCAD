@@ -9,6 +9,7 @@ import {
 import userEvent from '@testing-library/user-event';
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { controlOwnsEnter } from '../lib/exactEntryShortcut';
 import {
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY
@@ -256,6 +257,8 @@ describe('HistoryTimeline', () => {
       name: 'Offset Face, not built. Reopen it'
     });
     expect(reopen).toHaveClass('history-pending-row');
+    // Review: Enter on it with a Box command running created the Box.
+    expect(controlOwnsEnter(reopen)).toBe(true);
     expect(reopen).toHaveAttribute(
       'title',
       'Choose how the chamfered rim moves. Reopen the edit to see why and choose what to do.'
@@ -284,6 +287,7 @@ describe('HistoryTimeline', () => {
       name: 'Resize Body, edit not applied. Reopen it'
     });
     expect(reopen).toHaveClass('history-row-refused');
+    expect(controlOwnsEnter(reopen)).toBe(true);
     expect(reopen).toHaveTextContent('edit not applied');
     expect(reopen).toHaveAttribute(
       'title',

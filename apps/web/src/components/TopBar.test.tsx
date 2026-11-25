@@ -9,6 +9,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AuthSession } from '@openzcad/shared';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { TopBar, preloadEncryptionIndicator } from './TopBar';
+import { controlOwnsEnter } from '../lib/exactEntryShortcut';
 import type { EncryptionIndicatorProps } from './EncryptionIndicator';
 import { WORKSPACE_MODE_OPTIONS } from '../lib/topBarPresentation';
 import { IDENTITY_DISCONTINUED_PROBLEM } from '../lib/e2ee/encryptionStatus';
@@ -311,7 +312,10 @@ describe('TopBar save chip', () => {
       saveState: 'synced',
       editRefusal: 'The proposed edit would remove the body.'
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Edit not applied' }));
+    const chip = screen.getByRole('button', { name: 'Edit not applied' });
+    // Enter on it is its own, never Done on a running command.
+    expect(controlOwnsEnter(chip)).toBe(true);
+    fireEvent.click(chip);
     expect(handlers.onReviewEditFailure).toHaveBeenCalledOnce();
     expect(handlers.onSave).not.toHaveBeenCalled();
   });
@@ -330,6 +334,9 @@ describe('TopBar save chip', () => {
       'title',
       'Choose how the chamfered rim moves. Reopen the edit to see why and choose what to do.'
     );
+    // Review: Enter on it with a Box command running created the Box. It
+    // asks for the refused edit instead, which is refused over the command.
+    expect(controlOwnsEnter(chip)).toBe(true);
     fireEvent.click(chip);
     expect(handlers.onReviewEditFailure).toHaveBeenCalledOnce();
     expect(handlers.onSave).not.toHaveBeenCalled();

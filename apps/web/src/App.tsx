@@ -496,6 +496,7 @@ import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSection } from './hooks/useRememberedSection';
 import { newBlendFacePick } from './lib/blendRearm';
 import {
+  controlOwnsEnter,
   exactEntryShortcut,
   inPlaceTypedEntryKey,
   isTypingTarget
@@ -988,7 +989,7 @@ import {
   holdsRefusal,
   isParkableRefusal,
   refusalCancelledInPlace,
-  refusalReopenBlocker,
+  workspaceAtRestForReopen,
   startsEditAttempt,
   movedOnFromRefusal,
   refusalSubjectKey,
@@ -14819,17 +14820,22 @@ export function App() {
       revealParkedWhy(parked.interaction);
       return;
     }
+    // Only over a workspace at rest: everything below tears down what is
+    // open, so anything not provably idle keeps the refusal parked.
     if (
-      refusalReopenBlocker(current, {
+      !workspaceAtRestForReopen(current, {
         keypadOpen: keypadRef.current !== null,
+        exactEntryQueued: exactEntryQueue.queued,
         commandRunning: inPlaceRef.current.active,
         toolOpen: tool !== null,
         featureEditOpen:
           extrudeEditRef.current !== null || modelingEditFeature !== null,
         moveOpen: movePreview !== null,
         repairPickOpen:
-          faceRepair !== null || datumRepair !== null || toFacePick !== null
-      }) !== null
+          faceRepair !== null || datumRepair !== null || toFacePick !== null,
+        modelPreviewShown:
+          previewDoc !== null || savePreview !== null || drawingPreview !== null
+      })
     ) {
       setStatus(
         `Finish or cancel the edit in progress to return to the ${failure.title} that was not applied.`
@@ -37088,11 +37094,15 @@ export function App() {
         // clicked, still leaves Enter to the command (U01). The modeling
         // guide's buttons too, now that it stays up through the command
         // (#1947): Enter on Skip created the Box and left the guide open.
+        // And the refused edit's reopen buttons (the top bar's "Edit not
+        // applied", History's), which ask for it and are refused over the
+        // command: Enter on them created the Box.
         const control =
-          target instanceof Element &&
-          target.closest(
-            '[aria-haspopup], [role="menu"], .in-place-command, .workspace-tour'
-          ) !== null;
+          controlOwnsEnter(target) ||
+          (target instanceof Element &&
+            target.closest(
+              '[aria-haspopup], [role="menu"], .in-place-command, .workspace-tour'
+            ) !== null);
         if (event.key === 'Enter' && !typing && !control) {
           event.preventDefault();
           inPlace.done();
@@ -37147,6 +37157,7 @@ export function App() {
         (interaction.mode === 'region' || extrudeEditRef.current) &&
         event.key === 'Enter' &&
         !typing &&
+        !controlOwnsEnter(target) &&
         !(
           target instanceof Element &&
           target.closest(
@@ -37177,9 +37188,12 @@ export function App() {
           return;
         }
         // As for an in-place command: Enter on the Move bar's own controls
-        // (Options, Cancel, Done) acts for that control, not the Move.
+        // (Options, Cancel, Done) acts for that control, not the Move; so
+        // does Enter on a refused edit's reopen button.
         const moveControl =
-          target instanceof Element && target.closest('.move-command') !== null;
+          controlOwnsEnter(target) ||
+          (target instanceof Element &&
+            target.closest('.move-command') !== null);
         if (event.key === 'Enter' && !typing && !moveControl) {
           event.preventDefault();
           confirmMove();
@@ -37487,7 +37501,8 @@ export function App() {
         keypad !== null,
         modelingLocked
       );
-      if (exactEntry) {
+      // Enter on a reopen button is that button's, not the pick's value entry.
+      if (exactEntry && !(event.key === 'Enter' && controlOwnsEnter(target))) {
         event.preventDefault();
         if (interaction.mode === 'region' && extrudeBarFailedRef.current) {
           setStatus(EXTRUDE_ENTRY_UNAVAILABLE);

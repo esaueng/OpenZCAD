@@ -924,6 +924,9 @@ export function TopBar({
           <button
             className={`save-state topbar-action is-${saveState}`}
             type="button"
+            // Enter on "Edit not applied" asks for the refused edit, never
+            // Done on a command that happens to be running (OWN_ENTER_ATTRIBUTE).
+            data-own-enter={reviewRefusal ? '' : undefined}
             disabled={!projectName}
             onClick={
               reviewRefusal

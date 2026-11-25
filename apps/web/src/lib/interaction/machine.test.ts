@@ -16,9 +16,10 @@ import {
   escapeTarget,
   holdsRefusal,
   isParkableRefusal,
-  canReopenRefusalOver,
+  interactionAtRest,
   startsEditAttempt,
-  refusalReopenBlocker,
+  workspaceAtRestForReopen,
+  type WorkspaceEditSurfaces,
   refusalCancelledInPlace,
   movedOnFromRefusal,
   refusalSubjectKey,
@@ -2221,7 +2222,7 @@ describe('a failed edit the selection leaves', () => {
       type: 'select-face',
       target: face({ topologyId: 'face:7', hash: 7 })
     });
-    expect(canReopenRefusalOver(other)).toBe(true);
+    expect(interactionAtRest(other)).toBe(true);
     expect(
       interactionReducer(other, { type: 'reopen-refusal', state: failed })
     ).toBe(failed);
@@ -2240,7 +2241,7 @@ describe('a failed edit the selection leaves', () => {
       interactionReducer(IDLE, { type: 'enter-sketch', plane })
     ];
     for (const state of busy) {
-      expect(canReopenRefusalOver(state)).toBe(false);
+      expect(interactionAtRest(state)).toBe(false);
       expect(
         interactionReducer(state, { type: 'reopen-refusal', state: failed })
       ).toBe(state);
@@ -2282,29 +2283,128 @@ describe('a failed edit the selection leaves', () => {
   // typed Shell thickness) and cancelled the command, because only the
   // machine was asked and a running command leaves it idle.
   it('is not reopened over an edit in progress anywhere in the workspace', () => {
-    const none = {
+    const none: WorkspaceEditSurfaces = {
       keypadOpen: false,
+      exactEntryQueued: false,
       commandRunning: false,
       toolOpen: false,
       featureEditOpen: false,
       moveOpen: false,
-      repairPickOpen: false
+      repairPickOpen: false,
+      modelPreviewShown: false
     };
-    expect(refusalReopenBlocker(IDLE, none)).toBeNull();
+    expect(workspaceAtRestForReopen(IDLE, none)).toBe(true);
     const armed = interactionReducer(IDLE, {
       type: 'select-face',
       target: face({ topologyId: 'face:7', hash: 7 })
     });
-    expect(refusalReopenBlocker(armed, none)).toBeNull();
+    expect(workspaceAtRestForReopen(armed, none)).toBe(true);
     expect(
-      refusalReopenBlocker(
+      workspaceAtRestForReopen(
         interactionReducer(armed, { type: 'drag-engage' }),
         none
       )
-    ).toBe('interaction');
-    for (const key of Object.keys(none) as (keyof typeof none)[]) {
-      expect(refusalReopenBlocker(IDLE, { ...none, [key]: true })).toBe(key);
-      expect(refusalReopenBlocker(armed, { ...none, [key]: true })).toBe(key);
+    ).toBe(false);
+    for (const key of Object.keys(none) as (keyof WorkspaceEditSurfaces)[]) {
+      expect(workspaceAtRestForReopen(IDLE, { ...none, [key]: true })).toBe(
+        false
+      );
+      expect(workspaceAtRestForReopen(armed, { ...none, [key]: true })).toBe(
+        false
+      );
+    }
+    // A surface reported as anything but closed (one added and not yet
+    // wired) keeps the refusal parked.
+    expect(
+      workspaceAtRestForReopen(IDLE, {
+        ...none,
+        newSurface: undefined
+      } as unknown as WorkspaceEditSurfaces)
+    ).toBe(false);
+  });
+
+  // Review: the chip reopened over an Extrude armed on a sketch profile with
+  // its options changed, unmounting the Extrude and losing the draft; its
+  // profile pick was cancelled too. At rest is an allow-list, so a region
+  // and anything else not named stay untouched.
+  it('is reopened only over a workspace at rest', () => {
+    const failed = rimChoice();
+    const armedFace = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({ topologyId: 'face:7', hash: 7 })
+    });
+    const armedEdges = interactionReducer(IDLE, {
+      type: 'select-edge',
+      selection: edge(3),
+      additive: false
+    });
+    expect(armedEdges.mode).toBe('edges');
+    const otherRefusal = interactionReducer(armedFace, {
+      type: 'preview-refused',
+      diagnostic: { message: 'No.', code: 'refused' },
+      value: 4
+    });
+    expect(isParkableRefusal(otherRefusal)).toBe(true);
+    for (const state of [IDLE, armedFace, armedEdges, otherRefusal]) {
+      expect(interactionAtRest(state), JSON.stringify(state)).toBe(true);
+      expect(
+        interactionReducer(state, { type: 'reopen-refusal', state: failed })
+      ).toBe(failed);
+    }
+
+    const profilePick = interactionReducer(IDLE, {
+      type: 'pick-extrude-profiles'
+    });
+    const armedRegion = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    const regionWithOption = interactionReducer(armedRegion, {
+      type: 'set-extrude-choice',
+      choice: { operation: 'cut' }
+    });
+    // A face pick that recovered from a refused frame still holds the
+    // value it was given: a value in progress, not a plain pick.
+    const valued = interactionReducer(otherRefusal, { type: 'recover' });
+    expect(valued).toMatchObject({ phase: 'armed', lastValue: 4 });
+    const notAtRest: InteractionState[] = [
+      profilePick,
+      armedRegion,
+      regionWithOption,
+      interactionReducer(regionWithOption, {
+        type: 'validation-failed',
+        diagnostic: { message: 'No.', code: 'refused' },
+        value: 3
+      }),
+      valued,
+      interactionReducer(armedFace, { type: 'drag-engage' }),
+      interactionReducer(armedFace, { type: 'keypad-open' }),
+      interactionReducer(armedFace, { type: 'validation-start', value: 2 }),
+      interactionReducer(IDLE, { type: 'enter-sketch', plane })
+    ];
+    for (const state of notAtRest) {
+      expect(interactionAtRest(state), JSON.stringify(state)).toBe(false);
+      expect(
+        interactionReducer(state, { type: 'reopen-refusal', state: failed })
+      ).toBe(state);
+    }
+  });
+
+  it('refuses a state kind or phase it does not know by default', () => {
+    const failed = rimChoice();
+    const unknown = [
+      { mode: 'assemble-joint' },
+      { mode: 'idle', pickingSomethingNew: true },
+      { ...armedFaceFor(), phase: 'measuring' }
+    ] as unknown as InteractionState[];
+    for (const state of unknown) {
+      expect(interactionAtRest(state), JSON.stringify(state)).toBe(false);
+      expect(
+        interactionReducer(state, { type: 'reopen-refusal', state: failed })
+      ).toBe(state);
+    }
+    function armedFaceFor(): InteractionState {
+      return interactionReducer(IDLE, { type: 'select-face', target: face() });
     }
   });
 
