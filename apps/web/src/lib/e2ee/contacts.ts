@@ -194,6 +194,12 @@ export interface ContactView {
   readonly keyChanged: boolean;
   /** The signed list still verifies the replaced key: sign the change. */
   readonly keyChangeUnsigned: boolean;
+  /**
+   * The user trusted this changed identity on this browser ("Trust new
+   * keys", `trustNewKeys`): invitations may treat it as the pinned identity
+   * again. It never makes the contact verified.
+   */
+  readonly keyChangeTrusted: boolean;
   readonly list: VerifiedDeviceList | null;
   /** What the contact reads out: 40 digits over identity and head. */
   readonly code: string | null;
@@ -529,6 +535,7 @@ export async function inspectContact(
       status: 'no-keys',
       keyChanged: record?.status === 'key-changed' || Boolean(pin?.keyChanged),
       keyChangeUnsigned: false,
+      keyChangeTrusted: false,
       list: null,
       code: null,
       codeHash: null,
@@ -628,6 +635,10 @@ export async function inspectContact(
     status: trusted ? 'verified' : 'seen',
     keyChanged,
     keyChangeUnsigned: replacedVerified,
+    keyChangeTrusted:
+      keyChanged &&
+      pin?.identityKeyHash === identityHash &&
+      pin.trustedKeys === identityHash,
     // The chain does not carry its identity generation; the lookup does,
     // unsigned, so the server could relabel it. Checks that read it
     // (`verifyMlsAuthorityReset`) still need the identity key's signature
@@ -871,6 +882,35 @@ export async function verifyContact(
   if (!recorded) staleAnswer('device list');
   // Read again after the pin: the comparison made here counts now.
   return loadContacts(ctx, account);
+}
+
+/**
+ * The user's explicit "Trust new keys" for a contact whose identity changed
+ * (ADR-024 amendment 2026-11-25, trust on first use): this browser records
+ * the identity `view` showed as trusted again, so invitations add them
+ * again. Nothing is signed and the contact stays unverified: comparing
+ * codes (`verifyContact`) is still what verifies. Refused when the identity
+ * changed again since `view` was inspected.
+ */
+export async function trustNewKeys(
+  ctx: ContactsContext,
+  view: ContactView
+): Promise<void> {
+  if (!view.list || view.userId === ctx.keys.userId) {
+    throw new ContactsError('not-verifiable', 'This contact has no keys.');
+  }
+  requireActive(ctx);
+  const identity = toHex(view.list.identityKeyHash);
+  const recorded = await ctx.pins.advanceContact(ctx.keys.userId, {
+    contactUserId: view.userId,
+    identityKeyHash: identity,
+    sequence: view.list.pin.sequence,
+    entryHash: toHex(view.list.headHash),
+    keyChanged: false,
+    seenAt: now(ctx),
+    trustedKeys: identity
+  });
+  if (!recorded) staleAnswer('device list');
 }
 
 /** Signs that a verified contact's key was replaced; they become unverified. */

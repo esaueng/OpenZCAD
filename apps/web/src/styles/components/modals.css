@@ -2044,22 +2044,16 @@
   font-size: var(--fs-xs);
 }
 
-/* The owner's explicit choice of a verified contact for an encrypted
-   invitation, each named by the contact code Contacts shows. */
-.sharing-invite-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  font-size: var(--fs-sm);
-  overflow-wrap: anywhere;
+/* Verified or Not verified (ADR-024 amendment 2026-11-25): shown beside a
+   person, never a condition for sharing with them. */
+.sharing-trust {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
 }
 
-.sharing-invite-option input {
-  margin-top: 3px;
-}
-
-.sharing-invite-option .encryption-code {
-  display: inline;
+.sharing-trust[data-verified='true'] {
+  color: var(--color-success);
 }
 
 .sharing-invite-sent {
@@ -2162,7 +2156,7 @@
   font-size: var(--fs-xs);
 }
 
-.sharing-row-detail[data-status='waiting-for-verification'],
+.sharing-row-detail[data-status='keys-changed'],
 .sharing-row-detail[data-status='needs-confirming'] {
   color: var(--color-warning);
 }

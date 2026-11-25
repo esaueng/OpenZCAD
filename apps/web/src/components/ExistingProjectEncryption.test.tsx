@@ -1420,7 +1420,8 @@ describe('a shared project (slice 7-4)', () => {
         userId: `user_${email}`,
         identityKeyHash: code.replace(/\D/g, ''),
         code,
-        email
+        email,
+        verified: true
       }
     });
     const roster = [
@@ -1518,7 +1519,8 @@ describe('a shared project (slice 7-4)', () => {
         userId: `user_${email}`,
         identityKeyHash: code.replace(/\D/g, ''),
         code,
-        email
+        email,
+        verified: true
       }
     });
     const roster = [

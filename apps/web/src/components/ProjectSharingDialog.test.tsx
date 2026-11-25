@@ -1459,10 +1459,16 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
           acceptedByUserId: invitee,
           role: 'viewer'
         }),
-        state: 'waiting-for-verification',
+        state: 'needs-acceptance',
         email: 'verify@example.com',
         statement: null,
-        acceptor: null
+        acceptor: {
+          userId: invitee,
+          identityKeyHash: 'dd'.repeat(32),
+          code: '77777 88888',
+          email: 'verify@example.com',
+          verified: false
+        }
       },
       {
         record: encryptedRecord('inv_done', {
@@ -1500,8 +1506,10 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       screen.getByText(/^Waiting for keys · Editor · \d+d$/)
     ).toBeVisible();
     expect(
-      screen.getByText(/^Waiting for you to verify · Viewer · \d+d$/)
+      screen.getByText(/^Waiting for them to accept again · Viewer · \d+d$/)
     ).toBeVisible();
+    // Verification is shown, never waited on: Not verified, with Verify….
+    expect(screen.getByText('Not verified')).toBeVisible();
     // Completed ones are members now, not pending rows.
     expect(screen.queryByText(/^Added/)).not.toBeInTheDocument();
     // Share links are the encrypted ones (slice 5-10), never the plaintext
@@ -1573,7 +1581,7 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       screen.getByRole('button', { name: 'Verify verify@example.com' })
     );
     expect(onVerifyContact).toHaveBeenCalledWith(invitee);
-    // Only an invitation waiting for verification offers it.
+    // Only an invitation someone accepted names a person to verify.
     expect(
       screen.queryByRole('button', { name: 'Verify keys@example.com' })
     ).not.toBeInTheDocument();
@@ -1596,8 +1604,7 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       expect(encrypted.invite).toHaveBeenCalledWith(
         'proj_encrypted',
         'New@Example.com',
-        'viewer',
-        undefined
+        'viewer'
       )
     );
     expect(sharingClient.createInvitation).not.toHaveBeenCalled();
@@ -1607,19 +1614,9 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     setPersonalInfoVisible(false);
   });
 
-  it('offers a contact listed under the address only as an explicit choice, by contact code', async () => {
+  it('invites by email alone: no contact choice, whoever accepts is added on first use', async () => {
     setPersonalInfoVisible(true);
-    const listed = {
-      userId: 'user_carol',
-      identityKeyHash: 'cc'.repeat(32),
-      code: '33333 44444',
-      // The server's label: it may name someone other than who was meant.
-      email: 'bob@example.com'
-    };
-    const encrypted: EncryptedSharingClient = {
-      ...encryptedClient([]),
-      contactsFor: vi.fn(async () => [listed])
-    };
+    const encrypted = encryptedClient([]);
     const user = userEvent.setup();
     render(
       <ProjectSharingDialog
@@ -1636,45 +1633,144 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       />
     );
     await user.type(await screen.findByLabelText('Email'), 'Bob@Example.com');
-    const choice = await screen.findByRole('radiogroup', {
-      name: 'Who to add'
-    });
-    expect(encrypted.contactsFor).toHaveBeenLastCalledWith('bob@example.com');
-    // An email-only invitation unless the owner picks the contact.
-    expect(
-      within(choice).getByRole('radio', {
-        name: 'Email only: you confirm whoever accepts'
-      })
-    ).toBeChecked();
-    expect(choice).toHaveTextContent('33333 44444');
+    // One input, one button: the "email only / this contact" choice is gone.
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Invite' }));
     await waitFor(() =>
       expect(encrypted.invite).toHaveBeenLastCalledWith(
         'proj_encrypted',
         'Bob@Example.com',
-        'viewer',
-        undefined
+        'viewer'
       )
     );
+    expect(encrypted.invite).toHaveBeenCalledOnce();
+    setPersonalInfoVisible(false);
+  });
 
-    await user.type(screen.getByLabelText('Email'), 'bob@example.com');
-    await user.click(
-      within(
-        await screen.findByRole('radiogroup', { name: 'Who to add' })
-      ).getByRole('radio', {
-        name: /^Invite bob@example\.com \(code 33333 44444 ?\)$/
+  it('marks members Verified or Not verified, and never adds someone whose keys changed without Review or Trust new keys', async () => {
+    setPersonalInfoVisible(true);
+    const changedHash = 'ee'.repeat(32);
+    const sharingClient = client();
+    vi.mocked(sharingClient.getProjectSharing).mockImplementation(
+      async (projectId: string) => ({
+        projectId,
+        ownerUserId: owner,
+        members: [
+          {
+            userId: member,
+            email: 'member@example.com',
+            role: 'viewer',
+            createdAt: 1,
+            updatedAt: 1
+          },
+          {
+            userId: invitee,
+            email: 'changed@example.com',
+            role: 'editor',
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ],
+        invitations: []
       })
     );
-    await user.click(screen.getByRole('button', { name: 'Invite' }));
+    const encrypted: EncryptedSharingClient = {
+      ...encryptedClient([
+        {
+          record: encryptedRecord('inv_changed', {
+            acceptedByUserId: toUserId('user_dana')
+          }),
+          state: 'keys-changed',
+          email: 'dana@example.com',
+          statement: null,
+          acceptor: {
+            userId: 'user_dana',
+            identityKeyHash: 'ab'.repeat(32),
+            code: '12121 21212',
+            email: 'dana@example.com',
+            verified: false
+          }
+        }
+      ]),
+      confirmAdd: vi.fn(async () => undefined),
+      peopleTrust: vi.fn(async (userIds: readonly string[]) =>
+        userIds.map((userId) =>
+          userId === member
+            ? {
+                userId,
+                verified: true,
+                keyChanged: false,
+                identityKeyHash: 'aa'.repeat(32)
+              }
+            : {
+                userId,
+                verified: false,
+                keyChanged: true,
+                identityKeyHash: changedHash
+              }
+        )
+      ),
+      trustNewKeys: vi.fn(async () => undefined)
+    };
+    const onVerifyContact = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_encrypted"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        currentUserId={owner}
+        client={sharingClient}
+        shareLinkClient={shareLinkClient()}
+        encrypted
+        encryptedClient={encrypted}
+        encryptedShareLinkClient={encryptedShareLinkClient()}
+        onVerifyContact={onVerifyContact}
+        onClose={vi.fn()}
+      />
+    );
+    expect(await screen.findByText('Verified')).toBeVisible();
+    // The owner's own row is never looked up.
+    expect(encrypted.peopleTrust).toHaveBeenCalledWith([member, invitee]);
+    const changed = await screen.findByRole('group', {
+      name: "changed@example.com's encryption keys changed"
+    });
+    expect(changed).toHaveTextContent(
+      'Nothing is shared with them automatically'
+    );
+    const invitation = screen.getByRole('group', {
+      name: "dana@example.com's encryption keys changed"
+    });
+    // Nothing is added or confirmed in the background.
+    expect(encrypted.confirmAdd).not.toHaveBeenCalled();
+    expect(encrypted.trustNewKeys).not.toHaveBeenCalled();
+    expect(
+      within(invitation).queryByRole('button', { name: 'Add' })
+    ).not.toBeInTheDocument();
+    await user.click(within(changed).getByRole('button', { name: 'Review' }));
+    expect(onVerifyContact).toHaveBeenCalledWith(invitee);
+    await user.click(
+      within(changed).getByRole('button', { name: 'Trust new keys' })
+    );
     await waitFor(() =>
-      expect(encrypted.invite).toHaveBeenLastCalledWith(
-        'proj_encrypted',
-        'bob@example.com',
-        'viewer',
-        { userId: 'user_carol', identityKeyHash: 'cc'.repeat(32) }
+      expect(encrypted.trustNewKeys).toHaveBeenCalledWith(invitee, changedHash)
+    );
+    await user.click(
+      within(
+        screen.getByRole('group', {
+          name: "dana@example.com's encryption keys changed"
+        })
+      ).getByRole('button', { name: 'Trust new keys' })
+    );
+    await waitFor(() =>
+      expect(encrypted.trustNewKeys).toHaveBeenLastCalledWith(
+        'user_dana',
+        'ab'.repeat(32)
       )
     );
-    expect(encrypted.invite).toHaveBeenCalledTimes(2);
+    expect(encrypted.confirmAdd).not.toHaveBeenCalled();
     setPersonalInfoVisible(false);
   });
 
@@ -1688,7 +1784,8 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       userId: invitee,
       identityKeyHash,
       code,
-      email: 'carol@example.com'
+      email: 'carol@example.com',
+      verified: false
     });
     const encrypted = {
       ...encryptedClient([

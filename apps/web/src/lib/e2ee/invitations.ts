@@ -8,18 +8,26 @@
  *   owner, a hash of the invitee's email, the role, seven days of validity,
  *   this device and its key hash, and a hash of the link's token) and posts
  *   it with the email and token, which the Worker mails and forgets (it
- *   keeps hashes). This browser keeps the email for the pending list. Only
- *   when the owner explicitly picks a verified contact, shown by the
- *   contact code Contacts shows (`invitableContacts` offers those listed
- *   under the address typed; the label is the server's word), does the
- *   statement (version 3) also name that contact's identity key: only they
- *   are then added without asking. An address alone never binds anyone.
- * - **Invitee: accept, verify, publish.** Accepting binds the account; the
+ *   keeps hashes). This browser keeps the email for the pending list. A
+ *   caller may name a verified contact's identity key (`options.contact`,
+ *   statement version 3): only they are then added. An address alone never
+ *   binds anyone.
+ * - **Trust on first use (ADR-024 amendment 2026-11-25).** Neither side
+ *   has to compare codes first. The invitee's browser accepts the owner
+ *   identity whose device signed the statement it checks, and the owner's
+ *   browser adds the identity whose device signed a valid acceptance; each
+ *   identity becomes the pin for that person (the owner's project group,
+ *   and this browser's contact pins). Comparing codes stays available and
+ *   is shown as Verified or Not verified, but nothing waits on it. A
+ *   person whose pinned identity changed (`InvitationPerson.keyChanged`) is
+ *   never added or joined automatically: the owner reviews the change, or
+ *   trusts the new keys explicitly (`trustNewKeys`).
+ * - **Invitee: accept, publish.** Accepting binds the account; the
  *   invitee's browser checks the statement against the owner's device list
- *   and, once the owner is a verified contact (slice 5-1, the mutual
- *   comparison), each of its online certified devices makes a leaf for the
- *   project certified from the group's current epoch and publishes one
- *   KeyPackage (decision M3: every device that published one is added).
+ *   (checked against its pins) and each of its online certified devices
+ *   makes a leaf for the project certified from the group's current epoch
+ *   and publishes one KeyPackage (decision M3: every device that published
+ *   one is added).
  * - **Invitee: sign the acceptance.** Before its KeyPackage, a device signs
  *   an acceptance ("OZJ"): the invitation, by the hash of its statement,
  *   and the account and identity accepting it as the recipient of the
@@ -36,24 +44,24 @@
  *   person's invitation, and the signed-in email it reports is no check
  *   (nothing the account signs binds an email). The account's other
  *   devices publish KeyPackages once one of its devices signed.
- * - **Owner: verify and add.** The owner's next session lists accepted
- *   invitations: "waiting for keys" until KeyPackages arrive, "waiting for
- *   you to verify" until the invitee is a verified contact, "waiting for
- *   them to accept again" until a valid signed acceptance is there (one an
- *   older app version accepted has none). Only then, and only for a
- *   statement this account's device signed, are the KeyPackages claimed
- *   (once; kept locally until the Add lands), each checked (the invitee's
- *   account, a device of their verified list, its leaf certification), and
- *   one Add Commit with the statement's role travels with the Welcome and
- *   the owner's wraps of the new epoch (`addInvitee`). The account added is
- *   the one whose device signed the acceptance, never merely the one the
- *   server names. The server delivers the email, so whoever accepted is
- *   added without asking only when the statement names their identity
- *   (the owner invited that verified contact) and this browser has seen
- *   every removal from the project since its group began; otherwise the
- *   owner confirms the contact who accepted, shown by the contact code
- *   Contacts shows (`confirm-add`), or declines. An account this browser
- *   saw removed from the project is added back only on the owner's
+ * - **Owner: add.** The owner's next session lists accepted invitations:
+ *   "waiting for keys" until KeyPackages arrive, "keys changed" while the
+ *   acceptor's pinned identity changed and the owner has not trusted the
+ *   new keys, "waiting for them to accept again" until a valid signed
+ *   acceptance is there (one an older app version accepted has none). Only
+ *   then, and only for a statement this account's device signed, are the
+ *   KeyPackages claimed (once; kept locally until the Add lands), each
+ *   checked (the invitee's account, a device of their checked list, its
+ *   leaf certification), and one Add Commit with the statement's role
+ *   travels with the Welcome and the owner's wraps of the new epoch
+ *   (`addInvitee`). The account added is the one whose device signed the
+ *   acceptance, never merely the one the server names. Whoever accepted is
+ *   added without asking when this browser has seen every removal from the
+ *   project since its group began; otherwise the owner confirms the person
+ *   who accepted, shown by their contact code (`confirm-add`), or
+ *   declines. A statement that names an identity is completed only by an
+ *   acceptance of that identity (`accepted-by-other`). An account this
+ *   browser saw removed from the project is added back only on the owner's
  *   explicit confirmation (`confirm-re-add`). That check runs
  *   again on every attempt of the Add Commit, after catching up, so a
  *   removal another device of the owner made meanwhile stops it. A Commit
@@ -98,7 +106,12 @@ import {
   type E2eeKeyPackageRecord
 } from '@openzcad/shared';
 import type { AccountView } from './accountKeys';
-import { inspectContact, loadContacts, type ContactsContext } from './contacts';
+import {
+  inspectContact,
+  loadContacts,
+  trustNewKeys,
+  type ContactsContext
+} from './contacts';
 import { E2eeApiError } from './e2eeApi';
 import {
   addInvitee,
@@ -125,6 +138,14 @@ export interface InvitationPerson {
   readonly status: 'verified' | 'seen' | 'no-keys';
   /** Their device list, checked against this browser's pins. */
   readonly list: VerifiedDeviceList | null;
+  /**
+   * Their identity is not the one this browser pinned for them (a seen or
+   * verified pin, which every project group they share with this account
+   * also reads), and the user has not trusted the new keys here: nothing
+   * is added, joined or wrapped for them automatically. Absent reads as
+   * false.
+   */
+  readonly keyChanged?: boolean;
 }
 
 export interface InvitationPeople {
@@ -136,6 +157,12 @@ export interface InvitationPeople {
    * code, never bound by itself.
    */
   verifiedContacts?(email: string): Promise<InvitationPerson[]>;
+  /**
+   * The user's explicit "Trust new keys" for `userId`, whose identity
+   * changed: only when it is still the identity `identityKeyHash` (hex)
+   * names, which is what the user was shown.
+   */
+  trustNewKeys?(userId: string, identityKeyHash: string): Promise<void>;
 }
 
 export interface InvitationContext {
@@ -168,7 +195,8 @@ export function contactInvitationPeople(
             : view.status === 'no-keys'
               ? 'no-keys'
               : 'seen',
-        list: view.list
+        list: view.list,
+        keyChanged: view.keyChanged && !view.keyChangeTrusted
       };
     } catch (error) {
       if (error instanceof E2eeApiError && error.status === 404) return null;
@@ -194,8 +222,73 @@ export function contactInvitationPeople(
         if (person?.status === 'verified' && person.list) out.push(person);
       }
       return out;
+    },
+    async trustNewKeys(userId, identityKeyHash) {
+      const book = await loadContacts(contacts, account);
+      const view = await inspectContact(contacts, book, userId);
+      if (!view.list || toHex(view.list.identityKeyHash) !== identityKeyHash) {
+        throw new InvitationError(
+          'keys-changed',
+          'Their keys changed again since you reviewed them. Nothing was trusted; review them again.'
+        );
+      }
+      await trustNewKeys(contacts, view);
     }
   };
+}
+
+/** How this browser stands with one person's keys, as sharing shows it. */
+export interface PersonTrust {
+  readonly userId: string;
+  /** Compared codes, under their current identity: Verified. */
+  readonly verified: boolean;
+  /** Their identity is not the one pinned here, and not trusted again. */
+  readonly keyChanged: boolean;
+  /** Hex identity key hash now shown: what "Trust new keys" trusts. */
+  readonly identityKeyHash: string;
+}
+
+/**
+ * Where this browser stands with each of `userIds`' keys (Verified, Not
+ * verified, keys changed). Anyone whose keys cannot be looked up is left
+ * out.
+ */
+export async function peopleTrust(
+  ctx: Pick<InvitationContext, 'people'>,
+  userIds: readonly string[]
+): Promise<PersonTrust[]> {
+  const out: PersonTrust[] = [];
+  for (const userId of userIds) {
+    const person = await ctx.people.inspect(userId).catch(() => null);
+    if (!person?.list) continue;
+    out.push({
+      userId,
+      verified: person.status === 'verified' && !person.keyChanged,
+      keyChanged: person.keyChanged === true,
+      identityKeyHash: toHex(person.list.identityKeyHash)
+    });
+  }
+  return out;
+}
+
+/**
+ * The user's explicit "Trust new keys" for `userId`, whose identity changed,
+ * by the identity they were shown (hex): a first use again, recorded in
+ * this browser's pins. Nothing is added here; the next sweep adds an
+ * invitee who is then ready.
+ */
+export async function trustInviteeKeys(
+  ctx: Pick<InvitationContext, 'people'>,
+  userId: string,
+  identityKeyHash: string
+): Promise<void> {
+  if (!ctx.people.trustNewKeys) {
+    throw new InvitationError(
+      'keys-changed',
+      'This browser cannot record trusted keys. Compare codes with them instead.'
+    );
+  }
+  await ctx.people.trustNewKeys(userId, identityKeyHash);
 }
 
 /**
@@ -207,8 +300,15 @@ export async function contactCodeOf(list: VerifiedDeviceList): Promise<string> {
 }
 
 export type InvitationErrorCode =
-  /** The invitee (or, for the invitee, the owner) is not a verified contact. */
+  /** A contact the caller named is not (or no longer) the verified one. */
   | 'not-verified'
+  /**
+   * The invitee's (or, for the invitee, the owner's) identity is not the
+   * one this browser pinned for them: review it, or trust the new keys.
+   */
+  | 'keys-changed'
+  /** Their keys cannot be looked up (none, or no relation any more). */
+  | 'no-keys'
   /** The statement does not verify, or is not this account's to complete. */
   | 'statement-invalid'
   /** A claimed KeyPackage is not the invitee's, or its leaf does not verify. */
@@ -230,9 +330,8 @@ export type InvitationErrorCode =
    */
   | 'removed-member'
   /**
-   * The owner confirms this Add first (`confirmedIdentity`): the
-   * invitation names no identity, or this browser has not seen every
-   * removal from the project.
+   * The owner confirms this Add first (`confirmedIdentity`): this browser
+   * has not seen every removal from the project.
    */
   | 'needs-confirmation';
 
@@ -548,15 +647,15 @@ async function removedMembers(
 /**
  * How an Add of `memberUserId` to `projectId` may go ahead: `removed`
  * (this browser saw them removed: the owner confirms adding them back),
- * `confirm` (the owner confirms: the invitation names no identity, or this
- * browser cannot vouch that it saw every removal from the project), or
- * `automatic`.
+ * `confirm` (the owner confirms: this browser cannot vouch that it saw
+ * every removal from the project), or `automatic`. Whether the invitation
+ * names an identity no longer matters here (trust on first use, ADR-024
+ * amendment 2026-11-25); a changed identity is refused before this gate.
  */
 function addGate(
   view: RemovalView | null,
   projectId: string,
-  memberUserId: string,
-  bound: boolean
+  memberUserId: string
 ): 'removed' | 'confirm' | 'automatic' {
   if (
     view?.removed.some(
@@ -565,8 +664,7 @@ function addGate(
   ) {
     return 'removed';
   }
-  return !bound ||
-    view === null ||
+  return view === null ||
     view.unsettled.has(projectId) ||
     !view.known.has(projectId)
     ? 'confirm'
@@ -589,10 +687,10 @@ export interface InvitableContact {
 }
 
 /**
- * The verified contacts listed under `email`, offered to the owner as an
- * explicit choice when inviting. The server labels contacts with their
- * addresses, so it could list another contact under this one: the owner
- * picks by contact code, and the default stays an email-only invitation.
+ * The verified contacts listed under `email`, by contact code, for a caller
+ * that lets the owner bind an invitation to one explicitly. The server
+ * labels contacts with their addresses, so it could list another contact
+ * under this one: nothing here binds anyone by itself.
  */
 export async function invitableContacts(
   ctx: InvitationContext,
@@ -618,10 +716,11 @@ export async function invitableContacts(
  * Invite `email` to an encrypted project this account owns, as `role`: this
  * device signs the statement, the Worker mails the link. The email stays in
  * this browser only. Without `options.contact` the statement names no
- * identity, and the owner confirms whoever accepts. With it (the owner's
- * explicit pick of a verified contact, by the identity its code showed),
- * the statement names that identity key: only an acceptance by them is
- * added without the owner's confirmation.
+ * identity, and whoever accepts with a valid signed acceptance is added on
+ * first use (or, when their pinned identity changed, only once the owner
+ * reviews it). With it (an explicit pick of a verified contact, by the
+ * identity its code showed), the statement names that identity key: only
+ * an acceptance by them is ever added.
  */
 export async function inviteToEncryptedProject(
   ctx: InvitationContext,
@@ -734,25 +833,32 @@ export async function signInvitationStatement(
 export type OwnerInvitationState =
   /** Sent; the invitee has not accepted it yet. */
   | 'invited'
-  /** Accepted; no device of the invitee has published a KeyPackage yet. */
-  | 'waiting-for-keys'
-  /** KeyPackages are waiting; the invitee is not a verified contact yet. */
-  | 'waiting-for-verification'
   /**
-   * Verified, with KeyPackages, but no valid signed acceptance (an older
-   * app version accepted): they need to open OpenZCAD again.
+   * Accepted; no device of the invitee has published a KeyPackage yet, or
+   * their keys cannot be looked up.
+   */
+  | 'waiting-for-keys'
+  /**
+   * KeyPackages are waiting, but the acceptor's identity is not the one
+   * this browser pinned for them, and the owner has not trusted the new
+   * keys: never added automatically. The owner reviews the change
+   * (compares codes) or trusts the new keys explicitly.
+   */
+  | 'keys-changed'
+  /**
+   * With KeyPackages, but no valid signed acceptance (an older app version
+   * accepted): they need to open OpenZCAD again.
    */
   | 'needs-acceptance'
   /**
-   * Verified and accepted, but this browser saw them removed from this
-   * project before: only the owner's explicit confirmation adds them back.
+   * Accepted, but this browser saw them removed from this project before:
+   * only the owner's explicit confirmation adds them back.
    */
   | 'confirm-re-add'
   /**
-   * A verified contact accepted, with KeyPackages, but the invitation names
-   * no identity (the server delivered the email), or this browser has not
-   * seen every removal from the project: the owner confirms the contact
-   * shown (`acceptor`) or declines.
+   * Accepted, with KeyPackages, but this browser has not seen every
+   * removal from the project: the owner confirms the person shown
+   * (`acceptor`) or declines.
    */
   | 'confirm-add'
   /**
@@ -761,9 +867,10 @@ export type OwnerInvitationState =
    */
   | 'accepted-by-other'
   /**
-   * Verified, accepted by the very contact the invitation names, with
-   * KeyPackages, and every removal from the project seen here: this
-   * browser adds them.
+   * Accepted by signature (by the contact the invitation names, when it
+   * names one), with KeyPackages, under an identity this browser pinned or
+   * first sees now, and every removal from the project seen here: this
+   * browser adds them (trust on first use).
    */
   | 'ready'
   | 'completed'
@@ -771,9 +878,9 @@ export type OwnerInvitationState =
   | 'expired';
 
 /**
- * The verified contact whose device signed an invitation's acceptance, as
- * the owner's confirmation names them: from their verified device list,
- * never from the server's listing.
+ * The person whose device signed an invitation's acceptance, as the owner's
+ * list names them: from their device list (checked against this browser's
+ * pins), never from the server's listing.
  */
 export interface InvitationAcceptor {
   readonly userId: string;
@@ -783,6 +890,12 @@ export interface InvitationAcceptor {
   readonly code: string;
   /** The address Contacts lists them under: the server's word. */
   readonly email: string | null;
+  /**
+   * The owner compared codes with them (a verified contact whose key has
+   * not changed): shown as Verified, else Not verified. Optional, never a
+   * condition for adding them.
+   */
+  readonly verified: boolean;
 }
 
 export interface OwnerInvitation {
@@ -803,7 +916,10 @@ function ownerState(
   record: E2eeInvitationRecord,
   at: number,
   standing: {
-    readonly verified: boolean;
+    /** Their device list could be looked up and checked. */
+    readonly known: boolean;
+    /** Their identity is not the one pinned here, and not trusted again. */
+    readonly keyChanged: boolean;
     readonly claimedHere: boolean;
     readonly accepted: boolean;
     readonly otherAccepted: boolean;
@@ -817,8 +933,8 @@ function ownerState(
   const waiting =
     (record.keyPackages ?? 0) +
     (standing.claimedHere ? (record.claimedKeyPackages ?? 0) : 0);
-  if (waiting === 0) return 'waiting-for-keys';
-  if (!standing.verified) return 'waiting-for-verification';
+  if (waiting === 0 || !standing.known) return 'waiting-for-keys';
+  if (standing.keyChanged) return 'keys-changed';
   if (!standing.accepted) return 'needs-acceptance';
   if (standing.otherAccepted) return 'accepted-by-other';
   return standing.gate === 'removed'
@@ -830,8 +946,8 @@ function ownerState(
 
 /**
  * `record`'s statement, when this account's device signed it, and the
- * verified contact `person` whose device signed a valid acceptance of it:
- * what `addInvitedMember` checks again.
+ * person `person` (verified or not) whose device signed a valid acceptance
+ * of it: what `addInvitedMember` checks again.
  */
 async function acceptedBy(
   ctx: InvitationContext,
@@ -848,7 +964,7 @@ async function acceptedBy(
   } catch {
     return { statement: null, acceptor: null };
   }
-  if (!record.acceptance || person?.status !== 'verified' || !person.list) {
+  if (!record.acceptance || !person?.list) {
     return { statement, acceptor: null };
   }
   try {
@@ -862,7 +978,8 @@ async function acceptedBy(
       userId: person.userId,
       identityKeyHash: toHex(person.list.identityKeyHash),
       code: await contactCodeOf(person.list),
-      email: person.email
+      email: person.email,
+      verified: person.status === 'verified' && !person.keyChanged
     }
   };
 }
@@ -870,8 +987,8 @@ async function acceptedBy(
 /**
  * `record`'s statement, when this account's device signed it, and the
  * verified contact whose device signed a valid acceptance of it (looked up
- * now): what the owner reviews before confirming an Add, as the migration
- * cutover's member approval does. `options.at` checks the statement's
+ * now; null for anyone not verified): what the migration cutover's member
+ * approval reviews. `options.at` checks the statement's
  * validity at another time than now: when an Add completed it, for the
  * migration's review of a member already added (the signature is what
  * names them; freshness mattered when they were added).
@@ -887,7 +1004,18 @@ export async function reviewAcceptance(
   const person = record.acceptedByUserId
     ? await ctx.people.inspect(record.acceptedByUserId).catch(() => null)
     : null;
-  return acceptedBy(ctx, record, person, options.at ?? now(ctx));
+  const reviewed = await acceptedBy(
+    ctx,
+    record,
+    person,
+    options.at ?? now(ctx)
+  );
+  // The migration's member approval (slice 7-4) still reviews verified
+  // contacts only: the 2026-11-25 trust-on-first-use amendment covers
+  // emailed invitations, not that roster.
+  return reviewed.acceptor?.verified
+    ? reviewed
+    : { statement: reviewed.statement, acceptor: null };
 }
 
 async function describe(
@@ -926,16 +1054,12 @@ async function describe(
     out.push({
       record,
       state: ownerState(record, at, {
-        verified: person?.status === 'verified',
+        known: Boolean(person?.list),
+        keyChanged: person?.keyChanged === true,
         claimedHere: claimed !== null,
         accepted: acceptor !== null,
         otherAccepted: named !== undefined && acceptor !== null && !bound,
-        gate: addGate(
-          removed,
-          record.projectId,
-          record.acceptedByUserId ?? '',
-          bound
-        )
+        gate: addGate(removed, record.projectId, record.acceptedByUserId ?? '')
       }),
       email: emails.get(record.invitationId) ?? person?.email ?? null,
       statement,
@@ -1030,18 +1154,21 @@ async function checkedKeyPackage(
 /**
  * Add the invitee of one accepted invitation (owner only): the statement
  * must be this account's, signed by one of its certified devices and still
- * valid; the invitee must be a verified contact (an unverified one is never
- * added, whatever the server says) whose certified device signed an
- * acceptance of exactly this statement as the recipient of its email hash,
- * and, when the statement names an identity, with that identity.
+ * valid; a certified device of the invitee's device list (checked against
+ * this browser's pins) must have signed an acceptance of exactly this
+ * statement as the recipient of its email hash, and, when the statement
+ * names an identity, with that identity. Verifying the invitee first is
+ * not required (trust on first use, ADR-024 amendment 2026-11-25), but an
+ * identity that is not the one pinned for them (`keyChanged`) is never
+ * added, confirmed or not (`keys-changed`), until the owner trusts it.
  *
- * Without `confirmedIdentity` (the sweep), it goes ahead only for a
- * statement that names the accepting identity, in a project whose every
- * removal this browser saw, for an account it never saw removed from it
- * (`needs-confirmation`, `removed-member`). `confirmedIdentity` is the
- * owner's explicit confirmation of the hex identity key hash the
- * confirmation showed (`OwnerInvitation.acceptor`; the migration cutover
- * names each verified member's): the acceptance must be by exactly it.
+ * Without `confirmedIdentity` (the sweep), it goes ahead only in a project
+ * whose every removal this browser saw, for an account it never saw
+ * removed from it (`needs-confirmation`, `removed-member`).
+ * `confirmedIdentity` is the owner's explicit confirmation of the hex
+ * identity key hash the confirmation showed (`OwnerInvitation.acceptor`;
+ * the migration cutover names each verified member's): the acceptance must
+ * be by exactly it.
  * `projectId`, when given, is the project the caller means to add to (the
  * migration's): both the record and its verified statement must name it,
  * or nothing is added. The KeyPackages are claimed once (or taken from
@@ -1087,10 +1214,16 @@ export async function addInvitedMember(
     );
   }
   const person = await ctx.people.inspect(invitee);
-  if (!person || person.status !== 'verified' || !person.list) {
+  if (!person?.list) {
     throw new InvitationError(
-      'not-verified',
-      'Verify this person first: compare your codes with them in Settings › Encryption › Contacts.'
+      'no-keys',
+      'Their encryption keys could not be looked up. Nothing was added; try again later.'
+    );
+  }
+  if (person.keyChanged) {
+    throw new InvitationError(
+      'keys-changed',
+      'Their encryption keys changed. Review the change, or trust their new keys, before adding them. Nothing was added.'
     );
   }
   // The account added is the one whose device accepted this statement.
@@ -1117,8 +1250,7 @@ export async function addInvitedMember(
     const gate = addGate(
       await removedMembers(ctx),
       invitation.projectId,
-      invitee,
-      named !== undefined
+      invitee
     );
     if (gate === 'removed') {
       throw new InvitationError(
@@ -1229,8 +1361,9 @@ export async function declineInvitation(
 }
 
 /**
- * Add every invitee of `invitations` who is ready (verified, accepted by
- * signature by the contact the invitation names, with KeyPackages, in a
+ * Add every invitee of `invitations` who is ready (accepted by signature,
+ * by the contact the invitation names when it names one, under an identity
+ * that did not change from the one pinned for them, with KeyPackages, in a
  * project whose every removal this browser saw, never removed from it).
  * Everyone else waits for the owner. One that fails stays pending and is
  * reported; the rest still go ahead.
@@ -1386,8 +1519,13 @@ export async function confirmEncryptedInvitation(
 
 /** Where an accepted invitation stands for the invitee. */
 export type InviteeInvitationState =
-  /** Compare codes with the owner first (the mutual verification). */
-  | 'verify-owner'
+  /**
+   * The owner's identity is not the one this browser pinned for them, and
+   * the person has not trusted the new keys: nothing is signed or
+   * published until they review it (trust on first use covers only a first
+   * introduction).
+   */
+  | 'owner-keys-changed'
   /** The statement does not verify against the owner's device list. */
   | 'invalid'
   /** This device published its KeyPackage; the owner adds it next. */
@@ -1398,7 +1536,11 @@ export type InviteeInvitationState =
    * role shown), or it is not theirs.
    */
   | 'confirm'
-  /** The owner is verified; this device publishes its KeyPackage now. */
+  /**
+   * Accepted here (or signed by another device of this account), under an
+   * owner identity this browser pinned or first sees now: this device
+   * publishes its KeyPackage now. Verifying the owner is optional.
+   */
   | 'ready'
   /** This browser cannot hold a leaf (read-only or not set up). */
   | 'no-device';
@@ -1422,6 +1564,8 @@ export interface InviteeInvitation {
    * Join names the inviter. Null with `statement`.
    */
   readonly ownerCode: string | null;
+  /** The person compared codes with the owner: Verified, else Not verified. */
+  readonly ownerVerified: boolean;
 }
 
 /**
@@ -1548,7 +1692,9 @@ export async function acceptedInvitations(
           { inviteeEmail: ctx.email ?? null }
         );
         verified = statement;
-        if (owner.status !== 'verified') state = 'verify-owner';
+        // Trust on first use: the owner identity whose device signed the
+        // statement is accepted unverified, unless it replaced one pinned.
+        if (owner.keyChanged) state = 'owner-keys-changed';
         else if (!device) state = 'no-device';
         else {
           const accepted = await acceptedHere(
@@ -1575,7 +1721,8 @@ export async function acceptedInvitations(
       statement: verified,
       statementHash: verified ? await statementHashOf(record) : null,
       ownerCode:
-        verified && owner?.list ? await contactCodeOf(owner.list) : null
+        verified && owner?.list ? await contactCodeOf(owner.list) : null,
+      ownerVerified: owner?.status === 'verified' && !owner.keyChanged
     });
   }
   return out;
@@ -1583,8 +1730,10 @@ export async function acceptedInvitations(
 
 /**
  * Publish this device's KeyPackage for every accepted invitation whose
- * owner is verified and whose statement verifies (each of the invitee's
- * online devices does this for itself, decision M3), after the signed
+ * statement verifies against the owner's device list, under an owner
+ * identity that did not change from the one pinned here (trust on first
+ * use: verifying the owner is optional), each of the invitee's online
+ * devices for itself (decision M3), after the signed
  * acceptance the owner checks before adding anyone. This device signs that
  * acceptance only for an invitation the person accepted on it (the link
  * opened here, or the in-app confirmation); one the server merely lists,
@@ -1608,12 +1757,18 @@ export async function publishInvitationKeyPackages(
   const published: string[] = [];
   for (const { record } of ready) {
     // Callers may supply a cached listing. Recheck its signed, recipient-bound
-    // intent and current contact pin before persisting the independent owner.
+    // intent and current contact pin before pinning the project's owner.
     const owner = await ctx.people.inspect(record.inviterUserId);
-    if (owner?.status !== 'verified' || !owner.list || !ctx.email) {
+    if (!owner?.list || !ctx.email) {
       throw new InvitationError(
-        'not-verified',
-        'Verify the project owner and invitation recipient before joining.'
+        'no-keys',
+        'The project owner’s keys or your signed-in email could not be checked. Nothing was joined.'
+      );
+    }
+    if (owner.keyChanged) {
+      throw new InvitationError(
+        'keys-changed',
+        'The project owner’s encryption keys changed. Review the change before joining. Nothing was joined.'
       );
     }
     const statement = await verifiedStatement(record, owner.list, now(ctx), {

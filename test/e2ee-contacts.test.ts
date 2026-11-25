@@ -62,6 +62,7 @@ import {
   contactScanText,
   recordKeyChange,
   sealContactsList,
+  trustNewKeys,
   untrustContact,
   verifiedEncryptionKey,
   verifyContact,
@@ -771,6 +772,110 @@ describe('verifying contacts in the browser', () => {
     ]);
   });
 
+  it('pins an unverified contact on first sight, flags a later key change for invitations, and trusts new keys only explicitly', async () => {
+    const { alice, bob } = await pair();
+    const people = contactInvitationPeople(alice.contacts, alice.account);
+    // First sight: nobody compared codes, and nothing is flagged (trust on
+    // first use, ADR-024 amendment 2026-11-25).
+    expect(await people.inspect(BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: false
+    });
+    // Bob's identity is replaced: the pin this browser kept flags it.
+    const first = toHex(bob.account.list.identityKeyHash);
+    const replacement = await generateRecoveryKey();
+    bob.account = ready(
+      await replaceRecoveryKey(
+        bob.keys,
+        bob.account,
+        replacement.secret,
+        bob.recovery.secret
+      )
+    );
+    const second = toHex(bob.account.list.identityKeyHash);
+    expect(second).not.toBe(first);
+    expect(await people.inspect(BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: true
+    });
+    // It stays flagged on every later look, until trusted.
+    expect(await people.inspect(BOB)).toMatchObject({ keyChanged: true });
+    // Trusting another identity than the one shown trusts nothing.
+    await expect(people.trustNewKeys!(BOB, first)).rejects.toMatchObject({
+      code: 'keys-changed'
+    });
+    expect(await people.inspect(BOB)).toMatchObject({ keyChanged: true });
+    await people.trustNewKeys!(BOB, second);
+    expect(await people.inspect(BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: false
+    });
+    const book = await loadContacts(alice.contacts, alice.account);
+    expect(book.contacts.find((c) => c.userId === BOB)?.standing).toBe('seen');
+    // Trust never verifies, and never yields a key to wrap to.
+    expect(
+      verifiedEncryptionKey(await inspectContact(alice.contacts, book, BOB))
+    ).toBeNull();
+    // Another replacement is flagged again: the trust named one identity.
+    bob.account = ready(
+      await replaceRecoveryKey(
+        bob.keys,
+        bob.account,
+        (await generateRecoveryKey()).secret,
+        replacement.secret
+      )
+    );
+    expect(await people.inspect(BOB)).toMatchObject({ keyChanged: true });
+  });
+
+  it('keeps a verified contact whose key changed flagged for invitations until the new keys are trusted', async () => {
+    const { alice, bob } = await pair();
+    let book = await loadContacts(alice.contacts, alice.account);
+    book = await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, BOB),
+      alice.recovery.secret
+    );
+    const people = contactInvitationPeople(alice.contacts, alice.account);
+    expect(await people.inspect(BOB)).toMatchObject({
+      status: 'verified',
+      keyChanged: false
+    });
+    bob.account = ready(
+      await replaceRecoveryKey(
+        bob.keys,
+        bob.account,
+        (await generateRecoveryKey()).secret,
+        bob.recovery.secret
+      )
+    );
+    expect(await people.inspect(BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: true
+    });
+    const changed = await inspectContact(alice.contacts, book, BOB);
+    expect(changed).toMatchObject({
+      keyChanged: true,
+      keyChangeUnsigned: true,
+      keyChangeTrusted: false
+    });
+    await trustNewKeys(alice.contacts, changed);
+    // The contacts list still holds the old verification: the contact
+    // stays key-changed there and unverified, but invitations may add the
+    // identity the owner trusted.
+    expect(await inspectContact(alice.contacts, book, BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: true,
+      keyChangeTrusted: true
+    });
+    expect(await people.inspect(BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: false
+    });
+  });
+
   it('refuses the old verified identity once a replacement was seen (#898 review)', async () => {
     const { srv, alice, bob } = await pair();
     let book = await loadContacts(alice.contacts, alice.account);
@@ -1008,8 +1113,8 @@ describe('inviting a verified contact to an encrypted project (#1465 review)', (
     expect(offered[0]!.code).not.toBe(
       (await ownVerificationCode(bob.account)).code
     );
-    // Invited by address alone, the statement names no identity: whoever
-    // accepts waits for Alice's confirmation.
+    // Invited by address alone, the statement names no identity: nothing
+    // the server lists under the address is bound into it.
     await inviteToEncryptedProject(ctx, 'proj_shared', EMAILS[BOB]!, 'editor');
     expect(signed(0).inviteeIdentityKeyHash).toBeUndefined();
     expect(signed(0).linkTokenHash).toBeDefined();

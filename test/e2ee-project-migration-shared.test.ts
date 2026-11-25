@@ -584,9 +584,10 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
       { userId: THIRD, reason: 'waiting-for-keys' }
     ]);
 
-    // A member publishes only once they verified the owner (mutual).
-    expect(await publishKeys(w, editor)).toEqual([]);
-    verify(w, OTHER, OWNER);
+    // A member publishes without verifying the owner first (trust on first
+    // use, ADR-024 amendment 2026-11-25; a changed owner identity still
+    // blocks it, test/e2ee-invitations-browser.test.ts). The owner's side
+    // of the migration still waits for verification, below.
     expect((await publishKeys(w, editor)).length).toBe(1);
     // The owner has not verified the editor; the viewer has no keys out.
     const second = await failure(ownerSide.migrate(projectId));

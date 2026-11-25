@@ -185,21 +185,6 @@ export async function closeSettings(page: Page) {
   await expect(settings).toHaveCount(0, { timeout: SYNC_BUDGET_MS });
 }
 
-/** Compares codes with `name` in the open contact panel and signs it. */
-async function verifyContact(
-  settings: ReturnType<Page['getByRole']>,
-  name: string,
-  recoveryKey: string
-) {
-  await settings.getByRole('button', { name: 'Codes match — verify' }).click();
-  const confirm = settings.getByRole('group', { name: `Verify ${name}` });
-  await confirm.getByLabel('Recovery key').fill(recoveryKey);
-  await confirm.getByRole('button', { name: 'Verify contact' }).click();
-  await expect(
-    settings.getByRole('button', { name: 'Stop trusting' })
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-}
-
 export interface SharedWorld {
   server: E2eeServer;
   alice: Page;
@@ -291,10 +276,10 @@ export async function shareWithBob(
 /**
  * One more member of Alice's project, in a browser context of its own:
  * Alice invites it in `role` from the sharing dialog (an encrypted
- * project's editors need no edit-lease rollout, slice 5-4), it accepts
- * after setting up encryption, both verify each other by digit groups, and
- * Alice's browser adds it by an MLS Commit. Its page then shows the
- * project.
+ * project's editors need no edit-lease rollout, slice 5-4), its opened
+ * link is accepted once it has set up encryption, and Alice's browser adds
+ * it by an MLS Commit on first use, with no code comparison (ADR-024
+ * amendment 2026-11-25). Its page then shows the project.
  */
 export async function addSharedMember(
   browser: Browser,
@@ -339,39 +324,24 @@ export async function addSharedMember(
       .getByRole('dialog', { name: 'Settings' })
       .getByRole('button', { name: 'Set up encryption' })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  const seed = await seedE2eeDevice(page, server, {
+  await seedE2eeDevice(page, server, {
     label: member.label,
     userId: member.userId
   });
   await page.reload();
+  // The opened link is the acceptance: no Accept click, no comparison.
   const encryption = await openEncryptionSettings(page);
-  await encryption.getByRole('button', { name: 'Accept invitation' }).click();
   await expect(
     encryption.getByText(
       `${ALICE_EMAIL} invited you as ${role === 'editor' ? 'an editor' : 'a viewer'}`
     )
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await encryption
-    .getByRole('button', { name: `Verify ${ALICE_EMAIL}` })
-    .first()
-    .click();
-  await verifyContact(encryption, ALICE_EMAIL, seed.recoveryKey);
   await expect(
-    encryption.getByText(
-      'Your keys are ready. Waiting for them to verify you and add you.'
-    )
+    encryption.getByText('Your keys are ready. Waiting for them to add you.')
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
 
-  // Alice verifies the member; her browser adds it by an MLS Commit.
+  // Alice's sharing dialog adds the member by an MLS Commit.
   await alice.getByRole('button', { name: /Open project sharing/ }).click();
-  await dialog.getByRole('button', { name: /^Verify / }).click();
-  const aliceEncryption = alice.getByRole('dialog', { name: 'Settings' });
-  await verifyContact(aliceEncryption, member.email, world.aliceRecoveryKey);
-  // The invitation went out before she verified them, so it names no
-  // identity: she confirms the contact who accepted, by their code.
-  await aliceEncryption
-    .getByRole('button', { name: `Add ${member.email}` })
-    .click({ timeout: SYNC_BUDGET_MS });
   await expect
     .poll(
       () =>
@@ -383,7 +353,7 @@ export async function addSharedMember(
       { timeout: COMMIT_BUDGET_MS }
     )
     .toEqual({ role });
-  await closeSettings(alice);
+  await dialog.getByRole('button', { name: 'Close sharing' }).click();
 
   // The member opens the project from its shelf.
   await page.reload();

@@ -99,6 +99,14 @@ export interface ContactPin {
    * makes a verified contact count as verified.
    */
   readonly verifiedHere?: string | null;
+  /**
+   * The identity key hash the user explicitly trusted on this browser after
+   * a key change ("Trust new keys", trust on first use again; ADR-024
+   * amendment 2026-11-25), or null. It never makes a contact verified: it
+   * only lets invitations treat this identity as the pinned one again. It
+   * is dropped when the identity changes once more.
+   */
+  readonly trustedKeys?: string | null;
 }
 
 export interface ContactPinStore {
@@ -222,6 +230,10 @@ function readContactPin(value: unknown): ContactPin | null {
         verifiedHere:
           typeof pin.verifiedHere === 'string' && HASH.test(pin.verifiedHere)
             ? pin.verifiedHere
+            : null,
+        trustedKeys:
+          typeof pin.trustedKeys === 'string' && HASH.test(pin.trustedKeys)
+            ? pin.trustedKeys
             : null
       }
     : null;
@@ -358,11 +370,13 @@ export function advancedContactPin(
   }
   if (!follows(current, valid)) return null;
   // The first sighting of an identity stays its first sighting, and a
-  // comparison made here stays until the identity changes.
+  // comparison made here, or keys trusted here, stay until the identity
+  // changes.
   return {
     ...valid,
     seenAt: Math.min(current.seenAt, valid.seenAt),
-    verifiedHere: valid.verifiedHere ?? current.verifiedHere ?? null
+    verifiedHere: valid.verifiedHere ?? current.verifiedHere ?? null,
+    trustedKeys: valid.trustedKeys ?? current.trustedKeys ?? null
   };
 }
 

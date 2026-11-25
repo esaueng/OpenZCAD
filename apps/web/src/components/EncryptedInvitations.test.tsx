@@ -11,17 +11,30 @@ import type {
  * Settings › Encryption › Invitations: a Join shows the role and project
  * the verified statement names and the inviter by the contact code
  * Contacts shows, never the server's listing or email; it confirms
- * exactly the listing shown. An owner confirms (or declines) the contact
- * who accepted an invitation by the same code.
+ * exactly the listing shown. An opened invitation link is accepted with
+ * no separate click (trust on first use, ADR-024 amendment 2026-11-25).
+ * An owner confirms (or declines) the person who accepted an invitation
+ * by the same code when the removal gate asks for it.
  */
 
 const syncInvitations = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const acceptEncryptedInvitation =
+  vi.fn<(...args: unknown[]) => Promise<unknown>>();
+let pendingToken: string | null = null;
+const clearPendingEncryptedInvitation = vi.fn(() => {
+  pendingToken = null;
+});
 const confirmEncryptedInvitation =
   vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const addInvitedMember = vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const declineInvitation = vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const requestContactVerification = vi.fn<(userId: string) => void>();
 
+vi.mock('../lib/e2ee/encryptedInvitationLink', () => ({
+  pendingEncryptedInvitation: () => pendingToken,
+  subscribePendingEncryptedInvitation: () => () => undefined,
+  clearPendingEncryptedInvitation: () => clearPendingEncryptedInvitation()
+}));
 vi.mock('../lib/desktopBridge', () => ({
   desktopFetch: async () =>
     Response.json({ enabled: true, projectsEnabled: true })
@@ -31,6 +44,8 @@ vi.mock('../lib/e2ee/encryptedProjects', () => ({
 }));
 vi.mock('../lib/e2ee/invitations', () => ({
   syncInvitations: (...args: unknown[]) => syncInvitations(...args),
+  acceptEncryptedInvitation: (...args: unknown[]) =>
+    acceptEncryptedInvitation(...args),
   confirmEncryptedInvitation: (...args: unknown[]) =>
     confirmEncryptedInvitation(...args),
   addInvitedMember: (...args: unknown[]) => addInvitedMember(...args),
@@ -69,6 +84,7 @@ function listing(overrides: Partial<InviteeInvitation> = {}) {
     statement,
     statementHash: 'ab'.repeat(32),
     ownerCode: '12345 67890 12345',
+    ownerVerified: false,
     ...overrides
   };
   return {
@@ -81,7 +97,10 @@ function listing(overrides: Partial<InviteeInvitation> = {}) {
 }
 
 beforeEach(() => {
+  pendingToken = null;
   syncInvitations.mockReset();
+  acceptEncryptedInvitation.mockReset();
+  clearPendingEncryptedInvitation.mockClear();
   confirmEncryptedInvitation.mockReset();
   addInvitedMember.mockReset();
   declineInvitation.mockReset();
@@ -99,7 +118,7 @@ describe('EncryptedInvitations', () => {
     });
     expect(
       screen.getByText(
-        'Your verified contact invited you to project proj_1 as a viewer'
+        'someone-else@example.com invited you to project proj_1 as a viewer'
       )
     ).toBeTruthy();
     // The owner's contact code, as Contacts shows it, and a way there.
@@ -108,9 +127,8 @@ describe('EncryptedInvitations', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Open contact' }));
     expect(requestContactVerification).toHaveBeenCalledWith('user_owner');
-    // Neither the server's role nor its email text labels the Join.
+    // The server's role never labels the Join.
     expect(screen.queryByText(/an editor/)).toBeNull();
-    expect(screen.queryByText(/someone-else@example\.com/)).toBeNull();
     fireEvent.click(join);
     await waitFor(() =>
       expect(confirmEncryptedInvitation).toHaveBeenCalledOnce()
@@ -157,7 +175,8 @@ describe('EncryptedInvitations', () => {
         userId: 'user_carol',
         identityKeyHash: 'cd'.repeat(32),
         code: '99999 88888 77777',
-        email: 'carol@example.com'
+        email: 'carol@example.com',
+        verified: false
       }
     };
     syncInvitations.mockResolvedValue({
@@ -200,5 +219,48 @@ describe('EncryptedInvitations', () => {
       expect(declineInvitation).toHaveBeenCalledWith({}, 'proj_1', 'inv_1')
     );
     expect(addInvitedMember).toHaveBeenCalledOnce();
+  });
+
+  it('accepts an opened invitation link with no Accept click, once this device is ready', async () => {
+    syncInvitations.mockResolvedValue({
+      incoming: [],
+      outgoing: [],
+      joined: [],
+      added: [],
+      errors: []
+    });
+    acceptEncryptedInvitation.mockResolvedValue({ linked: true });
+    pendingToken = 'tok_opened';
+    const { unmount } = render(<EncryptedInvitations ready={false} />);
+    // Not set up here yet: nothing is accepted, and nothing asks to.
+    expect(
+      await screen.findByText(/Set up encryption on this device first/)
+    ).toBeTruthy();
+    expect(acceptEncryptedInvitation).not.toHaveBeenCalled();
+    unmount();
+
+    render(<EncryptedInvitations ready />);
+    await waitFor(() =>
+      expect(acceptEncryptedInvitation).toHaveBeenCalledOnce()
+    );
+    expect(acceptEncryptedInvitation.mock.calls[0]![1]).toBe('tok_opened');
+    expect(clearPendingEncryptedInvitation).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole('button', { name: 'Accept invitation' })
+    ).toBeNull();
+  });
+
+  it('never joins an invitation whose owner keys changed: it offers a review instead', async () => {
+    syncInvitations.mockResolvedValue(listing({ state: 'owner-keys-changed' }));
+    render(<EncryptedInvitations ready />);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Review someone-else@example.com'
+      })
+    );
+    expect(requestContactVerification).toHaveBeenCalledWith('user_owner');
+    expect(screen.getByText(/encryption keys changed/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Join/ })).toBeNull();
+    expect(confirmEncryptedInvitation).not.toHaveBeenCalled();
   });
 });
