@@ -3,7 +3,7 @@ import type { E2eeWriteAuthorization } from './e2eeWriteAuthorization';
 
 /**
  * The identities an account's devices pinned for other people on first use
- * (migration 0069, ADR-024 amendment 2026-11-25): one record per account,
+ * (migration 0070, ADR-024 amendment 2026-11-25): one record per account,
  * sealed under the account key in the browser
  * (`src/lib/e2ee/firstUsePins.ts`), so every owner device compares an
  * invitee against what any of them added. The Worker never reads a pin. It
@@ -36,7 +36,7 @@ export interface FirstUsePinsSnapshot {
   updatedAt: string | null;
 }
 
-/** Whether migration 0069 installed the table and its erasure fence. */
+/** Whether migration 0070 installed the table and its erasure fence. */
 export const isFirstUsePinStorageReady = cachedSchemaProbe(
   `SELECT
      (SELECT COUNT(*) FROM pragma_table_info('e2ee_first_use_pins')

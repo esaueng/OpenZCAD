@@ -1,5 +1,5 @@
 /**
- * The account's first-use pins on the Worker (migration 0069, ADR-024
+ * The account's first-use pins on the Worker (migration 0070, ADR-024
  * amendment 2026-11-25): one opaque sealed record per account, stored by
  * compare-and-set on its revision, whose sealed sequence must rise with
  * every write, and erased with the profile.

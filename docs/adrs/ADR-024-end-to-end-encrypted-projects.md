@@ -2011,7 +2011,7 @@ holds only ciphertext.
   pins**: one record per account sealed under the account key
   (`FIRST_USE_PINS_RECORD`, the sealed-record layout of the account
   settings and share link names, `/api/e2ee/first-use-pins`, migration
-  0069), so every unlocked device of the account reads and merges it. It
+  0070), so every unlocked device of the account reads and merges it. It
   keeps, per person, every identity a device accepted on first use, the
   identity last trusted explicitly, and the identities a trust superseded.
   An acceptor's identity counts only when it is the trusted one, or, with

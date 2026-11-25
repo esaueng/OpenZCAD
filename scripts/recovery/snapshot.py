@@ -107,7 +107,7 @@ def load_sql(data: bytes):
 
 
 # Migrations above 0050 reviewed one by one (other numbers are still in review).
-REVIEWED_AFTER_0050 = frozenset({53, 54, 55, 56, 57, 58, 59, 60, 61, 64, 65, 66, 67, 69})
+REVIEWED_AFTER_0050 = frozenset({53, 54, 55, 56, 57, 58, 59, 60, 61, 64, 65, 66, 67, 70})
 
 
 def required_objects(db):
@@ -152,7 +152,7 @@ def required_objects(db):
     # 0066 adds e2ee_share_links.history (a flag): no stored objects or keys.
     # 0067 adds e2ee_share_link_names (one record per account sealed under its
     # account key, base64url text in the row): no stored objects or keys.
-    # 0069 adds e2ee_first_use_pins (one record per account sealed under its
+    # 0070 adds e2ee_first_use_pins (one record per account sealed under its
     # account key, base64url text in the row): no stored objects or keys.
     # 0051-0052 are intentionally unused.
     if any(int(name[:4]) > 50 and int(name[:4]) not in REVIEWED_AFTER_0050

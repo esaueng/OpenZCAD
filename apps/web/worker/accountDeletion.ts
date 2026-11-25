@@ -756,7 +756,7 @@ export async function deleteAccountData(
         ...(await libraryFolderErasureStatements(db, session.userId)),
         // Sealed share link names are profile data too (migration 0067).
         ...(await shareLinkNameErasureStatements(db, session.userId)),
-        // So are the sealed first-use pins (migration 0069).
+        // So are the sealed first-use pins (migration 0070).
         ...(await firstUsePinErasureStatements(db, session.userId)),
         // L08 encrypted comment logs this account wrote (migration 0060),
         // when the table exists.

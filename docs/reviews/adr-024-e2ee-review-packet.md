@@ -461,7 +461,7 @@ the browser side first, then the Worker's defense in depth.
   `owner-keys-changed`), rechecked at Commit time. The account's first-use
   pins (`apps/web/src/lib/e2ee/firstUsePins.ts`, `FIRST_USE_PINS_RECORD` in
   `sealed-records.ts`, Worker `apps/web/worker/e2eeFirstUsePins.ts`,
-  migration 0069) are shared by its devices; an unreadable record makes
+  migration 0070) are shared by its devices; an unreadable record makes
   nobody a first use (`firstUse: 'unknown'`, owner confirmation).
 - Browser: `inviteToEncryptedProject` (email-only from the sharing dialog;
   a caller may still bind a verified contact's identity, version 3),
