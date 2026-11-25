@@ -1539,10 +1539,12 @@ export async function pickPlanarFace(
 export async function switchFaceOffsetToTotal(page: Page) {
   const tag = page.getByTestId('direct-manipulation-mode');
   await expect(tag).toHaveText(/^(Total|Offset)/);
-  // The switch is offered once the face's span is read; a pick whose body
-  // analysis is still landing takes the click a moment later.
+  // The switch is offered once the face's span is read, marked by its
+  // caret: until then the tag names Offset without one, and a click opens
+  // exact entry instead. A pick whose body analysis is still landing takes
+  // the click a moment later.
   await expect(async () => {
-    if (/^Offset/.test(await tag.innerText())) await tag.click();
+    if (/^Offset ▾/.test(await tag.innerText())) await tag.click();
     await expect(tag).toHaveText(/^Total/, { timeout: 1000 });
     // A Total reads the span itself; "+0 mm" is the change, shown while
     // there is no span to read yet.

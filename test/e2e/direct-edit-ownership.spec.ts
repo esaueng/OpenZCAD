@@ -262,7 +262,7 @@ for (const refused of [true, false]) {
       await expect
         .poll(async () => {
           await selectTop(canvas, boxId);
-          if (/^Offset/.test(await tag.innerText().catch(() => ''))) {
+          if (/^Offset ▾/.test(await tag.innerText().catch(() => ''))) {
             await tag.click().catch(() => undefined);
           }
           return chip.textContent();

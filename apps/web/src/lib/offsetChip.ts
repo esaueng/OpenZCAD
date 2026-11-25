@@ -100,6 +100,52 @@ export function continuesOffsetFace(
   );
 }
 
+/** The tag beside a face offset's value: which number it reads. */
+export interface OffsetChipTag {
+  text: string;
+  /** Whether a click switches Total/Offset; otherwise it opens exact entry. */
+  switchable: boolean;
+  /** What a typed number means, on hover. */
+  title: string;
+}
+
+/**
+ * The tag a face offset's value carries. Every face names its mode, so the
+ * same drag reads the same on every face of a body: a face with no flat face
+ * opposite it had no tag at all, and its bare "+0 mm" left a typed number's
+ * meaning unsaid beside a neighbour reading "Offset ▾ | +0 mm". Only a face
+ * with a span to read is a Total/Offset switch, marked by its caret.
+ */
+export function offsetChipTag(
+  mode: OffsetChipMode,
+  spanKnown: boolean
+): OffsetChipTag {
+  if (!spanKnown) {
+    // No span is either none opposite or one still being measured (the
+    // body's analysis landing; the tag then gains its caret), so the title
+    // states the condition rather than claiming which.
+    return {
+      text: 'Offset',
+      switchable: false,
+      title:
+        'Offset: a typed value is how far the face moves · Total, the size the face sets, is offered only where a flat face lies opposite it'
+    };
+  }
+  return mode === 'total'
+    ? {
+        text: 'Total ▾',
+        switchable: true,
+        title:
+          'Total: a typed value is the size this face sets · Switch to Offset to type how far it moves'
+      }
+    : {
+        text: 'Offset ▾',
+        switchable: true,
+        title:
+          'Offset: a typed value is how far the face moves · Switch to Total to type the size it sets'
+      };
+}
+
 /**
  * A sketch-region extrude shares the face offset's arrow rig, but nothing
  * stands behind a region and it has no dimension of its own: it always reads
