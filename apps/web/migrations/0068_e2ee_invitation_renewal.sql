@@ -12,7 +12,11 @@
 -- expiry. An acceptance signs the statement it saw, so an accepted,
 -- completed or revoked invitation's statement never changes. The Worker
 -- probes for the renewal trigger and answers a renewal 503 until this is
--- applied; nothing else depends on it.
+-- applied. Each renewed statement also names when its chain began, and no
+-- statement may expire more than 30 days after that (crypto), so renewal
+-- is bounded even where the server ignores a cancellation; the account's
+-- own sealed tombstones (below) stop its devices renewing or adding a
+-- cancelled invitation at all.
 
 DROP TRIGGER IF EXISTS e2ee_invitation_statement_immutable;
 
@@ -34,4 +38,38 @@ WHEN OLD.accepted_at IS NOT NULL
   OR NEW.expires_at <= OLD.expires_at
 BEGIN
   SELECT RAISE(ABORT, 'E2EE_INVITATION_IMMUTABLE');
+END;
+
+-- The invitations each account cancelled (ADR-024 amendment 2026-11-25):
+-- one record per account, sealed under the account key in the browser
+-- (`INVITATION_TOMBSTONES_RECORD`), opaque here like the share link names
+-- of migration 0067. The account's own devices renew, and add an
+-- acceptance of, no invitation it names. `sequence` is the sealed record's
+-- own, copied from its header, so a write can never lower it.
+CREATE TABLE IF NOT EXISTS e2ee_invitation_tombstones (
+  user_id TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  sequence INTEGER NOT NULL CHECK (sequence >= 1 AND sequence <= 4294967295),
+  record TEXT NOT NULL CHECK (length(record) <= 98304),
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Account erasure fences every cloud write before cleanup begins.
+CREATE TRIGGER IF NOT EXISTS block_erasing_invitation_tombstones_insert
+BEFORE INSERT ON e2ee_invitation_tombstones
+WHEN EXISTS (
+  SELECT 1 FROM account_erasure_requests WHERE user_id = NEW.user_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'ACCOUNT_ERASURE_IN_PROGRESS');
+END;
+
+CREATE TRIGGER IF NOT EXISTS block_erasing_invitation_tombstones_update
+BEFORE UPDATE ON e2ee_invitation_tombstones
+WHEN EXISTS (
+  SELECT 1 FROM account_erasure_requests WHERE user_id = NEW.user_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'ACCOUNT_ERASURE_IN_PROGRESS');
 END;

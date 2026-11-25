@@ -11,6 +11,9 @@ import {
   PROJECT_INVITATION_VERSION_1,
   PROJECT_INVITATION_VERSION_2,
   PROJECT_INVITATION_VERSION_3,
+  PROJECT_INVITATION_VERSION_4,
+  MAX_PROJECT_INVITATION_CHAIN_MS,
+  invitationChainIssuedAt,
   ProjectInvitationError,
   decodeInvitationAcceptance,
   decodeProjectInvitation,
@@ -211,7 +214,8 @@ describe('owner-signed project invitations (slice 5-3a)', () => {
       encodeProjectInvitation(value).byteLength + 33
     );
     expect(decodeProjectInvitation(unlinkedBytes)).toEqual(unlinked);
-    // The longest possible statement fits the bound every reader checks.
+    // The longest version 3 statement fits the bound every reader checks;
+    // a version 4 renewal (its chain start and identity flag) is 9 longer.
     const id = 'a'.repeat(128);
     expect(
       encodeProjectInvitation({
@@ -221,7 +225,7 @@ describe('owner-signed project invitations (slice 5-3a)', () => {
         inviterUserId: id,
         signerDeviceId: id
       }).byteLength
-    ).toBe(MAX_PROJECT_INVITATION_BYTES);
+    ).toBe(MAX_PROJECT_INVITATION_BYTES - 9);
     const signed = await signProjectInvitation(device.privateKey, bound);
     await expect(
       verifyProjectInvitation(signed, deviceRaw, {
@@ -413,7 +417,7 @@ describe('owner-signed project invitations (slice 5-3a)', () => {
     badRole[roleAt] = 3;
     throwsCode(() => decodeProjectInvitation(badRole), 'malformed');
     const newer = new Uint8Array(bytes);
-    newer[3] = 4;
+    newer[3] = 5;
     throwsCode(() => decodeProjectInvitation(newer), 'unsupported-version');
     // A version 1 body relabelled version 2 lacks its link token hash.
     const relabelled = new Uint8Array(bytes);
@@ -443,6 +447,100 @@ describe('owner-signed project invitations (slice 5-3a)', () => {
     throwsCode(() => decodeProjectInvitation(reset), 'malformed');
     expect(encodeProjectInvitation(value)[2]).toBe(0x49);
     expect(() => decodeProjectInvitation(new Uint8Array(0))).toThrow(E2eeError);
+  });
+});
+
+describe('renewed invitations (version 4, L11 plan of 2026-11-25)', () => {
+  /** A renewal `age` into its chain, with all optional fields or none. */
+  async function renewal(age: number, full: boolean) {
+    const { device, deviceRaw, value } = await fixture();
+    const renewed: ProjectInvitation = {
+      ...value,
+      issuedAt: T + age,
+      expiresAt: Math.min(
+        T + age + MAX_PROJECT_INVITATION_LIFETIME_MS,
+        T + MAX_PROJECT_INVITATION_CHAIN_MS
+      ),
+      chainIssuedAt: T,
+      ...(full
+        ? {
+            linkTokenHash: await invitationLinkTokenHash('t'.repeat(43)),
+            inviteeIdentityKeyHash: patternBytes(32, 9)
+          }
+        : {})
+    };
+    return { device, deviceRaw, value: renewed };
+  }
+
+  it('round-trips with and without an identity and a link, keeping where the chain began', async () => {
+    for (const full of [false, true]) {
+      const { device, deviceRaw, value } = await renewal(20 * DAY, full);
+      const bytes = encodeProjectInvitation(value);
+      expect(bytes[3]).toBe(PROJECT_INVITATION_VERSION_4);
+      expect(bytes.byteLength).toBeLessThanOrEqual(
+        MAX_PROJECT_INVITATION_BYTES
+      );
+      expect(decodeProjectInvitation(bytes)).toEqual(value);
+      expect(invitationChainIssuedAt(value)).toBe(T);
+      const signed = await signProjectInvitation(device.privateKey, value);
+      await expect(
+        verifyProjectInvitation(signed, deviceRaw, { now: T + 21 * DAY })
+      ).resolves.toEqual(value);
+    }
+  });
+
+  it('fits its longest form in the bound every reader checks', async () => {
+    const { value } = await renewal(DAY, true);
+    const id = 'a'.repeat(128);
+    expect(
+      encodeProjectInvitation({
+        ...value,
+        projectId: id,
+        invitationId: id,
+        inviterUserId: id,
+        signerDeviceId: id
+      }).byteLength
+    ).toBe(MAX_PROJECT_INVITATION_BYTES);
+  });
+
+  it('treats an older statement as a chain of one', async () => {
+    const { value } = await fixture();
+    expect(invitationChainIssuedAt(value)).toBe(value.issuedAt);
+    expect(
+      decodeProjectInvitation(encodeProjectInvitation(value))
+    ).not.toHaveProperty('chainIssuedAt');
+  });
+
+  it('refuses a chain past 30 days, or one that begins after its statement', async () => {
+    const { value } = await renewal(25 * DAY, true);
+    // Signing it is refused…
+    throwsCode(
+      () =>
+        encodeProjectInvitation({
+          ...value,
+          expiresAt: T + MAX_PROJECT_INVITATION_CHAIN_MS + 1
+        }),
+      'invalid-argument'
+    );
+    throwsCode(
+      () => encodeProjectInvitation({ ...value, chainIssuedAt: T + 26 * DAY }),
+      'invalid-argument'
+    );
+    // …and so is reading one: its expiry moved past the bound.
+    const bytes = encodeProjectInvitation(value);
+    const expiresAt = 4 + 1 + 6 + 1 + 5 + 1 + 10 + 32 + 1 + 8;
+    const past = new Uint8Array(bytes);
+    new DataView(past.buffer).setBigUint64(
+      expiresAt,
+      BigInt(T + MAX_PROJECT_INVITATION_CHAIN_MS + 1)
+    );
+    throwsCode(() => decodeProjectInvitation(past), 'malformed');
+    // A flag other than 0 or 1 is no statement either.
+    const chainAt = expiresAt + 8 + 1 + 12 + 32;
+    const flag = new Uint8Array(bytes);
+    expect(flag[chainAt + 8]).toBe(1);
+    flag[chainAt + 8] = 2;
+    throwsCode(() => decodeProjectInvitation(flag), 'malformed');
   });
 });
 

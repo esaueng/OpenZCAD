@@ -4,6 +4,7 @@ import {
   INVITATION_RUNNER_INTERVAL_MS,
   INVITATION_RUNNER_MAX_BACKOFF_MS,
   createInvitationRunner,
+  invitationGatesOpen,
   invitationRunnerBackoff,
   type InvitationPassModule,
   type InvitationPassOutcome,
@@ -177,16 +178,52 @@ describe('the invitation runner', () => {
     h.tick();
     await flush();
     expect(h.gatesOpen).toHaveBeenCalledTimes(1);
-    // A failed check reads as closed.
-    h.gatesOpen.mockRejectedValueOnce(new Error('offline'));
-    h.changed();
-    await flush();
-    expect(h.load).not.toHaveBeenCalled();
     open = true;
     h.changed();
     await flush();
     expect(h.load).toHaveBeenCalledTimes(1);
     expect(h.module.runInvitationPass).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps no answer from a gate check that failed, and retries it after the backoff', async () => {
+    let checks = 0;
+    const h = harness({
+      gates: () =>
+        checks++ === 0
+          ? Promise.reject(new Error('503'))
+          : Promise.resolve(true)
+    });
+    // Startup's check failed: nothing loaded, nothing cached as closed.
+    await flush();
+    expect(h.gatesOpen).toHaveBeenCalledTimes(1);
+    expect(h.load).not.toHaveBeenCalled();
+    // Within the backoff the timer waits; after it, it asks again.
+    h.advance(INVITATION_RUNNER_INTERVAL_MS / 2);
+    h.tick();
+    await flush();
+    expect(h.gatesOpen).toHaveBeenCalledTimes(1);
+    h.advance(INVITATION_RUNNER_INTERVAL_MS);
+    h.tick();
+    await flush();
+    expect(h.gatesOpen).toHaveBeenCalledTimes(2);
+    expect(h.module.runInvitationPass).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads a server error of the gate check as a failure, a missing route as closed', async () => {
+    const answer = (status: number, body?: unknown) => async () =>
+      body === undefined
+        ? new Response('<html>', { status })
+        : Response.json(body, { status });
+    await expect(
+      invitationGatesOpen(answer(200, { enabled: true, projectsEnabled: true }))
+    ).resolves.toBe(true);
+    await expect(
+      invitationGatesOpen(answer(200, { enabled: true, projectsEnabled: false }))
+    ).resolves.toBe(false);
+    await expect(invitationGatesOpen(answer(404))).resolves.toBe(false);
+    await expect(invitationGatesOpen(answer(200))).resolves.toBe(false);
+    await expect(invitationGatesOpen(answer(503, {}))).rejects.toThrow();
+    await expect(invitationGatesOpen(answer(429, {}))).rejects.toThrow();
   });
 
   it('does nothing without unlocked keys until the encryption state changes', async () => {

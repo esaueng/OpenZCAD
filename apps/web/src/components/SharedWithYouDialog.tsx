@@ -21,7 +21,11 @@ import {
   acceptEncryptedInvitation,
   type InviteeInvitationState
 } from '../lib/e2ee/invitations';
-import { clearPendingEncryptedInvitation } from '../lib/e2ee/encryptedInvitationLink';
+import type { E2eeInvitationRecord } from '@openzcad/shared';
+import {
+  clearPendingEncryptedInvitation,
+  pendingEncryptedInvitation
+} from '../lib/e2ee/encryptedInvitationLink';
 import {
   encryptionStateChanged,
   observeEncryptionState,
@@ -71,6 +75,7 @@ type Phase =
       /** Where the runner's newest pass says the invitation stands. */
       state: InviteeInvitationState | null;
     }
+  | { kind: 'expired'; owner: string | null }
   | { kind: 'failed'; message: string };
 
 export interface SharedWithYouDialogProps {
@@ -90,6 +95,9 @@ export interface SharedWithYouDialogProps {
 
 const notFound = (error: unknown) =>
   (error as { status?: unknown })?.status === 404;
+
+const NO_LONGER_VALID =
+  'This invitation is no longer valid: it was cancelled, it expired or someone else accepted it. Ask the owner to invite you again.';
 
 /**
  * "Shared with you" (L11 plan of 2026-11-25, §3.2): what an
@@ -137,12 +145,72 @@ export function SharedWithYouDialog({
 
   const open = useCallback(
     (projectId: string) => {
-      if (opened.current) return;
+      // A landing replaced by another link's opens nothing of its own.
+      if (opened.current || !lifetime.active) return;
       opened.current = true;
       onOpenProject(projectId);
     },
-    [onOpenProject]
+    [lifetime, onOpenProject]
   );
+
+  const show = useCallback((next: Phase) => {
+    phaseRef.current = next;
+    setPhase(next);
+  }, []);
+
+  /**
+   * What the invitation's own record says, once the account accepted it:
+   * completed (this account was added, whichever of its devices or tabs
+   * joined) opens the project; revoked or expired ends the wait. False
+   * while it still waits for the owner's device.
+   */
+  const settle = useCallback(
+    (invitation: E2eeInvitationRecord, owner: string | null): boolean => {
+      if (invitation.completedAt) {
+        open(invitation.projectId);
+        return true;
+      }
+      if (invitation.revokedAt) {
+        show({ kind: 'failed', message: NO_LONGER_VALID });
+        return true;
+      }
+      if (invitation.expiresAt <= Date.now()) {
+        show({ kind: 'expired', owner });
+        return true;
+      }
+      return false;
+    },
+    [open, show]
+  );
+
+  /**
+   * Asks the server about this invitation again (accepting a link twice is
+   * answered as the first time): for when the runner no longer lists it,
+   * since another tab may have joined it, or it lapsed.
+   */
+  const refreshing = useRef(false);
+  const refresh = useCallback(async () => {
+    const current = phaseRef.current;
+    if (current.kind !== 'waiting' || refreshing.current) return;
+    refreshing.current = true;
+    try {
+      const { api } = await encryptedInvitations();
+      const { invitation } = await api.accept({ token });
+      if (
+        phaseRef.current === current &&
+        invitation.invitationId === current.invitationId
+      ) {
+        settle(invitation, current.owner);
+      }
+    } catch (error) {
+      if (phaseRef.current === current && notFound(error)) {
+        show({ kind: 'failed', message: NO_LONGER_VALID });
+      }
+      // Anything else: the next poll asks again.
+    } finally {
+      refreshing.current = false;
+    }
+  }, [settle, show, token]);
 
   /** Where a pass leaves this invitation: joined opens the project. */
   const follow = useCallback(
@@ -156,13 +224,17 @@ export function SharedWithYouDialog({
       const listed = result.incoming.find(
         (entry) => entry.record.invitationId === current.invitationId
       );
-      if (listed && listed.state !== current.state) {
-        const next = { ...current, state: listed.state };
-        phaseRef.current = next;
-        setPhase(next);
+      if (!listed) {
+        // No longer an open invitation of this account: completed (joined
+        // elsewhere), revoked or expired. Its record says which.
+        void refresh();
+        return;
+      }
+      if (listed.state !== current.state) {
+        show({ ...current, state: listed.state });
       }
     },
-    [open]
+    [open, refresh, show]
   );
 
   const accept = useCallback(async () => {
@@ -175,16 +247,18 @@ export function SharedWithYouDialog({
         invitations,
         token
       );
-      clearPendingEncryptedInvitation();
-      if (invitation.completedAt) {
-        // Added before: this device joins it as the project opens.
-        open(invitation.projectId);
-        return;
+      // Only this link's: another opened since in this tab keeps its own.
+      if (pendingEncryptedInvitation() === token) {
+        clearPendingEncryptedInvitation();
       }
-      const owner = await invitations.people
-        .inspect(invitation.inviterUserId)
-        .then((person) => person?.email ?? null)
-        .catch(() => null);
+      const owner = invitation.completedAt
+        ? null
+        : await invitations.people
+            .inspect(invitation.inviterUserId)
+            .then((person) => person?.email ?? null)
+            .catch(() => null);
+      // Added before (this device joins it as the project opens), or over.
+      if (settle(invitation, owner)) return;
       const next: Phase = {
         kind: 'waiting',
         projectId: invitation.projectId,
@@ -193,19 +267,16 @@ export function SharedWithYouDialog({
         owner,
         state: null
       };
-      phaseRef.current = next;
-      setPhase(next);
+      show(next);
       follow(await syncInvitationsNow());
     } catch (error) {
       accepting.current = false;
-      setPhase({
+      show({
         kind: 'failed',
-        message: notFound(error)
-          ? 'This invitation is no longer valid: it was cancelled, it expired or someone else accepted it. Ask the owner to invite you again.'
-          : messageFor(error)
+        message: notFound(error) ? NO_LONGER_VALID : messageFor(error)
       });
     }
-  }, [follow, open, token]);
+  }, [follow, settle, show, token]);
 
   const check = useCallback(async () => {
     if (accepting.current) return;
@@ -264,15 +335,20 @@ export function SharedWithYouDialog({
   useEffect(() => {
     if (!waitingFor) return;
     const stop = subscribeInvitationPasses(follow);
+    // A change of the account (another tab joined, keys changed) asks too.
+    const stopState = userId
+      ? subscribeEncryptionState(userId, () => void refresh())
+      : () => undefined;
     const timer = setInterval(() => {
       if (shown && document.visibilityState === 'visible')
         void syncInvitationsNow().then(follow);
     }, SHARED_WITH_YOU_POLL_MS);
     return () => {
       stop();
+      stopState();
       clearInterval(timer);
     };
-  }, [follow, shown, waitingFor]);
+  }, [follow, refresh, shown, userId, waitingFor]);
 
   const run = useCallback(
     async (
@@ -445,6 +521,23 @@ export function SharedWithYouDialog({
       }
       break;
     }
+    case 'expired':
+      body = (
+        <p role="alert">
+          This invitation expired. Ask{' '}
+          {phase.owner ? (
+            <PrivateText
+              value={phase.owner}
+              visible={personalInfoVisible}
+              onChange={setPersonalInfoVisible}
+            />
+          ) : (
+            'the owner'
+          )}{' '}
+          to invite you again.
+        </p>
+      );
+      break;
     case 'failed':
       body = <p role="alert">{phase.message}</p>;
       footer = (

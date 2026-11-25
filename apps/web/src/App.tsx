@@ -5680,6 +5680,8 @@ export function App() {
     sharedInvitation && cloudFunctionsEnabled && !accountResolving ? (
       <Suspense fallback={null}>
         <LazySharedWithYouDialog
+          // A new link starts its own landing: nothing of the last one stays.
+          key={sharedInvitation}
           token={sharedInvitation}
           userId={sessionUserId}
           shown={!settingsOpen}

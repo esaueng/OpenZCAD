@@ -114,6 +114,7 @@ import type {
   RemovedMember
 } from './invitationStore';
 import { rememberExpectedProjectOwner } from './projectAuthority';
+import type { InvitationTombstones } from './invitationTombstones';
 
 // --- Context ----------------------------------------------------------------
 
@@ -145,6 +146,11 @@ export interface InvitationContext {
   readonly store: InvitationStore;
   /** The signed-in account's email, for checking a statement's hash. */
   readonly email?: string | null;
+  /**
+   * The invitations this account cancelled (`invitationTombstones.ts`):
+   * none of them is renewed or completed. The page always has one.
+   */
+  readonly tombstones?: InvitationTombstones;
   readonly now?: () => number;
 }
 
@@ -234,7 +240,9 @@ export type InvitationErrorCode =
    * invitation names no identity, or this browser has not seen every
    * removal from the project.
    */
-  | 'needs-confirmation';
+  | 'needs-confirmation'
+  /** This account cancelled the invitation (its sealed tombstones). */
+  | 'invitation-cancelled';
 
 export class InvitationError extends Error {
   override readonly name = 'InvitationError';
@@ -1069,6 +1077,17 @@ export async function addInvitedMember(
     ctx.groups.account.list,
     now(ctx)
   );
+  // An invitation this account cancelled is never completed, whatever the
+  // server lists; a record that cannot be read adds nobody (it throws).
+  if (
+    ctx.tombstones &&
+    (await ctx.tombstones.cancelled()).has(invitation.invitationId)
+  ) {
+    throw new InvitationError(
+      'invitation-cancelled',
+      'You cancelled this invitation. Nobody was added; invite them again.'
+    );
+  }
   if (
     options.projectId !== undefined &&
     (invitation.projectId !== options.projectId ||

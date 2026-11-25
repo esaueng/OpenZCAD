@@ -1957,3 +1957,62 @@ settings, which an account whose library is not encrypted stores readable.
   ciphertext. The account export includes the record as stored.
 - **Review.** This is a new account-key derivation and record format, so the
   Phase 8 outside review covers it with the other account records.
+
+## Amendment 2026-11-25: renewed invitations and their tombstones
+
+Pending invitations no longer lapse after seven days (L11 plan of
+2026-11-25, §3.4). Before a statement nobody accepted expires, an owner's
+certified device signs a fresh one for the same invitation, and the Worker
+replaces the stored one (`PUT /api/e2ee/projects/:id/invitations/:id`,
+migration 0068, which relaxes 0038's immutability trigger for open,
+unaccepted invitations only). The renewed statement names the same project,
+invitation, owner, email hash, role, link token hash and invitee identity, so
+the emailed link keeps working. An acceptance signs the statement it saw, so
+an accepted invitation's statement never changes.
+
+The server decides which invitations it lists as pending. Unbounded, renewal
+would let an actively malicious server keep an invitation the owner cancelled
+alive for as long as an owner device is online; before renewal, the seven-day
+statement bounded that. Two rules bound it again:
+
+- **A bounded chain (statement version 4).** A renewed statement carries
+  `chainIssuedAt`, the issuance of the invitation's first statement, which
+  every renewal keeps. Layout after the signer key hash: `u64 chainIssuedAt |
+  u8 identity (0 or 1) [| 32-byte invitee identity key hash] | u8 link (0 or
+  1) [| 32-byte link token hash]`. Every reader (the Worker, the owner's
+  browser before an Add, the invitee's browser before it accepts) refuses a
+  statement that expires more than 30 days after `chainIssuedAt`
+  (`MAX_PROJECT_INVITATION_CHAIN_MS`), or whose chain begins after it. A
+  version 1 to 3 statement is a chain of one: its own `issuedAt` begins it.
+  The Worker refuses a renewal whose chain start differs from the stored
+  statement's, and a new invitation whose chain does not start with itself.
+  An owner device never signs past the bound: the last renewal ends exactly
+  30 days after the first statement.
+- **The owner's own tombstones.** Cancelling (or declining) an invitation
+  first records its id in one account record sealed under the account key
+  (`INVITATION_TOMBSTONES_RECORD`, the
+  [sealed-record layout](#amendment-2026-10-30-library-folders): HKDF info
+  `OpenZCAD E2EE v1 invitation tombstones key`, additional-data label
+  `OpenZCAD E2EE v1 invitation tombstones`, a NUL, the user id, a NUL and the
+  header), stored opaque at `/api/e2ee/invitations/tombstones` (migration
+  0068). Content: JSON `{"version":1,"invitations":{invitationId:cancelledAt}}`,
+  at most 60 KiB; entries older than 60 days, past every statement they could
+  stop, are dropped when it is sealed. Writes merge (a union) against the
+  revision read, with a sequence above both the device's pin and the stored
+  one; the Worker refuses a lower sequence. Only then is the revocation sent,
+  so no cancellation reaches the server that the account's devices could
+  forget. The account's devices renew no invitation named there and add no
+  acceptance of one (`addInvitedMember` refuses `invitation-cancelled`). A
+  device that cannot read the record (keys locked, an account key it cannot
+  reach, altered bytes, a sequence below its pin, or no record where it has
+  seen one) renews nothing and adds nobody: it fails closed. While that
+  lasts, it cannot cancel either; the dialog says so.
+
+**What remains.** As with every sealed record, the server can withhold the
+record from, or roll it back for, a device that never saw the newer copy (a
+new device, or one whose pin was cleared). Such a device could renew or add
+by a cancelled invitation the server keeps listing. The chain bound caps that
+at 30 days from the invitation's first statement, as against seven before
+renewal. What the server sees of the record: its length, write times,
+revision count, sequence and the account-key commitment in its header. The
+account export includes it as stored, and account erasure deletes it.

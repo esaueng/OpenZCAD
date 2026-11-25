@@ -9,8 +9,12 @@
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
+  MAX_PROJECT_INVITATION_CHAIN_MS,
   MAX_PROJECT_INVITATION_LIFETIME_MS,
+  accountKeyCommitment,
   decodeProjectInvitation,
+  invitationChainIssuedAt,
+  toHex,
   fromBase64Url,
   invitationEmailHash,
   publicKeyHash,
@@ -32,11 +36,18 @@ import {
 import {
   acceptEncryptedInvitation,
   acceptedInvitations,
+  addInvitedMember,
   declineInvitation,
   inviteToEncryptedProject,
   type InvitationContext
 } from '../apps/web/src/lib/e2ee/invitations';
 import { memoryInvitationStore } from '../apps/web/src/lib/e2ee/invitationStore';
+import {
+  cancelInvitation,
+  memoryInvitationTombstones,
+  sealedInvitationTombstones,
+  type InvitationTombstones
+} from '../apps/web/src/lib/e2ee/invitationTombstones';
 import {
   INVITATION_RENEWAL_WINDOW_MS,
   renewPendingInvitations
@@ -133,10 +144,15 @@ function emailDevice(w: World, account: Account, deviceId: string): Device {
 
 function contextOf(
   d: Device,
-  options: { now?: () => number; api?: E2eeInvitationsApi } = {}
+  options: {
+    now?: () => number;
+    api?: E2eeInvitationsApi;
+    tombstones?: InvitationTombstones;
+  } = {}
 ): InvitationContext {
   return {
     groups: d.groups,
+    tombstones: options.tombstones ?? memoryInvitationTombstones(),
     api:
       options.api ??
       createE2eeInvitationsApi((path, init) => d.fetcher(path, init)),
@@ -219,15 +235,21 @@ describe('renewing pending invitations', () => {
       ...now,
       issuedAt: 0,
       expiresAt: 0,
+      chainIssuedAt: 0,
       signerDeviceId: '',
       signerKeyHash: null
     }).toEqual({
       ...was,
       issuedAt: 0,
       expiresAt: 0,
+      chainIssuedAt: 0,
       signerDeviceId: '',
       signerKeyHash: null
     });
+    // The first statement (version 2) was a chain of one: the renewal
+    // names its issuance as where the chain began.
+    expect(was.chainIssuedAt).toBeUndefined();
+    expect(now.chainIssuedAt).toBe(was.issuedAt);
     // The invitee opens the very link the first email carried; the
     // statement they accept is the renewed one, and it verifies.
     const invitee = emailDevice(w, other, 'other_laptop');
@@ -327,6 +349,7 @@ async function signed(
     ...base,
     issuedAt,
     expiresAt: issuedAt + MAX_PROJECT_INVITATION_LIFETIME_MS,
+    chainIssuedAt: invitationChainIssuedAt(base),
     signerDeviceId: deviceId,
     signerKeyHash: await publicKeyHash(
       by.list.head.devices.find((d) => d.deviceId === deviceId)!.signingKey
@@ -388,6 +411,8 @@ describe('the renewal route', () => {
         { linkTokenHash: new Uint8Array(32).fill(7) },
         'E2EE_INVITATION_INVALID'
       ],
+      // A chain that claims to begin anew.
+      [{ chainIssuedAt: Date.now() - 60_000 }, 'E2EE_INVITATION_INVALID'],
       [
         { inviteeIdentityKeyHash: new Uint8Array(32).fill(3) },
         'E2EE_INVITATION_INVALID'
@@ -497,5 +522,229 @@ describe('without migration 0068', () => {
       { invitationId: invitation.invitationId, error: { status: 503 } }
     ]);
     expect(stored(w.srv, invitation.invitationId)).toEqual(before);
+  });
+});
+
+describe('the owner’s own record of what it cancelled', () => {
+  it('renews nothing it cancelled, even while the server lists it as pending', async () => {
+    const w = world();
+    const { invitation, laptop } = await pending(w, 3 * DAY);
+    // The server ignored the cancellation: it still lists the invitation.
+    const tombstones = memoryInvitationTombstones([invitation.invitationId]);
+    const ctx = contextOf(laptop, { tombstones });
+    expect(
+      (await ctx.api.pending()).invitations.map((i) => i.invitationId)
+    ).toEqual([invitation.invitationId]);
+    const before = stored(w.srv, invitation.invitationId);
+    expect(await renewPendingInvitations(ctx)).toEqual({
+      renewed: [],
+      failed: []
+    });
+    expect(stored(w.srv, invitation.invitationId)).toEqual(before);
+  });
+
+  it('renews nothing while that record cannot be read', async () => {
+    const w = world();
+    const { invitation, laptop } = await pending(w, 3 * DAY);
+    const tombstones = memoryInvitationTombstones();
+    tombstones.failing = true;
+    const before = stored(w.srv, invitation.invitationId);
+    await expect(
+      renewPendingInvitations(contextOf(laptop, { tombstones }))
+    ).rejects.toThrow(/cannot be read/);
+    expect(stored(w.srv, invitation.invitationId)).toEqual(before);
+  });
+
+  it('adds nobody by an invitation it cancelled, whatever the server says', async () => {
+    const w = world();
+    const { invitation, token, laptop } = await pending(w, 3 * DAY);
+    await acceptEncryptedInvitation(
+      contextOf(emailDevice(w, other, 'other_laptop')),
+      token
+    );
+    const tombstones = memoryInvitationTombstones([invitation.invitationId]);
+    const ctx = contextOf(laptop, { tombstones });
+    const [record] = (await ctx.api.sent()).invitations;
+    expect(record?.invitationId).toBe(invitation.invitationId);
+    await expect(addInvitedMember(ctx, record!)).rejects.toMatchObject({
+      code: 'invitation-cancelled'
+    });
+    // Unreadable, it adds nobody either.
+    tombstones.failing = true;
+    await expect(addInvitedMember(ctx, record!)).rejects.toThrow(
+      /cannot be read/
+    );
+  });
+
+  it('cancels into the sealed record first, then revokes', async () => {
+    const w = world();
+    const { invitation, ownerCtx, projectId } = await pending(w, 3 * DAY);
+    const tombstones = memoryInvitationTombstones();
+    const ctx = { ...ownerCtx, tombstones };
+    await cancelInvitation(ctx, projectId, invitation.invitationId);
+    expect([...(await tombstones.cancelled())]).toEqual([
+      invitation.invitationId
+    ]);
+    expect((await ctx.api.pending()).invitations).toEqual([]);
+    // A record it cannot write revokes nothing.
+    const next = await inviteToEncryptedProject(
+      ownerCtx,
+      projectId,
+      EMAILS[THIRD]!,
+      'viewer'
+    );
+    tombstones.failing = true;
+    await expect(
+      cancelInvitation(ctx, projectId, next.invitationId)
+    ).rejects.toThrow(/cannot be read/);
+    expect(
+      (await ctx.api.pending()).invitations.map((i) => i.invitationId)
+    ).toEqual([next.invitationId]);
+  });
+
+  it('keeps it sealed in the account record, refusing an older or a withheld copy', async () => {
+    const w = world();
+    const laptop = emailDevice(w, owner, 'owner_laptop');
+    const api = createE2eeInvitationsApi((path, init) =>
+      laptop.fetcher(path, init)
+    );
+    const commitment = toHex(await accountKeyCommitment(owner.accountKey));
+    const pinsOf = () => {
+      let pin = 0;
+      return {
+        read: () => pin,
+        write: (sequence: number) => {
+          pin = Math.max(pin, sequence);
+        }
+      };
+    };
+    const tombstonesOn = (pins = pinsOf()) =>
+      sealedInvitationTombstones({
+        userId: OWNER,
+        api,
+        pins,
+        currentKey: () => owner.accountKey.slice(),
+        keyFor: async (key) =>
+          toHex(key) === commitment ? owner.accountKey.slice() : null
+      });
+    const tombstoneRow = () =>
+      rows<{ record: string; sequence: number }>(
+        w.srv,
+        'SELECT record, sequence FROM e2ee_invitation_tombstones WHERE user_id = ?',
+        OWNER
+      )[0]!;
+    const desktop = tombstonesOn();
+    // Nothing stored yet: nothing cancelled.
+    expect([...(await desktop.cancelled())]).toEqual([]);
+    await desktop.cancel('inv_one');
+    const first = tombstoneRow();
+    // Two devices write at once: both cancellations land.
+    const phone = tombstonesOn();
+    await Promise.all([phone.cancel('inv_two'), desktop.cancel('inv_three')]);
+    const all = ['inv_one', 'inv_three', 'inv_two'];
+    expect([...(await tombstonesOn().cancelled())].sort()).toEqual(all);
+    expect([...(await desktop.cancelled())].sort()).toEqual(all);
+    // The server never sees an id.
+    expect(tombstoneRow().record).not.toContain('inv_');
+    // Rolled back to the first record: refused where a newer one was seen.
+    w.srv.db
+      .prepare(
+        'UPDATE e2ee_invitation_tombstones SET sequence = ?, record = ? WHERE user_id = ?'
+      )
+      .run(first.sequence, first.record, OWNER);
+    await expect(desktop.cancelled()).rejects.toThrow(/older record/);
+    // Withheld altogether: refused too.
+    w.srv.db
+      .prepare('DELETE FROM e2ee_invitation_tombstones WHERE user_id = ?')
+      .run(OWNER);
+    await expect(desktop.cancelled()).rejects.toThrow(/no longer holds/);
+  });
+});
+
+describe('the renewal chain’s bound', () => {
+  it('ends 30 days after the first statement, however often it is renewed', async () => {
+    const w = world();
+    const { invitation, ownerCtx } = await pending(w, 0);
+    const start = decodeProjectInvitation(
+      fromBase64Url(invitation.statement)
+    ).issuedAt;
+    // The owner's and the Worker's clocks both jump to just before each
+    // statement lapses.
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    Date.now = () => realNow() + offset;
+    const ctx = { ...ownerCtx, now: () => Date.now() };
+    try {
+      let expiry = stored(w.srv, invitation.invitationId).expires_at;
+      for (let round = 0; round < 10; round++) {
+        offset = expiry - 60 * 60 * 1000 - realNow();
+        const result = await renewPendingInvitations(ctx);
+        if (!result.renewed.length) break;
+        const after = stored(w.srv, invitation.invitationId);
+        const statement = decodeProjectInvitation(
+          fromBase64Url(after.statement)
+        );
+        expect(statement.chainIssuedAt).toBe(start);
+        expect(statement.expiresAt - statement.issuedAt).toBeLessThanOrEqual(
+          MAX_PROJECT_INVITATION_LIFETIME_MS
+        );
+        expect(after.expires_at).toBeGreaterThan(expiry);
+        expiry = after.expires_at;
+      }
+      expect(expiry).toBe(start + MAX_PROJECT_INVITATION_CHAIN_MS);
+      // At the bound, nothing is renewed again.
+      offset = expiry - 60 * 60 * 1000 - realNow();
+      expect((await renewPendingInvitations(ctx)).renewed).toEqual([]);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it('refuses a statement past the bound when accepting and when adding', async () => {
+    const w = world();
+    const { invitation, token, laptop, ownerCtx } = await pending(w, 3 * DAY);
+    await renewPendingInvitations(ownerCtx);
+    const renewed = stored(w.srv, invitation.invitationId);
+    // The server stretches the renewed statement past its chain's bound.
+    const bytes = fromBase64Url(renewed.statement);
+    const value = decodeProjectInvitation(bytes);
+    expect(value.chainIssuedAt).toBeDefined();
+    const expiresAt =
+      4 +
+      (1 + value.projectId.length) +
+      (1 + value.invitationId.length) +
+      (1 + value.inviterUserId.length) +
+      32 +
+      1 +
+      8;
+    const stretched = new Uint8Array(bytes);
+    new DataView(stretched.buffer).setBigUint64(
+      expiresAt,
+      BigInt(value.chainIssuedAt! + MAX_PROJECT_INVITATION_CHAIN_MS + 1)
+    );
+    const forged = { statement: toBase64Url(stretched) };
+    // The invitee's browser refuses to accept it…
+    const invitee = emailDevice(w, other, 'other_laptop');
+    const real = createE2eeInvitationsApi((path, init) =>
+      invitee.fetcher(path, init)
+    );
+    const inviteeCtx = contextOf(invitee, {
+      api: {
+        ...real,
+        accept: async (request) => {
+          const answer = await real.accept(request);
+          return { invitation: { ...answer.invitation, ...forged } };
+        }
+      }
+    });
+    await expect(
+      acceptEncryptedInvitation(inviteeCtx, token)
+    ).rejects.toMatchObject({ code: 'statement-invalid' });
+    // …and the owner's browser to add anyone by it.
+    const [record] = (await ownerCtx.api.sent()).invitations;
+    expect(record?.invitationId).toBe(invitation.invitationId);
+    await expect(
+      addInvitedMember(contextOf(laptop), { ...record!, ...forged })
+    ).rejects.toMatchObject({ code: 'statement-invalid' });
   });
 });

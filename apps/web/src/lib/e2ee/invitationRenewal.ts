@@ -7,18 +7,26 @@
  * replaces the stored one (`PUT …/invitations/:invitationId`): the same
  * project, invitation, email hash, role, link token hash and invitee
  * identity, so the emailed link keeps working. Each statement keeps its
- * seven-day bound. The chain ends when the owner revokes the invitation
- * (the Worker lists and renews only open ones), when someone accepts it
- * (an acceptance signs the statement it saw, so that one never changes),
- * or when no owner device is online before it lapses.
+ * seven-day bound, and names when its chain began (`chainIssuedAt`):
+ * no statement of a chain expires more than 30 days after that
+ * (`MAX_PROJECT_INVITATION_CHAIN_MS`, checked by every verifier). The
+ * chain ends when the owner cancels the invitation, when someone accepts
+ * it (an acceptance signs the statement it saw, so that one never
+ * changes), at that 30-day bound, or when no owner device is online
+ * before it lapses.
  *
- * Only a statement this account's own device list certifies, still valid
- * now, is renewed: the server's listing never gets the owner to sign
- * anything it did not sign before.
+ * The server says which invitations are pending, so this account's own
+ * record of what it cancelled decides first (`invitationTombstones.ts`):
+ * nothing named there is renewed, and nothing is renewed at all while that
+ * record cannot be read. Only a statement this account's own device list
+ * certifies, still valid now, is renewed: the server's listing never gets
+ * the owner to sign anything it did not sign before.
  */
 import {
   decodeProjectInvitation,
   fromBase64Url,
+  invitationChainIssuedAt,
+  MAX_PROJECT_INVITATION_CHAIN_MS,
   MAX_PROJECT_INVITATION_LIFETIME_MS,
   publicKeyHash,
   signProjectInvitation,
@@ -110,12 +118,17 @@ export async function renewPendingInvitations(
   if (!device || !listed || device.userId !== account.userId) {
     return { renewed, failed };
   }
+  // Fail closed: without this account's own record of what it cancelled,
+  // nothing is renewed (a context without one renews nothing either).
+  if (!ctx.tombstones) return { renewed, failed };
+  const cancelled = await ctx.tombstones.cancelled();
   const now = ctx.now ?? Date.now;
   const windowMs = options.windowMs ?? INVITATION_RENEWAL_WINDOW_MS;
   const { invitations } = await ctx.api.pending();
   for (const record of invitations) {
     const at = now();
     if (
+      cancelled.has(record.invitationId) ||
       record.inviterUserId !== account.userId ||
       record.acceptedByUserId !== null ||
       record.completedAt !== null ||
@@ -127,10 +140,18 @@ export async function renewPendingInvitations(
     }
     try {
       const current = await ownStatement(ctx, record, at);
+      // The chain keeps where it began, and never runs past its bound.
+      const chainIssuedAt = invitationChainIssuedAt(current);
+      const expiresAt = Math.min(
+        at + MAX_PROJECT_INVITATION_LIFETIME_MS,
+        chainIssuedAt + MAX_PROJECT_INVITATION_CHAIN_MS
+      );
+      if (expiresAt <= current.expiresAt) continue;
       const value: ProjectInvitation = {
         ...current,
         issuedAt: at,
-        expiresAt: at + MAX_PROJECT_INVITATION_LIFETIME_MS,
+        expiresAt,
+        chainIssuedAt,
         signerDeviceId: device.deviceId,
         signerKeyHash: await publicKeyHash(listed.signingKey)
       };

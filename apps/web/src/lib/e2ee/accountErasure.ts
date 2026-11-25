@@ -8,6 +8,7 @@ import { projectAuthorityStore } from './projectAuthorityStore';
 import { forgetShelfNames } from '../projectShelfNames';
 import { forgetAccountShelf } from '../sealedShelfCore';
 import { forgetShareLinkNames } from './sealedShareLinkNames';
+import { forgetInvitationTombstones } from './invitationTombstonePins';
 
 /** Only the successful, explicitly requested erasure may reset local trust. */
 export async function eraseAccountWithKeyCleanup<
@@ -37,6 +38,8 @@ export async function eraseAccountWithKeyCleanup<
       forgetAccountShelf(input.userId, { erased: true });
       // The erased account's link names and ids, readable on this device.
       forgetShareLinkNames(input.userId);
+      // A fresh account of this id starts its tombstones afresh.
+      forgetInvitationTombstones(input.userId);
     }
     confirmKeySessionEnded();
     let cleanup: PromiseSettledResult<void>[] = [];

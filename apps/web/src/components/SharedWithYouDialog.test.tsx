@@ -21,6 +21,9 @@ const acceptEncryptedInvitation =
   vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const syncInvitationsNow = vi.fn<() => Promise<InvitationPassResult | null>>();
 const clearPendingEncryptedInvitation = vi.fn<() => void>();
+const pendingEncryptedInvitation = vi.fn<() => string | null>();
+/** The invitation route's accept, as the landing asks it again. */
+const acceptRoute = vi.fn<(request: { token: string }) => Promise<unknown>>();
 const requestContactVerification = vi.fn<(userId: string) => void>();
 let passListener: ((result: InvitationPassResult) => void) | null = null;
 
@@ -34,6 +37,7 @@ vi.mock('../lib/e2ee/keychainDeviceKeys', () => ({
 }));
 vi.mock('../lib/e2ee/encryptedProjects', () => ({
   encryptedInvitations: async () => ({
+    api: { accept: (request: { token: string }) => acceptRoute(request) },
     people: {
       inspect: async () => ({ email: 'alice@example.com' })
     }
@@ -44,7 +48,8 @@ vi.mock('../lib/e2ee/invitations', () => ({
     acceptEncryptedInvitation(...args)
 }));
 vi.mock('../lib/e2ee/encryptedInvitationLink', () => ({
-  clearPendingEncryptedInvitation: () => clearPendingEncryptedInvitation()
+  clearPendingEncryptedInvitation: () => clearPendingEncryptedInvitation(),
+  pendingEncryptedInvitation: () => pendingEncryptedInvitation()
 }));
 vi.mock('../lib/e2ee/invitationRunner', () => ({
   syncInvitationsNow: () => syncInvitationsNow(),
@@ -78,8 +83,20 @@ const invitation = {
   invitationId: 'inv_1',
   projectId: 'proj_1',
   inviterUserId: 'user_alice',
-  completedAt: null
+  completedAt: null,
+  revokedAt: null,
+  expiresAt: Date.now() + 86_400_000
 };
+/** The runner still lists the invitation, waiting for the owner. */
+const listed = (state = 'waiting-for-owner') =>
+  pass({
+    incoming: [
+      {
+        record: invitation,
+        state
+      } as unknown as InvitationPassResult['incoming'][number]
+    ]
+  });
 const ready = { kind: 'ready', account: { unlocked: true } };
 
 function pass(overrides: Partial<InvitationPassResult> = {}) {
@@ -115,8 +132,11 @@ beforeEach(() => {
   loadEncryption.mockReset();
   acceptEncryptedInvitation.mockReset();
   syncInvitationsNow.mockReset();
-  syncInvitationsNow.mockResolvedValue(pass());
+  syncInvitationsNow.mockResolvedValue(listed());
   clearPendingEncryptedInvitation.mockReset();
+  pendingEncryptedInvitation.mockReset();
+  pendingEncryptedInvitation.mockReturnValue(TOKEN);
+  acceptRoute.mockReset();
   requestContactVerification.mockReset();
   passListener = null;
 });
@@ -232,5 +252,110 @@ describe('SharedWithYouDialog', () => {
     rerender(<SharedWithYouDialog {...props} shown />);
     expect(screen.getByText(/device to add you…/)).toBeTruthy();
     expect(acceptEncryptedInvitation).toHaveBeenCalledOnce();
+  });
+
+  it('opens a project another tab joined, which the runner no longer lists', async () => {
+    loadEncryption.mockResolvedValue(ready);
+    acceptEncryptedInvitation.mockResolvedValue({ invitation, linked: true });
+    const { props } = landing();
+    await screen.findByText(/device to add you…/);
+    // The other tab took the Welcome: no join here, and no open invitation.
+    acceptRoute.mockResolvedValue({
+      invitation: { ...invitation, completedAt: '2026-11-25T10:00:00Z' }
+    });
+    await waitFor(() => expect(passListener).not.toBeNull());
+    act(() => passListener!(pass()));
+    await waitFor(() =>
+      expect(props.onOpenProject).toHaveBeenCalledWith('proj_1')
+    );
+    expect(acceptRoute).toHaveBeenCalledWith({ token: TOKEN });
+  });
+
+  it('says an accepted invitation expired instead of waiting on it', async () => {
+    loadEncryption.mockResolvedValue(ready);
+    acceptEncryptedInvitation.mockResolvedValue({ invitation, linked: true });
+    const { props } = landing();
+    await screen.findByText(/device to add you…/);
+    acceptRoute.mockResolvedValue({
+      invitation: { ...invitation, expiresAt: Date.now() - 1000 }
+    });
+    await waitFor(() => expect(passListener).not.toBeNull());
+    act(() => passListener!(pass()));
+    expect((await screen.findByRole('alert')).textContent).toMatch(
+      /This invitation expired\. Ask .* to invite you again\./
+    );
+    expect(screen.queryByText(/device to add you…/)).toBeNull();
+    expect(props.onOpenProject).not.toHaveBeenCalled();
+  });
+
+  it('says so at once when the link it accepts again has expired', async () => {
+    loadEncryption.mockResolvedValue(ready);
+    acceptEncryptedInvitation.mockResolvedValue({
+      invitation: { ...invitation, expiresAt: Date.now() - 1000 },
+      linked: true
+    });
+    landing();
+    expect((await screen.findByRole('alert')).textContent).toMatch(
+      /This invitation expired/
+    );
+  });
+
+  it('starts over for a second link, and the first one opens nothing', async () => {
+    loadEncryption.mockResolvedValue(ready);
+    let finishFirst: (value: unknown) => void = () => undefined;
+    acceptEncryptedInvitation.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFirst = resolve;
+        })
+    );
+    const second = 'b'.repeat(43);
+    acceptEncryptedInvitation.mockResolvedValueOnce({
+      invitation: { ...invitation, invitationId: 'inv_2', projectId: 'proj_2' },
+      linked: true
+    });
+    const onOpenProject = vi.fn();
+    const props = {
+      userId: 'user_bob',
+      shown: true,
+      onSignIn: vi.fn(),
+      onOpenEncryptionSettings: vi.fn(),
+      onOpenProject,
+      onClose: vi.fn()
+    };
+    // The app keys the landing on its link (`App.tsx`).
+    const { rerender } = render(
+      <SharedWithYouDialog key={TOKEN} token={TOKEN} {...props} />
+    );
+    await waitFor(() => expect(acceptEncryptedInvitation).toHaveBeenCalledOnce());
+    // The second link arrives while the first is still being accepted.
+    pendingEncryptedInvitation.mockReturnValue(second);
+    rerender(<SharedWithYouDialog key={second} token={second} {...props} />);
+    await waitFor(() =>
+      expect(acceptEncryptedInvitation).toHaveBeenCalledTimes(2)
+    );
+    expect(acceptEncryptedInvitation.mock.calls[1]![1]).toBe(second);
+    // The first finishes late, already completed: it neither opens its
+    // project nor clears the second link's stored token.
+    clearPendingEncryptedInvitation.mockClear();
+    finishFirst({
+      invitation: { ...invitation, completedAt: '2026-11-25T10:00:00Z' },
+      linked: true
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onOpenProject).not.toHaveBeenCalledWith('proj_1');
+    expect(clearPendingEncryptedInvitation).not.toHaveBeenCalled();
+    expect(await screen.findByText(/device to add you…/)).toBeTruthy();
+  });
+
+  it('leaves a stored token of another link alone', async () => {
+    loadEncryption.mockResolvedValue(ready);
+    acceptEncryptedInvitation.mockResolvedValue({ invitation, linked: true });
+    pendingEncryptedInvitation.mockReturnValue('c'.repeat(43));
+    landing();
+    await screen.findByText(/device to add you…/);
+    expect(clearPendingEncryptedInvitation).not.toHaveBeenCalled();
   });
 });

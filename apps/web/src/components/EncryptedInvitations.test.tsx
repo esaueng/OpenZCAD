@@ -38,7 +38,9 @@ vi.mock('../lib/e2ee/invitations', () => ({
   confirmEncryptedInvitation: (...args: unknown[]) =>
     confirmEncryptedInvitation(...args),
   addInvitedMember: (...args: unknown[]) => addInvitedMember(...args),
-  declineInvitation: (...args: unknown[]) => declineInvitation(...args)
+}));
+vi.mock('../lib/e2ee/invitationTombstones', () => ({
+  cancelInvitation: (...args: unknown[]) => declineInvitation(...args)
 }));
 vi.mock('../lib/e2ee/contactFocus', () => ({
   notifyContactsChanged: () => undefined,

@@ -165,13 +165,14 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
     return invitableContacts(await encryptedInvitations(), email);
   },
   async revoke(projectId, invitationId) {
-    const [{ encryptedInvitations }, { declineInvitation }] = await Promise.all(
+    const [{ encryptedInvitations }, { cancelInvitation }] = await Promise.all(
       [
         import('../lib/e2ee/encryptedProjects'),
-        import('../lib/e2ee/invitations')
+        import('../lib/e2ee/invitationTombstones')
       ]
     );
-    await declineInvitation(
+    // Recorded in the account's sealed tombstones first, then revoked.
+    await cancelInvitation(
       await encryptedInvitations(),
       projectId,
       invitationId

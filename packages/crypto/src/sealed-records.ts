@@ -283,3 +283,19 @@ export const SHARE_LINK_NAMES_RECORD: SealedRecordKind = {
   maxPlaintextBytes: 90 * 1024,
   noun: 'share link names record'
 };
+
+/**
+ * The invitations to encrypted projects this account cancelled (L11 plan
+ * of 2026-11-25, §3.4; ADR-024 amendment 2026-11-25): only its own devices
+ * read it. They renew, and add an acceptance of, no invitation named here,
+ * whatever the server lists.
+ */
+export const INVITATION_TOMBSTONES_RECORD: SealedRecordKind = {
+  keyInfo: 'OpenZCAD E2EE v1 invitation tombstones key',
+  aadLabel: 'OpenZCAD E2EE v1 invitation tombstones\0',
+  // An entry is an invitation id and a time (under 100 bytes of JSON);
+  // 60 KiB holds about 600 cancellations within the 60 days each is kept,
+  // and stays under the Worker's 96 KiB character cap once sealed.
+  maxPlaintextBytes: 60 * 1024,
+  noun: 'invitation tombstones record'
+};

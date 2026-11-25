@@ -63,6 +63,7 @@ import {
   fromHex,
   invitationEmailHash,
   invitationLinkTokenHash,
+  invitationChainIssuedAt,
   invitationStatementHash,
   toHex,
   verifyInvitationAcceptance,
@@ -116,6 +117,10 @@ import {
   createProjectInvitationToken,
   hashProjectInvitationToken
 } from './sharing';
+import {
+  E2EE_INVITATION_TOMBSTONES_ROUTE,
+  handleInvitationTombstones
+} from './e2eeInvitationTombstones';
 
 const PROJECT_ROUTE =
   /^\/api\/e2ee\/projects\/([^/]+)\/(invitations|invitations\/[^/]+|invitations\/[^/]+\/acceptance|key-packages|key-packages\/claim|welcome)$/;
@@ -131,6 +136,7 @@ export function isE2eeInvitationPath(pathname: string): boolean {
     pathname === E2EE_INVITATION_ACCEPT_ROUTE ||
     pathname === E2EE_SENT_INVITATIONS_ROUTE ||
     pathname === E2EE_PENDING_INVITATIONS_ROUTE ||
+    pathname === E2EE_INVITATION_TOMBSTONES_ROUTE ||
     PROJECT_ROUTE.test(pathname)
   );
 }
@@ -377,6 +383,17 @@ async function createInvitation(
       400,
       'E2EE_INVITATION_INVALID',
       'The invitation statement is for another project or owner.'
+    );
+  }
+  // A new invitation starts its own renewal chain.
+  if (
+    decoded.chainIssuedAt !== undefined &&
+    decoded.chainIssuedAt !== decoded.issuedAt
+  ) {
+    refuse(
+      400,
+      'E2EE_INVITATION_INVALID',
+      'A new invitation cannot continue another one’s renewals.'
     );
   }
   // The signing device must be certified in the owner's newest list.
@@ -790,7 +807,9 @@ async function renewInvitation(
     !sameOptionalBytes(
       decoded.inviteeIdentityKeyHash,
       stored.inviteeIdentityKeyHash
-    )
+    ) ||
+    // The chain keeps where it began, so it ends 30 days after that.
+    invitationChainIssuedAt(decoded) !== invitationChainIssuedAt(stored)
   ) {
     refuse(
       400,
@@ -1784,6 +1803,17 @@ export async function handleE2eeInvitationRequest(
     }
     if (url.pathname === E2EE_PENDING_INVITATIONS_ROUTE && method === 'GET') {
       return await listPendingInvitations(db, userId);
+    }
+    if (url.pathname === E2EE_INVITATION_TOMBSTONES_ROUTE) {
+      const snapshot = await handleInvitationTombstones(
+        db,
+        userId,
+        method,
+        authorization,
+        readBody
+      );
+      if (snapshot) return json(snapshot);
+      refuse(404, 'NOT_FOUND', 'Not found.');
     }
     const match = PROJECT_ROUTE.exec(url.pathname);
     if (!match) refuse(404, 'NOT_FOUND', 'Not found.');

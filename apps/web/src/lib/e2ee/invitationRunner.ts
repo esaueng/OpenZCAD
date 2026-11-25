@@ -184,7 +184,9 @@ export function createInvitationRunner(
     lastPassAt = deps.now();
     try {
       if (gates === null) {
-        gates = await deps.gatesOpen().catch(() => false);
+        // Only an answer is kept: a check that failed throws, backs the
+        // timer off and asks again (below), never reading as closed.
+        gates = await deps.gatesOpen();
         if (disposed) return null;
       }
       if (!gates) return null;
@@ -301,19 +303,35 @@ export function createInvitationRunner(
   };
 }
 
-/** Whether the server opens the gates invitations need. */
-async function invitationGatesOpen(): Promise<boolean> {
-  const response = await desktopFetch('/api/e2ee/config', {
+/**
+ * Whether the server opens the gates invitations need: an answer, or a
+ * throw for a check that could not be made (offline, a server error, a
+ * rate limit), which the runner retries. A route the Worker does not have
+ * (404, an older one) or a page served without it reads as closed.
+ */
+export async function invitationGatesOpen(
+  fetcher: typeof desktopFetch = desktopFetch
+): Promise<boolean> {
+  const response = await fetcher('/api/e2ee/config', {
     credentials: 'same-origin'
   });
-  if (!response.ok) return false;
-  const config = (await response.json()) as Partial<E2eeConfigResponse>;
-  return config.enabled === true && config.projectsEnabled === true;
+  if (response.status === 404) return false;
+  if (!response.ok) {
+    throw new Error(`The encryption gates could not be read (${response.status}).`);
+  }
+  let config: Partial<E2eeConfigResponse> | null;
+  try {
+    config = (await response.json()) as Partial<E2eeConfigResponse> | null;
+  } catch {
+    // A static host answers with its page: no encryption here.
+    return false;
+  }
+  return config?.enabled === true && config.projectsEnabled === true;
 }
 
 function pageDeps(userId: string): InvitationRunnerDeps {
   return {
-    gatesOpen: invitationGatesOpen,
+    gatesOpen: () => invitationGatesOpen(),
     load: () => import('./invitationPass'),
     now: () => Date.now(),
     visible: () =>

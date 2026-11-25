@@ -116,6 +116,21 @@ export interface E2eeRenewInvitationRequest {
   signature: string;
 }
 
+/**
+ * `GET`/`PUT /api/e2ee/invitations/tombstones`: the invitations an account
+ * cancelled, one record sealed under its account key (ADR-024 amendment
+ * 2026-11-25), opaque to the server.
+ */
+export interface E2eeInvitationTombstonesSnapshot {
+  /** 0 while the account never stored one. */
+  revision: number;
+  /** The sealed record's sequence; 0 with none. */
+  sequence: number;
+  /** base64url; null with none. */
+  record: string | null;
+  updatedAt: string | null;
+}
+
 /** `POST /api/e2ee/invitations/accept`: the token from the emailed link. */
 export interface E2eeAcceptInvitationRequest {
   token: string;
@@ -244,6 +259,16 @@ export interface E2eeInvitationsApi {
     invitationId: string,
     request: E2eeRenewInvitationRequest
   ): Promise<E2eeInvitationResponse>;
+  /** The account's sealed record of the invitations it cancelled. */
+  tombstones(): Promise<E2eeInvitationTombstonesSnapshot>;
+  /**
+   * Stores it at `expectedRevision` (0: none yet); a newer copy answers
+   * 409 `E2EE_INVITATION_TOMBSTONES_CONFLICT`.
+   */
+  saveTombstones(request: {
+    expectedRevision: number;
+    record: string;
+  }): Promise<E2eeInvitationTombstonesSnapshot>;
   /** The invitee's device posts its signed acceptance. */
   publishAcceptance(
     projectId: string,
@@ -307,6 +332,9 @@ export function createE2eeInvitationsApi(fetcher: Fetch): E2eeInvitationsApi {
     accepted: () => call('/api/e2ee/invitations'),
     sent: () => call('/api/e2ee/invitations/sent'),
     pending: () => call('/api/e2ee/invitations/pending'),
+    tombstones: () => call('/api/e2ee/invitations/tombstones'),
+    saveTombstones: (request) =>
+      call('/api/e2ee/invitations/tombstones', 'PUT', request),
     renew: (projectId, invitationId, request) =>
       call(
         `${project(projectId)}/invitations/${encodeURIComponent(invitationId)}`,

@@ -228,7 +228,10 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
           confirmedIdentity: invitation.acceptor.identityKeyHash
         });
       } else {
-        await invitations.declineInvitation(ctx, projectId, invitationId);
+        // Recorded in the account's sealed tombstones first, then revoked.
+        const { cancelInvitation } =
+          await import('../lib/e2ee/invitationTombstones');
+        await cancelInvitation(ctx, projectId, invitationId);
       }
     } catch (caught) {
       setError(messageFor(caught));
