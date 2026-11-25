@@ -23,13 +23,20 @@
  * itself. After the move it looks for a curved face of the source whose exact
  * carrier is gone from the result while the same carrier translated by the
  * move's displacement is present: proof that the kernel moved it rigidly.
- * That is the move's job only for:
+ * That is the move's job only for the moved faces themselves and for their
+ * own blend chain:
  *
- * - the moved faces themselves;
- * - the faces sharing an edge with them, the rim bands a planar move
- *   translates or rebuilds;
- * - curved faces with the blend radius of one of those rim bands, the corner
- *   patches a prismatic blend translation carries with its band.
+ * - a seed: a round on the moved face's rim, tangent to it (the edge between
+ *   them is G1), which a planar move translates or rebuilds;
+ * - a corner patch: a curved face tangent to a chain member and rolling the
+ *   same radius, which a prismatic blend translation carries with its band.
+ *
+ * Every chain member must also be shaped like a rolling-ball blend, not like
+ * a support: a cylinder spans less than half a turn about its axis, a torus
+ * less than half a turn about its tube, a sphere lies inside an open
+ * hemisphere. A bore or boss wall spans half a turn or more, so it never
+ * joins the chain, whatever its radius, and neither does a bore that meets
+ * the face square rather than tangent.
  *
  * Any other curved face moved that way is refused, typed, and nothing is
  * committed. The check reads only faces that are proven to have moved
@@ -37,21 +44,26 @@
  * Cones are not read: a chamfer or countersink cone is carried with the face
  * it rings, and the hole-mouth guard (`exact-offset-face-hole-mouth.ts`)
  * owns those.
+ *
+ * Lengths compare at a tolerance set by the body's size and the move, never
+ * by how far the body sits from the world origin.
  */
-import type { Vec3 } from '@openzcad/geometry';
+import { GEOMETRY_LINEAR_TOLERANCE, type Vec3 } from '@openzcad/geometry';
 
 import { analyticSurfaceRecord } from './exact-brep';
 import {
   ANALYTIC_MATCH_EPSILON,
+  FULL_REVOLUTION,
   add,
   cross,
+  dot,
   finiteVec3,
   length,
   normalized,
   positiveFinite,
+  scale,
   subtract
 } from './exact-math';
-import { measureBlendRegion } from './exact-measure';
 import { OffsetFaceRefusal } from './exact-offset-face-refusal';
 import { edgeToFaceMapOf, surfaceTypeOf } from './exact-sync-memo';
 import type { RemusKernel } from './remus-runtime';
@@ -72,12 +84,41 @@ type CurvedCarrier =
       minorRadius: number;
     };
 
-/** Lengths compare at the analytic match tolerance, scaled by size. */
-const lengthTolerance = (size: number) =>
-  Math.max(1, Math.abs(size)) * ANALYTIC_MATCH_EPSILON;
+/**
+ * The length tolerance for one move: the analytic match tolerance scaled by
+ * the body's bounding-box diagonal, never below the linear tolerance, and
+ * never more than a quarter of the move, so a carry of any length stays
+ * visible. Where the body sits in the world does not enter it: a body 60 km
+ * from the origin compares as finely as one at the origin.
+ */
+function moveTolerance(
+  kernel: RemusKernel,
+  source: number,
+  displacement: Vec3
+): number {
+  let diagonal = 0;
+  try {
+    const box = kernel.boundingBox(source);
+    diagonal = Math.hypot(
+      box[3]! - box[0]!,
+      box[4]! - box[1]!,
+      box[5]! - box[2]!
+    );
+  } catch {
+    // No box: the linear tolerance alone.
+  }
+  const size = Number.isFinite(diagonal) ? diagonal : 0;
+  return Math.min(
+    Math.max(GEOMETRY_LINEAR_TOLERANCE, size * ANALYTIC_MATCH_EPSILON),
+    length(displacement) / 4
+  );
+}
 
 /** Directions compare as lines: parallel either way. */
 const PARALLEL_SINE = 1e-7;
+
+/** How far short of half a turn a blend's arc must stop. */
+const HALF_TURN_MARGIN = 1e-3;
 
 function carrierOf(kernel: RemusKernel, face: number): CurvedCarrier | null {
   const type = surfaceTypeOf(kernel, face);
@@ -122,31 +163,30 @@ function parallel(a: Vec3, b: Vec3): boolean {
 }
 
 /** Whether two carriers are the same surface, whatever their trims. */
-function sameCarrier(a: CurvedCarrier, b: CurvedCarrier): boolean {
+function sameCarrier(
+  a: CurvedCarrier,
+  b: CurvedCarrier,
+  tolerance: number
+): boolean {
   if (a.kind === 'cylinder' && b.kind === 'cylinder') {
     if (!parallel(a.axis, b.axis)) return false;
-    if (Math.abs(a.radius - b.radius) > lengthTolerance(a.radius)) return false;
+    if (Math.abs(a.radius - b.radius) > tolerance) return false;
     // Distance between the two axis lines, which are parallel.
     const between = subtract(b.origin, a.origin);
-    const off = length(cross(between, a.axis));
-    return off <= lengthTolerance(length(a.origin) + a.radius);
+    return length(cross(between, a.axis)) <= tolerance;
   }
   if (a.kind === 'sphere' && b.kind === 'sphere') {
     return (
-      Math.abs(a.radius - b.radius) <= lengthTolerance(a.radius) &&
-      length(subtract(a.center, b.center)) <=
-        lengthTolerance(length(a.center) + a.radius)
+      Math.abs(a.radius - b.radius) <= tolerance &&
+      length(subtract(a.center, b.center)) <= tolerance
     );
   }
   if (a.kind === 'torus' && b.kind === 'torus') {
     return (
       parallel(a.axis, b.axis) &&
-      Math.abs(a.majorRadius - b.majorRadius) <=
-        lengthTolerance(a.majorRadius) &&
-      Math.abs(a.minorRadius - b.minorRadius) <=
-        lengthTolerance(a.minorRadius) &&
-      length(subtract(a.center, b.center)) <=
-        lengthTolerance(length(a.center) + a.majorRadius)
+      Math.abs(a.majorRadius - b.majorRadius) <= tolerance &&
+      Math.abs(a.minorRadius - b.minorRadius) <= tolerance &&
+      length(subtract(a.center, b.center)) <= tolerance
     );
   }
   return false;
@@ -157,16 +197,118 @@ function rollingRadius(carrier: CurvedCarrier): number {
   return carrier.kind === 'torus' ? carrier.minorRadius : carrier.radius;
 }
 
-function blendRadiusOf(
+/** Points along every edge of `face`, or null when one cannot be sampled. */
+function boundaryPoints(
   kernel: RemusKernel,
-  solid: number,
   face: number,
-  carrier: CurvedCarrier | null
-): number | null {
-  return (
-    measureBlendRegion(kernel, solid, face)?.radius ??
-    (carrier ? rollingRadius(carrier) : null)
-  );
+  deflection: number
+): Vec3[] | null {
+  const points: Vec3[] = [];
+  try {
+    for (const edge of kernel.getFaceEdges(face)) {
+      const flat = kernel.sampleEdge(edge, deflection);
+      for (let index = 0; index + 2 < flat.length; index += 3) {
+        points.push({
+          x: flat[index]!,
+          y: flat[index + 1]!,
+          z: flat[index + 2]!
+        });
+      }
+    }
+  } catch {
+    return null;
+  }
+  return points.length > 0 ? points : null;
+}
+
+/**
+ * The angular extent of `angles` on the circle: a full turn less the widest
+ * gap between neighbours.
+ */
+function angularSpan(angles: number[]): number {
+  if (angles.length === 0) return FULL_REVOLUTION;
+  const sorted = angles
+    .map(
+      (angle) => ((angle % FULL_REVOLUTION) + FULL_REVOLUTION) % FULL_REVOLUTION
+    )
+    .sort((a, b) => a - b);
+  let widest = sorted[0]! + FULL_REVOLUTION - sorted[sorted.length - 1]!;
+  for (let index = 1; index < sorted.length; index += 1) {
+    widest = Math.max(widest, sorted[index]! - sorted[index - 1]!);
+  }
+  return FULL_REVOLUTION - widest;
+}
+
+/** An angle about `axis` measured in a fixed frame perpendicular to it. */
+function angleAbout(axis: Vec3): (radial: Vec3) => number {
+  const helper =
+    Math.abs(axis.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  const u = normalized(cross(axis, helper))!;
+  const v = cross(axis, u);
+  return (radial) => Math.atan2(dot(radial, v), dot(radial, u));
+}
+
+/**
+ * Whether `face` is shaped like a rolling-ball blend of its carrier rather
+ * than like a support: a cylinder spans less than half a turn about its
+ * axis, a torus less than half a turn about its tube, and a sphere lies
+ * inside an open hemisphere. A round between two faces meeting at any real
+ * angle passes; a bore or boss wall, which wraps half a turn or more, does
+ * not.
+ */
+function blendShaped(
+  kernel: RemusKernel,
+  face: number,
+  carrier: CurvedCarrier
+): boolean {
+  const points = boundaryPoints(kernel, face, rollingRadius(carrier) / 50);
+  if (!points) return false;
+  const halfTurn = Math.PI - HALF_TURN_MARGIN;
+  switch (carrier.kind) {
+    case 'cylinder': {
+      const angle = angleAbout(carrier.axis);
+      return (
+        angularSpan(
+          points.map((point) => {
+            const offset = subtract(point, carrier.origin);
+            return angle(
+              subtract(offset, scale(carrier.axis, dot(offset, carrier.axis)))
+            );
+          })
+        ) < halfTurn
+      );
+    }
+    case 'torus':
+      return (
+        angularSpan(
+          points.map((point) => {
+            const offset = subtract(point, carrier.center);
+            const height = dot(offset, carrier.axis);
+            const ring = length(subtract(offset, scale(carrier.axis, height)));
+            return Math.atan2(height, ring - carrier.majorRadius);
+          })
+        ) < halfTurn
+      );
+    case 'sphere': {
+      const directions = points.flatMap((point) => {
+        const direction = normalized(subtract(point, carrier.center));
+        return direction ? [direction] : [];
+      });
+      const mean = normalized(
+        directions.reduce((sum, direction) => add(sum, direction), {
+          x: 0,
+          y: 0,
+          z: 0
+        })
+      );
+      return (
+        mean !== null &&
+        directions.every(
+          (direction) => dot(direction, mean) > Math.sin(HALF_TURN_MARGIN)
+        )
+      );
+    }
+  }
 }
 
 function describe(carrier: CurvedCarrier): string {
@@ -180,6 +322,60 @@ function describe(carrier: CurvedCarrier): string {
     case 'torus':
       return `R${round(carrier.majorRadius)}/r${round(carrier.minorRadius)} torus about ${point(carrier.center)}`;
   }
+}
+
+/**
+ * The moved faces' own blend chain on `source`: the blend-shaped rounds
+ * tangent to a moved face, then every blend-shaped curved face tangent to a
+ * member and rolling the same radius.
+ */
+function blendChain(
+  kernel: RemusKernel,
+  source: number,
+  movedSet: ReadonlySet<number>,
+  tolerance: number
+): Set<number> {
+  let smooth: ReadonlySet<number>;
+  try {
+    smooth = new Set(kernel.getSolidSmoothEdges(source));
+  } catch {
+    // Without a tangency verdict no face can be proven a blend.
+    return new Set();
+  }
+  const edgeFaces = edgeToFaceMapOf(kernel, source);
+  const chain = new Map<number, number>();
+  const queue: number[] = [];
+  /** The curved faces across a G1 edge of `face`, with their carriers. */
+  const tangentNeighbours = (face: number) => {
+    const found: { face: number; carrier: CurvedCarrier }[] = [];
+    for (const edge of kernel.getFaceEdges(face)) {
+      if (!smooth.has(edge)) continue;
+      for (const other of edgeFaces[String(edge)] ?? []) {
+        if (other === face || movedSet.has(other) || chain.has(other)) continue;
+        const carrier = carrierOf(kernel, other);
+        if (carrier) found.push({ face: other, carrier });
+      }
+    }
+    return found;
+  };
+  const join = (face: number, carrier: CurvedCarrier) => {
+    if (chain.has(face) || !blendShaped(kernel, face, carrier)) return;
+    chain.set(face, rollingRadius(carrier));
+    queue.push(face);
+  };
+  for (const face of movedSet) {
+    for (const seed of tangentNeighbours(face)) join(seed.face, seed.carrier);
+  }
+  while (queue.length > 0) {
+    const member = queue.shift()!;
+    const radius = chain.get(member)!;
+    for (const next of tangentNeighbours(member)) {
+      if (Math.abs(rollingRadius(next.carrier) - radius) <= tolerance) {
+        join(next.face, next.carrier);
+      }
+    }
+  }
+  return new Set(chain.keys());
 }
 
 /** A source face the move carried rigidly without being attached to it. */
@@ -205,6 +401,7 @@ export function detachedSupportCarry(
   displacement: Vec3
 ): DetachedCarry | null {
   if (length(displacement) <= ANALYTIC_MATCH_EPSILON) return null;
+  const tolerance = moveTolerance(kernel, source, displacement);
   const movedSet = new Set(moved);
   const resultCarriers: CurvedCarrier[] = [];
   for (const face of kernel.getSolidFaces(output)) {
@@ -212,7 +409,7 @@ export function detachedSupportCarry(
     if (carrier) resultCarriers.push(carrier);
   }
   const present = (carrier: CurvedCarrier) =>
-    resultCarriers.some((other) => sameCarrier(carrier, other));
+    resultCarriers.some((other) => sameCarrier(carrier, other, tolerance));
   // The faces that rigidly moved and are not one of the moved faces.
   const carried: { face: number; carrier: CurvedCarrier }[] = [];
   for (const face of kernel.getSolidFaces(source)) {
@@ -222,41 +419,21 @@ export function detachedSupportCarry(
     const shifted = translated(carrier, displacement);
     // A carrier the displacement leaves where it was (a bore along the
     // move) cannot show a carry.
-    if (sameCarrier(carrier, shifted)) continue;
+    if (sameCarrier(carrier, shifted, tolerance)) continue;
     if (present(carrier) || !present(shifted)) continue;
     carried.push({ face, carrier });
   }
   if (carried.length === 0) return null;
-  // Only now, with a proven carry, read the rim the move was allowed to take.
-  const edgeFaces = edgeToFaceMapOf(kernel, source);
-  const rim = new Set<number>();
-  for (const face of moved) {
-    for (const edge of kernel.getFaceEdges(face)) {
-      for (const other of edgeFaces[String(edge)] ?? []) {
-        if (!movedSet.has(other)) rim.add(other);
-      }
-    }
-  }
-  const bandRadii: number[] = [];
-  for (const band of rim) {
-    if (surfaceTypeOf(kernel, band) === 'plane') continue;
-    const radius = blendRadiusOf(kernel, source, band, carrierOf(kernel, band));
-    if (radius !== null) bandRadii.push(radius);
-  }
-  for (const { face, carrier } of carried) {
-    if (rim.has(face)) continue;
-    const radius = blendRadiusOf(kernel, source, face, carrier);
-    if (
-      radius !== null &&
-      bandRadii.some(
-        (band) => Math.abs(band - radius) <= lengthTolerance(radius)
-      )
-    ) {
-      continue;
-    }
-    return { face, carrier: describe(carrier) };
-  }
-  return null;
+  // Only now, with a proven carry, read the chain the move may take along.
+  const chain = blendChain(kernel, source, movedSet, tolerance);
+  const detached = carried.filter(({ face }) => !chain.has(face));
+  if (detached.length === 0) return null;
+  // Name the support itself (the boss, not a round riding with it) when
+  // one moved; otherwise the first face that should not have.
+  const named =
+    detached.find(({ face, carrier }) => !blendShaped(kernel, face, carrier)) ??
+    detached[0]!;
+  return { face: named.face, carrier: describe(named.carrier) };
 }
 
 /** The refusal for a move that carried a support it is not attached to. */
