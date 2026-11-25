@@ -212,7 +212,7 @@ export interface InvitationContext {
 export function contactInvitationPeople(
   contacts: ContactsContext,
   account: AccountView,
-  firstUse?: FirstUsePinStore
+  firstUse: FirstUsePinStore | undefined = contacts.firstUse
 ): InvitationPeople {
   const inspect = async (
     book: Awaited<ReturnType<typeof loadContacts>>,
@@ -236,8 +236,11 @@ export function contactInvitationPeople(
         const shared = firstUseStanding(pins, userId, identity);
         const superseded =
           pins.people[userId]?.retired.includes(identity) ?? false;
-        if (shared === 'trusted') keyChanged = false;
-        else if (shared === 'changed' && !(verified && !superseded)) {
+        // A trust in the account's pins never clears an alarm this browser
+        // recorded: only Trust new keys or a verification here does (they
+        // clear the contact pin's), so a change another tab saw meanwhile
+        // still stops an Add in progress.
+        if (shared === 'changed' && !(verified && !superseded)) {
           keyChanged = true;
         } else if (shared === 'new' && !verified) standing = 'new';
         if (superseded) verified = false;
@@ -390,6 +393,12 @@ export type InvitationErrorCode =
   | 'keys-changed'
   /** Their keys cannot be looked up (none, or no relation any more). */
   | 'no-keys'
+  /**
+   * The identity being added could not be saved to the account's first-use
+   * pins: nothing is added until it is, so the account's other devices
+   * compare against it.
+   */
+  | 'pins-unavailable'
   /** The statement does not verify, or is not this account's to complete. */
   | 'statement-invalid'
   /** A claimed KeyPackage is not the invitee's, or its leaf does not verify. */
@@ -1372,18 +1381,16 @@ export async function addInvitedMember(
   await authorize();
   // Pinned for every device of the account before anything is shared, so a
   // later invitation compares against this identity wherever it is added.
+  // A confirmed Add waits for it too: a pin left unsaved would let another
+  // device take a replacement identity for a first use.
   try {
     await ctx.people.pin?.(invitee, identity);
   } catch (error) {
     if (!(error instanceof FirstUsePinsUnavailable)) throw error;
-    // Only the owner's explicit confirmation of this identity goes ahead
-    // without the account's pins.
-    if (confirmed === undefined) {
-      throw new InvitationError(
-        'needs-confirmation',
-        'The keys of the people you share with could not be saved to your account. Confirm adding this person in the project’s sharing settings.'
-      );
-    }
+    throw new InvitationError(
+      'pins-unavailable',
+      'Couldn’t save who you added to your account. Nothing was added; try again.'
+    );
   }
   let claimed = await ctx.store
     .claim(userId, invitation.invitationId)

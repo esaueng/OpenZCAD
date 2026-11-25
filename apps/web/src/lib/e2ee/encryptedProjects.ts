@@ -73,15 +73,8 @@ import {
   createProjectGroupsApi,
   projectGroupAccount,
   type MemberDevicesRemoved,
-  type MembersRemoved,
-  type ProjectGroupAccount
+  type MembersRemoved
 } from './projectGroups';
-import {
-  createFirstUsePinsApi,
-  localStorageFirstUsePinState,
-  sealedFirstUsePins,
-  type FirstUsePinStore
-} from './firstUsePins';
 import {
   createEncryptedMeasurements,
   createEncryptedViewStates,
@@ -669,11 +662,7 @@ async function openStore(
     invitations: {
       groups,
       api: createE2eeInvitationsApi(desktopFetch),
-      people: contactInvitationPeople(
-        contacts,
-        account,
-        pageFirstUsePins(userId, groups, desktopFetch)
-      ),
+      people: contactInvitationPeople(contacts, account),
       store: invitationStore(),
       email
     }
@@ -681,30 +670,6 @@ async function openStore(
 }
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
-
-/**
- * The account's first-use pins (ADR-024 amendment 2026-11-25), shared by its
- * devices through a record sealed under the account key.
- */
-function pageFirstUsePins(
-  userId: string,
-  groups: { readonly account: ProjectGroupAccount },
-  fetcher: Fetch
-): FirstUsePinStore {
-  return sealedFirstUsePins(
-    {
-      userId,
-      accountKey: async () => (await groups.account.currentAccountKey()).key,
-      olderKey: async (commitment) =>
-        (await import('./sealedSettings')).accountKeyByCommitment(
-          userId,
-          commitment
-        ),
-      device: localStorageFirstUsePinState(userId)
-    },
-    createFirstUsePinsApi(fetcher)
-  );
-}
 
 /**
  * The encrypted-project clients a migration stages through (ADR-024 Phase
@@ -799,11 +764,7 @@ export async function openMigrationStaging(expectedUserId?: string): Promise<{
         invitations: {
           groups,
           api: createE2eeInvitationsApi(fetcher),
-          people: contactInvitationPeople(
-            contacts,
-            account,
-            pageFirstUsePins(userId, groups, fetcher)
-          ),
+          people: contactInvitationPeople(contacts, account),
           store: invitationStore(),
           email
         },

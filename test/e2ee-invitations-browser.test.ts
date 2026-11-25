@@ -904,7 +904,22 @@ describe('trust on first use: a changed identity blocks (ADR-024 amendment 2026-
     };
     await expect(
       addInvitedMember(unwritable, pending!.record)
-    ).rejects.toSatisfy(refusedWith('needs-confirmation'));
+    ).rejects.toSatisfy(refusedWith('pins-unavailable'));
+    // Not even the owner's confirmation adds anyone until the pin is saved:
+    // another device would take a replacement for a first use (PR 2057
+    // re-check).
+    await expect(
+      addInvitedMember(unwritable, pending!.record, {
+        confirmedIdentity: otherIdentity()
+      })
+    ).rejects.toSatisfy(refusedWith('pins-unavailable'));
+    expect(
+      rows<{ claimed_at: string | null }>(
+        w.srv,
+        'SELECT claimed_at FROM e2ee_key_packages WHERE project_id = ?',
+        projectId
+      )
+    ).toEqual([{ claimed_at: null }]);
     expect(groupEpoch(w.srv, projectId)).toBe(1);
     // With the pin written, it adds them.
     const recording: InvitationContext = {

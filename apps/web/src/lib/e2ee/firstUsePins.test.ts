@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FIRST_USE_PINS_RECORD,
+  sealRecord,
+  toBase64Url
+} from '@openzcad/crypto';
+import {
+  forgetFirstUsePins,
+  localStorageFirstUsePinState,
   EMPTY_FIRST_USE_PIN_BOOK,
   FirstUsePinsConflict,
   FirstUsePinsUnavailable,
@@ -168,6 +175,41 @@ describe('the sealed account record', () => {
     await expect(
       laptop.change((book, at) => pinFirstUse(book, BOB, K2, at))
     ).rejects.toBeInstanceOf(FirstUsePinsUnavailable);
+  });
+
+  it('refuses another record at the sequence it accepted, even after sign-out forgot its copy (PR 2057 re-check)', async () => {
+    const userId = 'user_alice';
+    const api = memoryApi();
+    const laptop = sealedFirstUsePins(
+      { ...keysFor(), device: localStorageFirstUsePinState(userId) },
+      api
+    );
+    await laptop.change((book, at) => pinFirstUse(book, BOB, K1, at));
+    const { sequence, revision } = api.snapshot;
+    // Sign-out forgets the merged copy, never the sequence and its hash.
+    forgetFirstUsePins(userId);
+    // The server answers a record at the same sequence that leaves the pin
+    // out (one an account device sealed on a fork it was kept on).
+    api.snapshot = {
+      revision,
+      sequence,
+      record: toBase64Url(
+        await sealRecord(
+          FIRST_USE_PINS_RECORD,
+          KEY,
+          userId,
+          sequence,
+          encodeFirstUsePinBook(EMPTY_FIRST_USE_PIN_BOOK)
+        )
+      )
+    };
+    const signedIn = sealedFirstUsePins(
+      { ...keysFor(), device: localStorageFirstUsePinState(userId) },
+      api
+    );
+    await expect(signedIn.read()).rejects.toBeInstanceOf(
+      FirstUsePinsUnavailable
+    );
   });
 
   it('fails closed when the record cannot be fetched or opened', async () => {

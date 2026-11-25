@@ -40,8 +40,15 @@ import { callE2eeRoute, E2eeApiError, type E2eeFetch } from './e2eeApi';
 export interface FirstUsePinEntry {
   /** Hex identity key hash → when a device first accepted it (ms). */
   readonly seen: Readonly<Record<string, number>>;
-  /** The identity the user trusted explicitly, last. */
-  readonly trusted?: { readonly identity: string; readonly stamp: number };
+  /**
+   * The identity the user trusted explicitly, last: by "Trust new keys", or
+   * by comparing codes (`verified`).
+   */
+  readonly trusted?: {
+    readonly identity: string;
+    readonly stamp: number;
+    readonly verified?: true;
+  };
   /** Identities a trust superseded: never a first use again. */
   readonly retired: readonly string[];
 }
@@ -100,7 +107,11 @@ function parseEntry(value: unknown): FirstUsePinEntry | null {
     typeof trust.identity === 'string' &&
     HASH.test(trust.identity) &&
     validStamp(trust.stamp)
-      ? { identity: trust.identity, stamp: trust.stamp }
+      ? {
+          identity: trust.identity,
+          stamp: trust.stamp,
+          ...(trust.verified === true ? { verified: true as const } : {})
+        }
       : undefined;
   return { seen, retired, ...(trusted ? { trusted } : {}) };
 }
@@ -208,13 +219,15 @@ export function pinFirstUse(
  * The user's explicit trust of `identity` for `userId`: it becomes the one
  * that counts, and every other identity known for them (`also`: one the
  * signed contacts list verified, say) is retired, so it never counts again.
+ * `verified` marks a trust made by comparing codes.
  */
 export function trustFirstUse(
   book: FirstUsePinBook,
   userId: string,
   identity: string,
   now: number,
-  also: readonly string[] = []
+  also: readonly string[] = [],
+  verified = false
 ): FirstUsePinBook {
   const entry = book.people[userId] ?? { seen: {}, retired: [] };
   const retired = [
@@ -238,7 +251,7 @@ export function trustFirstUse(
       [userId]: {
         seen: { ...entry.seen, [identity]: entry.seen[identity] ?? stamp },
         retired,
-        trusted: { identity, stamp }
+        trusted: { identity, stamp, ...(verified ? { verified: true } : {}) }
       }
     }
   };
@@ -259,7 +272,8 @@ export function encodeFirstUsePinBook(book: FirstUsePinBook): Uint8Array {
         ? {
             trusted: {
               identity: entry.trusted.identity,
-              stamp: entry.trusted.stamp
+              stamp: entry.trusted.stamp,
+              ...(entry.trusted.verified ? { verified: true } : {})
             }
           }
         : {})
@@ -339,10 +353,17 @@ export interface FirstUsePinsApi {
   save(expectedRevision: number, record: string): Promise<FirstUsePinsSnapshot>;
 }
 
-/** The highest sequence this device opened or wrote, and its merged copy. */
+/**
+ * The highest sequence this device opened or wrote, with a hash of the
+ * record it accepted there, and its merged copy. The sequence and hash
+ * outlive sign-out (they name nobody); the copy does not.
+ */
 export interface FirstUsePinDeviceState {
   readSequence(): number;
-  writeSequence(sequence: number): void;
+  /** Hex SHA-256 of the record accepted at `readSequence()`, or null. */
+  readRecordHash(): string | null;
+  /** Raises the sequence, keeping the hash accepted at an equal one. */
+  writeSequence(sequence: number, recordHash: string): void;
   readCopy(): FirstUsePinBook;
   writeCopy(book: FirstUsePinBook): void;
 }
@@ -362,10 +383,21 @@ export interface FirstUsePinKeys {
 
 const SAVE_ATTEMPTS = 4;
 
+/** Hex SHA-256 of a stored record as the Worker returns it. */
+async function recordHash(record: string): Promise<string> {
+  return toHex(
+    new Uint8Array(
+      await crypto.subtle.digest('SHA-256', new TextEncoder().encode(record))
+    )
+  );
+}
+
 /**
  * The record's book: null when none is stored and this device never opened
- * one. Throws when it cannot be opened, and when it is missing or older
- * than what this device already opened or wrote (a rollback).
+ * one. Throws when it cannot be opened, when it is missing or older than
+ * what this device already opened or wrote (a rollback), and when it has
+ * that very sequence but other content (a fork: the server cannot store two
+ * records at one sequence, so another one there was never the account's).
  */
 async function openPins(
   keys: FirstUsePinKeys,
@@ -385,7 +417,10 @@ async function openPins(
   } catch {
     throw new FirstUsePinsUnavailable();
   }
-  if (header.sequence < keys.device.readSequence()) {
+  const pinned = keys.device.readSequence();
+  if (header.sequence < pinned) throw new FirstUsePinsUnavailable();
+  const hash = await recordHash(record);
+  if (header.sequence === pinned && keys.device.readRecordHash() !== hash) {
     throw new FirstUsePinsUnavailable();
   }
   const current = await keys.accountKey().catch(() => null);
@@ -419,7 +454,7 @@ async function openPins(
       book = null;
     }
     if (!book) throw new FirstUsePinsUnavailable();
-    keys.device.writeSequence(header.sequence);
+    keys.device.writeSequence(header.sequence, hash);
     return book;
   } finally {
     key.fill(0);
@@ -479,8 +514,9 @@ export function sealedFirstUsePins(
         } finally {
           key.fill(0);
         }
+        const stored = toBase64Url(sealed);
         try {
-          await api.save(snapshot.revision, toBase64Url(sealed));
+          await api.save(snapshot.revision, stored);
         } catch (error) {
           if (
             error instanceof FirstUsePinsConflict &&
@@ -493,7 +529,7 @@ export function sealedFirstUsePins(
             'The keys of the people you share with could not be saved to your account. Nothing was shared.'
           );
         }
-        keys.device.writeSequence(sequence);
+        keys.device.writeSequence(sequence, await recordHash(stored));
         keys.device.writeCopy(book);
         return book;
       }
@@ -545,7 +581,47 @@ export function createFirstUsePinsApi(fetcher: E2eeFetch): FirstUsePinsApi {
 const SEQUENCE_PREFIX = realmStorageName('openzcad.firstUsePins.sequence.v1');
 const COPY_PREFIX = realmStorageName('openzcad.firstUsePins.copy.v1');
 /** Kept across reads even when persistent storage refuses a write. */
-const floors = new Map<string, number>();
+const floors = new Map<string, { sequence: number; hash: string | null }>();
+
+const HEX_HASH = /^[0-9a-f]{64}$/;
+
+/** The later of two heads; at one sequence, the hash accepted first. */
+function laterHead(
+  a: { sequence: number; hash: string | null },
+  b: { sequence: number; hash: string | null }
+): { sequence: number; hash: string | null } {
+  if (a.sequence !== b.sequence) return a.sequence > b.sequence ? a : b;
+  return a.hash ? a : b;
+}
+
+function parseHead(raw: string | null): {
+  sequence: number;
+  hash: string | null;
+} {
+  if (!raw) return { sequence: 0, hash: null };
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (typeof value === 'number') {
+      return Number.isSafeInteger(value) && value > 0
+        ? { sequence: value, hash: null }
+        : { sequence: 0, hash: null };
+    }
+    const head = value as { sequence?: unknown; hash?: unknown };
+    return typeof head.sequence === 'number' &&
+      Number.isSafeInteger(head.sequence) &&
+      head.sequence > 0
+      ? {
+          sequence: head.sequence,
+          hash:
+            typeof head.hash === 'string' && HEX_HASH.test(head.hash)
+              ? head.hash
+              : null
+        }
+      : { sequence: 0, hash: null };
+  } catch {
+    return { sequence: 0, hash: null };
+  }
+}
 const copies = new Map<string, FirstUsePinBook>();
 
 /** This device's sequence pin and merged copy, in local storage. */
@@ -554,21 +630,21 @@ export function localStorageFirstUsePinState(
 ): FirstUsePinDeviceState {
   const sequenceKey = `${SEQUENCE_PREFIX}:${userId}`;
   const copyKey = `${COPY_PREFIX}:${userId}`;
-  const remember = (value: number) => {
-    const floor = Math.max(
-      floors.get(userId) ?? 0,
-      Number.isSafeInteger(value) && value > 0 ? value : 0
+  const remember = (head: { sequence: number; hash: string | null }) => {
+    const floor = laterHead(
+      floors.get(userId) ?? { sequence: 0, hash: null },
+      head
     );
     floors.set(userId, floor);
     return floor;
   };
-  const readSequence = () => {
+  const readHead = () => {
     try {
       return remember(
-        Number(globalThis.localStorage?.getItem(sequenceKey) ?? 0)
+        parseHead(globalThis.localStorage?.getItem(sequenceKey) ?? null)
       );
     } catch {
-      return remember(0);
+      return remember({ sequence: 0, hash: null });
     }
   };
   const readCopy = (): FirstUsePinBook => {
@@ -585,11 +661,12 @@ export function localStorageFirstUsePinState(
       : (stored ?? visit ?? EMPTY_FIRST_USE_PIN_BOOK);
   };
   return {
-    readSequence,
-    writeSequence(sequence) {
-      const floor = remember(Math.max(readSequence(), sequence));
+    readSequence: () => readHead().sequence,
+    readRecordHash: () => readHead().hash,
+    writeSequence(sequence, hash) {
+      const floor = remember(laterHead(readHead(), { sequence, hash }));
       try {
-        globalThis.localStorage?.setItem(sequenceKey, String(floor));
+        globalThis.localStorage?.setItem(sequenceKey, JSON.stringify(floor));
       } catch {
         // The memory floor still protects this visit.
       }
@@ -612,12 +689,16 @@ export function localStorageFirstUsePinState(
 
 /** An in-memory device state, for tests and browsers without storage. */
 export function memoryFirstUsePinState(): FirstUsePinDeviceState {
-  let sequence = 0;
+  let head: { sequence: number; hash: string | null } = {
+    sequence: 0,
+    hash: null
+  };
   let copy = EMPTY_FIRST_USE_PIN_BOOK;
   return {
-    readSequence: () => sequence,
-    writeSequence: (value) => {
-      sequence = Math.max(sequence, value);
+    readSequence: () => head.sequence,
+    readRecordHash: () => head.hash,
+    writeSequence: (sequence, hash) => {
+      head = laterHead(head, { sequence, hash });
     },
     readCopy: () => copy,
     writeCopy: (book) => {
@@ -628,8 +709,9 @@ export function memoryFirstUsePinState(): FirstUsePinDeviceState {
 
 /**
  * Forgets this device's copy at sign-out or erasure: it names the people
- * the account shares with. The sequence pin stays, so a rolled-back record
- * is still refused here.
+ * the account shares with. The sequence and the hash of the record accepted
+ * there stay, so a rolled-back record, or another record at that sequence
+ * (a fork that leaves out pins this device wrote), is still refused here.
  */
 export function forgetFirstUsePins(userId: string): void {
   copies.delete(userId);
@@ -638,4 +720,48 @@ export function forgetFirstUsePins(userId: string): void {
   } catch {
     // Storage unavailable.
   }
+}
+
+/**
+ * The identities the account's pins retired for `userId` (a trust or a
+ * verification superseded them): never shown as verified, nor wrapped to,
+ * on any device. Empty when the record cannot be read here.
+ */
+export async function retiredIdentities(
+  store: FirstUsePinStore | undefined,
+  userId: string
+): Promise<ReadonlySet<string>> {
+  if (!store) return new Set();
+  const book = await store.read().catch(() => null);
+  return new Set(book?.people[userId]?.retired ?? []);
+}
+
+/**
+ * The page's account pins for `userId`, over the Worker route, with the
+ * page's unlocked account key (locked: unavailable).
+ */
+export function pageFirstUsePins(
+  userId: string,
+  fetcher?: E2eeFetch
+): FirstUsePinStore {
+  return sealedFirstUsePins(
+    {
+      userId,
+      accountKey: async () => {
+        const { unlockedAccount } = await import('./unlockedKeys');
+        return unlockedAccount(userId)?.accountKey.slice() ?? null;
+      },
+      olderKey: async (commitment) =>
+        (await import('./sealedSettings')).accountKeyByCommitment(
+          userId,
+          commitment
+        ),
+      device: localStorageFirstUsePinState(userId)
+    },
+    createFirstUsePinsApi(
+      fetcher ??
+        (async (path, init) =>
+          (await import('../desktopBridge')).desktopFetch(path, init))
+    )
+  );
 }
