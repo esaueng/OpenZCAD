@@ -85,7 +85,18 @@ export type InvitationRunnerEvent =
       readonly email: string | null;
     }
   /** This device joined a project it was invited to. */
-  | { readonly kind: 'joined'; readonly projectId: string };
+  | { readonly kind: 'joined'; readonly projectId: string }
+  /**
+   * Someone new to this account accepted an invitation it sent
+   * (`confirm-new`): only the owner's signed Confirm adds them (ADR-024
+   * amendment 2026-11-25). The runner never signs; this asks once per
+   * invitation.
+   */
+  | {
+      readonly kind: 'confirm';
+      readonly projectId: string;
+      readonly invitationId: string;
+    };
 
 type Trigger = 'tick' | 'visible' | 'event' | 'manual';
 
@@ -151,6 +162,8 @@ export function createInvitationRunner(
   let queued: Promise<InvitationPassResult | null> | null = null;
   let queuedTrigger: Trigger | null = null;
   const listeners = new Set<(event: InvitationRunnerEvent) => void>();
+  /** Invitations whose Confirm was asked for already. */
+  const asked = new Set<string>();
   const passListeners = new Set<(result: InvitationPassResult) => void>();
 
   const emit = (event: InvitationRunnerEvent) => {
@@ -223,6 +236,13 @@ export function createInvitationRunner(
       }
       for (const projectId of result.joined)
         emit({ kind: 'joined', projectId });
+      for (const invitation of result.outgoing) {
+        const { invitationId, projectId } = invitation.record;
+        if (invitation.state !== 'confirm-new' || asked.has(invitationId))
+          continue;
+        asked.add(invitationId);
+        emit({ kind: 'confirm', projectId, invitationId });
+      }
       for (const listener of passListeners) {
         try {
           listener(result);

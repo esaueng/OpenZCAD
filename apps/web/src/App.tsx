@@ -5639,6 +5639,15 @@ export function App() {
   );
   const sharedInvitationRef = useRef(sharedInvitation);
   sharedInvitationRef.current = sharedInvitation;
+  // A Confirm from a notice: the project's Share dialog opens once the
+  // project is.
+  const [shareWhenOpen, setShareWhenOpen] = useState<string | null>(null);
+  const sharingTargetId = doc?.projectId ?? null;
+  useEffect(() => {
+    if (!shareWhenOpen || sharingTargetId !== shareWhenOpen) return;
+    setShareWhenOpen(null);
+    setSharingOpen(true);
+  }, [sharingTargetId, shareWhenOpen]);
   // The app-level invitation runner (L11 plan of 2026-11-25, §3.3): adds
   // ready invitees, joins welcomed projects and renews pending statements
   // in the background on a device whose keys are unlocked, and loads no
@@ -5650,6 +5659,24 @@ export function App() {
     const nameOf = (projectId: string, listed: readonly ProjectSummary[]) =>
       listed.find((project) => project.projectId === projectId)?.name ?? null;
     const stopNotices = subscribeInvitationRunner((event) => {
+      if (event.kind === 'confirm') {
+        // Someone new accepted: the owner's one signed Confirm adds them,
+        // in the project's Share dialog. Never done in the background.
+        const name = nameOf(event.projectId, latestProjects.current);
+        announce(
+          name
+            ? `Someone you invited accepted ${name}. Confirm to add them.`
+            : 'Someone you invited accepted. Confirm to add them.',
+          {
+            label: 'Confirm',
+            run: () => {
+              setShareWhenOpen(event.projectId);
+              openJoinedProject(event.projectId);
+            }
+          }
+        );
+        return;
+      }
       if (event.kind === 'added') {
         // No address in a notice: personal info stays out of the log.
         const name = nameOf(event.projectId, latestProjects.current);
@@ -9009,10 +9036,9 @@ export function App() {
     const owned = await tracker.takeOverEditing();
     if (projectEditingRef.current !== tracker || owned) return;
     projectEditingAskedRef.current = false;
-    setStatus(
-      "Couldn't take over editing. Close the other tab to edit here.",
-      { sticky: true }
-    );
+    setStatus("Couldn't take over editing. Close the other tab to edit here.", {
+      sticky: true
+    });
   }
 
   /**
@@ -20495,12 +20521,10 @@ export function App() {
           // Not from a tab another tab took the project from meanwhile:
           // that tab sends the account its own copy.
           const claim = projectOwnershipRef.current;
-          if (
-            !(
-              claim?.projectId === savingManager.document.projectId &&
-              !claim.owned
-            )
-          ) {
+          if (!(
+            claim?.projectId === savingManager.document.projectId &&
+            !claim.owned
+          )) {
             controller?.schedule(savingManager.document);
           }
         }

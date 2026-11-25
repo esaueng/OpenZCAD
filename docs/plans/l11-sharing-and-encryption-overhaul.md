@@ -73,26 +73,31 @@ the owner.
 
 **Proposed:** the same model as Signal, WhatsApp and iMessage.
 
-- **First introduction is trusted.** If the invitee proves control of the
-  invited email (sign-in) and holds the emailed link token, their signed
-  acceptance is enough. The owner's browser adds them, and the identity it
-  added becomes the pin for that person. The invitee's browser likewise
-  accepts the owner identity named in the signed invitation and pins it.
+- **First introduction is trusted, with one confirmation.** If the invitee
+  proves control of the invited email (sign-in) and holds the emailed link
+  token, their signed acceptance is enough: no codes are compared. Someone
+  new to the owner takes one confirmation ("Alex accepted, confirm with
+  Touch ID"), which signs a `trust` entry for their identity into the
+  owner's contacts list and then adds them. The invitee likewise confirms
+  an owner new to them once. People already pinned are added, or joined,
+  with no prompt (D5).
 - **Verification becomes optional, and it is shown.** Each person in the Share
   dialog and in People carries **Verified** or **Not verified**. "Verify…"
   opens the existing mutual code comparison. Nothing waits on it.
 - **A change is still an alarm.** If a pinned person's identity key changes,
   nothing is added or re-wrapped for them automatically. The row reads
   "_Alex's encryption keys changed_", with **Review** (compare codes) and
-  **Trust new keys** (an explicit, logged first-use again). The rules for
-  removed members (`addGate`) stay: re-adding someone who was removed always
-  asks.
-- **The project group is the pin.** The identity an MLS group already holds
-  for a member is what later checks compare against. TOFU pins are therefore
-  not written to the identity-signed contacts list, so adding a person needs
-  no passkey touch. Verifying someone still writes a signed contacts entry.
-  Once someone is a member of any of the owner's projects, inviting them to
-  another one adds them at once.
+  **Trust new keys** (a signed `trust` entry replacing the pinned identity,
+  still not verified). The rules for removed members (`addGate`) stay:
+  re-adding someone who was removed always asks.
+- **The signed contacts list is the pin (D5).** First-use pins are entries of
+  the identity-signed, hash-chained contacts list: a `trusted` state,
+  distinct from verified, under the list's signature, fork-consistency and
+  rollback checks, so every device of the account compares against the same
+  identity. It costs one passkey touch per new person. Once someone is
+  pinned, inviting them to another project adds them as soon as their
+  devices publish KeyPackages. The background never signs: a new person's
+  acceptance surfaces a Confirm (toast and Share dialog row).
 
 **What this keeps.** A database or storage breach, a curious operator, or a
 passive network or server observer still sees only ciphertext. Keys are
@@ -126,9 +131,10 @@ Row: "Invited · waiting for Alex"   ──►  Email: "Peter shared Cheery Duck
                                           Turn on encryption to open it."
                                          [Continue with passkey]   (setup §5)
                                          Acceptance signed automatically
-Any owner device that is open adds  ◄──  "Waiting for Peter's device…" (only
-Alex in the background. Toast:           while no owner device is online)
-"Alex joined Cheery Duckling"            Project opens by itself
+Alex is new: toast "Alex accepted ·  ◄──  "Waiting for Peter's device…" (only
+Confirm" → one Touch ID → added.         while no owner device is online)
+(Already pinned: added in the            Project opens by itself
+background, toast "Alex joined".)        (A new owner: one Confirm first.)
 Row: Alex · Viewer · Not verified ⓘ
 ```
 
@@ -136,7 +142,8 @@ Changes:
 
 1. **Owner:** one input, one button. The "email only / this contact" radio
    group goes away. If the email belongs to someone the owner already shares
-   with (same pinned identity), the key is wrapped at Invite.
+   with (same pinned identity), they are added as soon as their devices
+   publish; someone new takes one signed Confirm.
 2. **Invitee lands on the project, not on Settings.** The invite link opens a
    "Shared with you" screen. It runs setup inline when needed. The opened
    link token is the acceptance intent, so there is no separate Accept or
@@ -289,3 +296,10 @@ key-change alarm blocking an automatic add.
    §5 of the 2026-11-16 plan.
 4. **D4, link delegation:** keep 30 days, renew automatically during any
    passkey-authorized action, and prompt only once it has expired.
+5. **D5, signed contacts list for TOFU pins** (2026-11-25, after three review
+   rounds on a merged sealed record): trust on first use is recorded as a
+   signed `trust` entry in the identity-signed contacts list, the only
+   cross-device trust store, rather than in an account-key-sealed record
+   that devices merge. One passkey touch per new person; people already
+   pinned are added automatically; the background never signs. Supersedes
+   §2's "the project group is the pin" bullet.

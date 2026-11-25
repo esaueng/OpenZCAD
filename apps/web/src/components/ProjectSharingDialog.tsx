@@ -1,4 +1,5 @@
 import {
+  Suspense,
   useCallback,
   useEffect,
   useId,
@@ -52,56 +53,70 @@ import {
   ShareLinkFacts,
   ShareLinkNameField
 } from './ShareLinkCard';
-import type {
-  InvitableContact,
-  OwnerInvitation
-} from '../lib/e2ee/invitations';
+import type { OwnerInvitation, PersonTrust } from '../lib/e2ee/invitations';
+import type { UnlockAuthorization } from '../lib/e2ee/accountKeys';
+import type { AuthorizeRequest } from './encryption/AuthorizeDialog';
+import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { useEncryptionStatus } from '../lib/e2ee/encryptionStatus';
 import { describeFailure, type PlainFailure } from '../lib/plainFailure';
 import { FailureDetails } from './FailureDetails';
 import { PrivateEmailInput, usePersonalInfoVisible } from './PersonalInfo';
 
 const defaultClient = createProjectSharingClient();
+/** The passkey-or-recovery-key confirmation, loaded with its crypto. */
+const LazyAuthorizeDialog = lazyWithStaleChunkNotice(() =>
+  import('./encryption/AuthorizeDialog').then((module) => ({
+    default: module.AuthorizeDialog
+  }))
+);
 const defaultShareLinkClient = createProjectShareLinkClient();
 
 /**
  * Invitations to an end-to-end encrypted project (ADR-024 slice 5-3b): the
- * owner's browser signs each one, adds a verified invitee by an MLS Commit
- * and keeps the invitee's address locally, so the dialog asks this client
- * instead of the plaintext routes, which refuse encrypted projects.
+ * owner's browser signs each one, adds whoever accepts by signature by an
+ * MLS Commit (trust on first use) and keeps the invitee's address locally,
+ * so the dialog asks this client instead of the plaintext routes, which
+ * refuse encrypted projects.
  */
 export interface EncryptedSharingClient {
   /** The project's open invitations, after adding every ready invitee. */
   list(projectId: string): Promise<OwnerInvitation[]>;
-  /**
-   * `contact` is the verified contact the owner explicitly picked, by the
-   * identity its contact code showed: the invitation then names them, and
-   * only they are added without asking. Without it, the owner confirms
-   * whoever accepts.
-   */
+  /** One email, one role: whoever accepts it is added on first use. */
   invite(
     projectId: string,
     email: string,
-    role: ProjectMemberRole,
-    contact?: Pick<InvitableContact, 'userId' | 'identityKeyHash'>
+    role: ProjectMemberRole
   ): Promise<void>;
-  /**
-   * The verified contacts Contacts lists under `email` (the server's
-   * label), offered by contact code as an explicit choice.
-   */
-  contactsFor?(email: string): Promise<InvitableContact[]>;
   /** Revokes an invitation, or declines one someone accepted. */
   revoke(projectId: string, invitationId: string): Promise<void>;
   /**
-   * The owner's explicit confirmation of the contact who accepted
-   * (`confirm-add`, or `confirm-re-add` for someone removed before), by
-   * the identity the confirmation showed: never done in the background.
+   * The owner's explicit confirmation of the person who accepted
+   * (`confirm-new` for someone new to the account, `confirm-add`, or
+   * `confirm-re-add` for someone removed before), by the identity the
+   * confirmation showed: never done in the background. Someone new is
+   * trusted first, signed with `authorization` (a passkey touch or the
+   * recovery key), then added.
    */
   confirmAdd?(
     projectId: string,
     invitationId: string,
-    identityKeyHash: string
+    identityKeyHash: string,
+    authorization?: UnlockAuthorization
   ): Promise<void>;
+  /** Where this browser stands with each person's keys; unknown ones left out. */
+  peopleTrust?(userIds: readonly string[]): Promise<PersonTrust[]>;
+  /**
+   * The owner's explicit "Trust new keys" for someone whose identity
+   * changed, by the identity shown, signed with `authorization`: never done
+   * in the background.
+   */
+  trustNewKeys?(
+    userId: string,
+    identityKeyHash: string,
+    authorization: UnlockAuthorization
+  ): Promise<void>;
+  /** Whether a passkey can sign here (the account has one, and PRF works). */
+  passkeyAvailable?(): Promise<boolean>;
   /**
    * The owner's role change of a member (slice 5-4): an MLS Commit the
    * Worker mirrors into the member list.
@@ -141,7 +156,7 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
       projectId
     );
   },
-  async invite(projectId, email, role, contact) {
+  async invite(projectId, email, role) {
     const [{ encryptedInvitations }, { inviteToEncryptedProject }] =
       await Promise.all([
         import('../lib/e2ee/encryptedProjects'),
@@ -151,18 +166,39 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
       await encryptedInvitations(),
       projectId,
       email,
-      role,
-      contact ? { contact } : {}
+      role
     );
   },
-  async contactsFor(email) {
-    const [{ encryptedInvitations }, { invitableContacts }] = await Promise.all(
-      [
-        import('../lib/e2ee/encryptedProjects'),
-        import('../lib/e2ee/invitations')
-      ]
+  async peopleTrust(userIds) {
+    const [{ encryptedInvitations }, { peopleTrust }] = await Promise.all([
+      import('../lib/e2ee/encryptedProjects'),
+      import('../lib/e2ee/invitations')
+    ]);
+    return peopleTrust(await encryptedInvitations(), userIds);
+  },
+  async trustNewKeys(userId, identityKeyHash, authorization) {
+    const [{ encryptedInvitations }, { trustPerson }] = await Promise.all([
+      import('../lib/e2ee/encryptedProjects'),
+      import('../lib/e2ee/invitations')
+    ]);
+    await trustPerson(
+      await encryptedInvitations(),
+      userId,
+      identityKeyHash,
+      authorization
     );
-    return invitableContacts(await encryptedInvitations(), email);
+  },
+  async passkeyAvailable() {
+    const [{ encryptedInvitations }, { passkeysAvailable }] = await Promise.all(
+      [import('../lib/e2ee/encryptedProjects'), import('../lib/e2ee/passkeys')]
+    );
+    const ctx = await encryptedInvitations();
+    return (
+      passkeysAvailable() &&
+      ctx.groups.account.list.unlockTargets.some(
+        (target) => target.kind === 'passkey'
+      )
+    );
   },
   async revoke(projectId, invitationId) {
     const [{ encryptedInvitations }, { cancelInvitation }] = await Promise.all([
@@ -176,7 +212,7 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
       invitationId
     );
   },
-  async confirmAdd(projectId, invitationId, identityKeyHash) {
+  async confirmAdd(projectId, invitationId, identityKeyHash, authorization) {
     const [{ encryptedInvitations }, invitations] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/invitations')
@@ -193,6 +229,18 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
     ) {
       throw new Error(
         'This invitation changed since you reviewed it. Nothing was added; check it again.'
+      );
+    }
+    // Someone new to the account: the signed trust first, then the Add.
+    if (!invitation.acceptor.pinned) {
+      if (authorization === undefined) {
+        throw new Error('Confirm with your passkey or recovery key first.');
+      }
+      await invitations.trustPerson(
+        ctx,
+        invitation.acceptor.userId,
+        identityKeyHash,
+        authorization
       );
     }
     await invitations.addInvitedMember(ctx, invitation.record, {
@@ -217,9 +265,10 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
 const ENCRYPTED_STATE_LABELS: Record<OwnerInvitation['state'], string> = {
   invited: 'Invited',
   'waiting-for-keys': 'Waiting for keys',
-  'waiting-for-verification': 'Waiting for you to verify',
+  'keys-changed': 'Encryption keys changed',
   'needs-acceptance': 'Waiting for them to accept again',
   'confirm-re-add': 'Removed before: confirm to add back',
+  'confirm-new': 'Accepted: confirm to add',
   'confirm-add': 'Accepted: confirm to add',
   'accepted-by-other': 'Accepted by someone you did not invite',
   ready: 'Adding',
@@ -231,9 +280,10 @@ const ENCRYPTED_STATE_LABELS: Record<OwnerInvitation['state'], string> = {
 const OPEN_ENCRYPTED_STATES = new Set<OwnerInvitation['state']>([
   'invited',
   'waiting-for-keys',
-  'waiting-for-verification',
+  'keys-changed',
   'needs-acceptance',
   'confirm-re-add',
+  'confirm-new',
   'confirm-add',
   'accepted-by-other',
   'ready'
@@ -241,6 +291,7 @@ const OPEN_ENCRYPTED_STATES = new Set<OwnerInvitation['state']>([
 
 /** Invitations the owner confirms (or declines) before anyone is added. */
 const CONFIRMABLE_STATES = new Set<OwnerInvitation['state']>([
+  'confirm-new',
   'confirm-add',
   'confirm-re-add'
 ]);
@@ -337,6 +388,134 @@ const ROLE_ARTICLES: Record<'editor' | 'viewer', string> = {
 /** An avatar with personal info hidden: a person, not a question mark. */
 function HiddenPerson() {
   return <UserRound size={13} aria-hidden="true" />;
+}
+
+/** Whether two addresses (either may be unknown) are the same one. */
+function sameAddress(a: string | null, b: string | null): boolean {
+  return (
+    a !== null &&
+    b !== null &&
+    a.trim().toLowerCase() === b.trim().toLowerCase()
+  );
+}
+
+/**
+ * Verified or Not verified (ADR-024 amendment 2026-11-25): whether the
+ * owner compared codes with this person. Shown only; nothing waits on it.
+ * "Verify…" opens the code comparison.
+ */
+function TrustBadge({
+  name,
+  userId,
+  verified,
+  busy,
+  onVerify
+}: {
+  name: string;
+  userId: string;
+  verified: boolean;
+  busy: boolean;
+  onVerify?: ((userId: string) => void) | undefined;
+}) {
+  return (
+    <>
+      <span className="sharing-trust" data-verified={verified}>
+        {verified ? 'Verified' : 'Not verified'}
+      </span>
+      {!verified && onVerify ? (
+        <button
+          type="button"
+          className="secondary sharing-verify"
+          aria-label={`Verify ${name}`}
+          disabled={busy}
+          onClick={() => onVerify(userId)}
+        >
+          Verify…
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * A person whose identity is not the one this browser pinned for them:
+ * nothing is added or shared with them automatically until the owner
+ * reviews the change (compares codes) or trusts the new keys explicitly.
+ */
+function KeysChanged({
+  name,
+  userId,
+  busy,
+  onReview,
+  onTrust,
+  onDecline,
+  onRemove
+}: {
+  name: string;
+  userId: string;
+  busy: boolean;
+  onReview?: ((userId: string) => void) | undefined;
+  onTrust?: (() => void) | undefined;
+  onDecline?: () => void;
+  onRemove?: () => void;
+}) {
+  return (
+    <div
+      className="sharing-confirm"
+      role="group"
+      aria-label={`${name}'s encryption keys changed`}
+      data-status="keys-changed"
+    >
+      <p className="sharing-confirm-title">{name}'s encryption keys changed</p>
+      <p className="sharing-hint">
+        Nothing is shared with them automatically until you review the change.
+        Compare codes with them, or trust the new keys if you know why they
+        changed (a new account or a reset).
+      </p>
+      <div className="sharing-confirm-actions">
+        {onDecline ? (
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            onClick={onDecline}
+          >
+            Decline
+          </button>
+        ) : null}
+        {onRemove ? (
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            onClick={onRemove}
+          >
+            Remove
+          </button>
+        ) : null}
+        {onReview ? (
+          <button
+            type="button"
+            className="secondary"
+            disabled={busy}
+            onClick={() => onReview(userId)}
+          >
+            Review
+          </button>
+        ) : null}
+        {onTrust ? (
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={onTrust}
+          >
+            Trust new keys
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 const LINK_MODE_LABELS: Record<ProjectShareLinkMode, string> = {
@@ -514,13 +693,42 @@ export function ProjectSharingDialog({
   const [email, setEmail] = useState('');
   const personalInfoVisible = usePersonalInfoVisible();
   const [inviteRole, setInviteRole] = useState<ProjectMemberRole>('viewer');
-  // Verified contacts listed under the address typed (the server's label):
-  // offered by contact code, never picked for the owner.
-  const [contactMatches, setContactMatches] = useState<{
-    email: string;
-    contacts: InvitableContact[];
-  } | null>(null);
-  const [pickedContact, setPickedContact] = useState<string | null>(null);
+  // Where this browser stands with each encrypted member's keys: Verified,
+  // Not verified, or keys changed (trust on first use).
+  const [memberTrust, setMemberTrust] = useState<
+    ReadonlyMap<string, PersonTrust>
+  >(new Map());
+  // The passkey-or-recovery-key confirmation of a signed trust: for someone
+  // new to the account, and for Trust new keys. Never in the background.
+  const [signature, setSignature] = useState<AuthorizeRequest | null>(null);
+  const [signing, setSigning] = useState(false);
+  const askSignature = async (
+    request: Omit<AuthorizeRequest, 'passkey' | 'work'> & {
+      work(authorization: UnlockAuthorization): Promise<void>;
+    }
+  ) => {
+    const passkey = await (
+      encryptedClient.passkeyAvailable?.() ?? Promise.resolve(false)
+    ).catch(() => false);
+    setSignature({ ...request, passkey });
+  };
+  const runSignature = async (
+    work: () => Promise<unknown>,
+    options?: { onError?(message: string): void }
+  ): Promise<boolean> => {
+    setSigning(true);
+    try {
+      await work();
+      return true;
+    } catch (caught) {
+      const failure = errorMessage(caught);
+      if (options?.onError) options.onError(failure.message);
+      else setError(failure);
+      return false;
+    } finally {
+      setSigning(false);
+    }
+  };
   const [invitationSentTo, setInvitationSentTo] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(role === 'owner');
   const [busy, setBusy] = useState<string | null>(null);
@@ -565,7 +773,7 @@ export function ProjectSharingDialog({
       try {
         if (encrypted) {
           // Encrypted: members from the metadata route, invitations (and
-          // the Adds of verified invitees) through MLS; share links in EncryptedShareLinks.
+          // the Adds of accepted invitees) through MLS; share links in EncryptedShareLinks.
           const nextSharing = await client.getProjectSharing(projectId);
           setSharing(nextSharing);
           setShareLinks([]);
@@ -579,8 +787,23 @@ export function ProjectSharingDialog({
                 (member) => member.userId === invitation.record.acceptedByUserId
               )
           );
-          if (newMember) {
-            setSharing(await client.getProjectSharing(projectId));
+          const members = newMember
+            ? await client.getProjectSharing(projectId)
+            : nextSharing;
+          if (newMember) setSharing(members);
+          // Verified or Not verified, and keys changed, per member: shown
+          // only, never a condition for sharing (trust on first use).
+          if (encryptedClient.peopleTrust) {
+            const trust = await encryptedClient
+              .peopleTrust(
+                members.members
+                  .map((member) => member.userId)
+                  .filter((userId) => userId !== currentUserId)
+              )
+              .catch(() => []);
+            setMemberTrust(
+              new Map(trust.map((entry) => [entry.userId, entry]))
+            );
           }
           return;
         }
@@ -605,7 +828,8 @@ export function ProjectSharingDialog({
       role,
       localProject,
       encrypted,
-      encryptedClient
+      encryptedClient,
+      currentUserId
     ]
   );
 
@@ -635,41 +859,6 @@ export function ProjectSharingDialog({
     // action-status row after the dialog has already painted.
     void refresh('hydrate');
   }, [refresh]);
-
-  const contactLookup =
-    encrypted &&
-    !localProject &&
-    role === 'owner' &&
-    encryptedClient.contactsFor
-      ? encryptedClient
-      : null;
-  useEffect(() => {
-    setPickedContact(null);
-    const address = email.trim().toLowerCase();
-    if (!contactLookup?.contactsFor || !address.includes('@')) {
-      setContactMatches(null);
-      return;
-    }
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      contactLookup.contactsFor!(address).then(
-        (contacts) => {
-          if (!cancelled) setContactMatches({ email: address, contacts });
-        },
-        () => {
-          if (!cancelled) setContactMatches(null);
-        }
-      );
-    }, 250);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [email, contactLookup]);
-  const offeredContacts =
-    contactMatches?.email === email.trim().toLowerCase()
-      ? contactMatches.contacts
-      : [];
 
   const mutate = async (key: string, action: () => Promise<void>) => {
     actionOriginRef.current =
@@ -1054,20 +1243,10 @@ export function ProjectSharingDialog({
                     void mutate('invite', async () => {
                       setInvitationSentTo(null);
                       if (encrypted) {
-                        // Only the owner's explicit pick binds a contact.
-                        const contact = offeredContacts.find(
-                          (candidate) => candidate.userId === pickedContact
-                        );
                         await encryptedClient.invite(
                           projectId,
                           email,
-                          inviteRole,
-                          contact
-                            ? {
-                                userId: contact.userId,
-                                identityKeyHash: contact.identityKeyHash
-                              }
-                            : undefined
+                          inviteRole
                         );
                         setInvitationSentTo(email.trim().toLowerCase());
                       } else {
@@ -1119,56 +1298,6 @@ export function ProjectSharingDialog({
                     Invite
                   </button>
                 </form>
-                {offeredContacts.length ? (
-                  <div
-                    className="sharing-confirm"
-                    role="radiogroup"
-                    aria-label="Who to add"
-                  >
-                    <p className="sharing-confirm-title">
-                      Contacts lists a verified contact under this address.
-                    </p>
-                    <label className="sharing-invite-option">
-                      <input
-                        type="radio"
-                        name="sharing-invite-contact"
-                        checked={pickedContact === null}
-                        disabled={interactionBusy}
-                        onChange={() => setPickedContact(null)}
-                      />
-                      <span>Email only: you confirm whoever accepts</span>
-                    </label>
-                    {offeredContacts.map((contact) => (
-                      <label
-                        key={contact.userId}
-                        className="sharing-invite-option"
-                      >
-                        <input
-                          type="radio"
-                          name="sharing-invite-contact"
-                          checked={pickedContact === contact.userId}
-                          disabled={interactionBusy}
-                          onChange={() => setPickedContact(contact.userId)}
-                        />
-                        <span>
-                          Invite{' '}
-                          {personalInfoVisible && contact.email
-                            ? contact.email
-                            : 'your verified contact'}{' '}
-                          (code{' '}
-                          <code className="encryption-code">
-                            {contact.code}
-                          </code>
-                          )
-                        </span>
-                      </label>
-                    ))}
-                    <p className="sharing-hint">
-                      A contact you pick is added once they accept. Pick them
-                      only if this is the code Contacts shows for them.
-                    </p>
-                  </div>
-                ) : null}
                 {invitationSentTo && (
                   <p className="sharing-invite-sent" role="status">
                     {personalInfoVisible
@@ -1243,6 +1372,41 @@ export function ProjectSharingDialog({
                         </li>
                       );
                     }
+                    const trust =
+                      encrypted && member
+                        ? memberTrust.get(member.userId)
+                        : undefined;
+                    if (member && manageable && trust?.keyChanged) {
+                      return (
+                        <li key={person.key} className="sharing-confirm-row">
+                          <KeysChanged
+                            name={name}
+                            userId={member.userId}
+                            busy={interactionBusy}
+                            onReview={onVerifyContact}
+                            onTrust={
+                              encryptedClient.trustNewKeys
+                                ? () =>
+                                    void askSignature({
+                                      title: `Trust ${name}'s new keys`,
+                                      body: 'This signs that you trust their new keys, on every device of yours. It does not verify them: compare codes for that.',
+                                      actionLabel: 'Trust new keys',
+                                      work: async (authorization) => {
+                                        await encryptedClient.trustNewKeys!(
+                                          member.userId,
+                                          trust.identityKeyHash,
+                                          authorization
+                                        );
+                                        await refresh();
+                                      }
+                                    })
+                                : undefined
+                            }
+                            onRemove={() => setConfirmingRemoval(member.userId)}
+                          />
+                        </li>
+                      );
+                    }
                     return (
                       <li key={person.key}>
                         <span
@@ -1260,6 +1424,15 @@ export function ProjectSharingDialog({
                           {name}
                           {personalInfoVisible && person.you ? ' (you)' : ''}
                         </span>
+                        {trust ? (
+                          <TrustBadge
+                            name={name}
+                            userId={trust.userId}
+                            verified={trust.verified}
+                            busy={interactionBusy}
+                            onVerify={onVerifyContact}
+                          />
+                        ) : null}
                         {person.kind === 'self' && role ? (
                           <span className="sharing-kind">
                             {ROLE_LABELS[role]}
@@ -1395,22 +1568,65 @@ export function ProjectSharingDialog({
                             personalInfoVisible && invitation.email
                               ? invitation.email
                               : `Invitation ${index + 1}`;
-                          const invitee = invitation.record.acceptedByUserId;
                           const acceptor = invitation.acceptor;
                           const statement = invitation.statement;
+                          if (invitation.state === 'keys-changed' && acceptor) {
+                            const who =
+                              personalInfoVisible && acceptor.email
+                                ? acceptor.email
+                                : label;
+                            const id = invitation.record.invitationId;
+                            return (
+                              <li key={id} className="sharing-confirm-row">
+                                <KeysChanged
+                                  name={who}
+                                  userId={acceptor.userId}
+                                  busy={interactionBusy}
+                                  onReview={onVerifyContact}
+                                  onTrust={
+                                    encryptedClient.trustNewKeys
+                                      ? () =>
+                                          void askSignature({
+                                            title: `Trust ${who}'s new keys`,
+                                            body: 'This signs that you trust their new keys, on every device of yours, and then adds them. It does not verify them: compare codes for that.',
+                                            actionLabel: 'Trust new keys',
+                                            work: async (authorization) => {
+                                              await encryptedClient.trustNewKeys!(
+                                                acceptor.userId,
+                                                acceptor.identityKeyHash,
+                                                authorization
+                                              );
+                                              await refresh();
+                                            }
+                                          })
+                                      : undefined
+                                  }
+                                  onDecline={() =>
+                                    void mutate(`decline:${id}`, async () => {
+                                      await encryptedClient.revoke(
+                                        projectId,
+                                        id
+                                      );
+                                      await refresh();
+                                    })
+                                  }
+                                />
+                              </li>
+                            );
+                          }
                           if (
                             CONFIRMABLE_STATES.has(invitation.state) &&
                             acceptor &&
                             statement?.projectId === projectId &&
                             encryptedClient.confirmAdd
                           ) {
-                            // Named from the verified acceptance and statement
+                            // Named from the signed acceptance and statement
                             // only: the contact code Contacts shows, the role
                             // this account signed.
                             const who =
                               personalInfoVisible && acceptor.email
                                 ? acceptor.email
-                                : 'Your verified contact';
+                                : 'The person who accepted';
                             const id = invitation.record.invitationId;
                             return (
                               <li key={id} className="sharing-confirm-row">
@@ -1427,9 +1643,11 @@ export function ProjectSharingDialog({
                                   <p className="sharing-hint">
                                     {invitation.state === 'confirm-re-add'
                                       ? 'You removed them from this project before. '
-                                      : ''}
-                                    Add them only if this is the contact code
-                                    Contacts shows for the person you invited:
+                                      : invitation.state === 'confirm-new'
+                                        ? 'They are new to you: confirming signs that you trust their keys, on every device of yours, then adds them. '
+                                        : 'This browser has not seen every change to who is in this project. '}
+                                    Add them only if this is the person you
+                                    invited. Their contact code:
                                   </p>
                                   <code
                                     className="encryption-code"
@@ -1474,20 +1692,37 @@ export function ProjectSharingDialog({
                                       className="primary"
                                       disabled={interactionBusy}
                                       onClick={() =>
-                                        void mutate(
-                                          `confirm-add:${id}`,
-                                          async () => {
-                                            await encryptedClient.confirmAdd!(
-                                              projectId,
-                                              id,
-                                              acceptor.identityKeyHash
-                                            );
-                                            await refresh();
-                                          }
-                                        )
+                                        acceptor.pinned
+                                          ? void mutate(
+                                              `confirm-add:${id}`,
+                                              async () => {
+                                                await encryptedClient.confirmAdd!(
+                                                  projectId,
+                                                  id,
+                                                  acceptor.identityKeyHash
+                                                );
+                                                await refresh();
+                                              }
+                                            )
+                                          : // New to the account: one signed
+                                            // confirmation, then the Add.
+                                            void askSignature({
+                                              title: `Confirm ${who}`,
+                                              body: `${who} accepted your invitation. Confirming signs that you trust their keys, on every device of yours, then adds them. It does not verify them: compare codes for that.`,
+                                              actionLabel: 'Confirm',
+                                              work: async (authorization) => {
+                                                await encryptedClient.confirmAdd!(
+                                                  projectId,
+                                                  id,
+                                                  acceptor.identityKeyHash,
+                                                  authorization
+                                                );
+                                                await refresh();
+                                              }
+                                            })
                                       }
                                     >
-                                      Add
+                                      {acceptor.pinned ? 'Add' : 'Confirm'}
                                     </button>
                                   </div>
                                 </div>
@@ -1526,19 +1761,17 @@ export function ProjectSharingDialog({
                                   )}
                                 </span>
                               </span>
-                              {invitation.state ===
-                                'waiting-for-verification' &&
-                              invitee &&
-                              onVerifyContact ? (
-                                <button
-                                  type="button"
-                                  className="secondary sharing-verify"
-                                  aria-label={`Verify ${label}`}
-                                  disabled={interactionBusy}
-                                  onClick={() => onVerifyContact(invitee)}
-                                >
-                                  Verify
-                                </button>
+                              {acceptor &&
+                              sameAddress(acceptor.email, invitation.email) ? (
+                                // The badge names the acceptor's keys: shown
+                                // only beside the address they accepted as.
+                                <TrustBadge
+                                  name={label}
+                                  userId={acceptor.userId}
+                                  verified={acceptor.verified}
+                                  busy={interactionBusy}
+                                  onVerify={onVerifyContact}
+                                />
                               ) : null}
                               <button
                                 type="button"
@@ -1806,6 +2039,16 @@ export function ProjectSharingDialog({
           </footer>
         ) : null}
       </div>
+      {signature ? (
+        <Suspense fallback={null}>
+          <LazyAuthorizeDialog
+            request={signature}
+            busy={signing}
+            run={runSignature}
+            onClose={() => setSignature(null)}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

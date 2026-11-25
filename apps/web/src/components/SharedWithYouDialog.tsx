@@ -11,6 +11,7 @@ import {
   deviceKeyStore
 } from '../lib/e2ee/keychainDeviceKeys';
 import {
+  EncryptionFlowError,
   loadEncryption,
   type E2eeContext,
   type EncryptionState
@@ -19,8 +20,11 @@ import { createE2eeApi } from '../lib/e2ee/e2eeApi';
 import { encryptedInvitations } from '../lib/e2ee/encryptedProjects';
 import {
   acceptEncryptedInvitation,
+  trustInvitationOwner,
+  type InviteeInvitation,
   type InviteeInvitationState
 } from '../lib/e2ee/invitations';
+import { passkeysAvailable } from '../lib/e2ee/passkeys';
 import type { E2eeInvitationRecord } from '@openzcad/shared';
 import {
   clearPendingEncryptedInvitation,
@@ -42,6 +46,7 @@ import {
   type InvitationPassResult
 } from '../lib/e2ee/invitationRunner';
 import { requestContactVerification } from '../lib/e2ee/contactFocus';
+import { AuthorizeDialog } from './encryption/AuthorizeDialog';
 import { EncryptionDialog } from './encryption/EncryptionDialog';
 import { SetupDialog } from './encryption/SetupDialog';
 import { messageFor, type RunOptions } from './encryption/flow';
@@ -76,6 +81,8 @@ type Phase =
       expiresAt: number;
       /** Where the runner's newest pass says the invitation stands. */
       state: InviteeInvitationState | null;
+      /** That pass's listing, for the owner's signed confirmation. */
+      listing?: InviteeInvitation;
     }
   | { kind: 'expired'; owner: string | null }
   | { kind: 'failed'; message: string };
@@ -232,8 +239,12 @@ export function SharedWithYouDialog({
         void refresh();
         return;
       }
-      if (listed.state !== current.state) {
-        show({ ...current, state: listed.state });
+      if (
+        listed.state !== current.state ||
+        listed.statementHash !== current.listing?.statementHash ||
+        listed.ownerIdentityKeyHash !== current.listing?.ownerIdentityKeyHash
+      ) {
+        show({ ...current, state: listed.state, listing: listed });
       }
     },
     [open, refresh, show]
@@ -359,6 +370,33 @@ export function SharedWithYouDialog({
     };
   }, [follow, refresh, show, shown, userId, waitingFor]);
 
+  // Whether the owner's confirmation is open, and with a passkey offered.
+  // The exact listing the person confirms (its statement and the owner
+  // identity it was shown with), captured at the click: a later pass that
+  // lists another statement under the same id never gets signed for.
+  const [confirmingOwner, setConfirmingOwner] = useState<{
+    passkey: boolean;
+    listing: InviteeInvitation;
+  } | null>(null);
+  const askOwnerConfirmation = async () => {
+    const current = phaseRef.current;
+    const listing = current.kind === 'waiting' ? current.listing : undefined;
+    if (!listing) return;
+    let passkey: boolean;
+    try {
+      const state = ctx ? await loadEncryption(ctx) : null;
+      passkey =
+        passkeysAvailable() &&
+        state?.kind === 'ready' &&
+        state.account.list.unlockTargets.some(
+          (target) => target.kind === 'passkey'
+        );
+    } catch {
+      passkey = false;
+    }
+    setConfirmingOwner({ passkey, listing });
+  };
+
   const run = useCallback(
     async (
       work: () => Promise<EncryptionState | void>,
@@ -387,6 +425,45 @@ export function SharedWithYouDialog({
   );
 
   if (!shown) return null;
+  // An owner new to this account: one signature (a passkey touch, or the
+  // recovery key) trusts them, then this device joins. Never automatic.
+  if (confirmingOwner !== null) {
+    const { listing } = confirmingOwner;
+    return (
+      <AuthorizeDialog
+        request={{
+          title: 'Confirm the project owner',
+          body: 'This signs that you trust their keys, on every device of yours, so you can join. It does not verify them: compare codes for that.',
+          actionLabel: 'Confirm',
+          passkey: confirmingOwner.passkey,
+          work: async (authorization) => {
+            // The listing still shown must be the one confirmed.
+            const shownNow = phaseRef.current;
+            if (
+              shownNow.kind !== 'waiting' ||
+              shownNow.listing?.statementHash !== listing.statementHash ||
+              shownNow.listing?.ownerIdentityKeyHash !==
+                listing.ownerIdentityKeyHash
+            ) {
+              throw new EncryptionFlowError(
+                'invalid-request',
+                'This invitation changed since you reviewed it. Nothing was trusted; review it again.'
+              );
+            }
+            await trustInvitationOwner(
+              await encryptedInvitations(),
+              listing,
+              authorization
+            );
+            void syncInvitationsNow().then(follow);
+          }
+        }}
+        busy={busy}
+        run={run}
+        onClose={() => setConfirmingOwner(null)}
+      />
+    );
+  }
   if (setup && ctx && userId) {
     return (
       <SetupDialog
@@ -486,7 +563,8 @@ export function SharedWithYouDialog({
       break;
     case 'waiting': {
       const who = owner ?? 'the owner';
-      const verify = phase.state === 'verify-owner';
+      const verify = phase.state === 'owner-keys-changed';
+      const newOwner = phase.state === 'confirm-owner' && !!phase.listing;
       body = (
         <>
           <p>
@@ -495,8 +573,13 @@ export function SharedWithYouDialog({
           </p>
           {verify ? (
             <p role="status">
-              Compare codes with {who} first: their device adds you once you
-              have verified each other.
+              {who}’s encryption keys changed. Compare codes with them before
+              joining.
+            </p>
+          ) : newOwner ? (
+            <p role="status">
+              {who} is new to you. Confirm it is them to join: your passkey or
+              recovery key signs that you trust their keys.
             </p>
           ) : phase.state === 'invalid' ? (
             <p role="alert">
@@ -510,7 +593,20 @@ export function SharedWithYouDialog({
           )}
         </>
       );
-      if (verify || phase.state === 'confirm') {
+      if (newOwner) {
+        footer = (
+          <>
+            {footer}
+            <button
+              className="primary"
+              type="button"
+              onClick={() => void askOwnerConfirmation()}
+            >
+              Confirm
+            </button>
+          </>
+        );
+      } else if (verify || phase.state === 'confirm') {
         const inviter = phase.inviterUserId;
         footer = (
           <>

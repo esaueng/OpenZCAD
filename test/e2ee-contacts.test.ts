@@ -54,6 +54,7 @@ import { createE2eeApi, E2eeApiError } from '../apps/web/src/lib/e2ee/e2eeApi';
 import { memoryDeviceStore } from '../apps/web/src/lib/e2ee/deviceStore';
 import {
   ContactsError,
+  type ContactsApi,
   createContactsApi,
   inspectContact,
   loadContacts,
@@ -61,6 +62,7 @@ import {
   parseContactScan,
   contactScanText,
   recordKeyChange,
+  trustContact,
   sealContactsList,
   untrustContact,
   verifiedEncryptionKey,
@@ -771,6 +773,258 @@ describe('verifying contacts in the browser', () => {
     ]);
   });
 
+  /** Another browser of Alice's whose list pin an approving device confirmed. */
+  async function aliceDesktop(
+    alice: Person,
+    api: ContactsApi = alice.contacts.api
+  ): Promise<ContactsContext> {
+    const pins = memoryContactPins();
+    await pins.advanceList(ALICE, (await alice.pins.readList(ALICE))!);
+    return { ...alice.contacts, api, pins };
+  }
+
+  const replaced = async (p: Person) => {
+    p.account = ready(
+      await replaceRecoveryKey(
+        p.keys,
+        p.account,
+        (await generateRecoveryKey()).secret,
+        p.recovery.secret
+      )
+    );
+    return toHex(p.account.list.identityKeyHash);
+  };
+
+  it('trusts someone new with one signature, pinned on every device and never verified (ADR-024 amendment 2026-11-25)', async () => {
+    const { alice, bob } = await pair();
+    const people = contactInvitationPeople(alice.contacts, alice.account);
+    const first = toHex(bob.account.list.identityKeyHash);
+    // New to the account: nothing pins Bob yet.
+    expect(await people.inspect(BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: false,
+      firstUse: 'new'
+    });
+    // The owner's one confirmation signs a trust entry for that identity.
+    await people.trust!(BOB, first, alice.recovery.secret);
+    expect(await people.inspect(BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: false,
+      firstUse: 'known'
+    });
+    const book = await loadContacts(alice.contacts, alice.account);
+    expect(book.list?.contacts.get(BOB)).toMatchObject({ status: 'trusted' });
+    expect(book.contacts.find((c) => c.userId === BOB)?.standing).toBe(
+      'trusted'
+    );
+    expect(book.list?.entries.map((e) => e.entry.action)).toEqual(['trust']);
+    // Trusted is not verified: no key to wrap to by itself.
+    expect(
+      verifiedEncryptionKey(await inspectContact(alice.contacts, book, BOB))
+    ).toBeNull();
+    // Another device of Alice's, which never looked Bob up, knows him from
+    // the signed list.
+    const desktop = contactInvitationPeople(
+      await aliceDesktop(alice),
+      alice.account
+    );
+    expect(await desktop.inspect(BOB)).toMatchObject({
+      keyChanged: false,
+      firstUse: 'known'
+    });
+    // A browser whose list pin is unconfirmed counts the trust only once it
+    // signed or compared codes there.
+    const unconfirmed = contactInvitationPeople(
+      { ...alice.contacts, pins: memoryContactPins() },
+      alice.account
+    );
+    expect(await unconfirmed.inspect(BOB)).toMatchObject({ firstUse: 'new' });
+    // A trust of an identity other than the one shown signs nothing.
+    await expect(
+      people.trust!(BOB, 'ab'.repeat(32), alice.recovery.secret)
+    ).rejects.toMatchObject({ code: 'keys-changed' });
+  });
+
+  it('flags a changed identity on every device against the signed pin, and signs Trust new keys (ADR-024 amendment 2026-11-25)', async () => {
+    const { srv, alice, bob } = await pair();
+    const people = contactInvitationPeople(alice.contacts, alice.account);
+    const first = toHex(bob.account.list.identityKeyHash);
+    await people.trust!(BOB, first, alice.recovery.secret);
+    const path = `/api/e2ee/users/${BOB}/device-list`;
+    const oldAnswer = await (
+      await srv.call('GET', path, { user: ALICE })
+    ).text();
+    const second = await replaced(bob);
+    // The laptop, and a desktop that never saw Bob, both see a key change.
+    expect(await people.inspect(BOB)).toMatchObject({
+      keyChanged: true,
+      firstUse: 'new'
+    });
+    const desktopContacts = await aliceDesktop(alice);
+    const desktop = contactInvitationPeople(desktopContacts, alice.account);
+    expect(await desktop.inspect(BOB)).toMatchObject({ keyChanged: true });
+    // The server answers with the pinned identity again, as an Add's
+    // Commit-time check would read it: the alarm this browser recorded
+    // stands (a rollback is refused), it is never cleared by the lookup.
+    const replaying: ContactsContext = {
+      ...alice.contacts,
+      api: createContactsApi(async (p, init) =>
+        p === path
+          ? new Response(oldAnswer, {
+              status: 200,
+              headers: { 'content-type': 'application/json' }
+            })
+          : fetcher(srv, ALICE)(p, init)
+      )
+    };
+    await expect(
+      contactInvitationPeople(replaying, alice.account).inspect(BOB)
+    ).rejects.toMatchObject({ code: 'fork' });
+    // Trust new keys: a signed entry that replaces the pinned identity.
+    await desktop.trust!(BOB, second, alice.recovery.secret);
+    const book = await loadContacts(alice.contacts, alice.account);
+    expect(book.list?.contacts.get(BOB)).toMatchObject({ status: 'trusted' });
+    expect(toHex(book.list!.contacts.get(BOB)!.identityKeyHash)).toBe(second);
+    expect(await desktop.inspect(BOB)).toMatchObject({
+      keyChanged: false,
+      firstUse: 'known'
+    });
+    // The laptop takes the signed replacement too, and the old identity is
+    // no longer the pinned one anywhere: a fresh browser shown it sees a
+    // key change.
+    expect(await people.inspect(BOB)).toMatchObject({
+      keyChanged: false,
+      firstUse: 'known'
+    });
+    const fresh = contactInvitationPeople(
+      await aliceDesktop(alice, replaying.api),
+      alice.account
+    );
+    expect(await fresh.inspect(BOB)).toMatchObject({ keyChanged: true });
+    expect(first).not.toBe(second);
+  });
+
+  it('lets a device whose list pin is unconfirmed confirm a verified contact by signing, so the invitation can go ahead (PR 2057 review)', async () => {
+    const { alice, bob } = await pair();
+    const book = await loadContacts(alice.contacts, alice.account);
+    await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, BOB),
+      alice.recovery.secret
+    );
+    // A browser enrolled with only the recovery key: its list pin is
+    // unconfirmed, so the verification does not count there.
+    const unconfirmed: ContactsContext = {
+      ...alice.contacts,
+      pins: memoryContactPins()
+    };
+    const people = contactInvitationPeople(unconfirmed, alice.account);
+    expect(await people.inspect(BOB)).toMatchObject({ firstUse: 'new' });
+    // Its Confirm, signed, establishes this device's standing: no new list
+    // entry, and the next lookup counts Bob as known.
+    await people.trust!(
+      BOB,
+      toHex(bob.account.list.identityKeyHash),
+      alice.recovery.secret
+    );
+    expect(await people.inspect(BOB)).toMatchObject({
+      firstUse: 'known',
+      keyChanged: false
+    });
+    expect(
+      (await loadContacts(unconfirmed, alice.account)).list?.entries.map(
+        (e) => e.entry.action
+      )
+    ).toEqual(['verify']);
+  });
+
+  it('keeps an alarm another tab records while the signed confirmation is open, and confirms nothing (PR 2057 re-check)', async () => {
+    const { alice } = await pair();
+    const verifiedBook = await loadContacts(alice.contacts, alice.account);
+    await verifyContact(
+      alice.contacts,
+      alice.account,
+      verifiedBook,
+      await inspectContact(alice.contacts, verifiedBook, BOB),
+      alice.recovery.secret
+    );
+    const pins = memoryContactPins();
+    const unconfirmed: ContactsContext = { ...alice.contacts, pins };
+    const book = await loadContacts(unconfirmed, alice.account);
+    const view = await inspectContact(unconfirmed, book, BOB);
+    expect(view.pinned).toBeNull();
+    // While the passkey prompt is open, another tab records a replacement.
+    const racing: ContactsContext = {
+      ...unconfirmed,
+      pins: {
+        ...pins,
+        advanceContact: async (userId, next, options) => {
+          const stored = (await pins.readContact(ALICE, BOB))!;
+          await pins.advanceContact(
+            ALICE,
+            { ...stored, identityKeyHash: 'cd'.repeat(32), keyChanged: true },
+            { replaceIdentity: true }
+          );
+          return pins.advanceContact(userId, next, options);
+        }
+      }
+    };
+    await expect(
+      trustContact(racing, alice.account, book, view, alice.recovery.secret)
+    ).rejects.toMatchObject({ code: 'fork' });
+    expect(await pins.readContact(ALICE, BOB)).toMatchObject({
+      identityKeyHash: 'cd'.repeat(32),
+      keyChanged: true,
+      trustedHere: null
+    });
+  });
+
+  it('records a verified contact’s key change before trusting the new identity, which stays unverified', async () => {
+    const { alice, bob } = await pair();
+    let book = await loadContacts(alice.contacts, alice.account);
+    book = await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, BOB),
+      alice.recovery.secret
+    );
+    await replaced(bob);
+    const changed = await inspectContact(alice.contacts, book, BOB);
+    expect(changed).toMatchObject({ keyChanged: true, pinned: null });
+    book = await trustContact(
+      alice.contacts,
+      alice.account,
+      book,
+      changed,
+      alice.recovery.secret
+    );
+    expect(book.list?.entries.map((e) => e.entry.action)).toEqual([
+      'verify',
+      'key-changed',
+      'trust'
+    ]);
+    expect(await inspectContact(alice.contacts, book, BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: false,
+      pinned: 'trusted'
+    });
+    // Comparing codes later verifies the trusted identity.
+    book = await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, BOB),
+      alice.recovery.secret
+    );
+    expect(await inspectContact(alice.contacts, book, BOB)).toMatchObject({
+      status: 'verified',
+      pinned: 'verified'
+    });
+  });
+
   it('refuses the old verified identity once a replacement was seen (#898 review)', async () => {
     const { srv, alice, bob } = await pair();
     let book = await loadContacts(alice.contacts, alice.account);
@@ -1008,8 +1262,8 @@ describe('inviting a verified contact to an encrypted project (#1465 review)', (
     expect(offered[0]!.code).not.toBe(
       (await ownVerificationCode(bob.account)).code
     );
-    // Invited by address alone, the statement names no identity: whoever
-    // accepts waits for Alice's confirmation.
+    // Invited by address alone, the statement names no identity: nothing
+    // the server lists under the address is bound into it.
     await inviteToEncryptedProject(ctx, 'proj_shared', EMAILS[BOB]!, 'editor');
     expect(signed(0).inviteeIdentityKeyHash).toBeUndefined();
     expect(signed(0).linkTokenHash).toBeDefined();

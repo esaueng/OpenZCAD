@@ -185,19 +185,21 @@ export async function closeSettings(page: Page) {
   await expect(settings).toHaveCount(0, { timeout: SYNC_BUDGET_MS });
 }
 
-/** Compares codes with `name` in the open contact panel and signs it. */
-async function verifyContact(
-  settings: ReturnType<Page['getByRole']>,
-  name: string,
-  recoveryKey: string
+/**
+ * Signs in the confirmation dialog titled `title` with the recovery key
+ * (seeded devices have no passkey): one signature, as a passkey touch is.
+ */
+export async function signWith(
+  page: Page,
+  title: string,
+  recoveryKey: string,
+  action: string
 ) {
-  await settings.getByRole('button', { name: 'Codes match — verify' }).click();
-  const confirm = settings.getByRole('group', { name: `Verify ${name}` });
-  await confirm.getByLabel('Recovery key').fill(recoveryKey);
-  await confirm.getByRole('button', { name: 'Verify contact' }).click();
-  await expect(
-    settings.getByRole('button', { name: 'Stop trusting' })
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  const dialog = page.getByRole('dialog', { name: title });
+  await expect(dialog).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await dialog.getByLabel('Recovery key').fill(recoveryKey);
+  await dialog.getByRole('button', { name: action }).click();
+  await expect(dialog).toHaveCount(0, { timeout: SYNC_BUDGET_MS });
 }
 
 export interface SharedWorld {
@@ -291,10 +293,10 @@ export async function shareWithBob(
 /**
  * One more member of Alice's project, in a browser context of its own:
  * Alice invites it in `role` from the sharing dialog (an encrypted
- * project's editors need no edit-lease rollout, slice 5-4), it accepts
- * after setting up encryption, both verify each other by digit groups, and
- * Alice's browser adds it by an MLS Commit. Its page then shows the
- * project.
+ * project's editors need no edit-lease rollout, slice 5-4), its opened
+ * link is accepted once it has set up encryption, and Alice's browser adds
+ * it by an MLS Commit on first use, with no code comparison (ADR-024
+ * amendment 2026-11-25). Its page then shows the project.
  */
 export async function addSharedMember(
   browser: Browser,
@@ -344,35 +346,36 @@ export async function addSharedMember(
     userId: member.userId
   });
   await page.reload();
+  // The landing accepts the opened link itself: no Accept click, no code
+  // comparison. Alice is new to the member: one signature pins her.
   await landing
-    .getByRole('button', { name: 'Compare codes' })
+    .getByRole('button', { name: 'Confirm' })
     .click({ timeout: SYNC_BUDGET_MS });
-  const encryption = page.getByRole('dialog', { name: 'Settings' });
-  await expect(
-    encryption.getByText(
-      `${ALICE_EMAIL} invited you as ${role === 'editor' ? 'an editor' : 'a viewer'}`
-    )
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await verifyContact(encryption, ALICE_EMAIL, seed.recoveryKey);
-  await expect(
-    encryption.getByText(
-      'Your keys are ready. Waiting for them to verify you and add you.'
-    )
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await signWith(
+    page,
+    'Confirm the project owner',
+    seed.recoveryKey,
+    'Confirm'
+  );
   // Back on the landing, which waits for Alice's device.
-  await closeSettings(page);
-  await expect(landing.getByRole('status')).toContainText('device to add you…');
+  await expect(landing.getByRole('status')).toContainText(
+    'device to add you…',
+    { timeout: SYNC_BUDGET_MS }
+  );
 
-  // Alice verifies the member; her browser adds it by an MLS Commit.
+  // The member is new to Alice: one confirmation, signed, then her
+  // browser adds them by an MLS Commit.
   await alice.getByRole('button', { name: /Open project sharing/ }).click();
-  await dialog.getByRole('button', { name: /^Verify / }).click();
-  const aliceEncryption = alice.getByRole('dialog', { name: 'Settings' });
-  await verifyContact(aliceEncryption, member.email, world.aliceRecoveryKey);
-  // The invitation went out before she verified them, so it names no
-  // identity: she confirms the contact who accepted, by their code.
-  await aliceEncryption
-    .getByRole('button', { name: `Add ${member.email}` })
-    .click({ timeout: SYNC_BUDGET_MS });
+  await dialog
+    .getByRole('group', { name: 'Confirm The person who accepted' })
+    .getByRole('button', { name: 'Confirm' })
+    .click({ timeout: COMMIT_BUDGET_MS });
+  await signWith(
+    alice,
+    'Confirm The person who accepted',
+    world.aliceRecoveryKey,
+    'Confirm'
+  );
   await expect
     .poll(
       () =>
@@ -384,7 +387,7 @@ export async function addSharedMember(
       { timeout: COMMIT_BUDGET_MS }
     )
     .toEqual({ role });
-  await closeSettings(alice);
+  await dialog.getByRole('button', { name: 'Close sharing' }).click();
 
   // The member's landing joins by its Welcome and opens the project.
   await expect(page.locator('.breadcrumb')).toContainText(PROJECT_NAME, {

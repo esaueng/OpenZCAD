@@ -48,14 +48,27 @@ import type { SigningPrivateKey } from './external-keys';
  *   (the browser checks that the newer head chains from the pinned one);
  * - `key-changed`: the verified identity key was replaced, so the contact
  *   drops back to unverified until verified again;
- * - `untrust`: the user withdraws a verification.
+ * - `untrust`: the user withdraws a verification;
+ * - `trust` (entry version 2, ADR-024 amendment 2026-11-25): the user
+ *   accepted the contact's identity key, with the head of their device
+ *   list, on first use, without comparing codes. It pins that identity on
+ *   every device of the user, distinct from a verification. A later `trust`
+ *   of another identity is "Trust new keys": it replaces the pinned one.
  *
  * Only a verified contact can advance, change or be untrusted, and only
- * under the identity it was verified with, so the list's state follows from
- * its entries alone.
+ * under the identity it was verified with; a verified identity is never
+ * trusted over (its key change is recorded first). So the list's state
+ * follows from its entries alone.
  */
 
 export const CONTACTS_ENTRY_VERSION_1 = 1;
+/**
+ * The version of a `trust` entry, the only action version 1 lacks. Every
+ * other action keeps version 1, byte for byte, so lists without a trust
+ * entry read as before and an older app refuses a trust entry by its
+ * version rather than misreading it.
+ */
+export const CONTACTS_ENTRY_VERSION_2 = 2;
 const CONTACTS_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x4b); // "OZK"
 const MAX_U32 = 0xffffffff;
 
@@ -68,7 +81,8 @@ export const CONTACT_ACTIONS = Object.freeze([
   'verify',
   'advance',
   'key-changed',
-  'untrust'
+  'untrust',
+  'trust'
 ] as const);
 export type ContactAction = (typeof CONTACT_ACTIONS)[number];
 
@@ -76,8 +90,13 @@ const ACTION_CODES: Record<ContactAction, number> = {
   verify: 1,
   advance: 2,
   'key-changed': 3,
-  untrust: 4
+  untrust: 4,
+  trust: 5
 };
+
+/** The entry version an action is encoded with. */
+const versionOf = (action: ContactAction) =>
+  action === 'trust' ? CONTACTS_ENTRY_VERSION_2 : CONTACTS_ENTRY_VERSION_1;
 
 /** A device-list head: the entry a verified contact's keys are pinned to. */
 export interface ContactDeviceListHead {
@@ -99,7 +118,7 @@ export interface ContactsEntry {
   readonly contactUserId: string;
   /** `publicKeyHash` of the contact's identity key (their fingerprint). */
   readonly identityKeyHash: Uint8Array;
-  /** `verify` and `advance` only: the device-list head pinned with it. */
+  /** `verify`, `advance` and `trust` only: the device-list head pinned with it. */
   readonly deviceListHead: ContactDeviceListHead | null;
 }
 
@@ -117,20 +136,26 @@ export interface ContactsListPin {
   readonly entryHash: Uint8Array;
 }
 
-export type ContactRecordStatus = 'verified' | 'key-changed' | 'untrusted';
+/**
+ * `trusted`: pinned on first use (a `trust` entry), not verified. Like a
+ * verified record it pins an identity and a device-list head; unlike one it
+ * never yields a key to wrap to by itself, and it is shown as Not verified.
+ */
+export type ContactRecordStatus =
+  'verified' | 'trusted' | 'key-changed' | 'untrusted';
 
 /** What the list says about one contact after its newest entry. */
 export interface ContactRecord {
   readonly contactUserId: string;
   readonly status: ContactRecordStatus;
-  /** The identity key hash the contact was verified with. */
+  /** The identity key hash the contact was verified (or trusted) with. */
   readonly identityKeyHash: Bytes;
   /** The newest pinned device-list head for that identity. */
   readonly deviceListHead: {
     readonly sequence: number;
     readonly entryHash: Bytes;
   };
-  /** Sequence of the entry that verified this identity. */
+  /** Sequence of the entry that verified (or trusted) this identity. */
   readonly verifiedAt: number;
   /** Sequence of the contact's newest entry. */
   readonly updatedAt: number;
@@ -164,7 +189,7 @@ function isHash(value: unknown): value is Uint8Array {
 }
 
 const carriesHead = (action: ContactAction) =>
-  action === 'verify' || action === 'advance';
+  action === 'verify' || action === 'advance' || action === 'trust';
 
 function checkEntry(entry: ContactsEntry, code: E2eeErrorCode): void {
   const fail = (message: string): never => {
@@ -217,18 +242,19 @@ function readId(reader: ByteReader): string {
 }
 
 /**
- * Canonical bytes: `"OZK" | u8 version = 1 | u32 sequence | u8 (0|32) +
+ * Canonical bytes: `"OZK" | u8 version | u32 sequence | u8 (0|32) +
  * previous entry hash | u8 length + user id | u64 issuedAt | u8 action
- * (1 verify, 2 advance, 3 key-changed, 4 untrust) | u8 length + contact
- * user id | 32-byte contact identity key hash`, then for `verify` and
- * `advance` only `u32 device-list sequence | 32-byte device-list entry
- * hash`.
+ * (1 verify, 2 advance, 3 key-changed, 4 untrust, 5 trust) | u8 length +
+ * contact user id | 32-byte contact identity key hash`, then for `verify`,
+ * `advance` and `trust` only `u32 device-list sequence | 32-byte
+ * device-list entry hash`. The version is 2 for `trust` and 1 for every
+ * other action; the layout is the same.
  */
 export function encodeContactsEntry(entry: ContactsEntry): Bytes {
   checkEntry(entry, 'invalid-argument');
   const writer = new ByteWriter()
     .bytes(CONTACTS_MAGIC)
-    .u8(CONTACTS_ENTRY_VERSION_1)
+    .u8(versionOf(entry.action))
     .u32(entry.sequence);
   writer.u8(entry.previousEntryHash?.byteLength ?? 0);
   if (entry.previousEntryHash) writer.bytes(entry.previousEntryHash);
@@ -257,7 +283,10 @@ export function decodeContactsEntry(bytes: Uint8Array): ContactsEntry {
     throw new E2eeError('malformed', 'Not a contacts entry');
   }
   const version = reader.u8();
-  if (version !== CONTACTS_ENTRY_VERSION_1) {
+  if (
+    version !== CONTACTS_ENTRY_VERSION_1 &&
+    version !== CONTACTS_ENTRY_VERSION_2
+  ) {
     throw new E2eeError(
       'unsupported-version',
       `Contacts entry version ${version} is not supported`
@@ -384,6 +413,24 @@ function applyEntry(
     updatedAt: entry.sequence
   };
   switch (entry.action) {
+    case 'trust': {
+      // First use, or Trust new keys over an earlier trust. A verified
+      // identity is never trusted over: its key change comes first.
+      if (current?.status === 'verified') {
+        broken(`${at} trusts over a verified contact`);
+      }
+      const head = entry.deviceListHead!;
+      contacts.set(entry.contactUserId, {
+        ...base,
+        status: 'trusted',
+        deviceListHead: {
+          sequence: head.sequence,
+          entryHash: copyBytes(head.entryHash)
+        },
+        verifiedAt: entry.sequence
+      });
+      return;
+    }
     case 'verify': {
       if (current?.status === 'verified') {
         broken(

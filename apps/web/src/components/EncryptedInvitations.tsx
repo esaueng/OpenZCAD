@@ -1,4 +1,5 @@
 import {
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -22,13 +23,23 @@ import type {
   InviteeInvitation,
   OwnerInvitation
 } from '../lib/e2ee/invitations';
+import type { UnlockAuthorization } from '../lib/e2ee/accountKeys';
 import {
   subscribeInvitationPasses,
   syncInvitationsNow,
   type InvitationPassResult
 } from '../lib/e2ee/invitationRunner';
 import { desktopFetch } from '../lib/desktopBridge';
+import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
+import type { AuthorizeRequest } from './encryption/AuthorizeDialog';
 import { Group, Notice, SettingRow } from './settingsControls';
+
+/** The passkey-or-recovery-key confirmation, loaded with its crypto. */
+const LazyAuthorizeDialog = lazyWithStaleChunkNotice(() =>
+  import('./encryption/AuthorizeDialog').then((module) => ({
+    default: module.AuthorizeDialog
+  }))
+);
 
 const ROLE: Record<E2eeInvitationRole, string> = {
   editor: 'an editor',
@@ -36,14 +47,15 @@ const ROLE: Record<E2eeInvitationRole, string> = {
 };
 
 const INCOMING_HINTS: Record<InviteeInvitation['state'], string> = {
-  'verify-owner':
-    'Compare codes with them to continue: they add you once you have verified each other.',
+  'owner-keys-changed':
+    'Their encryption keys changed since this browser last saw them. Review the change (compare codes with them) before joining.',
   invalid:
     'This invitation does not verify against the owner’s keys. Ask them to invite you again.',
-  'waiting-for-owner':
-    'Your keys are ready. Waiting for them to verify you and add you.',
+  'waiting-for-owner': 'Your keys are ready. Waiting for them to add you.',
+  'confirm-owner':
+    'They are new to you. Confirm with your passkey or recovery key to join: it signs that you trust their keys, on every device of yours.',
   confirm:
-    'Join only if you expected this invitation and the code is the one Contacts shows for them. Joining tells them this account accepted it.',
+    'Join only if you expected this invitation. Joining tells them this account accepted it.',
   ready: 'Preparing your keys for the project…',
   'no-device':
     'Open this invitation on a device that holds your encryption keys.'
@@ -51,17 +63,19 @@ const INCOMING_HINTS: Record<InviteeInvitation['state'], string> = {
 
 const OUTGOING_HINTS: Partial<Record<OwnerInvitation['state'], string>> = {
   'waiting-for-keys': 'Accepted. Waiting for their keys.',
-  'waiting-for-verification':
-    'Waiting for you to verify them: compare codes, then they are added.',
+  'confirm-new':
+    'Accepted. They are new to you: confirm them in the project’s sharing settings to add them.',
+  'keys-changed':
+    'Their encryption keys changed. Review the change, or trust their new keys in the project’s sharing settings, before they are added.',
   'needs-acceptance':
     'Waiting for them to open OpenZCAD again and confirm the invitation.',
   'confirm-re-add':
     'You removed them from this project before. Add them only if this is the contact code Contacts shows for them.',
   'confirm-add':
-    'Add them only if this is the contact code Contacts shows for the person you invited.',
+    'This browser has not seen every change to who is in this project. Add them only if this is the person you invited.',
   'accepted-by-other':
     'Someone other than the contact you invited accepted. They will not be added: revoke it and invite again.',
-  ready: 'Verified. Adding them…'
+  ready: 'Adding them…'
 };
 
 /** Accepted invitations the owner confirms or declines. */
@@ -112,12 +126,13 @@ function messageFor(error: unknown): string {
 
 /**
  * Settings › Encryption › Invitations (ADR-024 Phase 5, slice 5-3b): the
- * invitation link this tab captured (accepted here), the encrypted
- * projects this account was invited to (verify the owner, then this device
- * publishes its keys and joins once added), and the people this account
- * invited who are waiting for keys or for it to verify them. Each pass
+ * invitation link this tab captured (accepted here as soon as this device
+ * can: the opened link is the acceptance), the encrypted projects this
+ * account was invited to (this device publishes its keys and joins once
+ * added; verifying the owner is optional, ADR-024 amendment 2026-11-25),
+ * and the people this account invited who are waiting for keys. Each pass
  * publishes this device's KeyPackages, joins welcomed projects and adds
- * verified invitees; the app's invitation runner makes it
+ * invitees who accepted; the app's invitation runner makes it
  * (`invitationRunner.ts`), and this panel shows every pass it makes.
  */
 export function EncryptedInvitations({ ready }: { ready: boolean }) {
@@ -173,8 +188,13 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
     return subscribeContactsChanged(() => void sync());
   }, [sync]);
 
+  // The opened link is the person's acceptance (trust on first use): it is
+  // accepted once this device is ready, with no separate click.
+  const accepting = useRef<string | null>(null);
   const accept = async () => {
-    if (!token) return;
+    const opened = token;
+    if (!opened || accepting.current === opened) return;
+    accepting.current = opened;
     setBusy(true);
     setError(null);
     try {
@@ -182,10 +202,15 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
         await import('../lib/e2ee/invitations');
       // An invitation whose statement names no link (an older app's) is
       // listed below for an explicit Join.
-      await acceptEncryptedInvitation(await pageInvitations(), token);
-      clearPendingEncryptedInvitation();
+      await acceptEncryptedInvitation(await pageInvitations(), opened);
+      // Only the token this request accepted: a link opened meanwhile, and
+      // captured in its place, stays for its own acceptance.
+      if (pendingEncryptedInvitation() === opened) {
+        clearPendingEncryptedInvitation();
+      }
     } catch (caught) {
-      setError(messageFor(caught));
+      // A newer link's acceptance owns the row (and its Try again) now.
+      if (accepting.current === opened) setError(messageFor(caught));
       setBusy(false);
       return;
     }
@@ -195,22 +220,96 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
     notifyContactsChanged();
   };
 
+  useEffect(() => {
+    if (token && ready && available) void accept();
+    // `accept` reads the token it guards; re-run only when these change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, ready, available]);
+
   // The person's own confirmation of an invitation this device did not
   // open by link: only then does it sign the acceptance.
-  const confirm = async (invitation: InviteeInvitation) => {
+  const confirm = async (
+    invitation: InviteeInvitation,
+    authorization?: UnlockAuthorization
+  ) => {
     setBusy(true);
     setError(null);
     try {
       const { confirmEncryptedInvitation } =
         await import('../lib/e2ee/invitations');
-      // Exactly the verified statement this row shows.
-      await confirmEncryptedInvitation(await pageInvitations(), invitation);
+      // Exactly the verified statement this row shows; an owner new to
+      // this account is trusted in the same step, signed.
+      await confirmEncryptedInvitation(
+        await pageInvitations(),
+        invitation,
+        authorization
+      );
     } catch (caught) {
       setError(messageFor(caught));
       setBusy(false);
       return;
     }
     setBusy(false);
+    await sync();
+  };
+
+  // One signature for an owner new to this account (ADR-024 amendment
+  // 2026-11-25): a passkey touch or the recovery key, never in the
+  // background.
+  const [signature, setSignature] = useState<AuthorizeRequest | null>(null);
+  const [signing, setSigning] = useState(false);
+  const askSignature = async (
+    title: string,
+    work: (authorization: UnlockAuthorization) => Promise<void>
+  ) => {
+    let passkey: boolean;
+    try {
+      const [ctx, { passkeysAvailable }] = await Promise.all([
+        pageInvitations(),
+        import('../lib/e2ee/passkeys')
+      ]);
+      passkey =
+        passkeysAvailable() &&
+        ctx.groups.account.list.unlockTargets.some(
+          (target) => target.kind === 'passkey'
+        );
+    } catch {
+      passkey = false;
+    }
+    setSignature({
+      title,
+      body: 'This signs that you trust the project owner’s keys, on every device of yours. It does not verify them: compare codes for that.',
+      actionLabel: 'Confirm',
+      passkey,
+      work
+    });
+  };
+  const runSignature = async (
+    work: () => Promise<unknown>,
+    options?: { onError?(message: string): void }
+  ): Promise<boolean> => {
+    setSigning(true);
+    try {
+      await work();
+      return true;
+    } catch (caught) {
+      if (options?.onError) options.onError(messageFor(caught));
+      else setError(messageFor(caught));
+      return false;
+    } finally {
+      setSigning(false);
+    }
+  };
+  const trustOwner = async (
+    invitation: InviteeInvitation,
+    authorization: UnlockAuthorization
+  ) => {
+    const { trustInvitationOwner } = await import('../lib/e2ee/invitations');
+    await trustInvitationOwner(
+      await pageInvitations(),
+      invitation,
+      authorization
+    );
     await sync();
   };
 
@@ -281,21 +380,27 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
         ready ? (
           <SettingRow
             title="Invitation to an encrypted project"
-            hint="Accepting tells the owner which account is yours. You are added after you both compare codes."
+            hint="Accepting the invitation you opened. The owner adds you once this device has published its keys."
           >
-            <button
-              className="primary"
-              type="button"
-              disabled={busy}
-              onClick={() => void accept()}
-            >
-              Accept invitation
-            </button>
+            {error && accepting.current === token ? (
+              <button
+                className="primary"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  accepting.current = null;
+                  void accept();
+                }}
+              >
+                Try again
+              </button>
+            ) : null}
           </SettingRow>
         ) : (
           <Notice tone="warning" role="status">
             You were invited to an end-to-end encrypted project. Set up
-            encryption on this device first, then accept the invitation here.
+            encryption on this device first: the invitation is then accepted
+            here.
           </Notice>
         )
       ) : null}
@@ -310,7 +415,7 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
         const title = !statement
           ? `An invitation from ${owner} that does not verify`
           : joinable
-            ? `Your verified contact invited you to project ${statement.projectId} as ${ROLE[statement.role]}`
+            ? `${owner} invited you to project ${statement.projectId} as ${ROLE[statement.role]}`
             : `${owner} invited you as ${ROLE[statement.role]}`;
         return (
           <SettingRow
@@ -332,18 +437,18 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
               )
             }
           >
-            {invitation.state === 'verify-owner' ? (
+            {invitation.state === 'owner-keys-changed' ? (
               <button
                 className="secondary"
                 type="button"
                 disabled={busy}
-                aria-label={`Verify ${owner}`}
+                aria-label={`Review ${owner}`}
                 onClick={() =>
                   requestContactVerification(invitation.record.inviterUserId)
                 }
               >
                 <ShieldCheck size={14} aria-hidden="true" />
-                Verify
+                Review
               </button>
             ) : null}
             {joinable && statement ? (
@@ -363,11 +468,32 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
                   type="button"
                   disabled={busy}
                   aria-label={`Join project ${statement.projectId} as ${ROLE[statement.role]}`}
-                  onClick={() => void confirm(invitation)}
+                  onClick={() =>
+                    invitation.ownerPinned
+                      ? void confirm(invitation)
+                      : void askSignature(`Join ${owner}’s project`, (auth) =>
+                          confirm(invitation, auth)
+                        )
+                  }
                 >
                   Join
                 </button>
               </>
+            ) : null}
+            {invitation.state === 'confirm-owner' ? (
+              <button
+                className="primary"
+                type="button"
+                disabled={busy}
+                aria-label={`Confirm ${owner}`}
+                onClick={() =>
+                  void askSignature(`Confirm ${owner}`, (auth) =>
+                    trustOwner(invitation, auth)
+                  )
+                }
+              >
+                Confirm
+              </button>
             ) : null}
           </SettingRow>
         );
@@ -380,7 +506,7 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
         if (CONFIRMABLE.has(invitation.state) && acceptor && statement) {
           // Named from the verified acceptance and this account's own
           // statement: the contact code Contacts shows, the role signed.
-          const who = acceptor.email ?? 'Your verified contact';
+          const who = acceptor.email ?? 'The person who accepted';
           return (
             <SettingRow
               key={invitation.record.invitationId}
@@ -432,13 +558,13 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
             title={name}
             hint={OUTGOING_HINTS[invitation.state]}
           >
-            {invitation.state === 'waiting-for-verification' &&
+            {invitation.state === 'keys-changed' &&
             invitation.record.acceptedByUserId ? (
               <button
                 className="secondary"
                 type="button"
                 disabled={busy}
-                aria-label={`Verify ${name}`}
+                aria-label={`Review ${name}`}
                 onClick={() =>
                   requestContactVerification(
                     invitation.record.acceptedByUserId!
@@ -446,12 +572,22 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
                 }
               >
                 <ShieldCheck size={14} aria-hidden="true" />
-                Verify
+                Review
               </button>
             ) : null}
           </SettingRow>
         );
       })}
+      {signature ? (
+        <Suspense fallback={null}>
+          <LazyAuthorizeDialog
+            request={signature}
+            busy={signing}
+            run={runSignature}
+            onClose={() => setSignature(null)}
+          />
+        </Suspense>
+      ) : null}
     </Group>
   );
 }

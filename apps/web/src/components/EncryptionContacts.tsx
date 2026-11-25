@@ -307,13 +307,14 @@ export function EncryptionContacts({
   );
 }
 
-/** Said only where a row needs more than its badge. */
-const STANDING_HINTS: Record<ContactStanding, string | undefined> = {
-  verified: undefined,
+const STANDING_HINTS: Record<ContactStanding, string> = {
+  verified: 'Verified: you compared codes with them.',
+  trusted:
+    'Not verified: you trusted their keys when you first shared. Compare codes to verify them.',
   'key-changed': 'Their key changed. Compare codes again before sharing.',
   untrusted: 'You stopped trusting their key.',
-  seen: undefined,
-  'not-checked': undefined
+  seen: 'Seen, not verified. Compare codes before sharing.',
+  'not-checked': 'Not checked yet.'
 };
 
 /** Every person reads Verified or Not verified, unless something changed. */
@@ -321,6 +322,8 @@ function StandingBadge({ standing }: { standing: ContactStanding }) {
   switch (standing) {
     case 'verified':
       return <Status tone="good">Verified</Status>;
+    case 'trusted':
+      return <Status>Not verified</Status>;
     case 'key-changed':
       return <Status tone="warning">Key changed</Status>;
     case 'untrusted':
