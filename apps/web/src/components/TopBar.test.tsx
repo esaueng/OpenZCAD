@@ -27,6 +27,7 @@ function renderTopBar(
     geometryFailed?: boolean;
     editPending?: boolean;
     editRefusal?: string;
+    editRefusalReopens?: boolean;
     canExport?: boolean;
     exportWithheld?: string | null;
     exportUnavailableReason?: string | null;
@@ -74,6 +75,7 @@ function renderTopBar(
       geometryFailed={options.geometryFailed}
       editPending={options.editPending}
       editRefusal={options.editRefusal}
+      editRefusalReopens={options.editRefusalReopens}
       warningCount={options.warningCount}
       reloadPrompt={options.reloadPrompt ?? null}
       saveToAccount={options.saveToAccount ?? false}
@@ -310,6 +312,25 @@ describe('TopBar save chip', () => {
       editRefusal: 'The proposed edit would remove the body.'
     });
     fireEvent.click(screen.getByRole('button', { name: 'Edit not applied' }));
+    expect(handlers.onReviewEditFailure).toHaveBeenCalledOnce();
+    expect(handlers.onSave).not.toHaveBeenCalled();
+  });
+
+  // Recording review: after a click on empty space cleared a refused
+  // push/pull, "Edit not applied" led only to the log. With the failed edit
+  // set aside, the chip says it reopens it.
+  it('reopens a failed edit the selection left from the chip', () => {
+    const handlers = renderTopBar({
+      saveState: 'synced',
+      editRefusal: 'Choose how the chamfered rim moves.',
+      editRefusalReopens: true
+    });
+    const chip = screen.getByRole('button', { name: 'Edit not applied' });
+    expect(chip).toHaveAttribute(
+      'title',
+      'Choose how the chamfered rim moves. Reopen the edit to see why and choose what to do.'
+    );
+    fireEvent.click(chip);
     expect(handlers.onReviewEditFailure).toHaveBeenCalledOnce();
     expect(handlers.onSave).not.toHaveBeenCalled();
   });

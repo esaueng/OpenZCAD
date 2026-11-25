@@ -1325,6 +1325,24 @@
   cursor: help;
 }
 
+/* A failed edit the selection left: the row reopens it. */
+button.history-pending-row {
+  width: calc(100% - 20px);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+button.history-pending-row:hover {
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+
+button.history-pending-row:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
 .history-pending-name {
   flex: 1 1 auto;
   min-width: 0;

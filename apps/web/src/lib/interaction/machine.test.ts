@@ -15,6 +15,9 @@ import {
   radialFaceOperationName,
   escapeTarget,
   holdsRefusal,
+  isParkableRefusal,
+  canReopenRefusalOver,
+  startsEditAttempt,
   movedOnFromRefusal,
   refusalSubjectKey,
   refusalDiscardedByHistoryStep,
@@ -2074,9 +2077,9 @@ describe('a preview refused under a held handle', () => {
     });
     expect(state).toMatchObject({ phase: 'failed', lastValue: -9 });
   });
-  // Recording review: "Edit not applied" stayed in the top bar through
-  // selecting other faces after a refused offset, naming no edit.
-  it('retires a refusal once another selection takes over', () => {
+  // A late refusal of an edit the user picked away from while it was being
+  // checked is reported as that edit's, never as the new pick's.
+  it('knows when the selection moved on from an edit being checked', () => {
     const failed = interactionReducer(draggingOffset(), {
       type: 'validation-failed',
       diagnostic: refusal,
@@ -2087,7 +2090,7 @@ describe('a preview refused under a held handle', () => {
     const movedOn = (state: InteractionState) =>
       movedOnFromRefusal(refusalSubjectKey(state), key);
     expect(movedOn(failed)).toBe(false);
-    // A plain deselection keeps the chip as the link to the log (#1596).
+    // A plain deselection has not moved on to anything.
     expect(movedOn(IDLE)).toBe(false);
     // Picking the refused face again is the same edit, even when the
     // refusal was made in local offset mode and the re-pick comes back in
@@ -2132,6 +2135,145 @@ describe('a preview refused under a held handle', () => {
     // A pick the machine does not hold (a face set, a History row)
     // is keyed by the workspace and moves on too.
     expect(movedOnFromRefusal('["faces",["face:3","face:7"]]', key)).toBe(true);
+  });
+});
+
+// Recording review (beta, Chamfer 2 rim): a push/pull and a face Offset
+// asked "Carry chamfer or Extend draft?", a body resize said "Not built ·
+// Why?", and one click on empty space threw each away for good while the top
+// bar kept "Edit not applied" with nothing behind it.
+describe('a failed edit the selection leaves', () => {
+  const rim = {
+    message: 'Choose how the chamfered rim moves.',
+    code: 'ambiguous_rim_chamfer'
+  };
+  function rimChoice(): InteractionState {
+    let state = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face()
+    });
+    state = interactionReducer(state, { type: 'drag-engage' });
+    state = interactionReducer(state, { type: 'drag-release' });
+    state = interactionReducer(state, {
+      type: 'validation-start',
+      value: -8.5
+    });
+    return interactionReducer(state, {
+      type: 'validation-failed',
+      diagnostic: rim,
+      value: -8.5
+    });
+  }
+
+  it('is parked only once it has failed', () => {
+    const failed = rimChoice();
+    expect(isParkableRefusal(failed)).toBe(true);
+    expect(isParkableRefusal(IDLE)).toBe(false);
+    const armed = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face()
+    });
+    expect(isParkableRefusal(armed)).toBe(false);
+    // A refused frame still under the hand is not the edit's verdict yet.
+    const held = interactionReducer(
+      interactionReducer(armed, { type: 'drag-engage' }),
+      { type: 'preview-refused', diagnostic: rim, value: -9 }
+    );
+    expect(isParkableRefusal(held)).toBe(false);
+    // Letting go of it is.
+    expect(
+      isParkableRefusal(interactionReducer(held, { type: 'drag-release' }))
+    ).toBe(true);
+  });
+
+  it('comes back exactly as it failed after the selection was cleared', () => {
+    const failed = rimChoice();
+    const cleared = interactionReducer(failed, { type: 'clear' });
+    expect(cleared).toEqual(IDLE);
+    const reopened = interactionReducer(cleared, {
+      type: 'reopen-refusal',
+      state: failed
+    });
+    expect(reopened).toBe(failed);
+    expect(reopened).toMatchObject({
+      phase: 'failed',
+      lastValue: -8.5,
+      error: { code: 'ambiguous_rim_chamfer' }
+    });
+    // Its card offers the choice again, and History its "not built" row.
+    expect(toolCardFor(reopened)).toMatchObject({
+      phase: 'failed',
+      error: { code: 'ambiguous_rim_chamfer' }
+    });
+    expect(pendingHistoryStepFor(commandSessionFor(reopened))).toEqual({
+      title: 'Offset Face',
+      message: rim.message
+    });
+    // Esc still cancels it.
+    expect(interactionReducer(reopened, { type: 'escape' })).toEqual(IDLE);
+  });
+
+  it('replaces an armed pick of another face', () => {
+    const failed = rimChoice();
+    const other = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({ topologyId: 'face:7', hash: 7 })
+    });
+    expect(canReopenRefusalOver(other)).toBe(true);
+    expect(
+      interactionReducer(other, { type: 'reopen-refusal', state: failed })
+    ).toBe(failed);
+  });
+
+  it('never takes over newer work in progress', () => {
+    const failed = rimChoice();
+    const armed = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({ topologyId: 'face:7', hash: 7 })
+    });
+    const busy = [
+      interactionReducer(armed, { type: 'drag-engage' }),
+      interactionReducer(armed, { type: 'keypad-open' }),
+      interactionReducer(armed, { type: 'validation-start', value: 2 }),
+      interactionReducer(IDLE, { type: 'enter-sketch', plane })
+    ];
+    for (const state of busy) {
+      expect(canReopenRefusalOver(state)).toBe(false);
+      expect(
+        interactionReducer(state, { type: 'reopen-refusal', state: failed })
+      ).toBe(state);
+    }
+  });
+
+  it('reopens nothing that is not a failed edit', () => {
+    const armed = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face()
+    });
+    expect(
+      interactionReducer(IDLE, { type: 'reopen-refusal', state: armed })
+    ).toBe(IDLE);
+  });
+
+  it('is superseded by a new attempt, not by a pick', () => {
+    const armed = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({ topologyId: 'face:7', hash: 7 })
+    });
+    expect(startsEditAttempt(IDLE)).toBe(false);
+    expect(startsEditAttempt(armed)).toBe(false);
+    expect(startsEditAttempt(rimChoice())).toBe(false);
+    expect(
+      startsEditAttempt(interactionReducer(armed, { type: 'drag-engage' }))
+    ).toBe(true);
+    expect(
+      startsEditAttempt(interactionReducer(armed, { type: 'keypad-open' }))
+    ).toBe(true);
+    expect(
+      startsEditAttempt(
+        interactionReducer(armed, { type: 'validation-start', value: 1 })
+      )
+    ).toBe(true);
   });
 });
 

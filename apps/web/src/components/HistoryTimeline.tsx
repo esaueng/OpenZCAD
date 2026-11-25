@@ -273,8 +273,16 @@ export interface HistoryTimelineProps {
   brokenProjectionSketchIds?: ReadonlySet<string>;
   parameterValues: Record<string, number>;
   units: UnitSystem;
-  /** A refused operation, drawn after the last row until it re-arms. */
-  pendingStep?: { title: string; message: string } | null;
+  /**
+   * A refused operation, drawn after the last row until it re-arms, is
+   * answered or is cancelled. With `onReopen` it is a failed edit the
+   * selection left, and the row brings it back.
+   */
+  pendingStep?: {
+    title: string;
+    message: string;
+    onReopen?: () => void;
+  } | null;
   /**
    * The existing step a running command edits (Resize Body edits its Box).
    * Its row keeps its value in view while it is selected, and a refusal is
@@ -2061,10 +2069,23 @@ export function HistoryTimeline({
       </div>
       {pendingStep &&
         !filtering &&
-        !features.some((feature) => feature.featureId === editingFeatureId) && (
-          // Outside the list: the handle, spine and keyboard walk measure
-          // `.feature-row`s, and this is not a step that can be selected,
-          // rolled back to or reordered.
+        !features.some((feature) => feature.featureId === editingFeatureId) &&
+        // Outside the list: the handle, spine and keyboard walk measure
+        // `.feature-row`s, and this is not a step that can be selected,
+        // rolled back to or reordered.
+        (pendingStep.onReopen ? (
+          <button
+            type="button"
+            className="history-pending-row"
+            title={`${pendingStep.message} Reopen the edit to see why and choose what to do.`}
+            aria-label={`${pendingStep.title}, not built. Reopen it`}
+            onClick={pendingStep.onReopen}
+          >
+            <AlertTriangle size={13} aria-hidden="true" />
+            <span className="history-pending-name">{pendingStep.title}</span>
+            <span className="history-pending-state">not built</span>
+          </button>
+        ) : (
           <div
             className="history-pending-row"
             role="status"
@@ -2074,7 +2095,7 @@ export function HistoryTimeline({
             <span className="history-pending-name">{pendingStep.title}</span>
             <span className="history-pending-state">not built</span>
           </div>
-        )}
+        ))}
       {features.length > 0 && (pendingFeature || latestOutOfView) && (
         // Floats at the foot of the panel, where the end is, and reserves no
         // row of its own; only while the end is out of view.

@@ -290,79 +290,87 @@ for (const refused of [true, false]) {
   );
 }
 
+/**
+ * The gear's Total width dragged to 13 and refused at release, with the
+ * compact refusal showing in the guidance row.
+ */
+async function refusedGearDrag(page: Page) {
+  await installHeldReplies(page);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const { document, gearId } = scene(8);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Import project' }).click();
+  await page.getByLabel('Import project backup').setInputFiles({
+    name: 'refusal-ui.openzcad',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        format: 'openzcad-project',
+        version: 1,
+        document,
+        files: []
+      })
+    )
+  });
+  await expectBodyCount(page, 2);
+  const canvas = page.locator('.viewer-host canvas');
+  const chip = page.getByTestId('direct-manipulation-value');
+  await page.keyboard.press('f');
+  await expect
+    .poll(async () => {
+      await selectTop(canvas, gearId);
+      return chip.textContent();
+    })
+    .toMatch(/mm/);
+  // A face starts on Offset; this drags the gear's Total width.
+  await switchFaceOffsetToTotal(page);
+  await expect(chip).toContainText('10');
+  await waitForStillViewport(page);
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    perUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const rect = (await canvas.boundingBox())!;
+  const start = { x: rect.x + handle.x, y: rect.y + handle.y };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + handle.dx * handle.perUnit * 3,
+    start.y + handle.dy * handle.perUnit * 3,
+    { steps: 6 }
+  );
+  await expect.poll(() => tallest(canvas)).toBeCloseTo(13, 2);
+  await page.evaluate(() => {
+    const scope = window as unknown as HeldReplyWindow;
+    scope.heldReplies = 0;
+    scope.holdReplies = true;
+  });
+  await page.mouse.up();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as HeldReplyWindow).heldReplies)
+    )
+    .toBeGreaterThan(0);
+  await page.evaluate(() => {
+    (window as unknown as HeldReplyWindow).releaseReplies(true);
+  });
+  await expect(page.locator('.topbar')).toContainText('Edit not applied');
+  await expect(
+    page.locator('.workspace-hint .edit-refusal.is-bar')
+  ).toBeVisible();
+  return canvas;
+}
+
 test(
   'compact refusal explains the edit from the guidance row',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     test.setTimeout(120_000);
-    await installHeldReplies(page);
-    await stubApi(page, { panelLayout: MODEL_ONLY });
-    await page.setViewportSize({ width: 1440, height: 1000 });
-    const { document, gearId } = scene(8);
-    await page.goto('/');
-    await page.getByRole('button', { name: 'Import project' }).click();
-    await page.getByLabel('Import project backup').setInputFiles({
-      name: 'refusal-ui.openzcad',
-      mimeType: 'application/json',
-      buffer: Buffer.from(
-        JSON.stringify({
-          format: 'openzcad-project',
-          version: 1,
-          document,
-          files: []
-        })
-      )
-    });
-    await expectBodyCount(page, 2);
-    const canvas = page.locator('.viewer-host canvas');
-    const topbar = page.locator('.topbar');
-    const chip = page.getByTestId('direct-manipulation-value');
-    await page.keyboard.press('f');
-    await expect
-      .poll(async () => {
-        await selectTop(canvas, gearId);
-        return chip.textContent();
-      })
-      .toMatch(/mm/);
-    // A face starts on Offset; this drags the gear's Total width.
-    await switchFaceOffsetToTotal(page);
-    await expect(chip).toContainText('10');
-    await waitForStillViewport(page);
-    const handle = await canvas.evaluate((element) => ({
-      x: Number(element.dataset.e2eHandleX),
-      y: Number(element.dataset.e2eHandleY),
-      dx: Number(element.dataset.e2eHandleDx),
-      dy: Number(element.dataset.e2eHandleDy),
-      perUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
-    }));
-    const rect = (await canvas.boundingBox())!;
-    const start = { x: rect.x + handle.x, y: rect.y + handle.y };
-    await page.mouse.move(start.x, start.y);
-    await page.mouse.down();
-    await page.mouse.move(
-      start.x + handle.dx * handle.perUnit * 3,
-      start.y + handle.dy * handle.perUnit * 3,
-      { steps: 6 }
-    );
-    await expect.poll(() => tallest(canvas)).toBeCloseTo(13, 2);
-    await page.evaluate(() => {
-      const scope = window as unknown as HeldReplyWindow;
-      scope.heldReplies = 0;
-      scope.holdReplies = true;
-    });
-    await page.mouse.up();
-    await expect
-      .poll(() =>
-        page.evaluate(() => (window as unknown as HeldReplyWindow).heldReplies)
-      )
-      .toBeGreaterThan(0);
-    await page.evaluate(() => {
-      (window as unknown as HeldReplyWindow).releaseReplies(true);
-    });
-    await expect(topbar).toContainText('Edit not applied');
-    await expect(
-      page.locator('.workspace-hint .edit-refusal.is-bar')
-    ).toBeVisible();
+    const canvas = await refusedGearDrag(page);
     // The preview built 13 but release validation refused it: there is no
     // "Keep 13 mm" for a value that cannot be built (#1596).
     await expect(page.getByRole('button', { name: /^Keep \d/ })).toHaveCount(0);
@@ -408,6 +416,47 @@ test(
     );
     await expect(page.locator('.workspace-toast')).not.toContainText('Undid');
     await expectBodyCount(page, 2);
+    await expect.poll(() => tallest(canvas)).toBeCloseTo(10, 2);
+  }
+);
+
+// Recording review (beta, a 0.5 mm rim chamfer): "Choice required · Carry
+// chamfer · Extend draft · Why?" and "Not built · Why?" vanished for good on
+// a click on empty space, while the top bar kept "Edit not applied" leading
+// only to the log.
+test(
+  'a refused edit survives a click on empty space and reopens from the top bar',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    const canvas = await refusedGearDrag(page);
+    const notice = page.getByRole('button', { name: 'Edit not applied' });
+    const refusal = page.locator('.workspace-hint .edit-refusal');
+    const box = (await canvas.boundingBox())!;
+    // Empty space above the framed model: the pick clears.
+    await page.mouse.click(box.x + box.width / 2, box.y + 110);
+    await expect(refusal).toHaveCount(0);
+    await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /.+/);
+    // The failure is set aside, not thrown away: the chip says it reopens.
+    await expect(notice).toBeVisible();
+    await expect(notice).toHaveAttribute(
+      'title',
+      / Reopen the edit to see why and choose what to do\.$/
+    );
+    await notice.click();
+    // The same pick, card and refusal, with its Why open.
+    await expect(refusal).toBeVisible();
+    await expect(
+      page.locator('.workspace-hint .edit-refusal-card')
+    ).toContainText('The solid is unchanged.');
+    await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+    // Escape closes the Why, then cancels the failed edit and its notice.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.edit-refusal-card')).toHaveCount(0);
+    await expect(refusal).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(refusal).toHaveCount(0);
+    await expect(notice).toHaveCount(0);
     await expect.poll(() => tallest(canvas)).toBeCloseTo(10, 2);
   }
 );

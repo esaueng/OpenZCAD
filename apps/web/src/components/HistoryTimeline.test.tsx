@@ -240,6 +240,31 @@ describe('HistoryTimeline', () => {
     expect(row('Feature 2')).not.toHaveClass('is-editing');
   });
 
+  // Recording review: clicking empty space after "Choice required" took the
+  // "not built" row and its choice away. Set aside, the row stays and
+  // brings the edit back.
+  it('reopens a failed edit the selection left from its row', () => {
+    const onReopen = vi.fn();
+    const { container } = renderTimeline({
+      pendingStep: {
+        title: 'Offset Face',
+        message: 'Choose how the chamfered rim moves.',
+        onReopen
+      }
+    });
+    const reopen = screen.getByRole('button', {
+      name: 'Offset Face, not built. Reopen it'
+    });
+    expect(reopen).toHaveClass('history-pending-row');
+    expect(reopen).toHaveAttribute(
+      'title',
+      'Choose how the chamfered rim moves. Reopen the edit to see why and choose what to do.'
+    );
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(4);
+    fireEvent.click(reopen);
+    expect(onReopen).toHaveBeenCalledOnce();
+  });
+
   it('names a Boolean row by the bodies it combined', () => {
     renderTimeline({
       features: [

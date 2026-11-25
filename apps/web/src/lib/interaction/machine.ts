@@ -575,6 +575,13 @@ export type InteractionEvent =
       value: number;
     }
   | { type: 'recover' }
+  /**
+   * Brings back a failed edit the selection left: the operation, its value
+   * and its refusal exactly as they were, so its card, Why and choices
+   * return. Refused while another edit is under the hand or being checked,
+   * and for anything but a failed operation.
+   */
+  | { type: 'reopen-refusal'; state: InteractionState }
   | { type: 'reset-value' }
   | { type: 'enter-sketch'; plane: SketchPlaneRef; sketchId?: string }
   | {
@@ -1089,6 +1096,10 @@ function reduceInteraction(
             lastValue: event.value,
             error: event.diagnostic
           };
+    case 'reopen-refusal':
+      return isParkableRefusal(event.state) && canReopenRefusalOver(state)
+        ? event.state
+        : state;
     case 'recover':
       return isOperationState(state) && state.phase === 'failed'
         ? { ...state, phase: 'armed', error: null }
@@ -1808,13 +1819,17 @@ export function refusalSubjectKey(state: InteractionState): string | null {
 }
 
 /**
- * Whether the selection has moved on from a refused edit made on
- * `refusedKey`: `current` is the subject now picked (`refusalSubjectKey`, or
- * the workspace's own key for a pick the machine does not hold), null when
- * nothing is. Picking something else has; the chip described the earlier
- * pick and was stale beside the new one. A plain deselection has not; the
- * chip stays as its link to the refusal's Activity log entry (#1596).
- * Neither has re-picking the refused subject.
+ * Whether the selection has moved on from an edit made on `refusedKey`
+ * that is still being checked: `current` is the subject now picked
+ * (`refusalSubjectKey`, or the workspace's own key for a pick the machine
+ * does not hold), null when nothing is. Picking something else has, so a
+ * late refusal of that edit is reported in the status line only, never as
+ * the new pick's. A plain deselection has not, nor has re-picking the same
+ * subject.
+ *
+ * A refusal that has already landed is not retired by any selection change:
+ * it is parked with its operation and the top bar's "Edit not applied"
+ * reopens it (`isParkableRefusal`).
  */
 export function movedOnFromRefusal(
   current: string | null,
@@ -1836,6 +1851,55 @@ export function refusalDiscardedByHistoryStep(
   return holdsRefusal(state)
     ? (commandIdentityFor(state)?.title ?? 'edit')
     : null;
+}
+
+/**
+ * A failed edit that can be set aside and brought back: an operation in its
+ * failed phase, holding the refusal it failed with. That covers a release
+ * the exact check refused, a frame refused under the hand and then let go,
+ * and a rim the kernel needs a choice for.
+ */
+export function isParkableRefusal(state: InteractionState): state is Exclude<
+  InteractionState,
+  { mode: 'idle' } | { mode: 'sketch' }
+> & {
+  phase: 'failed';
+  error: CommandDiagnostic;
+} {
+  return (
+    isOperationState(state) && state.phase === 'failed' && state.error !== null
+  );
+}
+
+/**
+ * Whether a parked refusal may replace what the machine holds now. Not over
+ * a sketch, a gesture under the hand, a typed value, or an edit being
+ * checked: each is newer work the user is in the middle of. An armed pick
+ * or another refusal is only a selection, and gives way.
+ */
+export function canReopenRefusalOver(state: InteractionState): boolean {
+  if (state.mode === 'sketch') return false;
+  if (!isOperationState(state)) return true;
+  return (
+    state.phase !== 'dragging' &&
+    state.phase !== 'validating' &&
+    state.phase !== 'exact-entry'
+  );
+}
+
+/**
+ * A new attempt at an edit has begun: a drag, a typed value, or a release
+ * being checked. It supersedes any failed edit set aside earlier: whatever
+ * it ends in (a commit, a refusal of its own, a cancel) replaces that
+ * failure as the latest word on the model.
+ */
+export function startsEditAttempt(state: InteractionState): boolean {
+  return (
+    isOperationState(state) &&
+    (state.phase === 'dragging' ||
+      state.phase === 'exact-entry' ||
+      state.phase === 'validating')
+  );
 }
 
 /**
