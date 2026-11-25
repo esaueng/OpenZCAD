@@ -72,6 +72,8 @@ type Phase =
       invitationId: string;
       inviterUserId: string;
       owner: string | null;
+      /** When the accepted invitation lapses (Unix ms), if nobody adds. */
+      expiresAt: number;
       /** Where the runner's newest pass says the invitation stands. */
       state: InviteeInvitationState | null;
     }
@@ -265,6 +267,7 @@ export function SharedWithYouDialog({
         invitationId: invitation.invitationId,
         inviterUserId: invitation.inviterUserId,
         owner,
+        expiresAt: invitation.expiresAt,
         state: null
       };
       show(next);
@@ -340,6 +343,12 @@ export function SharedWithYouDialog({
       ? subscribeEncryptionState(userId, () => void refresh())
       : () => undefined;
     const timer = setInterval(() => {
+      // The expiry it knows of ends the wait even with no pass at all.
+      const current = phaseRef.current;
+      if (current.kind === 'waiting' && Date.now() >= current.expiresAt) {
+        show({ kind: 'expired', owner: current.owner });
+        return;
+      }
       if (shown && document.visibilityState === 'visible')
         void syncInvitationsNow().then(follow);
     }, SHARED_WITH_YOU_POLL_MS);
@@ -348,7 +357,7 @@ export function SharedWithYouDialog({
       stopState();
       clearInterval(timer);
     };
-  }, [follow, refresh, shown, userId, waitingFor]);
+  }, [follow, refresh, show, shown, userId, waitingFor]);
 
   const run = useCallback(
     async (

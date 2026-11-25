@@ -38,6 +38,7 @@ import {
   acceptedInvitations,
   addInvitedMember,
   declineInvitation,
+  publishInvitationKeyPackages,
   inviteToEncryptedProject,
   type InvitationContext
 } from '../apps/web/src/lib/e2ee/invitations';
@@ -622,6 +623,7 @@ describe('the owner’s own record of what it cancelled', () => {
       sealedInvitationTombstones({
         userId: OWNER,
         api,
+        local: memoryInvitationStore(),
         pins,
         currentKey: () => owner.accountKey.slice(),
         keyFor: async (key) =>
@@ -746,5 +748,166 @@ describe('the renewal chain’s bound', () => {
     await expect(
       addInvitedMember(contextOf(laptop), { ...record!, ...forged })
     ).rejects.toMatchObject({ code: 'statement-invalid' });
+  });
+});
+
+describe('cancellations this device knows of', () => {
+  /** Sealed tombstones of the owner on `api`, with this device's copy. */
+  const ownerTombstones = async (
+    api: Pick<E2eeInvitationsApi, 'tombstones' | 'saveTombstones'>
+  ) => {
+    const commitment = toHex(await accountKeyCommitment(owner.accountKey));
+    return sealedInvitationTombstones({
+      userId: OWNER,
+      api,
+      local: memoryInvitationStore(),
+      pins: (() => {
+        let pin = 0;
+        return {
+          read: () => pin,
+          write: (sequence: number) => {
+            pin = Math.max(pin, sequence);
+          }
+        };
+      })(),
+      currentKey: () => owner.accountKey.slice(),
+      keyFor: async (key) =>
+        toHex(key) === commitment ? owner.accountKey.slice() : null
+    });
+  };
+
+  it('outlast a same-sequence record of another device the server serves instead', async () => {
+    const w = world();
+    const { invitation, token, laptop } = await pending(w, 3 * DAY);
+    const api = createE2eeInvitationsApi((path, init) =>
+      laptop.fetcher(path, init)
+    );
+    // Device A cancels X (the server keeps it pending: it ignored the
+    // revocation).
+    const deviceA = await ownerTombstones(api);
+    await deviceA.cancel(invitation.invitationId);
+    const ownRecord = rows<{ sequence: number }>(
+      w.srv,
+      'SELECT sequence FROM e2ee_invitation_tombstones WHERE user_id = ?',
+      OWNER
+    )[0]!;
+    // Device B sealed from the same revision, so at the same sequence; the
+    // server acknowledged both and now serves A only B's record.
+    const sealedByB = { record: '' };
+    const deviceB = await ownerTombstones({
+      tombstones: async () => ({
+        revision: 0,
+        sequence: 0,
+        record: null,
+        updatedAt: null
+      }),
+      saveTombstones: async (request) => {
+        sealedByB.record = request.record;
+        return {
+          revision: 1,
+          sequence: 1,
+          record: request.record,
+          updatedAt: null
+        };
+      }
+    });
+    await deviceB.cancel('inv_other_device');
+    expect(ownRecord.sequence).toBe(1);
+    w.srv.db
+      .prepare(
+        'UPDATE e2ee_invitation_tombstones SET record = ? WHERE user_id = ?'
+      )
+      .run(sealedByB.record, OWNER);
+    // A still knows of X, and of what B's record names.
+    expect([...(await deviceA.cancelled())].sort()).toEqual(
+      [invitation.invitationId, 'inv_other_device'].sort()
+    );
+    // It renews nothing of X…
+    const ctx = contextOf(laptop, { tombstones: deviceA });
+    const before = stored(w.srv, invitation.invitationId);
+    expect(await renewPendingInvitations(ctx)).toEqual({
+      renewed: [],
+      failed: []
+    });
+    expect(stored(w.srv, invitation.invitationId)).toEqual(before);
+    // …and adds nobody by it.
+    await acceptEncryptedInvitation(
+      contextOf(emailDevice(w, other, 'other_laptop')),
+      token
+    );
+    const [record] = (await ctx.api.sent()).invitations;
+    await expect(addInvitedMember(ctx, record!)).rejects.toMatchObject({
+      code: 'invitation-cancelled'
+    });
+    // Its next write seals both again.
+    await deviceA.cancel('inv_later');
+    const fresh = await ownerTombstones(api);
+    expect([...(await fresh.cancelled())].sort()).toEqual(
+      [invitation.invitationId, 'inv_later', 'inv_other_device'].sort()
+    );
+  });
+
+  it('stop an Add already in flight, at its Commit', async () => {
+    const w = world();
+    const { invitation, token, laptop } = await pending(w, 3 * DAY);
+    const invitee = emailDevice(w, other, 'other_laptop');
+    const inviteeCtx = contextOf(invitee);
+    await acceptEncryptedInvitation(inviteeCtx, token);
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([
+      invitation.invitationId
+    ]);
+    // Cancelled once the Add has passed its first check and claimed the
+    // KeyPackages: the check before the Commit sees it.
+    let reads = 0;
+    const tombstones: InvitationTombstones = {
+      cancelled: async () => {
+        reads += 1;
+        return new Set(reads > 2 ? [invitation.invitationId] : []);
+      },
+      cancel: async () => undefined
+    };
+    const ctx = contextOf(laptop, { tombstones });
+    const [record] = (await ctx.api.sent()).invitations;
+    await expect(
+      addInvitedMember(ctx, record!, {
+        confirmedIdentity: toHex(other.list.identityKeyHash)
+      })
+    ).rejects.toMatchObject({ code: 'invitation-cancelled' });
+    // Read up front, before the claim, and again before the Commit.
+    expect(reads).toBe(3);
+    // The KeyPackages were claimed, and nobody was added.
+    expect(
+      rows<{ claimed_at: string | null }>(
+        w.srv,
+        'SELECT claimed_at FROM e2ee_key_packages WHERE invitation_id = ?',
+        invitation.invitationId
+      ).every((row) => row.claimed_at !== null)
+    ).toBe(true);
+    expect(
+      rows(
+        w.srv,
+        'SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?',
+        record!.projectId,
+        OTHER
+      )
+    ).toEqual([]);
+  });
+
+  it('count a lost revocation answer as done once the tombstone is there', async () => {
+    const w = world();
+    const { invitation, ownerCtx, projectId } = await pending(w, 3 * DAY);
+    const tombstones = memoryInvitationTombstones();
+    const ctx = { ...ownerCtx, tombstones };
+    // The first revocation landed, but its answer was lost.
+    await ctx.api.revoke(projectId, invitation.invitationId);
+    await tombstones.cancel(invitation.invitationId);
+    // The retry completes rather than reporting a failure.
+    await expect(
+      cancelInvitation(ctx, projectId, invitation.invitationId)
+    ).resolves.toBeUndefined();
+    // An invitation that does not exist is still refused.
+    await expect(
+      cancelInvitation(ctx, projectId, 'inv_unknown')
+    ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
   });
 });

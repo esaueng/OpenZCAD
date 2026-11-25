@@ -1079,15 +1079,19 @@ export async function addInvitedMember(
   );
   // An invitation this account cancelled is never completed, whatever the
   // server lists; a record that cannot be read adds nobody (it throws).
-  if (
-    ctx.tombstones &&
-    (await ctx.tombstones.cancelled()).has(invitation.invitationId)
-  ) {
-    throw new InvitationError(
-      'invitation-cancelled',
-      'You cancelled this invitation. Nobody was added; invite them again.'
-    );
-  }
+  // `authorize` asks again before claiming and before every Commit.
+  const cancelled = async () => {
+    if (
+      ctx.tombstones &&
+      (await ctx.tombstones.cancelled()).has(invitation.invitationId)
+    ) {
+      throw new InvitationError(
+        'invitation-cancelled',
+        'You cancelled this invitation. Nobody was added; invite them again.'
+      );
+    }
+  };
+  await cancelled();
   if (
     options.projectId !== undefined &&
     (invitation.projectId !== options.projectId ||
@@ -1130,8 +1134,10 @@ export async function addInvitedMember(
     );
   }
   // Asked before claiming anything, and again on every attempt of the
-  // Commit after catching up: a removal processed there stops the Add.
+  // Commit after catching up: a removal processed there stops the Add, and
+  // so does a cancellation that landed meanwhile.
   const authorize = async () => {
+    await cancelled();
     if (confirmed !== undefined) return;
     const gate = addGate(
       await removedMembers(ctx),

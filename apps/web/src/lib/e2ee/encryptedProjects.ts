@@ -672,6 +672,7 @@ async function openStore(
       tombstones: sealedInvitationTombstones({
         userId,
         api,
+        local: invitationStore(),
         currentKey: () => unlockedAccount(userId)?.accountKey.slice() ?? null,
         keyFor: (commitment) => accountKeyByCommitment(userId, commitment)
       })

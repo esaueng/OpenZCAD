@@ -2107,8 +2107,16 @@ statement bounded that. Two rules bound it again:
   revision read, with a sequence above both the device's pin and the stored
   one; the Worker refuses a lower sequence. Only then is the revocation sent,
   so no cancellation reaches the server that the account's devices could
-  forget. The account's devices renew no invitation named there and add no
-  acceptance of one (`addInvitedMember` refuses `invitation-cancelled`). A
+  forget. Each device also keeps its own copy (IndexedDB): the
+  cancellations it made and those named in any record it opened. Two
+  devices that seal from the same revision write the same sequence, so the
+  server could serve one the other's record and the pin would accept it;
+  the device's own copy keeps its cancellations regardless. Every decision
+  uses the union of that copy and the account's record, and a write seals
+  the union. The account's devices renew no invitation named there and add
+  no acceptance of one (`addInvitedMember` refuses `invitation-cancelled`,
+  checked again before every Commit attempt, so an Add already under way
+  stops too). A
   device that cannot read the record (keys locked, an account key it cannot
   reach, altered bytes, a sequence below its pin, or no record where it has
   seen one) renews nothing and adds nobody: it fails closed. While that
@@ -2116,8 +2124,10 @@ statement bounded that. Two rules bound it again:
 
 **What remains.** As with every sealed record, the server can withhold the
 record from, or roll it back for, a device that never saw the newer copy (a
-new device, or one whose pin was cleared). Such a device could renew or add
-by a cancelled invitation the server keeps listing. The chain bound caps that
+new device, or one whose pin was cleared), and can withhold one device's
+cancellation from another device: each device is sure only of the
+cancellations it made or saw. Such a device could renew or add by a
+cancelled invitation the server keeps listing. The chain bound caps that
 at 30 days from the invitation's first statement, as against seven before
 renewal. What the server sees of the record: its length, write times,
 revision count, sequence and the account-key commitment in its header. The

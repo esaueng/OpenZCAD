@@ -691,11 +691,16 @@ async function revokeInvitation(
       )
       .bind(invitationId)
   ]);
+  const row = await invitationRow(db, invitationId);
   if ((revoked?.meta?.changes ?? 0) !== 1) {
-    refuse(404, 'INVITATION_NOT_FOUND', 'Project invitation not found.');
+    // Revoked already (a retry whose first answer was lost): done, as
+    // asked. Anything else is not this owner's to revoke.
+    if (row?.project_id !== projectId || row.revoked_at === null) {
+      refuse(404, 'INVITATION_NOT_FOUND', 'Project invitation not found.');
+    }
   }
   return json({
-    invitation: invitationRecord((await invitationRow(db, invitationId))!)
+    invitation: invitationRecord(row!)
   } satisfies E2eeInvitationResponse);
 }
 

@@ -360,4 +360,30 @@ describe('SharedWithYouDialog', () => {
     await screen.findByText(/device to add you…/);
     expect(clearPendingEncryptedInvitation).not.toHaveBeenCalled();
   });
+
+  it('ends the wait at the expiry it knows of, even with no pass at all', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    try {
+      loadEncryption.mockResolvedValue(ready);
+      const expiresAt = Date.now() + 15_000;
+      acceptEncryptedInvitation.mockResolvedValue({
+        invitation: { ...invitation, expiresAt },
+        linked: true
+      });
+      // The runner cannot run here (no unlocked keys it accepts, say).
+      syncInvitationsNow.mockResolvedValue(null);
+      landing();
+      await screen.findByText(/device to add you…/);
+      vi.setSystemTime(expiresAt + 1);
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect((await screen.findByRole('alert')).textContent).toMatch(
+        /This invitation expired/
+      );
+      expect(acceptRoute).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

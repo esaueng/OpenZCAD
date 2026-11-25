@@ -38,6 +38,7 @@ import {
   type TombstoneSequencePins
 } from './invitationTombstonePins';
 import { declineInvitation, type InvitationContext } from './invitations';
+import type { InvitationStore } from './invitationStore';
 
 /** How long a tombstone is kept: past every statement it could stop. */
 export const INVITATION_TOMBSTONE_KEEP_MS =
@@ -92,6 +93,12 @@ export interface SealedTombstonesDeps {
   currentKey(): Uint8Array | null;
   /** An account key of this account by its commitment, for older records. */
   keyFor(commitment: Uint8Array): Promise<Uint8Array | null>;
+  /**
+   * This device's own copy (`InvitationStore`, IndexedDB): what it
+   * cancelled and what any record it opened named. Every answer is the
+   * union of it and the account's record.
+   */
+  readonly local: Pick<InvitationStore, 'rememberCancelled' | 'cancelledHere'>;
   readonly pins?: TombstoneSequencePins;
   readonly now?: () => number;
 }
@@ -109,7 +116,37 @@ export function sealedInvitationTombstones(
   const pins = deps.pins ?? localStorageTombstonePins(deps.userId);
   const now = deps.now ?? Date.now;
 
+  /**
+   * The account's record and, in `union`, it together with this device's
+   * copy, which takes whatever the record names. The record alone is not
+   * enough: two devices that seal from the same revision write the same
+   * sequence, and the server could serve either to both.
+   */
   async function read(): Promise<{
+    snapshot: E2eeInvitationTombstonesSnapshot;
+    union: Record<string, number>;
+    stored: Book;
+    sequence: number;
+  }> {
+    const { snapshot, book, sequence } = await readRecord();
+    const union: Record<string, number> = {};
+    for (const { invitationId, cancelledAt } of await deps.local.cancelledHere(
+      deps.userId
+    )) {
+      union[invitationId] = cancelledAt;
+    }
+    for (const [id, at] of Object.entries(book.invitations)) {
+      if (union[id] === undefined) {
+        union[id] = at;
+        await deps.local
+          .rememberCancelled(deps.userId, { invitationId: id, cancelledAt: at })
+          .catch(() => undefined);
+      } else union[id] = Math.min(union[id], at);
+    }
+    return { snapshot, union, stored: book, sequence };
+  }
+
+  async function readRecord(): Promise<{
     snapshot: E2eeInvitationTombstonesSnapshot;
     book: Book;
     sequence: number;
@@ -151,21 +188,28 @@ export function sealedInvitationTombstones(
 
   return {
     async cancelled() {
-      const { book } = await read();
-      return new Set(Object.keys(book.invitations));
+      const { union } = await read();
+      return new Set(Object.keys(union));
     },
     async cancel(invitationId) {
+      // This device's copy first: whatever the server acknowledges or
+      // serves later, this device does not forget its own cancellation.
+      await deps.local.rememberCancelled(deps.userId, {
+        invitationId,
+        cancelledAt: now()
+      });
       for (let attempt = 0; attempt < 3; attempt++) {
-        const { snapshot, book, sequence } = await read();
-        if (book.invitations[invitationId] !== undefined) return;
+        const { snapshot, union, stored, sequence } = await read();
+        if (stored.invitations[invitationId] !== undefined) return;
+        // The union is sealed, so the record names every cancellation this
+        // device knows of.
         const at = now();
         const invitations: Record<string, number> = {};
-        for (const [id, cancelledAt] of Object.entries(book.invitations)) {
+        for (const [id, cancelledAt] of Object.entries(union)) {
           if (at - cancelledAt <= INVITATION_TOMBSTONE_KEEP_MS) {
             invitations[id] = cancelledAt;
           }
         }
-        invitations[invitationId] = at;
         const key = deps.currentKey();
         if (!key) return unavailable('unlock encryption first.');
         const next = Math.max(sequence, snapshot.sequence, pins.read()) + 1;

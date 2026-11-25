@@ -306,8 +306,8 @@ export function createInvitationRunner(
 /**
  * Whether the server opens the gates invitations need: an answer, or a
  * throw for a check that could not be made (offline, a server error, a
- * rate limit), which the runner retries. A route the Worker does not have
- * (404, an older one) or a page served without it reads as closed.
+ * rate limit, a body that does not parse), which the runner retries. A
+ * route the Worker does not have (404, an older one) reads as closed.
  */
 export async function invitationGatesOpen(
   fetcher: typeof desktopFetch = desktopFetch
@@ -325,8 +325,8 @@ export async function invitationGatesOpen(
   try {
     config = (await response.json()) as Partial<E2eeConfigResponse> | null;
   } catch {
-    // A static host answers with its page: no encryption here.
-    return false;
+    // An answer cut short or garbled: asked again after the backoff.
+    throw new Error('The encryption gates answered with no readable body.');
   }
   return config?.enabled === true && config.projectsEnabled === true;
 }

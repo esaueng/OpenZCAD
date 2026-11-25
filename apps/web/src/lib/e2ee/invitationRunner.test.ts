@@ -209,7 +209,7 @@ describe('the invitation runner', () => {
     expect(h.module.runInvitationPass).toHaveBeenCalledTimes(1);
   });
 
-  it('reads a server error of the gate check as a failure, a missing route as closed', async () => {
+  it('reads a server error or an unreadable body of the gate check as a failure, a missing route as closed', async () => {
     const answer = (status: number, body?: unknown) => async () =>
       body === undefined
         ? new Response('<html>', { status })
@@ -223,7 +223,8 @@ describe('the invitation runner', () => {
       )
     ).resolves.toBe(false);
     await expect(invitationGatesOpen(answer(404))).resolves.toBe(false);
-    await expect(invitationGatesOpen(answer(200))).resolves.toBe(false);
+    // A body that does not parse is a failed check too, not a closed gate.
+    await expect(invitationGatesOpen(answer(200))).rejects.toThrow();
     await expect(invitationGatesOpen(answer(503, {}))).rejects.toThrow();
     await expect(invitationGatesOpen(answer(429, {}))).rejects.toThrow();
   });
