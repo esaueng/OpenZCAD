@@ -461,6 +461,8 @@ interface HistoryRowContext {
   onToggleFeatureSuppression: HistoryTimelineProps['onToggleFeatureSuppression'];
   onToggleSketchVisibility: HistoryTimelineProps['onToggleSketchVisibility'];
   onToggleBodyVisibility: HistoryTimelineProps['onToggleBodyVisibility'];
+  /** Brings back the refused edit of the row being edited, when set aside. */
+  reopenRefusal: (() => void) | undefined;
 }
 
 /**
@@ -543,6 +545,12 @@ interface HistoryRowProps {
   consumed: boolean;
   refusalTitle: string | null;
   refusalMessage: string | null;
+  /**
+   * The refusal is a failed edit the selection left: its badge is a button
+   * that brings it back (`context.reopenRefusal`), as the trailing "not
+   * built" row is for a new step.
+   */
+  refusalReopens: boolean;
   suppressed: boolean;
   rollbackActive: boolean;
   hidden: boolean;
@@ -636,6 +644,7 @@ const HistoryRow = memo(function HistoryRow({
   consumed,
   refusalTitle,
   refusalMessage,
+  refusalReopens,
   suppressed,
   rollbackActive,
   hidden,
@@ -840,7 +849,7 @@ const HistoryRow = memo(function HistoryRow({
                   {spoken.qualifier ? `, ${spoken.qualifier}` : ''}
                 </span>
               )}
-              {refusalTitle !== null && (
+              {refusalTitle !== null && !refusalReopens && (
                 <span
                   className="feature-flag error history-row-refused"
                   role="status"
@@ -850,6 +859,21 @@ const HistoryRow = memo(function HistoryRow({
                   <span>edit not applied</span>
                 </span>
               )}
+            </button>
+          )}
+          {refusalTitle !== null && refusalReopens && !renaming && (
+            // Beside the row's own button, not in it (a button cannot hold
+            // one): the step is still selected by its name, and this badge
+            // brings back the refused edit of it.
+            <button
+              type="button"
+              className="feature-flag error history-row-refused is-reopen"
+              title={`${refusalTitle} not applied: ${refusalMessage} Reopen the edit to see why and choose what to do.`}
+              aria-label={`${refusalTitle}, edit not applied. Reopen it`}
+              onClick={() => context.current!.reopenRefusal?.()}
+            >
+              {ROW_ALERT_ICON}
+              <span>edit not applied</span>
             </button>
           )}
           {expanded && (
@@ -1812,7 +1836,8 @@ export function HistoryTimeline({
     onEditSketch,
     onToggleFeatureSuppression,
     onToggleSketchVisibility,
-    onToggleBodyVisibility
+    onToggleBodyVisibility,
+    reopenRefusal: pendingStep?.onReopen
   };
 
   return (
@@ -2018,6 +2043,7 @@ export function HistoryTimeline({
               consumed={consumed}
               refusalTitle={refusedEdit ? pendingStep.title : null}
               refusalMessage={refusedEdit ? pendingStep.message : null}
+              refusalReopens={refusedEdit && pendingStep.onReopen !== undefined}
               suppressed={suppressed}
               rollbackActive={index === committedEnd && committedEnd < last}
               hidden={hidden}

@@ -1368,6 +1368,28 @@ button.history-pending-row:focus-visible {
   white-space: nowrap;
 }
 
+/* Set aside by a selection change, the badge brings the edit back. It sits
+   beside the row's own button, so it is a control of its own. */
+button.history-row-refused.is-reopen {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+button.history-row-refused.is-reopen:hover {
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+
+button.history-row-refused.is-reopen:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
 /* The row's actions open over the value's end on hover or keyboard focus
    and take no room of their own; the value fades for them. They stay laid
    out at rest (only transparent), so a pointer or a test finds them where
