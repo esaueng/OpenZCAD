@@ -1888,6 +1888,61 @@ export function canReopenRefusalOver(state: InteractionState): boolean {
 }
 
 /**
+ * The workspace surfaces outside the machine that hold an edit in progress.
+ * Reopening a parked refusal replaces the pick and closes panels, so any of
+ * these open would be torn down along with what the user typed or armed:
+ * an open value entry (keypad), a running in-place command (Shell, Hole…),
+ * a tool panel, an extrude or datum being edited, a Move, or a face or
+ * vertex pick that repairs a feature.
+ */
+export interface EditSurfaces {
+  keypadOpen: boolean;
+  commandRunning: boolean;
+  toolOpen: boolean;
+  featureEditOpen: boolean;
+  moveOpen: boolean;
+  repairPickOpen: boolean;
+}
+
+/**
+ * What keeps a parked refusal from being reopened now, or null when nothing
+ * does: the machine holding newer work (`canReopenRefusalOver`), or an edit
+ * in progress on a surface the reopen would close.
+ */
+export function refusalReopenBlocker(
+  state: InteractionState,
+  surfaces: EditSurfaces
+): 'interaction' | keyof EditSurfaces | null {
+  if (!canReopenRefusalOver(state)) return 'interaction';
+  for (const key of Object.keys(surfaces) as (keyof EditSurfaces)[]) {
+    if (surfaces[key]) return key;
+  }
+  return null;
+}
+
+/**
+ * Whether `next` is the failed edit `previous` given up where it stands: the
+ * same pick, re-armed with its refused value and refusal dropped. That is
+ * how its value entry's Escape, a drag cancelled over it, or its card's
+ * close leaves a refusal (`reset-value`, or re-selecting the same target),
+ * so the parked failure ends with it. A clear (a click on empty space) goes
+ * idle instead and keeps it, and a pick of something else is another
+ * subject.
+ */
+export function refusalCancelledInPlace(
+  previous: InteractionState,
+  next: InteractionState
+): boolean {
+  return (
+    isParkableRefusal(previous) &&
+    isOperationState(next) &&
+    next.phase === 'armed' &&
+    next.error === null &&
+    refusalSubjectKey(next) === refusalSubjectKey(previous)
+  );
+}
+
+/**
  * A new attempt at an edit has begun: a drag, a typed value, or a release
  * being checked. It supersedes any failed edit set aside earlier: whatever
  * it ends in (a commit, a refusal of its own, a cancel) replaces that

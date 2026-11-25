@@ -18,6 +18,8 @@ import {
   isParkableRefusal,
   canReopenRefusalOver,
   startsEditAttempt,
+  refusalReopenBlocker,
+  refusalCancelledInPlace,
   movedOnFromRefusal,
   refusalSubjectKey,
   refusalDiscardedByHistoryStep,
@@ -2274,6 +2276,84 @@ describe('a failed edit the selection leaves', () => {
         interactionReducer(armed, { type: 'validation-start', value: 1 })
       )
     ).toBe(true);
+  });
+
+  // Review: reopening from the chip closed an in-place command's keypad (a
+  // typed Shell thickness) and cancelled the command, because only the
+  // machine was asked and a running command leaves it idle.
+  it('is not reopened over an edit in progress anywhere in the workspace', () => {
+    const none = {
+      keypadOpen: false,
+      commandRunning: false,
+      toolOpen: false,
+      featureEditOpen: false,
+      moveOpen: false,
+      repairPickOpen: false
+    };
+    expect(refusalReopenBlocker(IDLE, none)).toBeNull();
+    const armed = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({ topologyId: 'face:7', hash: 7 })
+    });
+    expect(refusalReopenBlocker(armed, none)).toBeNull();
+    expect(
+      refusalReopenBlocker(
+        interactionReducer(armed, { type: 'drag-engage' }),
+        none
+      )
+    ).toBe('interaction');
+    for (const key of Object.keys(none) as (keyof typeof none)[]) {
+      expect(refusalReopenBlocker(IDLE, { ...none, [key]: true })).toBe(key);
+      expect(refusalReopenBlocker(armed, { ...none, [key]: true })).toBe(key);
+    }
+  });
+
+  // Review: Esc in the reopened card's value entry re-armed the face and
+  // took History's row, but the chip still brought the refusal back.
+  it('ends when it is given up in place, not when the pick is cleared', () => {
+    const failed = rimChoice();
+    // Its value entry's Escape, or a drag cancelled over it.
+    expect(
+      refusalCancelledInPlace(
+        failed,
+        interactionReducer(failed, { type: 'reset-value' })
+      )
+    ).toBe(true);
+    // The offset cancel re-selects the same face.
+    expect(
+      refusalCancelledInPlace(
+        failed,
+        interactionReducer(failed, { type: 'select-face', target: face() })
+      )
+    ).toBe(true);
+    // A click on empty space parks it instead.
+    expect(
+      refusalCancelledInPlace(
+        failed,
+        interactionReducer(failed, { type: 'clear' })
+      )
+    ).toBe(false);
+    // So does a pick of another face.
+    expect(
+      refusalCancelledInPlace(
+        failed,
+        interactionReducer(failed, {
+          type: 'select-face',
+          target: face({ topologyId: 'face:7', hash: 7 })
+        })
+      )
+    ).toBe(false);
+    // An armed pick that never failed has nothing to give up.
+    const armed = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face()
+    });
+    expect(
+      refusalCancelledInPlace(
+        armed,
+        interactionReducer(armed, { type: 'reset-value' })
+      )
+    ).toBe(false);
   });
 });
 

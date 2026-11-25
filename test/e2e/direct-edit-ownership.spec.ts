@@ -460,3 +460,57 @@ test(
     await expect.poll(() => tallest(canvas)).toBeCloseTo(10, 2);
   }
 );
+
+// Review: Esc after the click-away left both the chip and History's "not
+// built" row up, and the chip still reopened the edit, though Esc is said
+// to discard it.
+test(
+  'Escape discards a refused edit the selection left',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    const canvas = await refusedGearDrag(page);
+    const notice = page.getByRole('button', { name: 'Edit not applied' });
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + 110);
+    await expect(page.locator('.workspace-hint .edit-refusal')).toHaveCount(0);
+    await expect(notice).toBeVisible();
+    // Nothing is picked now, so the set-aside failure is the rung Esc takes.
+    await page.keyboard.press('Escape');
+    await expect(notice).toHaveCount(0);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Discarded the failed'
+    );
+    await expect.poll(() => tallest(canvas)).toBeCloseTo(10, 2);
+  }
+);
+
+// Review: the chip reopened over a running in-place command, closing it and
+// what had been typed into it, because only the interaction was asked.
+test('the chip does not reopen a refused edit over a running command', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const canvas = await refusedGearDrag(page);
+  const notice = page.getByRole('button', { name: 'Edit not applied' });
+  const box = (await canvas.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + 110);
+  await expect(page.locator('.workspace-hint .edit-refusal')).toHaveCount(0);
+  const moreTools = page.getByRole('button', { name: /^More tools/ });
+  if ((await moreTools.getAttribute('aria-expanded')) !== 'true') {
+    await moreTools.click();
+  }
+  await page.getByRole('button', { name: /^Shell/ }).click();
+  const bar = page.getByRole('group', { name: 'Shell command' });
+  await expect(bar).toBeVisible();
+  if ((await moreTools.getAttribute('aria-expanded')) === 'true') {
+    await moreTools.click();
+  }
+  await notice.click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Finish or cancel the edit in progress'
+  );
+  await expect(bar).toBeVisible();
+  await expect(page.locator('.workspace-hint .edit-refusal')).toHaveCount(0);
+  await expect(notice).toBeVisible();
+});

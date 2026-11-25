@@ -987,7 +987,8 @@ import {
   commandSessionFor,
   holdsRefusal,
   isParkableRefusal,
-  canReopenRefusalOver,
+  refusalCancelledInPlace,
+  refusalReopenBlocker,
   startsEditAttempt,
   movedOnFromRefusal,
   refusalSubjectKey,
@@ -6083,9 +6084,16 @@ export function App() {
   // made on, so leaving it never loses it. A new attempt supersedes it.
   // Declared after the version reset above, so a refusal and a version
   // change in one commit keep the refusal.
+  const parkingSeenInteraction = useRef(interaction);
   useEffect(() => {
+    const previous = parkingSeenInteraction.current;
+    parkingSeenInteraction.current = interaction;
     if (!doc) return;
-    if (isParkableRefusal(interaction)) {
+    if (refusalCancelledInPlace(previous, interaction)) {
+      // Given up where it stands (its value entry's Escape, a cancelled
+      // drag over it): Esc discards a failed edit, so the chip goes too.
+      setLastDirectEditFailure(null);
+    } else if (isParkableRefusal(interaction)) {
       const parked: ParkedRefusal = {
         interaction,
         selection: {
@@ -14811,7 +14819,18 @@ export function App() {
       revealParkedWhy(parked.interaction);
       return;
     }
-    if (!canReopenRefusalOver(current)) {
+    if (
+      refusalReopenBlocker(current, {
+        keypadOpen: keypadRef.current !== null,
+        commandRunning: inPlaceRef.current.active,
+        toolOpen: tool !== null,
+        featureEditOpen:
+          extrudeEditRef.current !== null || modelingEditFeature !== null,
+        moveOpen: movePreview !== null,
+        repairPickOpen:
+          faceRepair !== null || datumRepair !== null || toFacePick !== null
+      }) !== null
+    ) {
       setStatus(
         `Finish or cancel the edit in progress to return to the ${failure.title} that was not applied.`
       );
@@ -37486,6 +37505,13 @@ export function App() {
         );
         return;
       }
+      // Nothing picked in the workspace: Escape's last rungs need it.
+      const nothingPicked =
+        !selectedTopology &&
+        selectedEdges.length === 0 &&
+        selectedBodyIds.length === 0 &&
+        !selectedSketchProfileId &&
+        selectedProfiles.length === 0;
       switch (meta || event.altKey ? null : event.key) {
         case 'Escape':
           if (cancelPendingRegionExtrusion()) {
@@ -37608,14 +37634,18 @@ export function App() {
             interaction.boxSelectProfiles
           ) {
             cancelPanel();
+          } else if (nothingPicked && shownParkedRefusal) {
+            // A failed edit set aside (the chip and History's "not built"
+            // row) is a rung of its own: once the pick is cleared, Esc
+            // discards it, before it would put the Tools drawer away.
+            setLastDirectEditFailure(null);
+            setStatus(
+              `Discarded the failed ${shownParkedRefusal.title} · the model is unchanged.`
+            );
           } else if (
             toolFold.commandFoldOpen &&
             resolvedWorkspaceMode === 'build' &&
-            !selectedTopology &&
-            selectedEdges.length === 0 &&
-            selectedBodyIds.length === 0 &&
-            !selectedSketchProfileId &&
-            selectedProfiles.length === 0
+            nothingPicked
           ) {
             // The last rung: nothing armed and nothing picked, so the key is
             // nobody else's and it puts the Tools drawer away. The drawer is
