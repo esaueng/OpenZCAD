@@ -86,28 +86,30 @@
 /* Wider, File and Settings take the same squares where a project name is
    too long to show beside their words and the mode labels (TopBar.tsx
    measures it). Presence is already its glyph and count above 960px. */
-.topbar[data-label-room='glyph'] .file-menu > summary,
-.topbar[data-label-room='glyph'] .topbar-actions .settings-action {
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 0;
-  gap: 0;
-  font-size: 0;
-}
+@media (min-width: 960px) {
+  .topbar[data-label-room='glyph'] .file-menu > summary,
+  .topbar[data-label-room='glyph'] .topbar-actions .settings-action {
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    min-height: 28px;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
+  }
 
-.topbar[data-label-room='glyph'] .file-menu-count {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 3px;
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  box-shadow: 0 0 0 2px var(--color-surface);
-  font-size: var(--fs-mini);
+  .topbar[data-label-room='glyph'] .file-menu-count {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 3px;
+    color: var(--color-text);
+    background: var(--color-surface-hover);
+    box-shadow: 0 0 0 2px var(--color-surface);
+    font-size: var(--fs-mini);
+  }
 }
 
 @media (max-width: 820px) {

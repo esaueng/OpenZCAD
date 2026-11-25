@@ -297,7 +297,14 @@ function PresenceGlyph({
  * with its grid track allowed a pixel for rounding, and that pixel was
  * exactly the ellipsis an encrypted project's lock left at 1366px.
  */
-function fitProjectName(topbar: HTMLElement) {
+function fitProjectName(topbar: HTMLElement): boolean {
+  const labelRoom = topbar.dataset.labelRoom;
+  fitProjectNameSteps(topbar);
+  // Whether the mode labels came or went, so the thumb can follow at once.
+  return topbar.dataset.labelRoom !== labelRoom;
+}
+
+function fitProjectNameSteps(topbar: HTMLElement) {
   const name = topbar.querySelector<HTMLElement>(
     '.topbar-identity .breadcrumb strong'
   );
@@ -335,7 +342,7 @@ function fitProjectName(topbar: HTMLElement) {
  * one it marks; CSS slides it (view-mode.css). It starts animating only
  * after its first placement, so a page load does not grow it from nothing.
  */
-function placeModeThumb(topbar: HTMLElement) {
+function placeModeThumb(topbar: HTMLElement, snap = false) {
   const modeSwitch = topbar.querySelector<HTMLElement>('.mode-switch');
   const active = modeSwitch?.querySelector<HTMLElement>(
     '.mode-switch-option.active'
@@ -343,8 +350,18 @@ function placeModeThumb(topbar: HTMLElement) {
   if (!modeSwitch || !active) {
     return;
   }
+  // The segments jumped to new widths with the labels, so the thumb jumps
+  // with them rather than sliding from where the old ones stood.
+  if (snap) {
+    delete modeSwitch.dataset.thumb;
+  }
   modeSwitch.style.setProperty('--mode-thumb-x', `${active.offsetLeft}px`);
   modeSwitch.style.setProperty('--mode-thumb-w', `${active.offsetWidth}px`);
+  if (snap) {
+    // Settle the new place with transitions off before they come back on
+    // (the frame callback below runs before the browser's own style pass).
+    void getComputedStyle(modeSwitch, '::before').transform;
+  }
   if (!modeSwitch.dataset.thumb) {
     requestAnimationFrame(() => {
       modeSwitch.dataset.thumb = 'placed';
@@ -836,8 +853,7 @@ export function TopBar({
     }
     // A breakpoint drops the mode labels, which resizes every segment.
     const fit = () => {
-      fitProjectName(topbar);
-      placeModeThumb(topbar);
+      placeModeThumb(topbar, fitProjectName(topbar));
     };
     const observer = new ResizeObserver(fit);
     observer.observe(topbar);
@@ -864,9 +880,8 @@ export function TopBar({
   const encrypted = encryption !== null;
   useLayoutEffect(() => {
     if (topbarRef.current) {
-      fitProjectName(topbarRef.current);
       // Fitting may drop or restore the mode labels, which moves the thumb.
-      placeModeThumb(topbarRef.current);
+      placeModeThumb(topbarRef.current, fitProjectName(topbarRef.current));
     }
   }, [
     projectName,

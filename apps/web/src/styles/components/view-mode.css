@@ -1208,13 +1208,16 @@
 }
 
 /* Wider, the same holds for a project name too long to show beside the
-   labelled switch (TopBar.tsx measures it). */
-.topbar[data-label-room='glyph'] .mode-switch-option {
-  padding-inline: 9px;
-}
+   labelled switch (TopBar.tsx measures it). Only there: the phone bar puts
+   the labels back under the icons (quiet-stage.css). */
+@media (min-width: 960px) {
+  .topbar[data-label-room='glyph'] .mode-switch-option {
+    padding-inline: 9px;
+  }
 
-.topbar[data-label-room='glyph'] .mode-switch-option .mode-switch-label {
-  display: none;
+  .topbar[data-label-room='glyph'] .mode-switch-option .mode-switch-label {
+    display: none;
+  }
 }
 
 @media (max-width: 620px) {
