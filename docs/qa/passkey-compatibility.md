@@ -34,8 +34,9 @@ Behaviour that differs by browser, handled in code:
 - **Orphaned passkeys:** when a new passkey turns out to lack PRF, the browser
   is asked to delete it through the WebAuthn Signal API
   (`PublicKeyCredential.signalUnknownCredential`, Chrome and Edge 132+, recent
-  Safari). A provider may ignore the signal. Where the API is missing (Firefox)
-  or fails, the error names the passkey to delete by hand.
+  Safari). A provider may ignore the signal, so the error still names the
+  passkey to check for and delete if it remains. Where the API is missing
+  (Firefox) or fails, it names the passkey to delete by hand.
 - **Timeouts** are five minutes per prompt, for phone (QR) ceremonies and slow
   Windows Hello prompts.
 

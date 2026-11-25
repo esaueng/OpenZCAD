@@ -133,7 +133,7 @@ function platformAdvice(
   }
   if (os === 'windows') {
     return ceremony === 'create'
-      ? 'Windows Hello on this PC can’t unlock encryption yet: it needs Windows 11 with the February 2026 update or later. Update Windows, or save the passkey to your phone, Google Password Manager or a security key.'
+      ? 'If you chose Windows Hello, it needs Windows 11 with the February 2026 update or later to unlock encryption. Update Windows, or save the passkey to your phone, Google Password Manager or a security key that supports hmac-secret.'
       : 'If you chose Windows Hello, it needs Windows 11 with the February 2026 update or later. Otherwise use the passkey where you created it.';
   }
   if (os === 'linux' && browser === 'firefox') {

@@ -94,7 +94,7 @@ describe('noPrfGuidance', () => {
   it.each([
     [
       UA.windowsEdge,
-      'Update Windows',
+      'If you chose Windows Hello',
       'Windows 11 with the February 2026 update'
     ],
     [

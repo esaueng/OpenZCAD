@@ -64,16 +64,21 @@ export function failedPasskeyEnrollment(
 
 /**
  * Manual cleanup advice for a credential saved by a failed enrollment, or
- * null when there is nothing to remove by hand: no credential was saved, or
- * the browser accepted a WebAuthn signal asking the provider to drop it.
+ * null when no credential was saved. A WebAuthn signal resolving only means
+ * the browser accepted the request, not that the provider removed the
+ * credential (WebAuthn L3 §5.1.10), so the advice still names the label,
+ * conditionally, after a signal.
  */
 export function passkeyEnrollmentCleanup(error: unknown): string | null {
   const enrollment =
     error instanceof Error ? failedEnrollments.get(error) : undefined;
-  if (!enrollment || enrollment.signalled) return null;
+  if (!enrollment) return null;
   const target = enrollment.targetId
     ? ` After reloading Encryption, remove any unlock method marked ${enrollment.targetId.slice(3, 15)} as well.`
     : '';
+  if (enrollment.signalled) {
+    return `Your passkey provider was asked to delete "${enrollment.label}". If it still lists it, remove only that passkey before creating another.${target} Use your recovery key or another device in the meantime.`;
+  }
   return `Before creating another passkey, remove only "${enrollment.label}" from the passkey provider where you saved it.${target} Use your recovery key or another device in the meantime.`;
 }
 
@@ -214,9 +219,17 @@ function erase(first: unknown): void {
  */
 function prfBytes(first: unknown): Bytes {
   if (Array.isArray(first)) {
-    const valid =
-      first.length === 32 &&
-      first.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255);
+    // Index every slot: `every` skips the holes of a sparse array, which
+    // `Uint8Array.from` would then fill with zeros.
+    let valid = first.length === 32;
+    for (let index = 0; valid && index < 32; index += 1) {
+      const byte: unknown = first[index];
+      valid =
+        Object.prototype.hasOwnProperty.call(first, index) &&
+        Number.isInteger(byte) &&
+        (byte as number) >= 0 &&
+        (byte as number) <= 255;
+    }
     const secret = valid ? Uint8Array.from(first as number[]) : undefined;
     first.fill(0);
     if (!secret) throw invalidPrf();

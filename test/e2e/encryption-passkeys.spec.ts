@@ -8,142 +8,142 @@ import {
   seedE2eeDevice
 } from './e2ee-fixtures';
 
-test('enrolls, unlocks and revokes with a real WebAuthn PRF virtual authenticator', { tag: '@ci-smoke' }, async ({
-  page,
-  context,
-  baseURL
-}) => {
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  page.on('console', (message) => {
-    if (message.type() === 'error') errors.push(message.text());
-  });
-  const cdp = await context.newCDPSession(page);
-  await cdp.send('WebAuthn.enable');
-  await cdp.send('WebAuthn.addVirtualAuthenticator', {
-    options: {
-      protocol: 'ctap2',
-      transport: 'internal',
-      hasResidentKey: true,
-      hasUserVerification: true,
-      isUserVerified: true,
-      hasPrf: true,
-      automaticPresenceSimulation: true
-    }
-  });
-  const server = createE2eeServer();
-  await stubApi(page);
-  await installE2eeServer(context, server);
-  const appUrl = new URL(baseURL!);
-  appUrl.hostname = 'localhost';
-  await page.goto(appUrl.href);
-  const seeded = await seedE2eeDevice(page, server);
-  let settings = await openEncryptionSettings(page);
-  await settings.getByText('Advanced encryption settings').click();
-  const fingerprint = await settings
-    .getByLabel('Your fingerprint')
-    .textContent();
-  await settings
-    .getByRole('button', { name: 'Add passkey', exact: true })
-    .click();
-  await settings
-    .getByLabel('Recovery key', { exact: true })
-    .fill(seeded.recoveryKey);
-  await settings
-    .getByRole('button', { name: 'Create passkey', exact: true })
-    .click();
-  await expect(
-    settings.getByRole('button', { name: 'Remove passkey 1', exact: true })
-  ).toBeVisible();
-  await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
-  await expect(page).toHaveTitle(/OpenZCAD/);
-  expect(new URL(page.url()).pathname).toBe('/');
-  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-  if (process.env.PASSKEY_QA_SCREENSHOTS) {
-    await page.screenshot({
-      path: `${process.env.PASSKEY_QA_SCREENSHOTS}/passkey-enrolled.png`
+test(
+  'enrolls, unlocks and revokes with a real WebAuthn PRF virtual authenticator',
+  { tag: '@ci-smoke' },
+  async ({ page, context, baseURL }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
     });
-    await page.setViewportSize({ width: 390, height: 844 });
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('WebAuthn.enable');
+    await cdp.send('WebAuthn.addVirtualAuthenticator', {
+      options: {
+        protocol: 'ctap2',
+        transport: 'internal',
+        hasResidentKey: true,
+        hasUserVerification: true,
+        isUserVerified: true,
+        hasPrf: true,
+        automaticPresenceSimulation: true
+      }
+    });
+    const server = createE2eeServer();
+    await stubApi(page);
+    await installE2eeServer(context, server);
+    const appUrl = new URL(baseURL!);
+    appUrl.hostname = 'localhost';
+    await page.goto(appUrl.href);
+    const seeded = await seedE2eeDevice(page, server);
+    let settings = await openEncryptionSettings(page);
+    await settings.getByText('Advanced encryption settings').click();
+    const fingerprint = await settings
+      .getByLabel('Your fingerprint')
+      .textContent();
+    await settings
+      .getByRole('button', { name: 'Add passkey', exact: true })
+      .click();
+    await settings
+      .getByLabel('Recovery key', { exact: true })
+      .fill(seeded.recoveryKey);
+    await settings
+      .getByRole('button', { name: 'Create passkey', exact: true })
+      .click();
+    await expect(
+      settings.getByRole('button', { name: 'Remove passkey 1', exact: true })
+    ).toBeVisible();
+    await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
+    await expect(page).toHaveTitle(/OpenZCAD/);
+    expect(new URL(page.url()).pathname).toBe('/');
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    if (process.env.PASSKEY_QA_SCREENSHOTS) {
+      await page.screenshot({
+        path: `${process.env.PASSKEY_QA_SCREENSHOTS}/passkey-enrolled.png`
+      });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await settings
+        .getByRole('button', { name: 'Remove passkey 1', exact: true })
+        .scrollIntoViewIfNeeded();
+      await page.screenshot({
+        path: `${process.env.PASSKEY_QA_SCREENSHOTS}/passkey-mobile.png`
+      });
+      await page.setViewportSize({ width: 1280, height: 720 });
+    }
+
+    // Retain only the rollback pin and authenticator: reload loses the page's
+    // account cache. PRF must open its target and certify fresh device keys.
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const request = indexedDB.open('openzcad-e2ee', 1);
+          request.onsuccess = () => {
+            const db = request.result;
+            const tx = db.transaction('devices', 'readwrite');
+            tx.objectStore('devices').clear();
+            tx.oncomplete = () => {
+              db.close();
+              resolve();
+            };
+            tx.onerror = () =>
+              reject(
+                new Error(tx.error?.message ?? 'Device-key transaction failed')
+              );
+          };
+          request.onerror = () =>
+            reject(
+              new Error(
+                request.error?.message ?? 'Device-key database did not open'
+              )
+            );
+        })
+    );
+    await page.reload();
+    settings = await openEncryptionSettings(page);
+    // A fresh browser of an account with a passkey offers it to unlock.
+    await settings
+      .getByRole('button', { name: 'Use passkey', exact: true })
+      .click();
+    await settings
+      .getByRole('dialog', { name: 'Unlock this device' })
+      .getByRole('button', { name: 'Confirm with passkey', exact: true })
+      .click();
+    await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
+    await expect(settings.getByText('Encryption is on')).toBeVisible();
+    await settings.getByText('Advanced encryption settings').click();
+    await expect(settings.getByLabel('Your fingerprint')).toHaveText(
+      fingerprint!
+    );
+
     await settings
       .getByRole('button', { name: 'Remove passkey 1', exact: true })
-      .scrollIntoViewIfNeeded();
-    await page.screenshot({
-      path: `${process.env.PASSKEY_QA_SCREENSHOTS}/passkey-mobile.png`
-    });
-    await page.setViewportSize({ width: 1280, height: 720 });
+      .click();
+    const removal = settings.getByRole('dialog', { name: 'Remove passkey' });
+    await removal
+      .getByRole('button', { name: 'Confirm with passkey', exact: true })
+      .click();
+    // The modal hides the page from the accessibility tree until it closes.
+    await expect(removal).toHaveCount(0, { timeout: 15_000 });
+    await expect(
+      settings.getByRole('button', { name: 'Remove passkey 1', exact: true })
+    ).toHaveCount(0);
+    await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
+    expect(
+      server.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE target_id LIKE 'pk_%'"
+        )
+        .get()
+    ).toEqual({ n: 0 });
+    expect(
+      server.db
+        .prepare('SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+        .get()
+    ).toEqual({ n: 4 });
+    expect(errors).toEqual([]);
   }
-
-  // Retain only the rollback pin and authenticator: reload loses the page's
-  // account cache. PRF must open its target and certify fresh device keys.
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        const request = indexedDB.open('openzcad-e2ee', 1);
-        request.onsuccess = () => {
-          const db = request.result;
-          const tx = db.transaction('devices', 'readwrite');
-          tx.objectStore('devices').clear();
-          tx.oncomplete = () => {
-            db.close();
-            resolve();
-          };
-          tx.onerror = () =>
-            reject(
-              new Error(tx.error?.message ?? 'Device-key transaction failed')
-            );
-        };
-        request.onerror = () =>
-          reject(
-            new Error(
-              request.error?.message ?? 'Device-key database did not open'
-            )
-          );
-      })
-  );
-  await page.reload();
-  settings = await openEncryptionSettings(page);
-  // A fresh browser of an account with a passkey offers it to unlock.
-  await settings
-    .getByRole('button', { name: 'Use passkey', exact: true })
-    .click();
-  await settings
-    .getByRole('dialog', { name: 'Unlock this device' })
-    .getByRole('button', { name: 'Confirm with passkey', exact: true })
-    .click();
-  await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
-  await expect(settings.getByText('Encryption is on')).toBeVisible();
-  await settings.getByText('Advanced encryption settings').click();
-  await expect(settings.getByLabel('Your fingerprint')).toHaveText(
-    fingerprint!
-  );
-
-  await settings
-    .getByRole('button', { name: 'Remove passkey 1', exact: true })
-    .click();
-  const removal = settings.getByRole('dialog', { name: 'Remove passkey' });
-  await removal
-    .getByRole('button', { name: 'Confirm with passkey', exact: true })
-    .click();
-  // The modal hides the page from the accessibility tree until it closes.
-  await expect(removal).toHaveCount(0, { timeout: 15_000 });
-  await expect(
-    settings.getByRole('button', { name: 'Remove passkey 1', exact: true })
-  ).toHaveCount(0);
-  await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
-  expect(
-    server.db
-      .prepare(
-        "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE target_id LIKE 'pk_%'"
-      )
-      .get()
-  ).toEqual({ n: 0 });
-  expect(
-    server.db
-      .prepare('SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
-      .get()
-  ).toEqual({ n: 4 });
-  expect(errors).toEqual([]);
-});
+);
 
 for (const signalApi of [true, false]) {
   test(`refuses an authenticator without PRF, certifies nothing and ${signalApi ? 'signals the provider to forget it' : 'asks for manual cleanup'}`, async ({
@@ -204,18 +204,23 @@ for (const signalApi of [true, false]) {
       .getByRole('button', { name: 'Create passkey', exact: true })
       .click();
     const alert = settings.getByRole('alert');
-    await expect(alert).toContainText(
-      'This passkey can’t unlock encryption'
-    );
+    await expect(alert).toContainText('This passkey can’t unlock encryption');
     await expect(alert).toContainText('Your recovery key still works.');
     const { credentials } = await cdp.send('WebAuthn.getCredentials', {
       authenticatorId
     });
     if (signalApi) {
-      // The browser forwarded signalUnknownCredential to the authenticator,
-      // so nothing is left for the user to remove by hand.
+      // The browser forwarded signalUnknownCredential to the authenticator.
+      // A resolved signal does not prove a real provider acted on it, so the
+      // advice still names the label, conditionally.
       expect(credentials).toHaveLength(0);
       await expect(alert).not.toContainText('Before creating another passkey');
+      await expect(alert).toContainText(
+        'was asked to delete "OpenZCAD encryption'
+      );
+      await expect(alert).toContainText(
+        'If it still lists it, remove only that passkey'
+      );
     } else {
       expect(credentials).toHaveLength(1);
       const saved = credentials[0]!;

@@ -290,9 +290,10 @@ removed or changed there. If enrollment fails after credential creation but
 before the credential reaches certification (missing or malformed PRF, a
 different or canceled fallback assertion), the browser is asked through the
 WebAuthn Signal API (`signalUnknownCredential`, a local call carrying only the
-RP id and credential id) to have the provider delete it. Where that API is
-missing or fails, the UI identifies that credential and asks the user to
-remove it from the provider before creating another. A credential whose
+RP id and credential id) to have the provider delete it. A resolved signal
+does not prove the provider acted, so the UI still names that credential: as
+a removal to check after a signal, and as a removal to make where the API is
+missing or fails, before another is created. A credential whose
 certification might have committed is never signalled; the UI then also
 identifies the corresponding unlock method to remove after reloading.
 Credential objects are checked structurally (type, a 1–1023-byte raw id,
@@ -1981,8 +1982,10 @@ the details.
   certification is signalled to its provider with
   `PublicKeyCredential.signalUnknownCredential` where the browser has it. The
   call is local, carries only the RP id and the base64url credential id, and
-  is bounded to five seconds. A provider may ignore it. Where the API is
-  missing or fails, the manual cleanup advice stays. A credential whose
+  is bounded to five seconds. A provider may ignore it, so the advice still
+  names the credential's label after a signal ("if it still lists it, remove
+  only that passkey"). Where the API is missing or fails, the manual cleanup
+  advice stays as before. A credential whose
   certification might have committed is never signalled.
 - **Credential shape.** Credentials are validated structurally (type
   `public-key`, a 1 to 1023-byte ArrayBuffer raw id from any realm, an

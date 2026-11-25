@@ -318,7 +318,9 @@ describe('PRF output shapes across browsers and providers', () => {
     ['a value above 255', [...Array.from({ length: 31 }, () => 1), 256]],
     ['a negative value', [...Array.from({ length: 31 }, () => 1), -1]],
     ['a fraction', [...Array.from({ length: 31 }, () => 1), 1.5]],
-    ['a string', [...Array.from({ length: 31 }, () => 1), '1']]
+    ['a string', [...Array.from({ length: 31 }, () => 1), '1']],
+    // `every` skips holes; Uint8Array.from would turn them into zeros.
+    ['holes', Object.assign(new Array<unknown>(32), { 5: 7 })]
   ])('refuses an Array PRF output with %s', async (_, values: unknown[]) => {
     get.mockResolvedValue(prfFirst(values));
     await expect(browserPasskeys.get()).rejects.toThrow('invalid PRF');
@@ -429,7 +431,7 @@ describe('orphaned credential cleanup through the Signal API', () => {
     vi.stubGlobal('PublicKeyCredential', SignallingCredential);
   });
 
-  it('signals an uncertified credential without PRF and drops the manual advice', async () => {
+  it('signals an uncertified credential without PRF and keeps the label in conditional advice', async () => {
     create.mockResolvedValue(
       new CredentialResult(Uint8Array.of(0xfb, 0xff, 0x01).buffer, {
         prf: { enabled: false }
@@ -441,7 +443,13 @@ describe('orphaned credential cleanup through the Signal API', () => {
       rpId: 'zcad.test',
       credentialId: '-_8B'
     });
-    expect(passkeyEnrollmentCleanup(failure)).toBeNull();
+    // A resolved signal does not prove the provider removed it.
+    const advice = passkeyEnrollmentCleanup(failure);
+    expect(advice).toContain('was asked to delete');
+    expect(advice).toContain(
+      `"${create.mock.calls[0]![0].publicKey!.user.displayName}"`
+    );
+    expect(advice).toContain('If it still lists it, remove only that passkey');
   });
 
   it('signals when the creation fallback assertion returns no PRF output', async () => {
@@ -455,7 +463,9 @@ describe('orphaned credential cleanup through the Signal API', () => {
       rpId: 'zcad.test',
       credentialId: 'AQID'
     });
-    expect(passkeyEnrollmentCleanup(failure)).toBeNull();
+    expect(passkeyEnrollmentCleanup(failure)).toContain(
+      `"${create.mock.calls[0]![0].publicKey!.user.displayName}"`
+    );
   });
 
   it('keeps the manual advice when signalling throws', async () => {
@@ -551,7 +561,7 @@ describe('WebAuthn error mapping', () => {
 
 describe('platform guidance when the authenticator has no PRF', () => {
   it.each([
-    [WINDOWS_CHROME, 'Windows Hello on this PC can’t unlock encryption yet'],
+    [WINDOWS_CHROME, 'If you chose Windows Hello, it needs Windows 11'],
     [
       MAC_SAFARI,
       'Save it in iCloud Keychain on this Mac, not on another device'
