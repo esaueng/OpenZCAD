@@ -357,11 +357,15 @@ function* buildDocumentHistorySteps(
         const wrongQuantity = misuse.get(feature.featureId);
         if (wrongQuantity) throw new Error(wrongQuantity);
         assertFeatureSketchProjectionsValid(result, feature.data);
-        // Downstream of a manual suppression or a failure nothing the build
-        // learns is written back (`withholdReferenceRepairs`), so a hash-only
-        // pick is not carried there either: a carry it could not store would
-        // build geometry the saved document cannot rebuild.
-        if (withheld) {
+        // Downstream of a failure nothing the build learns is written back
+        // (`withholdReferenceRepairs`), so a hash-only pick is not carried
+        // there either: a carry it could not store would build geometry the
+        // saved document cannot rebuild. A manual suppression is different:
+        // the pick was recorded on the very model the build shows, with that
+        // step left out, and the dimension-edit gate refuses any change to
+        // which steps are suppressed. The carried hashes therefore name the
+        // same edges in the same model, and are stored with the edit.
+        if (downstreamOfFailure) {
           delete ctx.edgeSelections;
         } else if (edgeSelections !== undefined) {
           ctx.edgeSelections = edgeSelections;
@@ -386,7 +390,9 @@ function* buildDocumentHistorySteps(
           );
         }
         if (withheld) {
-          withholdReferenceRepairs(result, feature);
+          withholdReferenceRepairs(result, feature, {
+            keepCarries: !downstreamOfFailure
+          });
         }
       } catch (error) {
         idleLineageView?.abandon();

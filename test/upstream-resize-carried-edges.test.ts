@@ -888,16 +888,46 @@ describe(
       }
     });
 
-    it('does not carry downstream of a suppressed step, where it could not be stored', async () => {
-      // Block → Spare (suppressed) → a hash-only chamfer on Block. Nothing a
-      // build learns after a suppressed step is written back, so a carry
-      // there would build geometry the saved document cannot rebuild.
+    /** `document` with the named feature suppressed, or resumed. */
+    function withSuppression(
+      document: ProjectDocument,
+      name: string,
+      suppressed: boolean
+    ): ProjectDocument {
+      const node = feature(document, name);
+      return {
+        ...document,
+        nodes: {
+          ...document.nodes,
+          [node.id]: {
+            ...node,
+            metadata: {
+              ...node.metadata,
+              [FEATURE_SUPPRESSED_METADATA_KEY]: suppressed
+            }
+          }
+        }
+      };
+    }
+
+    /** Every warning but a suppressed step's note and an advisory. */
+    function failures(derived: ProjectDocument['derived']) {
+      return (derived.featureWarnings ?? [])
+        .filter(
+          (warning) =>
+            warning.kind !== 'suppressed' && warning.kind !== 'advisory'
+        )
+        .map((warning) => [warning.featureName, warning.kind]);
+    }
+
+    /** Block → Spare (suppressed) → a hash-only chamfer on Block. */
+    async function behindSuppressedSpare(width: number) {
       const block = addPrimitiveFeature(
         createProjectDocument('Suppressed neighbour', user),
         {
           name: 'Block',
           primitiveKind: 'box',
-          dimensions: { width: 30, height: 18, depth: 24 }
+          dimensions: { width, height: 18, depth: 24 }
         }
       );
       const spare = addPrimitiveFeature(block, {
@@ -915,30 +945,267 @@ describe(
           .map((edge) => edge.hash),
         size: 1
       }).document;
-      const spareNode = feature(chamfered, 'Spare');
-      const suppressed: ProjectDocument = {
-        ...chamfered,
-        nodes: {
-          ...chamfered.nodes,
-          [spareNode.id]: {
-            ...spareNode,
-            metadata: {
-              ...spareNode.metadata,
-              [FEATURE_SUPPRESSED_METADATA_KEY]: true
-            }
-          }
-        }
+      const document = withSuppression(chamfered, 'Spare', true);
+      const derived = await adapter.syncDocument(document);
+      expect(derived.featureWarnings?.map((warning) => warning.kind)).toEqual([
+        'suppressed'
+      ]);
+      return {
+        document: { ...document, derived },
+        bodyId: block.bodyOrder[0]!,
+        body: derived.bodyRepresentations[block.bodyOrder[0]!]!
       };
-      const settledBuild = await adapter.syncDocument(suppressed);
-      expect(
-        settledBuild.featureWarnings?.map((warning) => warning.kind)
-      ).toEqual(['suppressed']);
-      const blockFeature = feature(suppressed, 'Block');
-      const edited = updateFeature(suppressed, {
+    }
+
+    it('carries downstream of a suppressed step and stores the carry with the edit', async () => {
+      // The pick was stored against the model with Spare left out, which is
+      // the model this build shows: the carry moves it within that model, and
+      // the dimension-edit gate refuses any edit that suppresses or resumes.
+      const model = await behindSuppressedSpare(30);
+      const blockFeature = feature(model.document, 'Block');
+      const edited = updateFeature(model.document, {
         featureId: blockFeature.featureId,
         data: { dimensions: { width: 22.5, height: 18, depth: 24 } }
       });
+      const commit = await validate(edited);
+      expect(failures(commit)).toEqual([]);
+      expect(commit.edgeHashRepairs?.map((repair) => repair.featureId)).toEqual(
+        [feature(model.document, 'Break bottom').featureId]
+      );
+      const result = withCarriedSelections(
+        model.document,
+        [
+          commandFactories.updateFeature({
+            featureId: blockFeature.featureId,
+            data: { dimensions: { width: 22.5, height: 18, depth: 24 } }
+          })
+        ],
+        commit
+      );
+      if ('refusal' in result) throw new Error(result.refusal);
+      expect(result.commands).toHaveLength(2);
+      const committed = result.commands.reduce(
+        (document, command) => command.apply(document),
+        model.document
+      );
+      const reference = await behindSuppressedSpare(22.5);
+      expect(storedHashes(committed, 'Break bottom').hashes).toEqual(
+        storedHashes(reference.document, 'Break bottom').hashes
+      );
+      const cold = await createExactKernelAdapter();
+      try {
+        const reopened = await cold.syncDocument(committed);
+        expect(failures(reopened)).toEqual([]);
+        expect(reopened.edgeHashRepairs ?? []).toEqual([]);
+        expect(reopened.bodyRepresentations[model.bodyId]!.volume).toBeCloseTo(
+          reference.body.volume,
+          6
+        );
+        // Resuming the step later still builds the stored pick.
+        const resumed = await cold.syncDocument(
+          withSuppression(committed, 'Spare', false)
+        );
+        expect(resumed.featureWarnings ?? []).toEqual([]);
+      } finally {
+        cold.dispose();
+      }
+    });
+
+    it('does not carry downstream of a failed step, where the pick was never made', async () => {
+      // Block → Spare → Broken (a chamfer on Spare naming an edge that was
+      // never there) → a hash-only chamfer on Block. The failure hands its
+      // input through, a body the later pick was not stored against, so
+      // nothing after it is carried.
+      const block = addPrimitiveFeature(
+        createProjectDocument('Failed neighbour', user),
+        {
+          name: 'Block',
+          primitiveKind: 'box',
+          dimensions: { width: 30, height: 18, depth: 24 }
+        }
+      );
+      const spare = addPrimitiveFeature(block, {
+        name: 'Spare',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 5, depth: 5 }
+      });
+      const broken = chamferEdges(spare, {
+        name: 'Broken',
+        targetBodyId: spare.bodyOrder.at(-1)!,
+        edgeHashes: [123456789],
+        size: 1
+      }).document;
+      const base = await adapter.syncDocument(broken);
+      const body = base.bodyRepresentations[block.bodyOrder[0]!]!;
+      const chamfered = chamferEdges(broken, {
+        name: 'Break bottom',
+        targetBodyId: block.bodyOrder[0]!,
+        edgeHashes: body
+          .topology!.edges.filter((edge) => atBottom(adjacentFaces(body, edge)))
+          .map((edge) => edge.hash),
+        size: 1
+      }).document;
+      expect(failures(await adapter.syncDocument(chamfered))).toEqual([
+        ['Broken', 'build-failed']
+      ]);
+      const edited = updateFeature(chamfered, {
+        featureId: feature(chamfered, 'Block').featureId,
+        data: { dimensions: { width: 22.5, height: 18, depth: 24 } }
+      });
       expectRefused(await validate(edited), 'Break bottom');
+    });
+
+    /**
+     * The reported part (beta, November 2026): Box 30 × 18 × 24, Cylinder r6
+     * h28, a rim Chamfer on the cylinder that was then suppressed, Union,
+     * Fillet R1 on five named junction edges, and Chamfer 2 (0.5 mm) on the
+     * nine bottom edges of the filleted union. That body publishes no name
+     * for its bottom edges, so Chamfer 2 was stored by hash alone, and the
+     * suppressed Chamfer upstream used to withhold the carry: a resize of
+     * the box's right face to 24.5 mm previewed and then refused with "A
+     * selected edge no longer exists".
+     */
+    async function suppressedChamferPart(width: number) {
+      const box = addPrimitiveFeature(
+        createProjectDocument('Suppressed rim chamfer', user),
+        {
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width, height: 18, depth: 24 }
+        }
+      );
+      const cylinder = addPrimitiveFeature(box, {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 6, height: 28 }
+      });
+      const cylinderBody = cylinder.bodyOrder[1]!;
+      const plain = await adapter.syncDocument(cylinder);
+      const rim = pick(
+        plain.bodyRepresentations[cylinderBody]!,
+        (edge) =>
+          edge.reference?.lineageName === 'primitive.cylinder.edge.rim.end'
+      );
+      expect(rim.count).toBe(1);
+      const rimChamfer = chamferEdges(cylinder, {
+        name: 'Chamfer',
+        targetBodyId: cylinderBody,
+        edgeHashes: rim.edgeHashes,
+        edgeReferences: rim.edgeReferences!,
+        size: 1
+      }).document;
+      const joined = booleanBodies(rimChamfer, {
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: [rimChamfer.bodyOrder.at(-1)!, box.bodyOrder[0]!]
+      });
+      const unionBody = joined.bodyId;
+      const suppressed = withSuppression(joined.document, 'Chamfer', true);
+      const union = (await adapter.syncDocument(suppressed))
+        .bodyRepresentations[unionBody]!;
+      const junction = new Set([
+        'boolean.edge.between.operand.0.primitive.cylinder.face.wall|operand.1.primitive.box.face.x-min',
+        'boolean.edge.operand.1.primitive.box.edge.y.x-min.z-max',
+        'boolean.edge.between.operand.0.primitive.cylinder.face.wall|operand.1.primitive.box.face.z-max',
+        'boolean.edge.operand.1.primitive.box.edge.x.y-min.z-max',
+        'boolean.edge.between.operand.0.primitive.cylinder.face.wall|operand.1.primitive.box.face.y-min'
+      ]);
+      const roundEdges = pick(union, (edge) =>
+        junction.has(edge.reference?.lineageName ?? '')
+      );
+      expect(roundEdges.count).toBe(5);
+      expect(roundEdges.edgeReferences).toHaveLength(5);
+      const rounded = filletEdges(suppressed, {
+        name: 'Fillet',
+        targetBodyId: unionBody,
+        edgeHashes: roundEdges.edgeHashes,
+        edgeReferences: roundEdges.edgeReferences!,
+        size: 1
+      });
+      const filleted = (await adapter.syncDocument(rounded.document))
+        .bodyRepresentations[rounded.bodyId]!;
+      const bottom = pick(filleted, (_, faces) => atBottom(faces));
+      expect(bottom.count).toBe(9);
+      // The precondition of the report: the filleted union names none of
+      // these edges, so the pick is stored by hash alone.
+      expect(bottom).not.toHaveProperty('edgeReferences');
+      const chamfered = chamferEdges(rounded.document, {
+        name: 'Chamfer 2',
+        targetBodyId: rounded.bodyId,
+        edgeHashes: bottom.edgeHashes,
+        size: 0.5
+      });
+      const derived = await adapter.syncDocument(chamfered.document);
+      expect(failures(derived)).toEqual([]);
+      return {
+        document: { ...chamfered.document, derived },
+        bodyId: chamfered.bodyId,
+        body: derived.bodyRepresentations[chamfered.bodyId]!
+      };
+    }
+
+    it('resizes the box behind a suppressed chamfer through a hash-only Chamfer 2 (reported)', async () => {
+      const model = await suppressedChamferPart(30);
+      const chamfer2 = feature(model.document, 'Chamfer 2');
+      expect(chamfer2.data).not.toHaveProperty('edgeReferences');
+      const right = boxSide(model.body, 'x-max');
+      const plan = planFaceOffset({
+        document: model.document,
+        bodyId: model.bodyId,
+        face: right,
+        faceHash: right.hash,
+        offset: -5.5
+      });
+      // The resize-body tool: the Box's own width, opposite side fixed.
+      expect(plan?.kind).toBe('primitive-dimension');
+      if (plan?.kind !== 'primitive-dimension') throw new Error('no plan');
+      expect(plan.primitive.name).toBe('Box');
+      expect(plan.value).toBeCloseTo(24.5, 9);
+      const candidate = plan.command.apply(model.document);
+      const preview = await adapter.previewGeometry(candidate, {
+        deferTopology: true,
+        proposeCarry: true
+      });
+      const commit = await validate(candidate);
+      expect(failures(preview)).toEqual([]);
+      expect(failures(commit)).toEqual([]);
+      expect(commit.edgeHashRepairs?.map((repair) => repair.featureId)).toEqual(
+        [chamfer2.featureId]
+      );
+      const resized = commit.bodyRepresentations[model.bodyId]!;
+      expect(resized.bbox.max.x).toBeCloseTo(24.5, 6);
+      expect(resized.bbox.min).toEqual(model.body.bbox.min);
+
+      // What the release commits: the edit and the carried hashes together.
+      const result = withCarriedSelections(
+        model.document,
+        [plan.command],
+        commit
+      );
+      if ('refusal' in result) throw new Error(result.refusal);
+      expect(result.commands).toHaveLength(2);
+      const committed = result.commands.reduce(
+        (document, command) => command.apply(document),
+        model.document
+      );
+      // Edge for edge the nine bottom edges a fresh pick takes at 24.5 mm.
+      const reference = await suppressedChamferPart(24.5);
+      expect(storedHashes(committed, 'Chamfer 2').hashes).toEqual(
+        storedHashes(reference.document, 'Chamfer 2').hashes
+      );
+      const cold = await createExactKernelAdapter();
+      try {
+        const reopened = await cold.syncDocument(committed);
+        expect(failures(reopened)).toEqual([]);
+        expect(reopened.edgeHashRepairs ?? []).toEqual([]);
+        const body = reopened.bodyRepresentations[model.bodyId]!;
+        expect(body.volume).toBeCloseTo(reference.body.volume, 6);
+        expect(body.topology!.edges).toHaveLength(
+          reference.body.topology!.edges.length
+        );
+      } finally {
+        cold.dispose();
+      }
     });
 
     it('carries the Heat Sink corner fillets to the corners a fresh pick takes', async () => {
