@@ -312,6 +312,31 @@ describe('the step describes the operation actually armed', () => {
     );
   });
 
+  // PR #2048 review: a face with no flat face opposite (a box's Right face
+  // where a unioned cylinder rounds its left side) tags its value plain
+  // "Offset", yet the hint still offered a Total it could not type.
+  it('names only Offset where the tag offers no Total', () => {
+    const armed = faceState('armed');
+    const step = commandPrompt(armed, 'diameter', {
+      offsetTotalOffered: false
+    })?.step;
+    expect(step).toMatch(/^Drag to push or pull the face, or type its Offset/);
+    expect(step).not.toMatch(/Total/);
+    expect(
+      commandPrompt(armed, 'diameter', { offsetTotalOffered: true })?.step
+    ).toContain('type its Offset or Total');
+    if (armed.mode !== 'face') throw new Error('face state');
+    const resizing: InteractionState = {
+      ...armed,
+      target: { ...armed.target, resizeBodyFeatureId: 'feature-box' }
+    };
+    expect(
+      commandPrompt(resizing, 'diameter', { offsetTotalOffered: false })?.step
+    ).toBe(
+      'Drag the arrow to resize the body, or type its Offset · The opposite side stays fixed'
+    );
+  });
+
   it('reads as one line for the status bar', () => {
     expect(commandPromptText(faceState('armed'))).toBe(
       'Drag to push or pull the face, or type its Offset or Total · Space views it head-on · Esc clears the selection'

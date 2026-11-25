@@ -194,6 +194,14 @@ export function resolveEdgeModifierEdges(
   }
 
   const lineage = shape.solids.length === 1 ? shape.lineage : undefined;
+  // Which upstream feature made a face, as far as the lineage says: the
+  // carry's provenance evidence (`exact-edge-selection-transport.ts`).
+  const faceIdentity = (face: number): string | undefined => {
+    const reference = lineage?.faceReferences.get(face);
+    return reference
+      ? `${reference.producingFeatureId}\u0000${reference.lineageName}`
+      : undefined;
+  };
 
   // Measured once: the candidates, the carried hashes and the layout all
   // read these.
@@ -320,18 +328,25 @@ export function resolveEdgeModifierEdges(
   const upstreamOnce = () => (upstream ??= carry?.upstream() ?? null);
   if (carry?.propose && missing.length > 0) {
     layout = edgeTopologyLayout(kernel, solid, measured);
-    carried = carryEdgeSelection(
+    const result = carryEdgeSelection(
       carry.memory,
       carry.key,
       layout,
       measured,
       direct,
       missing,
-      upstreamOnce()
+      upstreamOnce(),
+      faceIdentity
     );
-    if (!carried) {
-      throw unresolvedReferenceError('edge', missing[0]!, handles.length);
+    if (result.refused !== undefined) {
+      throw unresolvedReferenceError(
+        'edge',
+        missing[0]!,
+        handles.length,
+        result.refused
+      );
     }
+    carried = result.carried;
   }
   const handlesResolved = resolved.map(
     (handle, index) => handle ?? carried!.get(requested[index]!)!
@@ -363,6 +378,7 @@ export function resolveEdgeModifierEdges(
         handle: handlesResolved[index]!
       })),
       upstreamOnce,
+      faceIdentity,
       layout
     );
   }

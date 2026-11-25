@@ -624,7 +624,7 @@ test('keeps face sketching available after a primitive direct edit', async ({
   // #9); the tag beside the value is the switch to the whole span, Total.
   const modeTag = page.getByTestId('direct-manipulation-mode');
   const valueChip = page.getByTestId('direct-manipulation-value');
-  await expect(modeTag).toHaveText(/^Offset/);
+  await expect(modeTag).toHaveText(/^Offset ▾/);
   await expect(valueChip).toHaveText('+0 mm');
   await modeTag.click();
   await expect(modeTag).toHaveText(/^Total/);

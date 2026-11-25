@@ -322,6 +322,10 @@ the browser side first, then the Worker's defense in depth.
   `pendingMemberRotation` in `apps/web/src/lib/e2ee/projectGroups.ts`.
 - Share links after removal: `renewShareDelegationAfterRemoval`
   (`pageDeviceRemoval.ts`), `shareLinksAfterDeviceRemoval` (`shareLinks.ts`).
+  Any identity-authorized action also renews a due delegation in passing
+  once it has succeeded (amendment 2026-11-25): `afterIdentityKey` in
+  `accountKeys.ts`, `renewShareDelegationInPassing` in
+  `shareDelegationInPassing.ts` and `shareLinks.ts`.
 - Worker: `apps/web/worker/e2eeDeviceRemoval.ts`
   (`appendedRevocationCutoffs` stores the revocation and its statement in
   one batch; `memberRotationFence` and `ownRotationDue` refuse writes until
@@ -426,7 +430,10 @@ the browser side first, then the Worker's defense in depth.
 - Owner and editors: `createShareLink`, `revokeShareLinks`,
   `forgetRevokedShareLinks`, `issueShareAuthorities`,
   `renewShareDelegation`, `publishShareSnapshots`, `sealSnapshot`,
-  `reissueShareLinks` in `apps/web/src/lib/e2ee/shareLinks.ts`; head set
+  `reissueShareLinks` in `apps/web/src/lib/e2ee/shareLinks.ts`;
+  renewal in passing (`renewShareDelegationInPassing`, 14 days before
+  expiry, amendment 2026-11-25) and the browser's prompt only once a
+  delegation is missing or expired (`delegationNeedsConfirming`); head set
   verification in `shareLinkSet.ts`; fragment `#share=<token>.<key>.<owner>`
   in `shareLinkFragment.ts`; UI `EncryptedShareLinks.tsx`.
 - Visitor: `loadEncryptedSharedProject` in `sharedSnapshotLoader.ts`,

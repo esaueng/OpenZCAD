@@ -661,7 +661,10 @@ comparison, which is safe only because of its commitment step.
     recovery key. The owner's browser asks for it when the owner opens
     sharing, and in the last week before expiry. Removing an owner device
     issues a new delegation without it at once, since removal already
-    unlocks the identity key.
+    unlocks the identity key. (Amended 2026-11-25: any action that opens the
+    identity key renews it in its last two weeks, and the browser asks only
+    once it has expired; see
+    [the amendment](#amendment-2026-11-25-share-delegation-renewed-in-passing-and-one-click-links).)
   - The visitor's browser checks, in order: the owner hash in the link, the
     identity-signed share delegation and its expiry, that the statement's
     signing device is named in it, the statement's signature and expiry,
@@ -2084,3 +2087,59 @@ holds only ciphertext.
   writes and would read passively.
 - **Review.** This changes the trust model, so the Phase 8 outside review
   covers it; the review packet's invitation section says what to check.
+
+## Amendment 2026-11-25: share delegation renewed in passing, and one-click links
+
+Owner decision D4 of the L11 sharing simplification plan (PR #2052) keeps
+the share delegation's 30-day maximum and removes most of the prompts that
+renew it. Nothing a visitor checks changes: the delegation's signature,
+issuer, expiry and device list are verified exactly as before, and its
+lifetime is still at most 30 days from when it was signed.
+
+- **Renewed in passing.** An action that already opens the identity key
+  with a passkey or the recovery key (unlocking a new device, approving or
+  removing a device, adding or removing a passkey, revoking read-only
+  devices, sealing contacts) then also renews
+  the account's share delegation, if one is stored and it is due: less than
+  14 days left, expired, or naming other devices than the certified ones.
+  An account that never confirmed sharing has no delegation and gets none.
+  The renewal runs only after the action's server write succeeded (so not
+  for a group reset, which is written after its signature returns), with the
+  device list as the action left it, so a removal never re-signs a delegation naming the
+  removed device, and an approval names the new device at once. It is best
+  effort: a failed renewal never fails the action, and the action waits at
+  most five seconds for a slow one. The identity key is never used once the
+  action has returned: the renewal gets it only through the action, which
+  checks that it has not returned and that its session is live in the same
+  step that starts the signature, and refuses afterwards (a delegation
+  already signed may still be uploaded). The renewal is the action's last
+  step (`afterIdentityKey` in
+  `accountKeys.ts`, `renewShareDelegationInPassing` in `shareLinks.ts` and
+  `shareDelegationInPassing.ts`). The account must have encrypted projects
+  open; the renewal starts no MLS session. Replacing the recovery key does not renew it:
+  that retires the old identity and its links.
+- **Asked for only once expired.** In its last two weeks a delegation is
+  `expiring` but still trusted: Create link makes the link without asking,
+  and the sharing dialog shows a quiet "Confirm by <date>" chip whose action
+  confirms with the passkey (or opens the recovery-key form). The dialog
+  asks before creating a link only when there is no usable delegation
+  (missing, expired, or naming other devices), and only then shows the
+  banner that the links need confirming.
+- **What this changes.** Delegations are signed more often, each still for
+  30 days, so for an owner who uses the identity key regularly the window in
+  which a server replaying the newest delegation keeps a stolen, removed
+  owner device vouching is unchanged: removal still signs a delegation
+  without that device at once. More delegations exist, but every one names
+  only devices certified when it was signed.
+- **One-click links.** Create link makes a view-only link at once: the model
+  as it is now without its history where history can be left out
+  (otherwise view only with history), no visitor comments, and no name (its
+  card names it after its access, as before). Name, access, history and
+  comments wait behind Options… before the link is made, and the card's
+  rename and Allow comments afterwards. A link's access and history cannot
+  change once it is made. Plaintext projects' links use the same Create
+  link control and defaults.
+- **Upkeep outside the dialog.** `maintainEncryptedShareLinks` runs the same
+  owner upkeep (statement renewal, snapshot publication, revocation retries)
+  for a list of projects, for the app-level background runner, instead of
+  only while the Links tab is open.

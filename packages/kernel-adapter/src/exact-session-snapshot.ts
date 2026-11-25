@@ -24,8 +24,12 @@ import type { EdgeSelectionMemoryState } from './exact-edge-selection-transport'
 import type { PrimitiveReuseState } from './exact-primitive-cache';
 import { RemusKernel } from './remus-runtime';
 
-/** Bumped whenever the JS half of a persisted session changes shape. */
-export const PERSISTED_HISTORY_SESSION_FORMAT = 1;
+/**
+ * Bumped whenever the JS half of a persisted session changes shape. 2: edge
+ * selection records carry their faces' provenance, which an older record
+ * lacks, so its session replays and records again instead of refusing carries.
+ */
+export const PERSISTED_HISTORY_SESSION_FORMAT = 2;
 
 export interface PersistedHistorySession {
   format: typeof PERSISTED_HISTORY_SESSION_FORMAT;

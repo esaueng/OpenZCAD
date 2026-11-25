@@ -84,7 +84,7 @@ test(
     await expect(page.getByRole('group', { name: 'Picked' })).toContainText(
       'Block · Front face'
     );
-    await expect(mode).toHaveText(/^Offset/);
+    await expect(mode).toHaveText(/^Offset ▾/);
     await mode.click();
     await expect(mode).toHaveText(/^Total/);
     await expect(value).toHaveText('24 mm');
