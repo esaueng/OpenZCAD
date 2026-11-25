@@ -895,10 +895,23 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
     messages: [
       'A selected face no longer exists. Re-select the face(s) and re-create this feature.'
     ],
-    at: ['A/seed-2/20#10', 'B/seed-1/20#14'],
+    at: ['B/seed-1/20#14'],
     owner: 'K05',
     reason:
       'Observation O4: changing an earlier value removes the face a later edit picked, and the later edit refuses. The chain requires that typed re-pick refusal, never an edit of a different face.'
+  },
+  {
+    id: 'offset-carries-post',
+    family: 'direct-edit',
+    category: 'unsupported',
+    code: 'offset_face_carried_detached_support',
+    messages: [
+      'Offsetting this face would also move a separate curved feature joined to it by a fillet (such as a boss), so the offset was not applied. The exact kernel cannot yet rebuild the fillet between them for this offset.'
+    ],
+    at: ['A/seed-1/20#13', 'A/seed-2/20#2', 'A/seed-2/20#5', 'A/seed-3/20#18'],
+    owner: 'K10',
+    reason:
+      "Part A's corner junction rounds make the plate's front and left faces one tangent chain with the post. The pinned kernel offsets either face by translating the post with it (the post's axis left the origin), which these chains used to commit; the adapter now refuses it."
   }
 ];
 
