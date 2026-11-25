@@ -286,10 +286,19 @@ provider-visible label. Its user name and display name contain only that label;
 no email or stable account identifier is sent to the authenticator or passkey
 provider. Existing credentials remain usable because unlock uses their signed
 credential-id hashes, although metadata already saved by a provider must be
-removed or changed there. If enrollment fails after credential creation, the UI
-identifies that credential and asks the user to remove it from the provider
-before creating another. When certification might have committed, the UI
-also identifies the corresponding unlock method to remove after reloading.
+removed or changed there. If enrollment fails after credential creation but
+before the credential reaches certification (missing or malformed PRF, a
+different or canceled fallback assertion), the browser is asked through the
+WebAuthn Signal API (`signalUnknownCredential`, a local call carrying only the
+RP id and credential id) to have the provider delete it. Where that API is
+missing or fails, the UI identifies that credential and asks the user to
+remove it from the provider before creating another. A credential whose
+certification might have committed is never signalled; the UI then also
+identifies the corresponding unlock method to remove after reloading.
+Credential objects are checked structurally (type, a 1–1023-byte raw id,
+an extension-results function) rather than by class, because password-manager
+extensions return their own objects; a selected passkey still unlocks nothing
+unless its PRF output opens a certified target.
 Creation cancellation before a credential is saved has no cleanup warning;
 original conflict and session-cancellation errors keep their types. No pending
 PRF output or raw key material is persisted for retries.
@@ -1957,3 +1966,38 @@ settings, which an account whose library is not encrypted stores readable.
   ciphertext. The account export includes the record as stored.
 - **Review.** This is a new account-key derivation and record format, so the
   Phase 8 outside review covers it with the other account records.
+
+## Amendment 2026-11-25: passkey reliability
+
+Passkeys are the primary unlock path, so the browser side now copes with how
+browsers, platforms and password-manager extensions actually answer. None of
+this changes what a passkey proves: discoverable credentials, required user
+verification, the exact hostname as RP id, the fixed PRF input, a target id
+that must match a certified target, nothing sent to the Worker, and secrets
+zeroed after use all stay as stated in "Unlock and devices", which carries
+the details.
+
+- **Orphan cleanup.** A credential created and then refused before
+  certification is signalled to its provider with
+  `PublicKeyCredential.signalUnknownCredential` where the browser has it. The
+  call is local, carries only the RP id and the base64url credential id, and
+  is bounded to five seconds. A provider may ignore it. Where the API is
+  missing or fails, the manual cleanup advice stays. A credential whose
+  certification might have committed is never signalled.
+- **Credential shape.** Credentials are validated structurally (type
+  `public-key`, a 1 to 1023-byte ArrayBuffer raw id from any realm, an
+  extension-results function) instead of `instanceof PublicKeyCredential`.
+  PRF output is accepted as an ArrayBuffer, an ArrayBufferView, or a plain
+  Array of exactly 32 integers from 0 to 255; anything else is refused and
+  erased. A missing PRF reads the same whether reported as
+  `enabled: false` or an empty object.
+- **Timeouts and messages.** Each prompt has five minutes. WebAuthn errors map
+  to actionable messages, and a missing PRF names the likely platform cause
+  from the user agent. The user agent is read locally and only chooses
+  wording.
+- **Host binding.** Passkeys stay bound to the exact host they were made on.
+  Moving the app to another host would need every passkey enrolled again;
+  that is an owner decision, not part of this amendment.
+
+The compatibility matrix and the real-device QA script are in
+[docs/qa/passkey-compatibility.md](../qa/passkey-compatibility.md).
