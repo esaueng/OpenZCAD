@@ -1496,6 +1496,17 @@ export const isE2eeInvitationAcceptanceReady = cachedSchemaProbe(
 );
 
 /**
+ * Whether migration 0068's renewal trigger is installed: until it is,
+ * migration 0038's trigger keeps every statement immutable, so only a
+ * renewal of a pending invitation's statement answers 503.
+ */
+export const isE2eeInvitationRenewalReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master
+   WHERE type = 'trigger' AND name = 'e2ee_invitation_statement_renewal'`,
+  (row) => row?.ready === 1
+);
+
+/**
  * Whether migration 0039's proposal table exists (ADR-024 Phase 5, slice
  * 5-5: a departing member's SelfRemove, stored for another member to
  * commit). Only the proposal routes, the Commit route's settlement of

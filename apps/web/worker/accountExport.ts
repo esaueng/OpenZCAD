@@ -70,6 +70,12 @@ export async function exportAccountData(
       [session.userId]
     ],
     [
+      // Sealed in the browser (ADR-024 amendment 2026-11-25): as stored.
+      'e2ee_invitation_tombstones',
+      'SELECT revision, sequence, record, updated_at FROM e2ee_invitation_tombstones WHERE user_id = ?',
+      [session.userId]
+    ],
+    [
       // The day each current device last used its keys (migration 0069).
       'e2ee_device_last_used',
       DEVICE_LAST_USED_EXPORT_SQL,

@@ -16,6 +16,14 @@
  *   Add Commit does. `GET /api/e2ee/invitations` lists this account's
  *   accepted, unfinished invitations; `GET …/invitations/sent` the
  *   owner's (slice 5-3b).
+ * - `GET /api/e2ee/invitations/pending` (owner): the invitations it sent
+ *   that nobody accepted and that are still open. `PUT
+ *   …/invitations/:invitationId` (owner) replaces such an invitation's
+ *   statement with a renewed one (L11 plan of 2026-11-25, §3.4): the same
+ *   invitation, email hash, role, link and invitee identity, signed by a
+ *   device certified now, valid later than the one it replaces. The token,
+ *   and so the emailed link, stay. The chain ends when the owner revokes
+ *   it: a revoked, accepted, completed or lapsed invitation is not renewed.
  * - `POST …/invitations/:invitationId/acceptance` (the accepted invitee):
  *   a certified device's signed acceptance ("OZJ"), checked against its
  *   key and the stored statement and kept with the invitation (migration
@@ -55,6 +63,7 @@ import {
   fromHex,
   invitationEmailHash,
   invitationLinkTokenHash,
+  invitationChainIssuedAt,
   invitationStatementHash,
   toHex,
   verifyInvitationAcceptance,
@@ -73,6 +82,7 @@ import type {
 } from '@openzcad/shared';
 import {
   isE2eeInvitationAcceptanceReady,
+  isE2eeInvitationRenewalReady,
   isE2eeInvitationStorageReady,
   isE2eeProjectGroupStorageReady,
   isProjectStorageFormatReady
@@ -107,12 +117,17 @@ import {
   createProjectInvitationToken,
   hashProjectInvitationToken
 } from './sharing';
+import {
+  E2EE_INVITATION_TOMBSTONES_ROUTE,
+  handleInvitationTombstones
+} from './e2eeInvitationTombstones';
 
 const PROJECT_ROUTE =
   /^\/api\/e2ee\/projects\/([^/]+)\/(invitations|invitations\/[^/]+|invitations\/[^/]+\/acceptance|key-packages|key-packages\/claim|welcome)$/;
 export const E2EE_INVITATIONS_ROUTE = '/api/e2ee/invitations';
 export const E2EE_INVITATION_ACCEPT_ROUTE = '/api/e2ee/invitations/accept';
 export const E2EE_SENT_INVITATIONS_ROUTE = '/api/e2ee/invitations/sent';
+export const E2EE_PENDING_INVITATIONS_ROUTE = '/api/e2ee/invitations/pending';
 
 /** The encrypted invitation, KeyPackage and Welcome routes. */
 export function isE2eeInvitationPath(pathname: string): boolean {
@@ -120,6 +135,8 @@ export function isE2eeInvitationPath(pathname: string): boolean {
     pathname === E2EE_INVITATIONS_ROUTE ||
     pathname === E2EE_INVITATION_ACCEPT_ROUTE ||
     pathname === E2EE_SENT_INVITATIONS_ROUTE ||
+    pathname === E2EE_PENDING_INVITATIONS_ROUTE ||
+    pathname === E2EE_INVITATION_TOMBSTONES_ROUTE ||
     PROJECT_ROUTE.test(pathname)
   );
 }
@@ -366,6 +383,17 @@ async function createInvitation(
       400,
       'E2EE_INVITATION_INVALID',
       'The invitation statement is for another project or owner.'
+    );
+  }
+  // A new invitation starts its own renewal chain.
+  if (
+    decoded.chainIssuedAt !== undefined &&
+    decoded.chainIssuedAt !== decoded.issuedAt
+  ) {
+    refuse(
+      400,
+      'E2EE_INVITATION_INVALID',
+      'A new invitation cannot continue another one’s renewals.'
     );
   }
   // The signing device must be certified in the owner's newest list.
@@ -663,9 +691,207 @@ async function revokeInvitation(
       )
       .bind(invitationId)
   ]);
+  const row = await invitationRow(db, invitationId);
   if ((revoked?.meta?.changes ?? 0) !== 1) {
+    // Revoked already (a retry whose first answer was lost): done, as
+    // asked. Anything else is not this owner's to revoke.
+    if (row?.project_id !== projectId || row.revoked_at === null) {
+      refuse(404, 'INVITATION_NOT_FOUND', 'Project invitation not found.');
+    }
+  }
+  return json({
+    invitation: invitationRecord(row!)
+  } satisfies E2eeInvitationResponse);
+}
+
+/**
+ * `GET /api/e2ee/invitations/pending` (L11 plan of 2026-11-25, §3.4): the
+ * invitations this account sent, across its encrypted projects, that
+ * nobody accepted and that are neither revoked, completed nor expired,
+ * soonest to lapse first: what the owner's devices renew.
+ */
+async function listPendingInvitations(
+  db: D1Database,
+  userId: string
+): Promise<Response> {
+  const { results } = await db
+    .prepare(
+      `SELECT ${await invitationColumns(db)} FROM e2ee_invitations
+       WHERE invited_by_user_id = ? AND accepted_at IS NULL
+         AND completed_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+         AND EXISTS (SELECT 1 FROM projects p
+           WHERE p.id = e2ee_invitations.project_id AND p.user_id = ?
+             AND p.storage_format = 2 AND p.status <> 'deleted')
+       ORDER BY expires_at, invitation_id LIMIT ?`
+    )
+    .bind(userId, Date.now(), userId, LIST_LIMIT)
+    .all<InvitationRow>();
+  return json({
+    invitations: (results ?? []).map(invitationRecord)
+  } satisfies E2eeInvitationsResponse);
+}
+
+const sameOptionalBytes = (a?: Uint8Array, b?: Uint8Array) =>
+  a === undefined || b === undefined ? a === b : toHex(a) === toHex(b);
+
+/**
+ * `PUT /api/e2ee/projects/:id/invitations/:invitationId` (owner; L11 plan
+ * of 2026-11-25, §3.4): a renewed statement for a pending invitation. It
+ * names exactly what the stored statement names (project, invitation,
+ * owner, email hash, role, link token hash and invitee identity), is
+ * signed by a device the owner's newest list certifies, is valid now and
+ * lasts longer than the stored one. It replaces the stored statement only
+ * while that is still the one checked here and nobody accepted, completed
+ * or revoked the invitation meanwhile: an acceptance signs the statement
+ * it saw, so an accepted invitation's statement never changes. The token,
+ * and so the emailed link, stay.
+ */
+async function renewInvitation(
+  db: D1Database,
+  userId: string,
+  projectId: string,
+  invitationId: string,
+  authorization: Authorization,
+  body: Record<string, unknown>
+): Promise<Response> {
+  if (!(await isE2eeInvitationRenewalReady(db))) {
+    refuse(
+      503,
+      'E2EE_UNAVAILABLE',
+      'Renewing invitations is unavailable until the database is updated.'
+    );
+  }
+  await requireOwnedEncryptedProject(db, userId, projectId);
+  const statementField = bytesField(body.statement, 'statement', {
+    max: MAX_STATEMENT_BYTES
+  });
+  const signatureField = bytesField(body.signature, 'signature', {
+    exact: SIGNATURE_BYTES
+  });
+  const row = await invitationRow(db, invitationId);
+  if (!row || row.project_id !== projectId) {
     refuse(404, 'INVITATION_NOT_FOUND', 'Project invitation not found.');
   }
+  const nowMs = Date.now();
+  const notPending = (): never =>
+    refuse(
+      409,
+      'E2EE_INVITATION_UNAVAILABLE',
+      'Only an open invitation nobody accepted yet can be renewed.'
+    );
+  if (
+    row.accepted_at !== null ||
+    row.completed_at !== null ||
+    row.revoked_at !== null ||
+    row.expires_at <= nowMs
+  ) {
+    notPending();
+  }
+  let decoded: ProjectInvitation;
+  let stored: ProjectInvitation;
+  try {
+    decoded = decodeProjectInvitation(statementField.bytes);
+    stored = decodeProjectInvitation(fromBase64Url(row.statement));
+  } catch {
+    refuse(
+      400,
+      'E2EE_INVITATION_INVALID',
+      'The invitation statement is malformed.'
+    );
+  }
+  if (
+    decoded.projectId !== projectId ||
+    stored.projectId !== projectId ||
+    decoded.invitationId !== invitationId ||
+    stored.invitationId !== invitationId ||
+    decoded.inviterUserId !== userId ||
+    stored.inviterUserId !== userId ||
+    decoded.role !== row.role ||
+    toHex(decoded.inviteeEmailHash) !== row.email_hash ||
+    !sameOptionalBytes(decoded.linkTokenHash, stored.linkTokenHash) ||
+    !sameOptionalBytes(
+      decoded.inviteeIdentityKeyHash,
+      stored.inviteeIdentityKeyHash
+    ) ||
+    // The chain keeps where it began, so it ends 30 days after that.
+    invitationChainIssuedAt(decoded) !== invitationChainIssuedAt(stored)
+  ) {
+    refuse(
+      400,
+      'E2EE_INVITATION_INVALID',
+      'A renewed statement must name everything the invitation it renews names.'
+    );
+  }
+  if (decoded.expiresAt <= row.expires_at) {
+    refuse(
+      400,
+      'E2EE_INVITATION_INVALID',
+      'A renewed statement must last longer than the one it replaces.'
+    );
+  }
+  // The signing device must be certified in the owner's newest list.
+  const signer = await requireCertifiedDevice(
+    db,
+    userId,
+    decoded.signerDeviceId
+  );
+  try {
+    await verifyProjectInvitation(
+      { statement: statementField.bytes, signature: signatureField.bytes },
+      signer.signingKey,
+      {
+        now: nowMs,
+        expected: {
+          projectId,
+          invitationId,
+          inviterUserId: userId,
+          inviteeEmailHash: fromHex(row.email_hash)
+        }
+      }
+    );
+  } catch (error) {
+    if (
+      error instanceof ProjectInvitationError &&
+      (error.reason === 'expired' || error.reason === 'not-yet-valid')
+    ) {
+      refuse(
+        400,
+        'E2EE_INVITATION_EXPIRED',
+        'The invitation statement is expired or not valid yet.'
+      );
+    }
+    refuse(
+      400,
+      'E2EE_INVITATION_INVALID',
+      'The invitation statement does not verify with your device’s key.'
+    );
+  }
+  const [renewed] = await runBatch(db, [
+    db
+      .prepare(
+        `UPDATE e2ee_invitations
+         SET statement = ?, signature = ?, signer_device_id = ?, expires_at = ?
+         WHERE invitation_id = ? AND project_id = ? AND statement = ?
+           AND accepted_at IS NULL AND completed_at IS NULL
+           AND revoked_at IS NULL AND expires_at > ? AND expires_at < ?
+           AND ${authorization.sql} AND ${PROJECT_FENCE}`
+      )
+      .bind(
+        statementField.text,
+        signatureField.text,
+        decoded.signerDeviceId,
+        decoded.expiresAt,
+        invitationId,
+        projectId,
+        row.statement,
+        nowMs,
+        decoded.expiresAt,
+        ...authorization.binds,
+        projectId,
+        userId
+      )
+  ]);
+  if ((renewed?.meta?.changes ?? 0) !== 1) notPending();
   return json({
     invitation: invitationRecord((await invitationRow(db, invitationId))!)
   } satisfies E2eeInvitationResponse);
@@ -1580,6 +1806,20 @@ export async function handleE2eeInvitationRequest(
     if (url.pathname === E2EE_SENT_INVITATIONS_ROUTE && method === 'GET') {
       return await listSentInvitations(db, userId);
     }
+    if (url.pathname === E2EE_PENDING_INVITATIONS_ROUTE && method === 'GET') {
+      return await listPendingInvitations(db, userId);
+    }
+    if (url.pathname === E2EE_INVITATION_TOMBSTONES_ROUTE) {
+      const snapshot = await handleInvitationTombstones(
+        db,
+        userId,
+        method,
+        authorization,
+        readBody
+      );
+      if (snapshot) return json(snapshot);
+      refuse(404, 'NOT_FOUND', 'Not found.');
+    }
     const match = PROJECT_ROUTE.exec(url.pathname);
     if (!match) refuse(404, 'NOT_FOUND', 'Not found.');
     let projectId: string;
@@ -1628,13 +1868,23 @@ export async function handleE2eeInvitationRequest(
     } else if (
       rest.startsWith('invitations/') &&
       !rest.endsWith('/acceptance') &&
-      method === 'DELETE'
+      (method === 'DELETE' || method === 'PUT')
     ) {
       let invitationId: string;
       try {
         invitationId = decodeURIComponent(rest.slice('invitations/'.length));
       } catch {
         refuse(404, 'INVITATION_NOT_FOUND', 'Project invitation not found.');
+      }
+      if (method === 'PUT') {
+        return await renewInvitation(
+          db,
+          userId,
+          projectId,
+          idField(invitationId, 'invitationId'),
+          authorization,
+          await readBody()
+        );
       }
       return await revokeInvitation(
         db,

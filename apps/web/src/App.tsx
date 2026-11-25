@@ -463,6 +463,10 @@ import {
   AUTOMATIC_MIGRATION_LOAD_ERROR,
   startAutomaticMigration
 } from './lib/e2ee/automaticMigrationLoader';
+import {
+  startInvitationRunner,
+  subscribeInvitationRunner
+} from './lib/e2ee/invitationRunner';
 import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
 import {
   captureEncryptedInvitationLink,
@@ -1590,6 +1594,13 @@ const LazySketchRelationsRail = lazyWithStaleChunkNotice(() =>
 const LazyResumeSessionDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ResumeSessionDialog').then((module) => ({
     default: module.ResumeSessionDialog
+  }))
+);
+// What an encrypted project's emailed invitation link opens (L11 plan of
+// 2026-11-25, §3.2): it loads the crypto and setup only for that visitor.
+const LazySharedWithYouDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/SharedWithYouDialog').then((module) => ({
+    default: module.SharedWithYouDialog
   }))
 );
 // Make a copy's choice of destination for an encrypted share link's
@@ -3249,10 +3260,10 @@ export function App() {
         return;
       }
       if (isEncryptedInvitationHash(window.location.hash)) {
-        if (captureEncryptedInvitationLink()) {
+        const token = captureEncryptedInvitationLink();
+        if (token) {
           beginProjectNavigation(false).end();
-          updateSettingsViewState({ open: true, activeSection: 'encryption' });
-          setSettingsOpen(true);
+          setSharedInvitation(token);
         }
         return;
       }
@@ -3485,9 +3496,12 @@ export function App() {
     []
   );
   // An invitation to an encrypted project (slice 5-3b) is taken off the
-  // address bar at once; Settings › Encryption opens on it once the session
-  // is known (below), where it is accepted after encryption is set up.
-  useState(captureEncryptedInvitationLink);
+  // address bar at once, or still pending from before a reload in this
+  // tab; it opens the "Shared with you" landing (L11 plan of 2026-11-25,
+  // §3.2), which turns encryption on if needed and accepts it.
+  const [sharedInvitation, setSharedInvitation] = useState(
+    () => captureEncryptedInvitationLink() ?? pendingEncryptedInvitation()
+  );
   // A new device's approval QR code, opened by a phone's camera: taken off
   // the address bar at once, and Settings › Encryption opens on it, where
   // this device approves the new one once it is signed in and unlocked.
@@ -4529,7 +4543,8 @@ export function App() {
     const userId = session?.userId ?? null;
     if (!userId || encryptedInvitationSessionRef.current === userId) return;
     encryptedInvitationSessionRef.current = userId;
-    if (pendingEncryptedInvitation() || pendingDeviceApproval()) {
+    // An encrypted invitation has its own landing (`SharedWithYouDialog`).
+    if (pendingDeviceApproval()) {
       updateSettingsViewState({ open: true, activeSection: 'encryption' });
       setSettingsOpen(true);
     }
@@ -5582,6 +5597,113 @@ export function App() {
     useState(false);
   /** A listing is asking an account the last one did not reach. */
   const [accountListingPending, setAccountListingPending] = useState(false);
+  /**
+   * A project this device just joined by invitation, opened once the
+   * account's listing names it (the Open of its notice, or the "Shared
+   * with you" landing).
+   */
+  const [openWhenListed, setOpenWhenListed] = useState<string | null>(null);
+  const handleOpenProjectRef = useRef(handleOpenProject);
+  handleOpenProjectRef.current = handleOpenProject;
+  useEffect(() => {
+    if (!openWhenListed || !cloudProjectIds.has(openWhenListed)) return;
+    setOpenWhenListed(null);
+    void handleOpenProjectRef.current(openWhenListed);
+  }, [cloudProjectIds, openWhenListed]);
+  useEffect(() => setOpenWhenListed(null), [sessionUserId]);
+  /** Lists the account's projects again, with the one just joined. */
+  const relistAccountProjects = useCallback(async (): Promise<
+    ProjectSummary[] | null
+  > => {
+    const accountId = sessionRef.current?.userId ?? null;
+    if (!accountId) return null;
+    const listed = await loadProjectSummaries(accountId, false);
+    if (sessionRef.current?.userId !== accountId || !listed.remoteReached)
+      return null;
+    setProjects(listed.projects);
+    setCloudProjectIds(listed.cloudProjectIds);
+    setAccountProjectListReached(true);
+    return listed.projects;
+  }, []);
+  const openJoinedProject = useCallback(
+    (projectId: string) => {
+      setOpenWhenListed(projectId);
+      void relistAccountProjects().catch(() => undefined);
+    },
+    [relistAccountProjects]
+  );
+  const sharedInvitationRef = useRef(sharedInvitation);
+  sharedInvitationRef.current = sharedInvitation;
+  // The app-level invitation runner (L11 plan of 2026-11-25, §3.3): adds
+  // ready invitees, joins welcomed projects and renews pending statements
+  // in the background on a device whose keys are unlocked, and loads no
+  // crypto until the server opens the rollout gates
+  // (`invitationRunner.ts`). Its notices come here.
+  useEffect(() => {
+    if (!sessionUserId || !cloudFunctionsEnabled) return;
+    const stopRunner = startInvitationRunner(sessionUserId);
+    const nameOf = (projectId: string, listed: readonly ProjectSummary[]) =>
+      listed.find((project) => project.projectId === projectId)?.name ?? null;
+    const stopNotices = subscribeInvitationRunner((event) => {
+      if (event.kind === 'added') {
+        // No address in a notice: personal info stays out of the log.
+        const name = nameOf(event.projectId, latestProjects.current);
+        announce(
+          name
+            ? `Someone you invited joined ${name}`
+            : 'Someone you invited joined your project'
+        );
+        return;
+      }
+      // A landing on screen opens what it waits for itself.
+      const landing = sharedInvitationRef.current !== null;
+      void relistAccountProjects()
+        .catch(() => null)
+        .then((listed) => {
+          if (landing || sessionRef.current?.userId !== sessionUserId) return;
+          const name = nameOf(
+            event.projectId,
+            listed ?? latestProjects.current
+          );
+          announce(
+            name ? `${name} is ready` : 'A project shared with you is ready',
+            {
+              label: 'Open',
+              run: () => openJoinedProject(event.projectId)
+            }
+          );
+        });
+    });
+    return () => {
+      stopNotices();
+      stopRunner();
+    };
+  }, [
+    announce,
+    cloudFunctionsEnabled,
+    openJoinedProject,
+    relistAccountProjects,
+    sessionUserId
+  ]);
+  const sharedInvitationDialog =
+    sharedInvitation && cloudFunctionsEnabled && !accountResolving ? (
+      <Suspense fallback={null}>
+        <LazySharedWithYouDialog
+          // A new link starts its own landing: nothing of the last one stays.
+          key={sharedInvitation}
+          token={sharedInvitation}
+          userId={sessionUserId}
+          shown={!settingsOpen}
+          onSignIn={() => openSettingsAt('account')}
+          onOpenEncryptionSettings={() => openSettingsAt('encryption')}
+          onOpenProject={(projectId) => {
+            setSharedInvitation(null);
+            openJoinedProject(projectId);
+          }}
+          onClose={() => setSharedInvitation(null)}
+        />
+      </Suspense>
+    ) : null;
   const thumbnailBackfillRuntimeRef = useRef({
     cloudProjectIds
   });
@@ -38311,6 +38433,7 @@ export function App() {
         {settingsOverlay}
         {confirmDialog}
         {pinResetDialog}
+        {sharedInvitationDialog}
         <ToastHost toast={toast} onDismiss={dismissToast} />
       </>
     );
@@ -41757,6 +41880,7 @@ export function App() {
             />
           )}
           {pinResetDialog}
+          {sharedInvitationDialog}
           {/* Drawn here, once, not by the History panel: the dock and the
               phone lane each mount their own, and crossing the phone
               breakpoint swaps one for the other. */}
