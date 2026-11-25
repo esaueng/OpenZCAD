@@ -74,7 +74,7 @@ const cache = new WeakMap<BodyRepresentation, Map<string, PlanarFaceTravel>>();
 interface SweepKnowledge {
   searchedTo: number;
   blockedAt: number;
-  /** The reach whose slab exceeded the work budget; any wider one does too. */
+  /** The smallest doubled reach seen over the work budget; not tried again. */
   unmeasurableFrom: number;
 }
 
@@ -230,7 +230,6 @@ export function planarFaceSweepClear(
   perBody.set(key, known);
   const reach = Math.abs(offset) + toleranceOf(representation);
   if (reach > known.searchedTo) {
-    if (reach >= known.unmeasurableFrom) return null;
     // The wider search can exceed the work budget where the asked one
     // would not; fall back to the asked reach before giving up.
     // A doubled slab already over budget is not tried again: past that
@@ -238,14 +237,13 @@ export function planarFaceSweepClear(
     let searched = 2 * reach < known.unmeasurableFrom ? 2 * reach : reach;
     let travel = measure(representation, face, slab(offset, searched));
     if (!travel && searched > reach) {
-      known.unmeasurableFrom = searched;
+      known.unmeasurableFrom = Math.min(known.unmeasurableFrom, searched);
       searched = reach;
       travel = measure(representation, face, slab(offset, searched));
     }
-    if (!travel) {
-      known.unmeasurableFrom = reach;
-      return null;
-    }
+    // Not remembered: clipping can split more triangles in a narrow slab
+    // than in a wide one, so a wider search may still fit.
+    if (!travel) return null;
     const nearest = offset > 0 ? travel.outward : travel.inward;
     known.searchedTo = searched;
     known.blockedAt = Math.min(known.blockedAt, nearest ?? Infinity);
@@ -389,11 +387,12 @@ function measure(
   const flat = Math.max(1e-6, span * 1e-7);
   const inside = span * 1e-9;
 
-  // A windowed slab starts just past the face's own plane, so a triangle
-  // that leaves the plane over the face is cut where it is measurably
-  // above (or below) it, and that cut is sampled.
-  const low = window[0] >= 0 ? Math.max(window[0], 2 * flat) : window[0];
-  const high = window[1] <= 0 ? Math.min(window[1], -2 * flat) : window[1];
+  // A windowed slab starts at the face's own flatness allowance, so a
+  // triangle that leaves the plane over the face is cut where it leaves,
+  // and that cut is sampled — and counted, at the allowance itself.
+  const windowed = Number.isFinite(window[0]) || Number.isFinite(window[1]);
+  const low = window[0] >= 0 ? Math.max(window[0], flat) : window[0];
+  const high = window[1] <= 0 ? Math.min(window[1], -flat) : window[1];
   const excluded = new Uint8Array(indices.length / 3);
   for (const other of topology.faces) {
     if (!adjacent.has(other.hash)) continue;
@@ -454,8 +453,10 @@ function measure(
   let inward = Infinity;
   const record = (height: number) => {
     if (height < low || height > high) return;
-    if (height > flat) outward = Math.min(outward, height);
-    else if (height < -flat) inward = Math.min(inward, -height);
+    if (windowed ? height >= flat : height > flat)
+      outward = Math.min(outward, height);
+    else if (windowed ? height <= -flat : height < -flat)
+      inward = Math.min(inward, -height);
   };
   const overFootprint = (x: number, y: number) =>
     footprint.some((piece) => barycentric(piece, x, y, inside) !== null);

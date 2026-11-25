@@ -236,6 +236,20 @@ describe('planarFaceSweepClear', () => {
     expect(planarFaceSweepClear(plate, topOf(plate), 1)).toBeNull();
   });
 
+  it('sees a face just past the plane flatness allowance', () => {
+    // 1.5 µm above and below the 10 mm face, whose allowance is 1 µm.
+    const above = body(
+      [TOP, BOTTOM, SIDE, horizontal(4, 2, 4, 2, 4, 2 + 1.5e-6, false)],
+      ADJACENCY
+    );
+    expect(planarFaceSweepClear(above, topOf(above), 1)).toBe(false);
+    const below = body(
+      [TOP, BOTTOM, SIDE, horizontal(4, 2, 4, 2, 4, 2 - 1.5e-6, true)],
+      ADJACENCY
+    );
+    expect(planarFaceSweepClear(below, topOf(below), -1)).toBe(false);
+  });
+
   it('sees a face that rises through the slab from a shared corner', () => {
     // Touches the top face only at its corner (0, 0, 2) and climbs to 10
     // above it over the face: every sample is on the plane or past a 1 mm

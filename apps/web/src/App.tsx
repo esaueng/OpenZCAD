@@ -4962,6 +4962,16 @@ export function App() {
     /** Rewords the release's refusal as its preview would (a face move). */
     rewordRefusal?: (diagnostic: CommandDiagnostic) => CommandDiagnostic;
   } | null>(null);
+  /**
+   * The rewording of a release set aside by a retake, for the validation
+   * that lands it as it was let go (a release at the same value, Escape, or
+   * a drag that ends elsewhere): that validation starts a new pending record.
+   */
+  const retakenRewordRef = useRef<{
+    value: number;
+    selectionKey: string | null;
+    reword: (diagnostic: CommandDiagnostic) => CommandDiagnostic;
+  } | null>(null);
 
   /** Whether the selection is still the one a direct edit was checked for. */
   function directEditOwnsSelection(
@@ -6757,12 +6767,19 @@ export function App() {
       offsetLeadPreview.stop();
       const document = managerRef.current?.document;
       pendingDirectEditRef.current?.cancelReleasedDisplay?.();
+      const carried = retakenRewordRef.current;
+      retakenRewordRef.current = null;
+      const resumed =
+        carried !== null &&
+        carried.value === value &&
+        carried.selectionKey === faceOffsetPlanKey(interactionRef.current);
       pendingDirectEditRef.current = document
         ? {
             document,
             interaction: interactionRef.current,
             value,
-            startedAt: performance.now()
+            startedAt: performance.now(),
+            ...(resumed ? { rewordRefusal: carried.reword } : {})
           }
         : null;
       dispatchInteraction({ type: 'validation-start', value });
@@ -33518,6 +33535,13 @@ export function App() {
       return false;
     const pending = pendingDirectEditRef.current;
     pending?.cancelReleasedDisplay?.();
+    retakenRewordRef.current = pending?.rewordRefusal
+      ? {
+          value: pending.value,
+          selectionKey: faceOffsetPlanKey(pending.interaction),
+          reword: pending.rewordRefusal
+        }
+      : null;
     // A completed release-only frame belongs to the old drag. Recover the
     // last accepted value before a second release can capture its display.
     pending?.restoreOffsetDisplay?.();
