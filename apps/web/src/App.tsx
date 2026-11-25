@@ -987,6 +987,10 @@ import {
   interactionReducer,
   commandSessionFor,
   commitParksRefusal,
+  builtPreviewSettlement,
+  dragSettlementEvent,
+  projectedFrameSettlement,
+  type PreviewSettlement,
   holdsRefusal,
   isParkableRefusal,
   refusalCancelledInPlace,
@@ -6249,7 +6253,14 @@ export function App() {
             value: preview.document.radius,
             status: 'built'
           });
-          recoverPreviewInteraction();
+          // A late success for a radius the hand has left is no verdict on
+          // the radius held now.
+          recoverPreviewInteraction(
+            builtPreviewSettlement(
+              preview.document.radius,
+              cylinderRadiusHandValue.current
+            )
+          );
         }
         reusableRadiusPreview.current = preview
           ? { candidate: preview.document }
@@ -6466,7 +6477,14 @@ export function App() {
         }
         setLastValidPreview(preview.document.offset);
         setPreviewVerdict({ value: preview.document.offset, status: 'built' });
-        recoverPreviewInteraction();
+        // A face set's coarse lane publishes behind the hand: a late success
+        // for a value it has left is no verdict on the value held now.
+        recoverPreviewInteraction(
+          builtPreviewSettlement(
+            preview.document.offset,
+            offsetPreviewValueRef.current
+          )
+        );
         // Once a gesture has gone slow, the chip says "catching up" only
         // while the hand is actually ahead of the published geometry.
         setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
@@ -32461,7 +32479,9 @@ export function App() {
         );
         setLastValidPreview(preview.document.size);
         setPreviewVerdict({ value: preview.document.size, status: 'built' });
-        recoverPreviewInteraction();
+        recoverPreviewInteraction(
+          builtPreviewSettlement(preview.document.size, edgeHandValue.current)
+        );
         setPreviewDeferred(edgePreview.degraded && edgePreview.lagging);
       },
       onFailure: ({ error, value }) => {
@@ -33323,16 +33343,13 @@ export function App() {
    * The refusal stops being held, but the drag keeps it as its prior
    * refusal, so the prompt does not promise an apply until a value builds.
    */
-  function recoverPreviewInteraction(settled: 'built' | 'left' = 'built') {
+  function recoverPreviewInteraction(settled: PreviewSettlement = 'built') {
     const current = interactionRef.current;
     if (!isOperationState(current)) return;
     // A refused frame under the hand clears in place: the drag never left.
     if (current.phase === 'dragging') {
-      if (settled === 'left') {
-        if (current.error) dispatchInteraction({ type: 'preview-left' });
-      } else if (current.error || current.priorRefusal) {
-        dispatchInteraction({ type: 'drag-engage' });
-      }
+      const event = dragSettlementEvent(current, settled);
+      if (event) dispatchInteraction(event);
       return;
     }
     if (current.phase !== 'failed') {
@@ -33395,7 +33412,8 @@ export function App() {
       setPreviewDeferred(false);
       setPreviewVerdict({ value: offset, status: 'unchecked' });
       // A projected frame is never checked: the hand has left any refusal.
-      recoverPreviewInteraction('left');
+      // At zero, letting go ends the gesture with nothing to check.
+      recoverPreviewInteraction(projectedFrameSettlement(offset));
       if (offsetHandleTarget?.stepProfilePreview && Math.abs(offset) > 1e-9) {
         const target = current.target;
         offsetRestTimer.current = window.setTimeout(() => {

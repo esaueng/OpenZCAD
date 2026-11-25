@@ -1895,6 +1895,50 @@ export function commitParksRefusal(
 }
 
 /**
+ * What a preview's outcome says about the drag: a value under the hand
+ * `built`, or the hand `left` a refused value for one not yet checked.
+ */
+export type PreviewSettlement = 'built' | 'left';
+
+/**
+ * A published success settles the drag as built only for the value under
+ * the hand. The scheduler can publish a value the hand has already moved
+ * past (to another refused one, say), and that success is no verdict on the
+ * value held now. An unknown hand takes the success as before.
+ */
+export function builtPreviewSettlement(
+  built: number,
+  hand: number | null | undefined
+): PreviewSettlement {
+  return hand === null || hand === undefined || built === hand
+    ? 'built'
+    : 'left';
+}
+
+/**
+ * A projected frame is never checked, so the hand has only left any
+ * refusal; except at zero, where letting go ends the gesture with no commit
+ * and nothing to check.
+ */
+export function projectedFrameSettlement(offset: number): PreviewSettlement {
+  return Math.abs(offset) <= 1e-9 ? 'built' : 'left';
+}
+
+/**
+ * The event a drag's settlement dispatches, or null for none. Either one
+ * stops holding a refusal (the chip and the release no longer answer to
+ * it); only `built` also forgets it as the drag's prior refusal.
+ */
+export function dragSettlementEvent(
+  state: InteractionState,
+  settled: PreviewSettlement
+): InteractionEvent | null {
+  if (!isOperationState(state) || state.phase !== 'dragging') return null;
+  if (settled === 'left') return state.error ? { type: 'preview-left' } : null;
+  return state.error || state.priorRefusal ? { type: 'drag-engage' } : null;
+}
+
+/**
  * What a refused edit was made on, for the top bar's "Edit not applied" chip:
  * the face (or face set), edges or regions, whatever command and offset mode
  * held them, since a re-pick of the same face rebuilds its target in the

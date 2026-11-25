@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   IDLE,
+  builtPreviewSettlement,
   commitParksRefusal,
+  dragSettlementEvent,
+  projectedFrameSettlement,
+  type PreviewSettlement,
   escapeTarget,
   holdsRefusal,
   interactionReducer,
@@ -590,6 +594,55 @@ describe('the release a refused drag promises is the one it makes', () => {
     // and never a plain "Release to apply" before a value builds.
     expect(commandPrompt(left)?.step).toBe(
       'Can’t move this face here · Release checks this value · drag back or type a value'
+    );
+  });
+
+  /** Applies what `recoverPreviewInteraction` dispatches for `settled`. */
+  const settle = (state: InteractionState, settled: PreviewSettlement) => {
+    const event = dragSettlementEvent(state, settled);
+    return event ? interactionReducer(state, event) : state;
+  };
+
+  // PR #2060 re-check: a hole drag passed through a buildable radius on its
+  // way to another refused one, and the late success for the radius it had
+  // left flashed "Release to apply" before the new radius was refused.
+  it('a late success for a value the hand left keeps the refusal', () => {
+    const start = faceState('armed', 'resize-cylinder-radius');
+    const left = interactionReducer(drag(start, refused(9)), {
+      type: 'preview-left'
+    });
+    const step = commandPrompt(left)!.step;
+    expect(builtPreviewSettlement(9.2, 9.6)).toBe('left');
+    const late = settle(left, builtPreviewSettlement(9.2, 9.6));
+    expect(commandPrompt(late)?.step).toBe(step);
+    // Still held under the hand, the refusal is let go of exactly as a
+    // success always did; only the prompt's memory of it stays.
+    const held = drag(start, refused(9));
+    const lateOnHeld = settle(held, builtPreviewSettlement(9.2, 9.6));
+    expect(holdsRefusal(lateOnHeld)).toBe(false);
+    expect(commandPrompt(lateOnHeld)?.step).toBe(step);
+    // The success for the radius under the hand is a verdict on it.
+    expect(builtPreviewSettlement(9.6, 9.6)).toBe('built');
+    expect(builtPreviewSettlement(9.6, null)).toBe('built');
+    expect(commandPrompt(settle(late, 'built'))?.step).toBe(
+      'Release to apply · type to enter an exact value instead'
+    );
+  });
+
+  // PR #2060 re-check: a projected step-profile drag back to exactly zero
+  // still said "Release checks this value", though letting go there ends
+  // the gesture with no commit and nothing to check.
+  it('a projected frame back at zero forgets the refusal', () => {
+    const left = interactionReducer(drag(faceState('armed'), refused(-9)), {
+      type: 'preview-left'
+    });
+    expect(projectedFrameSettlement(-2)).toBe('left');
+    expect(
+      commandPrompt(settle(left, projectedFrameSettlement(-2)))?.step
+    ).toBe(commandPrompt(left)?.step);
+    expect(projectedFrameSettlement(0)).toBe('built');
+    expect(commandPrompt(settle(left, projectedFrameSettlement(0)))?.step).toBe(
+      'Release to apply · type to enter an exact value instead'
     );
   });
 
