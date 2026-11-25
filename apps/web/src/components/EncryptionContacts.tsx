@@ -41,9 +41,11 @@ import { encodeQr, qrSvgPath } from '../lib/e2ee/qrCode';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 
 /**
- * Settings › Encryption › Contacts (ADR-024 Phase 5, slice 5-1): the people
- * this account shares a project or an invitation with, whether each one is
- * verified, seen or changed, and the mutual comparison that verifies them.
+ * Settings › Encryption › People (ADR-024 Phase 5, slice 5-1; named People
+ * in the L11 plan of 2026-11-25): the people this account shares a project
+ * or an invitation with, each Verified or Not verified (or changed), and
+ * the mutual comparison that verifies them. Your own contact code is in
+ * that comparison and under Advanced, not in the list.
  * Both people read their own 40-digit code (or scan each other's QR code);
  * each side checks the other's against what OpenZCAD shows, then signs the
  * verification into their contacts list with a passkey or the recovery key.
@@ -142,6 +144,7 @@ export function EncryptionContacts({
   const verified =
     book?.contacts.filter((contact) => contact.standing === 'verified')
       .length ?? 0;
+  const people = book?.contacts.length ?? 0;
   const unconfirmed = book !== null && !book.listConfirmed;
   // A list an older build stored in plaintext (ADR-024 amendment
   // 2026-11-14): sealed at the next signature, or now on request.
@@ -149,7 +152,10 @@ export function EncryptionContacts({
 
   return (
     <>
-      <Group title="Contacts" note={book ? `${verified} verified` : undefined}>
+      <Group
+        title="People"
+        note={people > 0 ? `${people} · ${verified} verified` : undefined}
+      >
         {error ? (
           <Notice
             tone="warning"
@@ -230,22 +236,10 @@ export function EncryptionContacts({
             }}
           />
         ) : null}
-        <SettingRow
-          title="Your contact code"
-          hint="The code people compare with you to verify you: read it to them, or let them scan it. It covers your devices, so it changes when they do."
-        >
-          {own ? (
-            <ContactCode
-              label="Your contact code"
-              code={own.code}
-              hash={own.hash}
-            />
-          ) : null}
-        </SettingRow>
         {book && book.contacts.length === 0 ? (
           <SettingRow
-            title="No contacts yet"
-            hint="People you share with appear here."
+            title="No one yet"
+            hint="People you share encrypted projects with appear here."
           />
         ) : null}
         {book?.contacts.map((contact) => (
@@ -268,7 +262,7 @@ export function EncryptionContacts({
                 }
               >
                 <ShieldCheck size={14} aria-hidden="true" />
-                {contact.standing === 'verified' ? 'Check' : 'Verify'}
+                {contact.standing === 'verified' ? 'Check' : 'Verify…'}
               </button>
             </div>
           </SettingRow>
@@ -323,6 +317,7 @@ const STANDING_HINTS: Record<ContactStanding, string> = {
   'not-checked': 'Not checked yet.'
 };
 
+/** Every person reads Verified or Not verified, unless something changed. */
 function StandingBadge({ standing }: { standing: ContactStanding }) {
   switch (standing) {
     case 'verified':
@@ -333,11 +328,43 @@ function StandingBadge({ standing }: { standing: ContactStanding }) {
       return <Status tone="warning">Key changed</Status>;
     case 'untrusted':
       return <Status tone="warning">Not trusted</Status>;
-    case 'seen':
-      return <Status tone="warning">Seen</Status>;
     default:
-      return null;
+      return <Status>Not verified</Status>;
   }
+}
+
+/**
+ * Your own contact code, for Settings › Encryption › Advanced: the code
+ * people compare with you to verify you. The verify panel shows it too.
+ */
+export function OwnContactCode({ account }: { account: AccountView }) {
+  const [own, setOwn] = useState<{ hash: Bytes; code: string } | null>(null);
+  const head = toHex(account.list.headHash);
+  useEffect(() => {
+    let live = true;
+    void ownVerificationCode(account).then((next) => {
+      if (live) setOwn(next);
+    });
+    return () => {
+      live = false;
+    };
+    // The account view changes with every device-list head.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [head]);
+  return (
+    <SettingRow
+      title="Your contact code"
+      hint="The code people compare with you to verify you: read it to them, or let them scan it. It covers your devices, so it changes when they do."
+    >
+      {own ? (
+        <ContactCode
+          label="Your contact code"
+          code={own.code}
+          hash={own.hash}
+        />
+      ) : null}
+    </SettingRow>
+  );
 }
 
 function messageFor(error: unknown): string {
@@ -473,11 +500,13 @@ function ContactPanel({
           </SettingRow>
           <SettingRow
             title="Your code"
-            hint="Read this to them, so they can verify you in the same call."
+            hint="Read this to them, or let them scan it, so they can verify you in the same call."
           >
-            <code className="encryption-code" aria-label="Your code to read">
-              {own.code}
-            </code>
+            <ContactCode
+              label="Your code to read"
+              code={own.code}
+              hash={own.hash}
+            />
           </SettingRow>
           <SettingRow
             title="Scan their QR code"

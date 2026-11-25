@@ -52,11 +52,13 @@ import {
   type VerifiedDeviceList
 } from '@openzcad/crypto';
 import { deviceApprovalCodeFromLink } from './deviceApprovalLink';
+import { realmStorageName } from '../deploymentRealm';
 import type {
   E2eeAccountKeyHistoryInput,
   E2eeAccountKeyHistoryRecord,
   E2eeAccountResponse,
   E2eeApprovedDeviceRecord,
+  E2eeDeviceLastUsed,
   E2eeApprovalRecord,
   E2eeIdentityRecord,
   E2eeSignedStatementRecord,
@@ -306,6 +308,11 @@ export interface AccountView {
    * without verification: a replaced identity is not trusted.
    */
   readonly previous: readonly PreviousKeySet[];
+  /**
+   * The day each device was last unlocked, as the Worker reports it
+   * (migration 0069). Unsigned and shown only; null from an older Worker.
+   */
+  readonly lastUsed?: E2eeDeviceLastUsed | null;
 }
 
 export type EncryptionState =
@@ -944,11 +951,55 @@ export async function loadEncryption(
     deviceStatus,
     unlocked,
     unlockError,
-    previous
+    previous,
+    lastUsed: response.lastUsed ?? null
   };
+  // An unlocked device reports its day, at most once a day (migration
+  // 0069), beside the load: it never delays or fails it.
+  if (unlocked && device) void reportDeviceUse(ctx, device.deviceId);
   return identityChanged
     ? { kind: 'identity-changed', account }
     : { kind: 'ready', account };
+}
+
+const DEVICE_USE_PREFIX = realmStorageName('openzcad:e2ee-device-used:v1');
+/** Reports in flight, so parallel loads at startup send one. */
+const reportingDeviceUse = new Set<string>();
+
+/**
+ * Tells the Worker this device was used today (ADR-024 amendment
+ * 2026-11-25): once per device per UTC day, stamped in this browser's
+ * storage, with the id in the request body rather than in any URL. The
+ * Worker writes at most once a day anyway; a failure is retried on a
+ * later load.
+ */
+export async function reportDeviceUse(
+  ctx: Pick<E2eeContext, 'api' | 'userId'>,
+  deviceId: string
+): Promise<void> {
+  const send = ctx.api.recordDeviceUse;
+  if (!send) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const key = `${DEVICE_USE_PREFIX}:${ctx.userId}:${deviceId}`;
+  try {
+    if (globalThis.localStorage?.getItem(key) === today) return;
+  } catch {
+    // Blocked storage: the Worker's own once-a-day check still holds.
+  }
+  if (reportingDeviceUse.has(key)) return;
+  reportingDeviceUse.add(key);
+  try {
+    await send.call(ctx.api, deviceId);
+    try {
+      globalThis.localStorage?.setItem(key, today);
+    } catch {
+      // As above.
+    }
+  } catch {
+    // Shown days are best effort; the next load tries again.
+  } finally {
+    reportingDeviceUse.delete(key);
+  }
 }
 
 /** A recovery secret or a fresh, user-verified passkey ceremony. */
@@ -1678,7 +1729,35 @@ export function removeDevice(
   return rotateAccountKeys(
     authorization === 'passkey' ? passkeyContext(ctx) : ctx,
     account,
-    deviceId,
+    [deviceId],
+    'device',
+    authorization,
+    participant
+  );
+}
+
+/**
+ * Removes several devices at once (Settings › Encryption's clean-up of
+ * devices unused for 30 days): one device-list entry revokes them all,
+ * with one rotation of the account and encryption keys and one passkey
+ * touch or recovery key, instead of one of each per device. The new
+ * account key is wrapped only to the devices and unlock targets the entry
+ * keeps, every revocation names this device as the replacement, and the
+ * encrypted projects' cutoffs and rotations follow the one entry, as for a
+ * single removal. Refuses an empty set, a repeated id, an id the list does
+ * not name, and this device.
+ */
+export function removeDevices(
+  ctx: E2eeContext,
+  account: AccountView,
+  deviceIds: readonly string[],
+  authorization: UnlockAuthorization,
+  participant?: RemovalParticipantStep
+): Promise<EncryptionState> {
+  return rotateAccountKeys(
+    authorization === 'passkey' ? passkeyContext(ctx) : ctx,
+    account,
+    deviceIds,
     'device',
     authorization,
     participant
@@ -1695,7 +1774,7 @@ export function removePasskey(
   return rotateAccountKeys(
     authorization === 'passkey' ? passkeyContext(ctx) : ctx,
     account,
-    targetId,
+    [targetId],
     'passkey',
     authorization,
     participant
@@ -1712,7 +1791,7 @@ export function revokeReadOnlyDevices(
   return rotateAccountKeys(
     authorization === 'passkey' ? passkeyContext(ctx) : ctx,
     account,
-    '', // Aggregate rotation does not remove a certified id.
+    [], // Aggregate rotation does not remove a certified id.
     'read-only',
     authorization,
     participant
@@ -1764,7 +1843,7 @@ export interface RemovalParticipantStep {
 async function rotateAccountKeys(
   ctx: E2eeContext,
   account: AccountView,
-  id: string,
+  ids: readonly string[],
   kind: 'device' | 'passkey' | 'read-only',
   authorization: UnlockAuthorization,
   participant?: RemovalParticipantStep
@@ -1774,7 +1853,7 @@ async function rotateAccountKeys(
     return rotateAccountKeysLocked(
       ctx,
       account,
-      id,
+      ids,
       kind,
       authorization,
       participant
@@ -1785,15 +1864,33 @@ async function rotateAccountKeys(
 async function rotateAccountKeysLocked(
   ctx: E2eeContext,
   account: AccountView,
-  id: string,
+  ids: readonly string[],
   kind: 'device' | 'passkey' | 'read-only',
   authorization: UnlockAuthorization,
   participant?: RemovalParticipantStep
 ): Promise<EncryptionState> {
-  if (kind === 'device' && id === account.device?.deviceId) {
+  if (kind === 'device' && ids.some((id) => id === account.device?.deviceId)) {
     throw new EncryptionFlowError(
       'invalid-request',
       'Remove this device by signing out and removing its keys.'
+    );
+  }
+  if (
+    kind !== 'read-only' &&
+    (ids.length === 0 || new Set(ids).size !== ids.length)
+  ) {
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'Name each device or passkey to remove once.'
+    );
+  }
+  if (
+    kind === 'device' &&
+    ids.some((id) => !account.list.devices.some((d) => d.deviceId === id))
+  ) {
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'That device is not on your device list.'
     );
   }
   await participant?.prepare(account);
@@ -1807,8 +1904,10 @@ async function rotateAccountKeysLocked(
   try {
     if (
       kind === 'passkey' &&
-      !account.list.unlockTargets.some(
-        (t) => t.kind === 'passkey' && t.targetId === id
+      !ids.every((id) =>
+        account.list.unlockTargets.some(
+          (t) => t.kind === 'passkey' && t.targetId === id
+        )
       )
     ) {
       throw new EncryptionFlowError(
@@ -1831,11 +1930,11 @@ async function rotateAccountKeysLocked(
       issuedAt: now(ctx),
       ...(kind === 'device'
         ? {
-            removeDeviceIds: [id],
+            removeDeviceIds: ids,
             ...(replacement ? { replacedBy: replacement } : {})
           }
         : kind === 'passkey'
-          ? { removeUnlockTargetIds: [id] }
+          ? { removeUnlockTargetIds: ids }
           : {}),
       encryptionKey: await exportPublicKey(encryption.publicKey),
       accountKeyCommitment: await accountKeyCommitment(accountKey)

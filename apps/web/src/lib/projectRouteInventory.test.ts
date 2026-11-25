@@ -105,6 +105,10 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
   '/api/e2ee/config': [['/api/e2ee/config', 'read']],
   '/api/e2ee/contacts': [['/api/e2ee/contacts', 'none']],
   '/api/e2ee/device-list': [['/api/e2ee/device-list', 'none']],
+  // A device's own id and nothing else (migration 0069).
+  '/api/e2ee/devices/last-used': [
+    ['/api/e2ee/devices/last-used', 'none', ['POST']]
+  ],
   '/api/e2ee/identity': [['/api/e2ee/identity', 'none']],
   '/api/e2ee/invitations': [['/api/e2ee/invitations', 'none']],
   '/api/e2ee/invitations/accept': [['/api/e2ee/invitations/accept', 'none']],

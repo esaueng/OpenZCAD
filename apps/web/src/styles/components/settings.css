@@ -304,6 +304,14 @@
   font-size: var(--fs-mini);
 }
 
+/* A group's one header button sits at the right, the note by the title. */
+.settings-group-action {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
 .settings-card {
   overflow: hidden;
   background: var(--color-surface);

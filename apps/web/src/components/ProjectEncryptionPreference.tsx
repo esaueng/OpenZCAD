@@ -150,7 +150,7 @@ export function ProjectEncryptionPreference({
   const checked =
     required || (state?.kind === 'verified' && state.encryptNewProjects);
   return (
-    <Group title="Projects">
+    <Group>
       {error ? (
         <Notice
           tone="warning"

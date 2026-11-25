@@ -763,7 +763,7 @@ describe('device removal across encrypted projects', () => {
         joined = true;
         await saveEdit(desktop, projectId, 'Desktop edit');
       }
-      if (appended && path === '/api/e2ee/account') {
+      if (appended && path.split('?')[0] === '/api/e2ee/account') {
         throw new TypeError('Failed to fetch');
       }
       const response = await real(path, init);
@@ -818,7 +818,7 @@ describe('device removal across encrypted projects', () => {
     let appended = false;
     let dropped = false;
     laptop.fetcher = async (path, init = {}) => {
-      if (appended && !dropped && path === '/api/e2ee/account') {
+      if (appended && !dropped && path.split('?')[0] === '/api/e2ee/account') {
         dropped = true;
         throw new TypeError('Failed to fetch');
       }

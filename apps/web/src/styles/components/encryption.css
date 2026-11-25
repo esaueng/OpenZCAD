@@ -382,3 +382,20 @@
     justify-content: center;
   }
 }
+
+/* Devices: "Show all N" under the first three (L11 plan §6). */
+.encryption-show-all {
+  display: flex;
+  padding: var(--sp-2) var(--sp-4);
+  border-top: var(--border-thin);
+}
+
+/* Add a device: what shows until the new device's request arrives. */
+.encryption-add-device-wait {
+  color: var(--color-text-muted);
+}
+
+/* Where setup scrolls to; with nothing left to encrypt it takes no gap. */
+.encryption-existing-projects:empty {
+  display: none;
+}
