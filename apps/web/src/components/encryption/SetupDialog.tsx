@@ -1,4 +1,11 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react';
 import { Copy, Download, Fingerprint, KeyRound, Printer } from 'lucide-react';
 import {
   generateRecoveryKey,
@@ -8,11 +15,15 @@ import {
 import {
   addPasskey,
   defaultDeviceLabel,
+  EncryptionFlowError,
   replaceRecoveryKey,
   setUpEncryption,
   type AccountView,
-  type EncryptionState
+  type EncryptionState,
+  type SetupAttempts
 } from '../../lib/e2ee/accountKeys';
+import { E2eeApiError } from '../../lib/e2ee/e2eeApi';
+import { holdForSetup } from '../../lib/e2ee/setupInProgress';
 import {
   createProjectPreferenceApi,
   loadProjectPreference,
@@ -300,6 +311,7 @@ function passkeyProblem(caught: unknown, created?: PasskeySecret): string {
 }
 
 type SetupStep = 'intro' | 'save' | 'projects';
+type SetupMethod = 'passkey' | 'recovery';
 
 interface ProjectsChoice {
   /** The server requires encryption for new projects: no choice to make. */
@@ -314,25 +326,31 @@ interface ExistingProjects {
   ids: string[];
 }
 
+const ALREADY_SET_UP_ELSEWHERE =
+  'Encryption was already turned on for this account with a different recovery key, from another tab or device. The key shown here won’t open it: close this and unlock with the key you saved then.';
+
 /**
  * Settings › Encryption setup in three screens, passkey first (L11 plan
- * 2026-11-25 §5, decision D2):
+ * 2026-11-25 §5, decision D2; reordered after the #2053 review so nothing
+ * is committed before the recovery key is shown and acknowledged):
  *
- * 1. Turn on encryption. The recovery key already exists in memory.
- *    "Continue with passkey" creates the passkey first (no typing), then
- *    sets up the keys and enrolls that passkey with the in-memory recovery
- *    secret. "Use a recovery key only" commits nothing yet.
- * 2. Save your recovery key, ticking "I saved it". With a passkey made in
- *    setup nothing is typed; without one the last group is typed back, and
- *    only then does a recovery-key-only setup commit its keys.
+ * 1. Turn on encryption: choose "Continue with passkey" or "Use a recovery
+ *    key only". Nothing is created yet; the recovery key exists in memory.
+ * 2. Save your recovery key, ticking "I saved it" (and, for recovery key
+ *    only, typing its last group). Only then does the primary button run
+ *    the ceremony and commit: passkey creation, `setUpEncryption`, and
+ *    `addPasskey` with the recovery secret in memory.
  * 3. You're set: "Encrypt new projects" and "Encrypt my N existing cloud
- *    projects", both ticked, then Done.
+ *    projects", then Done, which alone starts encrypting existing projects.
  *
- * A passkey that is cancelled or fails falls back to the recovery-key-only
- * path: before setup that commits nothing; after it, the account already
- * holds keys with the recovery key as its only way in. Once keys exist,
- * screen 2 cannot be closed until the key is saved. Closing before then
- * discards everything, and the recovery secret is zeroed on close.
+ * A passkey cancelled or refused before the commit switches to recovery key
+ * only (type the last group, then turn on). One that fails after it leaves
+ * keys whose recovery key was already saved: the last group is asked before
+ * going on. A setup whose answer is lost is read back (`setUpEncryption`
+ * with this dialog's attempts); while its outcome is unknown the dialog
+ * cannot be closed, and retrying uses the same recovery key. Default-on
+ * migration waits while the dialog is open (`setupInProgress.ts`). The
+ * recovery and passkey secrets are zeroed on close.
  */
 export function SetupDialog({
   userId,
@@ -364,10 +382,15 @@ export function SetupDialog({
 }) {
   const recovery = useFreshRecoveryKey();
   const [step, setStep] = useState<SetupStep>('intro');
+  const [method, setMethod] = useState<SetupMethod>('passkey');
   const [prf, setPrf] = useState<PasskeyPrfSupport | null>(null);
-  /** Keys exist on the server: set when `setUpEncryption` succeeded. */
+  /** Keys exist on the server: `setUpEncryption` succeeded. */
   const [committed, setCommitted] = useState(false);
   const [passkeyMade, setPasskeyMade] = useState(false);
+  /** A setup's answer was lost and could not be read back. */
+  const [unknown, setUnknown] = useState(false);
+  /** Another identity holds the account: nothing here can turn it on. */
+  const [elsewhere, setElsewhere] = useState(false);
   const [fallback, setFallback] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [keySaved, setKeySaved] = useState(false);
@@ -377,8 +400,23 @@ export function SetupDialog({
   const [projects, setProjects] = useState<ProjectsChoice | null>(null);
   const [encryptNew, setEncryptNew] = useState(true);
   const [encryptExisting, setEncryptExisting] = useState(true);
-  const [existing, setExisting] = useState<ExistingProjects | null>(null);
+  const [existing, setExisting] = useState<ExistingProjects | 'failed' | null>(
+    null
+  );
+  const [listing, setListing] = useState(0);
   const preferenceApi = useMemo(() => createProjectPreferenceApi(), []);
+  const attempts = useRef<SetupAttempts>({ sent: [] });
+  /** A credential created but not yet certified, kept for a retry. */
+  const pendingPasskey = useRef<PasskeySecret | null>(null);
+
+  useEffect(() => holdForSetup(userId), [userId]);
+  useEffect(
+    () => () => {
+      pendingPasskey.current?.secret.fill(0);
+      pendingPasskey.current = null;
+    },
+    []
+  );
 
   useEffect(() => {
     let live = true;
@@ -404,9 +442,9 @@ export function SetupDialog({
     };
   }, [preferenceApi]);
 
-  // Default-on encrypts existing projects by itself (automaticMigration);
-  // otherwise screen 3 offers the same Phase 7 run Settings starts.
-  const offerExisting = projects?.migration === true && !projects.required;
+  // Screen 3 offers the same Phase 7 run Settings starts; nothing migrates
+  // before Done, default-on included.
+  const offerExisting = projects?.migration === true;
   const counting = step === 'projects' && offerExisting && existing === null;
   useEffect(() => {
     if (step !== 'projects' || !offerExisting) return;
@@ -415,24 +453,29 @@ export function SetupDialog({
     const listed = controller.getState().running
       ? Promise.resolve()
       : controller.refresh();
-    void listed
-      .catch(() => undefined)
-      .then(() => {
+    void listed.then(
+      () => {
         if (!live) return;
         const state = controller.getState();
-        setExisting({
-          controller,
-          ids: state.error
-            ? []
-            : state.projects
-                .filter((project) => project.phase !== 'done')
-                .map((project) => project.projectId)
-        });
-      });
+        setExisting(
+          state.error
+            ? 'failed'
+            : {
+                controller,
+                ids: state.projects
+                  .filter((project) => project.phase !== 'done')
+                  .map((project) => project.projectId)
+              }
+        );
+      },
+      () => {
+        if (live) setExisting('failed');
+      }
+    );
     return () => {
       live = false;
     };
-  }, [step, offerExisting, userId]);
+  }, [step, offerExisting, userId, listing]);
 
   const steps: SetupStep[] = [
     'intro',
@@ -440,7 +483,9 @@ export function SetupDialog({
     ...(projects && !skipProjectsStep ? (['projects'] as const) : [])
   ];
   const offerPasskey = prf !== 'unsupported';
-  const confirmByTyping = !passkeyMade;
+  const usePasskey = offerPasskey && method === 'passkey';
+  /** Recovery key only, or a passkey that failed after the commit. */
+  const needsTyping = !usePasskey || (committed && !passkeyMade);
 
   const end = () => {
     if (keySaved) onComplete?.();
@@ -455,68 +500,118 @@ export function SetupDialog({
       onClose();
     }
   };
+  const forgetPasskey = () => {
+    pendingPasskey.current?.secret.fill(0);
+    pendingPasskey.current = null;
+  };
 
   /**
-   * Screen 1's passkey step. The passkey is created first, inside the click,
-   * so nothing is committed if it is cancelled; then the keys are set up
-   * and the passkey enrolled with the recovery secret in memory.
+   * Commits the keys. An unknown outcome keeps the dialog open; a retry
+   * sends the same recovery key, and the read-back recognises any identity
+   * an earlier attempt of this dialog wrote.
    */
-  const continueWithPasskey = () =>
+  const commit = async (): Promise<EncryptionState> => {
+    if (!recovery) throw new Error('No recovery key');
+    try {
+      const next = await setUpEncryption(ctx, {
+        recoverySecret: recovery.secret,
+        label: defaultDeviceLabel(navigator.userAgent),
+        attempts: attempts.current
+      });
+      setUnknown(false);
+      setCommitted(true);
+      return next;
+    } catch (caught) {
+      const lost =
+        caught instanceof EncryptionFlowError &&
+        caught.code === 'setup-unknown';
+      setUnknown(lost);
+      if (
+        caught instanceof E2eeApiError &&
+        caught.code === 'E2EE_ALREADY_SET_UP'
+      ) {
+        setElsewhere(true);
+        throw new EncryptionFlowError(
+          'invalid-request',
+          ALREADY_SET_UP_ELSEWHERE
+        );
+      }
+      throw caught;
+    }
+  };
+
+  /** Recovery key only: commit once the last group matched. */
+  const turnOn = () =>
+    void run(
+      async () => {
+        const next = await commit();
+        afterSave();
+        return next;
+      },
+      { onError: setError }
+    );
+
+  /**
+   * The passkey choice, after the key is saved. The credential is created
+   * inside the click, so it keeps the user gesture; then the keys are set
+   * up and the passkey certified with the recovery secret in memory.
+   */
+  const turnOnWithPasskey = () =>
     void run(
       async () => {
         if (!recovery) return;
         setFallback(null);
-        let created: PasskeySecret;
-        try {
-          created = await (ctx.passkeys ?? browserPasskeys).create();
-        } catch (caught) {
-          // Nothing was committed: the recovery-key-only path, unchanged.
-          setFallback(passkeyProblem(caught));
-          setStep('save');
-          return;
-        }
-        try {
-          let next: EncryptionState;
+        let created = pendingPasskey.current;
+        if (!created) {
           try {
-            next = await setUpEncryption(ctx, {
-              recoverySecret: recovery.secret,
-              label: defaultDeviceLabel(navigator.userAgent)
-            });
+            created = await (ctx.passkeys ?? browserPasskeys).create();
           } catch (caught) {
-            // The credential exists but certifies nothing: say which one
-            // to delete from the provider.
-            throw created.enrollmentLabel
-              ? failedPasskeyEnrollment(caught, created.enrollmentLabel)
-              : caught;
+            // Nothing was committed: continue with the recovery key only.
+            setFallback(passkeyProblem(caught));
+            setMethod('recovery');
+            return;
           }
-          setCommitted(true);
-          if (next.kind !== 'ready') {
-            setFallback('');
-          } else {
-            try {
-              next = await addPasskey(
-                { ...ctx, passkeys: createdPasskey(created) },
-                next.account,
-                recovery.secret
-              );
-              setPasskeyMade(true);
-            } catch (caught) {
-              // Keys exist with the recovery key as the only way in:
-              // confirm it as a recovery-key-only setup does.
-              setFallback(passkeyProblem(caught, created));
-            }
-          }
-          setStep('save');
-          return next;
-        } finally {
-          created.secret.fill(0);
+          pendingPasskey.current = created;
         }
+        let next: EncryptionState;
+        try {
+          next = await commit();
+        } catch (caught) {
+          // The credential certifies nothing yet: kept for a retry, and
+          // named for deletion if the person gives up.
+          throw created.enrollmentLabel
+            ? failedPasskeyEnrollment(caught, created.enrollmentLabel)
+            : caught;
+        }
+        if (next.kind !== 'ready') {
+          forgetPasskey();
+          setFallback('');
+          return next;
+        }
+        let made = false;
+        try {
+          next = await addPasskey(
+            { ...ctx, passkeys: createdPasskey(created) },
+            next.account,
+            recovery.secret
+          );
+          made = true;
+          setPasskeyMade(true);
+        } catch (caught) {
+          // Keys exist and the recovery key was saved: ask for its last
+          // group, as a recovery-key-only setup does, before going on.
+          setFallback(passkeyProblem(caught, created));
+        } finally {
+          forgetPasskey();
+        }
+        if (made) afterSave();
+        return next;
       },
       { onError: setError }
     );
 
   const lastGroupMatches = () => {
-    if (!recovery || !confirmByTyping) return true;
+    if (!recovery || !needsTyping) return true;
     const matches =
       normalizedGroup(typed) ===
       normalizedGroup(lastRecoveryGroup(recovery.formatted));
@@ -524,30 +619,17 @@ export function SetupDialog({
     return matches;
   };
 
-  /** Screen 2's Continue: the key saved, and typed back where asked. */
+  /** Screen 2's primary button. */
   const confirmSaved = () => {
     if (!recovery || !saved || !lastGroupMatches()) return;
-    if (committed) {
-      afterSave();
-      return;
-    }
-    void run(
-      async () => {
-        const next = await setUpEncryption(ctx, {
-          recoverySecret: recovery.secret,
-          label: defaultDeviceLabel(navigator.userAgent)
-        });
-        setCommitted(true);
-        afterSave();
-        return next;
-      },
-      { onError: setError }
-    );
+    if (committed) afterSave();
+    else if (usePasskey) turnOnWithPasskey();
+    else turnOn();
   };
 
   /**
    * Saves the projects choice, starts encrypting the existing projects if
-   * ticked, then leaves. Only after the save succeeds, so a failure is said
+   * asked, then leaves. Only after the save succeeds, so a failure is said
    * here instead of in a dialog that has already gone (review finding).
    */
   const finish = () =>
@@ -574,7 +656,11 @@ export function SetupDialog({
           }
         }
         const started =
-          offerExisting && encryptExisting && existing?.ids.length
+          offerExisting &&
+          (projects?.required || encryptExisting) &&
+          existing !== null &&
+          existing !== 'failed' &&
+          existing.ids.length > 0
             ? existing
             : null;
         if (started) {
@@ -589,9 +675,10 @@ export function SetupDialog({
       { onError: setError }
     );
 
-  // Keys without a saved recovery key must not be left behind by a stray
-  // Escape: screen 2 stays until it is confirmed.
-  const closable = !busy && !(step === 'save' && committed);
+  // Keys without a saved recovery key, or an outcome not yet known, must
+  // not be left behind by a stray Escape.
+  const closable =
+    !busy && !unknown && !(step === 'save' && committed && !keySaved);
   const close = () => {
     if (closable) end();
   };
@@ -603,6 +690,13 @@ export function SetupDialog({
       : step === 'save'
         ? 'Save your recovery key'
         : 'You’re set';
+  const choose = (next: SetupMethod) => {
+    setError(null);
+    setFallback(null);
+    setMismatch(false);
+    setMethod(next);
+    setStep('save');
+  };
 
   let body: ReactNode;
   let footer: ReactNode;
@@ -615,7 +709,7 @@ export function SetupDialog({
               Only your devices will be able to read your cloud projects.
             </strong>{' '}
             {offerPasskey
-              ? 'A passkey unlocks your other devices without typing, and a recovery key is your backup. Your browser may ask you to confirm twice.'
+              ? 'A passkey unlocks your other devices without typing, and a recovery key is your backup.'
               : 'A recovery key unlocks your other devices and is your backup.'}
           </p>
           <p className="encryption-dialog-warning">{LOSS_SENTENCE}</p>
@@ -637,11 +731,7 @@ export function SetupDialog({
                 className="secondary"
                 type="button"
                 disabled={busy}
-                onClick={() => {
-                  setError(null);
-                  setFallback(null);
-                  setStep('save');
-                }}
+                onClick={() => choose('recovery')}
               >
                 Use a recovery key only
               </button>
@@ -649,7 +739,7 @@ export function SetupDialog({
                 className="primary"
                 type="button"
                 disabled={busy}
-                onClick={continueWithPasskey}
+                onClick={() => choose('passkey')}
               >
                 <Fingerprint size={14} aria-hidden="true" />
                 Continue with passkey
@@ -660,10 +750,7 @@ export function SetupDialog({
               className="primary"
               type="button"
               disabled={busy}
-              onClick={() => {
-                setError(null);
-                setStep('save');
-              }}
+              onClick={() => choose('recovery')}
             >
               <KeyRound size={14} aria-hidden="true" />
               Continue
@@ -675,30 +762,24 @@ export function SetupDialog({
     case 'save':
       body = (
         <>
-          {passkeyMade ? (
-            <p>
-              <strong>Your passkey is ready.</strong> Save your recovery key
-              too: it’s your backup if the passkey is lost.
-            </p>
-          ) : null}
           {fallback !== null ? (
             <p className="encryption-dialog-warning" role="status">
               No passkey was added. {fallback}
               {committed
-                ? ' Encryption is on with your recovery key; you can add a passkey later in Settings › Encryption.'
-                : ' Go back to try again, or continue with a recovery key only.'}
+                ? ' Encryption is on with your recovery key; type its last group to go on. You can add a passkey later in Settings › Encryption.'
+                : ' Go back to try again, or turn on encryption with a recovery key only.'}
             </p>
           ) : null}
           <SaveKeyStep
             recovery={recovery}
             saved={saved}
-            hideLastGroup={confirmByTyping && saved}
+            hideLastGroup={needsTyping && saved}
             onSaved={(next) => {
               setSaved(next);
               setMismatch(false);
             }}
           />
-          {confirmByTyping && saved ? (
+          {needsTyping && saved ? (
             <LastGroupField
               typed={typed}
               mismatch={mismatch}
@@ -709,11 +790,21 @@ export function SetupDialog({
               onSubmit={confirmSaved}
             />
           ) : null}
+          {usePasskey && !committed ? (
+            <p>
+              Next, your browser asks to save a passkey. It may ask you to
+              confirm twice.
+            </p>
+          ) : null}
         </>
       );
-      footer = (
+      footer = elsewhere ? (
+        <button className="secondary" type="button" onClick={close}>
+          Close
+        </button>
+      ) : (
         <>
-          {committed ? null : (
+          {committed || unknown ? null : (
             <button
               className="secondary"
               type="button"
@@ -729,12 +820,21 @@ export function SetupDialog({
           <button
             className="primary"
             type="button"
-            disabled={
-              busy || !saved || (confirmByTyping && typed.trim() === '')
-            }
+            disabled={busy || !saved || (needsTyping && typed.trim() === '')}
             onClick={confirmSaved}
           >
-            {committed ? 'Continue' : 'Turn on encryption'}
+            {committed ? (
+              'Continue'
+            ) : unknown ? (
+              'Try again'
+            ) : usePasskey ? (
+              <>
+                <Fingerprint size={14} aria-hidden="true" />
+                Create passkey and turn on encryption
+              </>
+            ) : (
+              'Turn on encryption'
+            )}
           </button>
         </>
       );
@@ -759,12 +859,39 @@ export function SetupDialog({
               </span>
             </label>
           )}
-          {projects?.required && projects.migration ? (
+          {!offerExisting ? (
             <p>
-              Your existing cloud projects are encrypted next, in this tab.
-              Settings › Encryption shows their progress.
+              Projects you already have stay as they are until you encrypt them.
             </p>
-          ) : offerExisting && existing && existing.ids.length > 0 ? (
+          ) : existing === 'failed' ? (
+            <>
+              <p role="status">
+                Couldn’t count your existing cloud projects. You can encrypt
+                them later from Settings › Encryption.
+              </p>
+              <div className="encryption-actions start">
+                <button
+                  className="secondary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setExisting(null);
+                    setListing((count) => count + 1);
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            </>
+          ) : existing === null ? (
+            <p role="status">Checking your existing cloud projects…</p>
+          ) : existing.ids.length === 0 ? null : projects?.required ? (
+            <p>
+              Done starts encrypting your {existing.ids.length} existing cloud{' '}
+              {existing.ids.length === 1 ? 'project' : 'projects'}. Keep this
+              tab open while it runs.
+            </p>
+          ) : (
             <label className="encryption-acknowledge">
               <input
                 type="checkbox"
@@ -779,13 +906,7 @@ export function SetupDialog({
                 (keep this tab open while it runs)
               </span>
             </label>
-          ) : counting ? (
-            <p role="status">Checking your existing cloud projects…</p>
-          ) : !offerExisting ? (
-            <p>
-              Projects you already have stay as they are until you encrypt them.
-            </p>
-          ) : null}
+          )}
         </>
       );
       footer = (

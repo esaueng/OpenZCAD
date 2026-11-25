@@ -2030,41 +2030,52 @@ Worker route or migration.
 ### Recovery-key confirmation (D2)
 
 Setup still generates the recovery key first, in memory, and the first
-device-list entry still certifies it as an unlock target. What changes is
-the order of the screens and how its saving is confirmed
-(`apps/web/src/components/encryption/SetupDialog.tsx`):
+device-list entry still certifies it as an unlock target. Nothing is
+created or committed until the person has seen the recovery key and
+acknowledged saving it (`apps/web/src/components/encryption/SetupDialog.tsx`):
 
-- **With a passkey.** "Continue with passkey" creates the credential first,
-  inside the click, so nothing is typed. The person confirms once, or twice
-  where the browser evaluates PRF only on a follow-up assertion (Safari),
-  and the first screen says the browser may ask twice. Then
-  `setUpEncryption` commits the identity, the recovery target and this
-  device, and `addPasskey` certifies the passkey with the recovery secret
-  already in memory and the credential just created. The person then saves
-  the recovery key (download, copy or print) and ticks "I saved it". Nothing
-  is typed back.
-- **Without a passkey** (recovery key only, a passkey that failed, or no
-  WebAuthn PRF, as in the desktop WebView), the person also types the key's
-  last group of four characters, which the screen masks meanwhile. A
-  recovery-key-only setup commits its keys only after that.
+- **Order.** The first screen only chooses: "Continue with passkey" or "Use
+  a recovery key only". The second shows the recovery key (download, copy,
+  print) and "I saved it". Only its primary button commits: on the passkey
+  path it creates the credential inside that click, so it keeps the user
+  gesture, then `setUpEncryption` commits the identity, the recovery target
+  and this device, then `addPasskey` certifies the passkey with the
+  recovery secret in memory and the credential just created. The person
+  confirms the passkey once, or twice where the browser evaluates PRF only
+  on a follow-up assertion (Safari), and the screen says it may ask twice.
+- **What is typed.** With the passkey path, nothing is typed back. With a
+  recovery key only (chosen, a passkey cancelled or refused before the
+  commit, or no WebAuthn PRF, as in the desktop WebView), the person also
+  types the key's last group of four characters, which the screen masks
+  meanwhile, before the commit.
 - This supersedes the full retype of the 2026-11-16 plan. The last group
   makes the person consult the copy they saved; it does not prove the rest
   of that copy is correct, so a transcription error elsewhere is found only
   when the key is used (its checksum then refuses it). That is the accepted
   cost. With a passkey enrolled, the account has a way back in besides this
   device and the recovery key, which is why no retype is asked.
-- **Failures.** A passkey ceremony cancelled or refused before setup
-  commits nothing, and setup continues as recovery key only. If setup
-  commits and certifying the passkey then fails, the account holds keys
-  with the recovery key as its only way in beyond this device, and the
-  save screen asks for the last group and cannot be dismissed until it is
-  confirmed. A credential the provider kept but nothing certified is named
-  for deletion, as [Unlock and devices](#unlock-and-devices) requires.
-- **Keys before the saved key.** On the passkey path the keys exist on the
-  server before the person confirms saving the recovery key. A tab closed
-  at that screen leaves an account reachable from this device and the
-  passkey, whose recovery key may be unsaved; Settings › Encryption can
-  replace it.
+- **Failures.** A passkey ceremony cancelled or refused before the commit
+  commits nothing, and setup continues as recovery key only. If the commit
+  succeeds and certifying the passkey then fails, the account holds keys
+  whose recovery key the person has already seen and acknowledged; the
+  screen asks for its last group and cannot be dismissed until it is typed.
+  A credential the provider kept but nothing certified is named for
+  deletion, as [Unlock and devices](#unlock-and-devices) requires.
+- **A lost answer.** A setup whose answer does not arrive (no response, a
+  server error, or `E2EE_ALREADY_SET_UP`) may still have committed, so
+  `setUpEncryption` reads the account back. The dialog passes the
+  identities its attempts sent (`SetupAttempts`); an identity there is its
+  own, and the write is accepted as if the answer had arrived (pin and
+  empty contacts list included). No identity means nothing was committed,
+  and the person may retry or cancel. Another identity means the account
+  was set up elsewhere with another recovery key, and the dialog says so.
+  A read-back that also fails leaves the outcome unknown (`setup-unknown`):
+  the dialog then offers only "Try again", with the same recovery key and
+  the same credential, and cannot be closed or discard the key.
+- **Existing projects.** Default-on migration waits while the setup dialog
+  is open (`setupInProgress.ts`): existing projects are encrypted only from
+  the last screen's Done, never because the account became ready while the
+  dialog was still open. Closing the dialog releases the hold.
 
 ### Passkey-first unlock (D3)
 

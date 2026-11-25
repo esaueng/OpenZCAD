@@ -190,22 +190,28 @@ test('sets up with a passkey first, no retype, and unlocks a fresh browser passk
     .click();
 
   const save = settings.getByRole('dialog', { name: 'Save your recovery key' });
-  await expect(save.getByText('Your passkey is ready.')).toBeVisible({
-    timeout: 30_000
-  });
   const recoveryKey = save.getByLabel('Recovery key', { exact: true });
   await expect(recoveryKey).toHaveText(/^([0-9A-Z]{4}-){13}[0-9A-Z]{4}$/);
-  // Keys exist already; Escape does not leave them with an unsaved key.
-  await page.keyboard.press('Escape');
-  await expect(save).toBeVisible();
+  // The key is shown and acknowledged before any passkey or key exists.
+  expect(
+    (await cdp.send('WebAuthn.getCredentials', { authenticatorId }))
+      .credentials
+  ).toHaveLength(0);
+  expect(
+    server.db.prepare('SELECT COUNT(*) AS n FROM e2ee_identities').get()
+  ).toEqual({ n: 0 });
+  const create = save.getByRole('button', {
+    name: 'Create passkey and turn on encryption'
+  });
+  await expect(create).toBeDisabled();
   await save.getByRole('checkbox', { name: /I saved my recovery key/ }).check();
-  // D2: nothing to type back after a passkey was made.
+  // D2: nothing to type back on the passkey path.
   await expect(save.getByLabel('Last group of your recovery key')).toHaveCount(
     0
   );
   await expect(recoveryKey).not.toContainText('•');
-  await save.getByRole('button', { name: 'Continue', exact: true }).click();
-  await expect(save).toHaveCount(0);
+  await create.click();
+  await expect(save).toHaveCount(0, { timeout: 30_000 });
   await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
   await expect(
     settings.getByRole('button', { name: 'Remove passkey 1', exact: true })
@@ -307,6 +313,13 @@ test('falls back to the recovery key alone, committing nothing, when the passkey
     .getByRole('button', { name: 'Continue with passkey', exact: true })
     .click();
   const save = settings.getByRole('dialog', { name: 'Save your recovery key' });
+  const recoveryKey = (await save
+    .getByLabel('Recovery key', { exact: true })
+    .textContent())!;
+  await save.getByRole('checkbox', { name: /I saved my recovery key/ }).check();
+  await save
+    .getByRole('button', { name: 'Create passkey and turn on encryption' })
+    .click();
   const notice = save.getByRole('status');
   await expect(notice).toContainText('No passkey was added.');
   await expect(notice).toContainText('does not support PRF');
@@ -320,10 +333,7 @@ test('falls back to the recovery key alone, committing nothing, when the passkey
     server.db.prepare('SELECT COUNT(*) AS n FROM e2ee_identities').get()
   ).toEqual({ n: 0 });
 
-  const recoveryKey = (await save
-    .getByLabel('Recovery key', { exact: true })
-    .textContent())!;
-  await save.getByRole('checkbox', { name: /I saved my recovery key/ }).check();
+  // Recovery key only now: its last group, then turn on.
   await save
     .getByLabel('Last group of your recovery key')
     .fill(lastRecoveryGroup(recoveryKey));

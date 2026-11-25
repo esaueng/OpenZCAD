@@ -224,12 +224,15 @@ the browser side first, then the Worker's defense in depth.
   first device-list entry and requires the recovery key to be saved:
   `setUpEncryption` in `apps/web/src/lib/e2ee/accountKeys.ts`; UI in
   `apps/web/src/components/encryption/SetupDialog.tsx`. Setup is passkey
-  first (ADR-024 amendment 2026-11-25, D2): the credential is created
-  inside the first click, then `setUpEncryption` commits, then `addPasskey`
-  certifies the passkey with the in-memory recovery secret. Saving the key
-  is an "I saved it" acknowledgement; without a passkey the last group of
-  four is also typed back, and a recovery-key-only setup commits only after
-  it. A passkey failure falls back to that path.
+  first (ADR-024 amendment 2026-11-25, D2), and nothing is created or
+  committed until the recovery key has been shown and "I saved it" ticked
+  (without a passkey, its last group of four is also typed back). The
+  final click then creates the credential, `setUpEncryption` commits and
+  `addPasskey` certifies the passkey with the in-memory recovery secret. A
+  passkey failure before the commit falls back to recovery key only. A
+  setup whose answer is lost is read back and adopted when the identity is
+  one this caller sent (`SetupAttempts`, `adoptSetUpAttempt`); a failed
+  read-back is `setup-unknown`, retried with the same material.
 - Recovery key: 256 bits, `generateRecoveryKey`, `formatRecoveryKey`,
   `parseRecoveryKey` in `packages/crypto/src/codes.ts`. It and each passkey
   are public-key targets: the target's private half is wrapped under the
