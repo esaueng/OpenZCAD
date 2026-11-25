@@ -221,9 +221,18 @@ the browser side first, then the Worker's defense in depth.
 
 - Setup creates the identity key (ECDSA P-256), the account key, the
   encryption key pair and this device's signing and unlock keys, signs the
-  first device-list entry and requires the recovery key to be saved and
-  confirmed: `setUpEncryption` in `apps/web/src/lib/e2ee/accountKeys.ts`;
-  UI in `apps/web/src/components/EncryptionSettings.tsx`.
+  first device-list entry and requires the recovery key to be saved:
+  `setUpEncryption` in `apps/web/src/lib/e2ee/accountKeys.ts`; UI in
+  `apps/web/src/components/encryption/SetupDialog.tsx`. Setup is passkey
+  first (ADR-024 amendment 2026-11-25, D2), and nothing is created or
+  committed until the recovery key has been shown and "I saved it" ticked
+  (without a passkey, its last group of four is also typed back). The
+  final click then creates the credential, `setUpEncryption` commits and
+  `addPasskey` certifies the passkey with the in-memory recovery secret. A
+  passkey failure before the commit falls back to recovery key only. A
+  setup whose answer is lost is read back and adopted when the identity is
+  one this caller sent (`SetupAttempts`, `adoptSetUpAttempt`); a failed
+  read-back is `setup-unknown`, retried with the same material.
 - Recovery key: 256 bits, `generateRecoveryKey`, `formatRecoveryKey`,
   `parseRecoveryKey` in `packages/crypto/src/codes.ts`. It and each passkey
   are public-key targets: the target's private half is wrapped under the
@@ -766,12 +775,16 @@ and on the scenario and archive tests.
   failures roll back; failed archive downloads during an accepted provisional
   rejoin remain retryable. Cadence tests drive a real group through epoch 256
   and exercise refresh after an owner-device revocation.
-- **Recovery enrollment without pins.** A recovery key authenticates the
-  identity, not the freshness of a device-list head supplied to a pin-less
-  browser. A consistent pre-removal fork may issue new wraps to a removed
-  device; later fork detection cannot undo disclosure. Prefer approval from
-  an existing unlocked device, whose verified head is transferred. The
-  recovery screen and ADR state this limitation explicitly.
+- **Recovery and passkey enrollment without pins.** A recovery key or a
+  passkey authenticates the identity, not the freshness of a device-list
+  head supplied to a pin-less browser. A consistent pre-removal fork may
+  issue new wraps to a removed device; later fork detection cannot undo
+  disclosure. Approval from an existing unlocked device transfers its
+  verified head. Since ADR-024's amendment of 2026-11-25 (D3), Settings
+  offers "Unlock with passkey" first where the account has a passkey this
+  browser can use, approval second and the recovery key third, and states
+  the limitation in one line under those choices
+  (`UNLOCK_FRESHNESS_NOTE` in `EncryptionSettings.tsx`).
 - **Cutoff head freshness.** A removal statement may bind a server-advertised
   head newer than the browser's saved pin. This is the existing removal
   tradeoff: a later post-rotation member write rejects the old epoch; the

@@ -3,12 +3,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as KeysModule from '../../lib/e2ee/accountKeys';
 import type * as PasskeysModule from '../../lib/e2ee/passkeys';
 import type * as PreferencesModule from '../../lib/e2ee/projectPreferences';
+import type * as MigrationsModule from '../../lib/e2ee/projectMigrations';
 import type * as UnlockedKeysModule from '../../lib/e2ee/unlockedKeys';
 import type {
   AccountView,
   E2eeContext,
-  EncryptionState
+  EncryptionState,
+  SetupAttempts
 } from '../../lib/e2ee/accountKeys';
+import type { PasskeyPrf, PasskeySecret } from '../../lib/e2ee/passkeys';
+import { E2eeApiError } from '../../lib/e2ee/e2eeApi';
 import { testRun } from '../../test/encryptionRun';
 
 const keys = vi.hoisted(() => ({
@@ -20,13 +24,30 @@ const keys = vi.hoisted(() => ({
       ) => Promise<unknown>
     >(),
   addPasskey:
-    vi.fn<(ctx: unknown, account: unknown, auth: unknown) => Promise<unknown>>()
+    vi.fn<
+      (
+        ctx: { passkeys?: PasskeyPrf },
+        account: unknown,
+        auth: unknown
+      ) => Promise<unknown>
+    >()
 }));
 const prf = vi.hoisted(() => vi.fn());
 const preferences = vi.hoisted(() => ({
   config: vi.fn(),
   load: vi.fn(),
   save: vi.fn()
+}));
+const migration = vi.hoisted(() => ({
+  refresh: vi.fn(),
+  run: vi.fn(),
+  state: {
+    running: false,
+    pausing: false,
+    otherTab: false,
+    projects: [] as { projectId: string; phase: string }[],
+    error: null as string | null
+  }
 }));
 vi.mock('../../lib/e2ee/accountKeys', async (original) => ({
   ...(await original<typeof KeysModule>()),
@@ -42,12 +63,23 @@ vi.mock('../../lib/e2ee/projectPreferences', async (original) => ({
   loadProjectPreference: preferences.load,
   saveProjectPreference: preferences.save
 }));
+vi.mock('../../lib/e2ee/projectMigrations', async (original) => ({
+  ...(await original<typeof MigrationsModule>()),
+  pageMigrationController: () => ({
+    getState: () => migration.state,
+    refresh: migration.refresh,
+    run: migration.run
+  })
+}));
 vi.mock('../../lib/e2ee/unlockedKeys', async (original) => ({
   ...(await original<typeof UnlockedKeysModule>()),
   unlockedAccount: () => ({ accountKey: new Uint8Array(32) })
 }));
-const { SetupDialog } = await import('./SetupDialog');
-const { EncryptionFlowError } = await import('../../lib/e2ee/accountKeys');
+const { SetupDialog, lastRecoveryGroup } = await import('./SetupDialog');
+const { EncryptionFlowError, SETUP_OUTCOME_UNKNOWN } =
+  await import('../../lib/e2ee/accountKeys');
+const { PasskeyError, failedPasskeyEnrollment } =
+  await import('../../lib/e2ee/passkeys');
 
 const ready = {
   kind: 'ready',
@@ -56,69 +88,364 @@ const ready = {
 
 afterEach(() => {
   vi.clearAllMocks();
+  migration.state.projects = [];
+  migration.state.error = null;
 });
 
-function open() {
+function passkey(): PasskeySecret {
+  return {
+    targetId: 'pk_0123456789abcdef',
+    secret: new Uint8Array(32).fill(7),
+    enrollmentLabel: 'OpenZCAD encryption 0a1b2c3d4e5f'
+  };
+}
+
+function open({
+  create = vi.fn<() => Promise<PasskeySecret>>(),
+  skipProjectsStep
+}: {
+  create?: ReturnType<typeof vi.fn<() => Promise<PasskeySecret>>>;
+  skipProjectsStep?: boolean;
+} = {}) {
   const onClose = vi.fn();
+  const onComplete = vi.fn();
   const onEncryptExisting = vi.fn();
-  render(
+  const view = render(
     <SetupDialog
-      ctx={{ userId: 'user_alice' } as E2eeContext}
+      ctx={
+        {
+          userId: 'user_alice',
+          passkeys: { create, get: vi.fn() }
+        } as unknown as E2eeContext
+      }
       busy={false}
       run={testRun()}
       userId="user_alice"
       onClose={onClose}
+      onComplete={onComplete}
       onEncryptExisting={onEncryptExisting}
+      skipProjectsStep={skipProjectsStep}
     />
   );
-  return { onClose, onEncryptExisting };
+  return {
+    onClose,
+    onComplete,
+    onEncryptExisting,
+    create,
+    unmount: view.unmount
+  };
 }
 
-async function throughConfirm() {
-  fireEvent.click(await screen.findByRole('button', { name: 'Start' }));
-  const shown = screen.getByLabelText('Recovery key').textContent ?? '';
-  const continueButton = screen.getByRole('button', { name: 'Continue' });
-  // The acknowledgement comes first (design review I80).
-  expect(continueButton).toBeDisabled();
-  fireEvent.click(screen.getByRole('checkbox'));
-  fireEvent.click(continueButton);
-  return shown;
-}
+const savedBox = () =>
+  screen.getByRole('checkbox', { name: /I saved my recovery key/ });
+const shownKey = () => screen.getByLabelText('Recovery key').textContent ?? '';
 
 describe('the setup dialog', () => {
-  it('says what losing every way in costs before anything else', async () => {
+  it('says what losing every way in costs on its first screen', async () => {
     prf.mockResolvedValue('supported');
     preferences.config.mockResolvedValue({ enabled: false });
     open();
     expect(
-      await screen.findByText(/can’t be recovered, by you or by us/)
-    ).toBeVisible();
+      await screen.findByRole('dialog', { name: 'Turn on encryption' })
+    ).toHaveTextContent(/can’t be recovered, by you or by us/);
+    expect(screen.getByRole('progressbar', { name: 'Step' })).toHaveAttribute(
+      'aria-valuetext',
+      'Step 1 of 2'
+    );
   });
 
-  it('turns encryption on only once the key is typed back exactly', async () => {
+  it('shows and acknowledges the key before any passkey or key exists, then creates, sets up and enrolls in one click', async () => {
+    prf.mockResolvedValue('supported');
+    preferences.config.mockResolvedValue({ enabled: false });
+    const made = passkey();
+    const order: string[] = [];
+    const create = vi.fn(async () => {
+      order.push('create');
+      return made;
+    });
+    keys.setUpEncryption.mockImplementation(async () => {
+      order.push('setup');
+      return ready;
+    });
+    keys.addPasskey.mockImplementation(async (ctx) => {
+      order.push('enroll');
+      // The credential created inside the click, never a second prompt.
+      expect(await ctx.passkeys!.create()).toBe(made);
+      return ready;
+    });
+    const { onClose, onComplete } = open({ create });
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Continue with passkey' })
+    );
+    // Screen 2 first: nothing created or committed yet.
+    await screen.findByRole('dialog', { name: 'Save your recovery key' });
+    expect(order).toEqual([]);
+    expect(screen.getByText(/may ask you to confirm twice/)).toBeVisible();
+    const primary = screen.getByRole('button', {
+      name: 'Create passkey and turn on encryption'
+    });
+    expect(primary).toBeDisabled();
+    fireEvent.click(savedBox());
+    // D2: with the passkey path, no part of the key is typed.
+    expect(
+      screen.queryByLabelText('Last group of your recovery key')
+    ).toBeNull();
+    expect(screen.getByLabelText('Recovery key')).not.toHaveTextContent('•');
+    fireEvent.click(primary);
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(order).toEqual(['create', 'setup', 'enroll']);
+    expect(keys.addPasskey.mock.calls[0]![2]).toBe(
+      keys.setUpEncryption.mock.calls[0]![1].recoverySecret
+    );
+    // The passkey's PRF secret does not outlive the flow.
+    expect(made.secret.every((byte) => byte === 0)).toBe(true);
+    expect(onComplete).toHaveBeenCalledOnce();
+  });
+
+  it('with a recovery key only, commits nothing until the last group is typed back', async () => {
     prf.mockResolvedValue('supported');
     preferences.config.mockResolvedValue({ enabled: false });
     keys.setUpEncryption.mockResolvedValue(ready);
-    open();
-    const shown = await throughConfirm();
-    const field = screen.getByLabelText('Confirm recovery key');
-    fireEvent.change(field, { target: { value: 'ABCD-EFGH' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Turn on encryption' }));
+    const { onClose, create } = open();
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Use a recovery key only' })
+    );
+    const shown = shownKey();
+    const turnOn = screen.getByRole('button', { name: 'Turn on encryption' });
+    expect(turnOn).toBeDisabled();
+    fireEvent.click(savedBox());
+    // The group asked for is hidden, so it is read from the saved copy.
+    expect(screen.getByLabelText('Recovery key')).toHaveTextContent(/-••••$/);
+    const field = screen.getByLabelText('Last group of your recovery key');
+    fireEvent.change(field, { target: { value: 'ZZZZ' } });
+    fireEvent.click(turnOn);
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'That does not match'
     );
     expect(keys.setUpEncryption).not.toHaveBeenCalled();
-    fireEvent.change(field, { target: { value: shown.toLowerCase() } });
+    fireEvent.change(field, {
+      target: { value: ` ${lastRecoveryGroup(shown).toLowerCase()} ` }
+    });
+    fireEvent.click(turnOn);
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(keys.setUpEncryption).toHaveBeenCalledOnce();
+    expect(create).not.toHaveBeenCalled();
+    expect(keys.addPasskey).not.toHaveBeenCalled();
+  });
+
+  it('offers only the recovery key where passkeys are unavailable', async () => {
+    prf.mockResolvedValue('unsupported');
+    preferences.config.mockResolvedValue({ enabled: false });
+    keys.setUpEncryption.mockResolvedValue(ready);
+    const { onClose } = open();
+    await screen.findByRole('dialog', { name: 'Turn on encryption' });
+    expect(
+      screen.queryByRole('button', { name: 'Continue with passkey' })
+    ).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    const shown = shownKey();
+    fireEvent.click(savedBox());
+    fireEvent.change(screen.getByLabelText('Last group of your recovery key'), {
+      target: { value: lastRecoveryGroup(shown) }
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Turn on encryption' }));
-    await screen.findByRole('dialog', { name: 'Add a passkey' });
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(keys.addPasskey).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the recovery key alone, with nothing committed, when the passkey prompt is cancelled', async () => {
+    prf.mockResolvedValue('unknown');
+    preferences.config.mockResolvedValue({ enabled: false });
+    keys.setUpEncryption.mockResolvedValue(ready);
+    const create = vi.fn(async (): Promise<PasskeySecret> => {
+      throw new PasskeyError(
+        'The passkey prompt was canceled or timed out. Try again or use your recovery key.'
+      );
+    });
+    const { onClose } = open({ create });
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Continue with passkey' })
+    );
+    const shown = shownKey();
+    fireEvent.click(savedBox());
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Create passkey and turn on encryption'
+      })
+    );
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      /No passkey was added\. The passkey prompt was canceled.*Go back to try again/
+    );
+    expect(keys.setUpEncryption).not.toHaveBeenCalled();
+    // Now recovery key only: Back still works, and the last group is asked.
+    expect(screen.getByRole('button', { name: 'Back' })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Last group of your recovery key'), {
+      target: { value: lastRecoveryGroup(shown) }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on encryption' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(keys.setUpEncryption).toHaveBeenCalledOnce();
+    expect(keys.addPasskey).not.toHaveBeenCalled();
+  });
+
+  it('keeps the keys and asks for the last group when enrolling the passkey fails after setup', async () => {
+    prf.mockResolvedValue('supported');
+    preferences.config.mockResolvedValue({ enabled: false });
+    const made = passkey();
+    keys.setUpEncryption.mockResolvedValue(ready);
+    keys.addPasskey.mockRejectedValue(
+      failedPasskeyEnrollment(
+        new EncryptionFlowError('invalid-request', 'Device list changed.'),
+        made.enrollmentLabel!,
+        made.targetId
+      )
+    );
+    const { onClose, onComplete } = open({ create: vi.fn(async () => made) });
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Continue with passkey' })
+    );
+    const shown = shownKey();
+    fireEvent.click(savedBox());
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Create passkey and turn on encryption'
+      })
+    );
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent(
+      'No passkey was added. Device list changed.'
+    );
+    // The provider's orphaned credential is named for clean-up.
+    expect(notice).toHaveTextContent(made.enrollmentLabel!);
+    expect(notice).toHaveTextContent('Encryption is on with your recovery key');
+    expect(made.secret.every((byte) => byte === 0)).toBe(true);
+    // Keys exist: no going back, and Escape does not leave unconfirmed.
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    const proceed = screen.getByRole('button', { name: 'Continue' });
+    expect(proceed).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Last group of your recovery key'), {
+      target: { value: lastRecoveryGroup(shown) }
+    });
+    fireEvent.click(proceed);
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onComplete).toHaveBeenCalledOnce();
     expect(keys.setUpEncryption).toHaveBeenCalledOnce();
   });
 
-  it('adds a passkey with the key already in hand, then encrypts new projects by default', async () => {
-    prf.mockResolvedValue('unknown');
+  it('never offers Cancel while a lost setup answer is unresolved, and retries with the same key and credential', async () => {
+    prf.mockResolvedValue('supported');
+    preferences.config.mockResolvedValue({ enabled: false });
+    const made = passkey();
+    const create = vi.fn(async () => made);
+    keys.setUpEncryption
+      .mockRejectedValueOnce(
+        new EncryptionFlowError('setup-unknown', SETUP_OUTCOME_UNKNOWN)
+      )
+      .mockResolvedValueOnce(ready);
+    keys.addPasskey.mockResolvedValue(ready);
+    const { onClose } = open({ create });
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Continue with passkey' })
+    );
+    fireEvent.click(savedBox());
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Create passkey and turn on encryption'
+      })
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Couldn’t tell whether encryption was turned on'
+    );
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    // The key on screen is the one the retry sends.
+    expect(screen.getByLabelText('Recovery key')).not.toHaveTextContent('•');
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    const [first, second] = keys.setUpEncryption.mock.calls;
+    expect(second![1].recoverySecret).toBe(first![1].recoverySecret);
+    // Both attempts share one record, so the read-back knows either.
+    expect((second![1] as { attempts?: unknown }).attempts).toBeDefined();
+    expect((second![1] as { attempts?: unknown }).attempts).toBe(
+      (first![1] as { attempts?: unknown }).attempts
+    );
+    // The credential made for the first try is reused, not made again.
+    expect(create).toHaveBeenCalledOnce();
+    expect(keys.addPasskey).toHaveBeenCalledOnce();
+  });
+
+  it('says plainly when another recovery key already holds the account', async () => {
+    prf.mockResolvedValue('supported');
+    preferences.config.mockResolvedValue({ enabled: false });
+    keys.setUpEncryption.mockRejectedValue(
+      new E2eeApiError(
+        409,
+        'Encryption keys are already set up.',
+        'E2EE_ALREADY_SET_UP'
+      )
+    );
+    const { onClose } = open();
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Use a recovery key only' })
+    );
+    const shown = shownKey();
+    fireEvent.click(savedBox());
+    fireEvent.change(screen.getByLabelText('Last group of your recovery key'), {
+      target: { value: lastRecoveryGroup(shown) }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on encryption' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'with a different recovery key'
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Turn on encryption' })
+    ).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('holds default-on migration while it is open', async () => {
+    prf.mockResolvedValue('supported');
+    preferences.config.mockResolvedValue({ enabled: false });
+    const { setupInProgress } = await import('../../lib/e2ee/setupInProgress');
+    const { unmount } = render(
+      <SetupDialog
+        ctx={{ userId: 'user_held' } as E2eeContext}
+        busy={false}
+        run={testRun()}
+        userId="user_held"
+        onClose={vi.fn()}
+      />
+    );
+    expect(setupInProgress('user_held')).toBe(true);
+    unmount();
+    expect(setupInProgress('user_held')).toBe(false);
+  });
+
+  /** Recovery key only through to screen 3. */
+  async function toProjects() {
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Use a recovery key only' })
+    );
+    const shown = shownKey();
+    fireEvent.click(savedBox());
+    fireEvent.change(screen.getByLabelText('Last group of your recovery key'), {
+      target: { value: lastRecoveryGroup(shown) }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on encryption' }));
+    await screen.findByRole('dialog', { name: 'You’re set' });
+  }
+
+  function migrationOpen(extra: Record<string, unknown> = {}) {
+    prf.mockResolvedValue('supported');
     preferences.config.mockResolvedValue({
       enabled: true,
-      projectsEnabled: true
+      projectsEnabled: true,
+      migrationEnabled: true,
+      ...extra
     });
     preferences.load.mockResolvedValue({ kind: 'unset', pinned: null });
     preferences.save.mockResolvedValue({
@@ -127,71 +454,347 @@ describe('the setup dialog', () => {
       sequence: 1
     });
     keys.setUpEncryption.mockResolvedValue(ready);
-    keys.addPasskey.mockResolvedValue(ready);
-    const { onClose } = open();
-    const shown = await throughConfirm();
-    fireEvent.change(screen.getByLabelText('Confirm recovery key'), {
-      target: { value: shown }
+    migration.run.mockResolvedValue(undefined);
+  }
+
+  it('ends with new and existing projects both ticked, and starts encrypting the existing ones only on Done', async () => {
+    migrationOpen();
+    migration.refresh.mockImplementation(async () => {
+      migration.state.projects = [
+        { projectId: 'proj_a', phase: 'waiting' },
+        { projectId: 'proj_b', phase: 'waiting' },
+        { projectId: 'proj_c', phase: 'done' }
+      ];
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Turn on encryption' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Add passkey' }));
-    await screen.findByRole('dialog', { name: 'Your projects' });
-    // The same recovery secret setup used, never typed a second time.
-    expect(keys.addPasskey.mock.calls[0]![2]).toBe(
-      keys.setUpEncryption.mock.calls[0]![1].recoverySecret
-    );
+    const { onClose, onComplete, onEncryptExisting } = open();
+    await toProjects();
     expect(
       screen.getByRole('checkbox', { name: /Encrypt new projects/ })
     ).toBeChecked();
+    expect(
+      await screen.findByRole('checkbox', {
+        name: /Encrypt my 2 existing cloud projects/
+      })
+    ).toBeChecked();
+    expect(migration.run).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await waitFor(() => expect(onEncryptExisting).toHaveBeenCalledOnce());
     expect(preferences.save.mock.calls[0]![1]).toBe(true);
+    expect(migration.run).toHaveBeenCalledWith(['proj_a', 'proj_b']);
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('never offers a passkey where the browser says PRF is unsupported', async () => {
-    prf.mockResolvedValue('unsupported');
-    preferences.config.mockResolvedValue({ enabled: false });
-    keys.setUpEncryption.mockResolvedValue(ready);
-    const { onClose } = open();
-    await waitFor(() => expect(prf).toHaveBeenCalled());
-    const shown = await throughConfirm();
+  it('leaves existing projects alone when that box is unticked', async () => {
+    migrationOpen();
+    preferences.load.mockResolvedValue({
+      kind: 'verified',
+      encryptNewProjects: true,
+      sequence: 1
+    });
+    migration.refresh.mockImplementation(async () => {
+      migration.state.projects = [{ projectId: 'proj_a', phase: 'waiting' }];
+    });
+    const { onClose, onEncryptExisting } = open();
+    await toProjects();
+    fireEvent.click(
+      await screen.findByRole('checkbox', {
+        name: /Encrypt my 1 existing cloud project\b/
+      })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(migration.run).not.toHaveBeenCalled();
+    expect(onEncryptExisting).not.toHaveBeenCalled();
+    expect(preferences.save).not.toHaveBeenCalled();
+  });
+
+  it('under default-on, encrypts existing projects on Done, not before', async () => {
+    migrationOpen({ defaultOn: true });
+    migration.refresh.mockImplementation(async () => {
+      migration.state.projects = [{ projectId: 'proj_a', phase: 'waiting' }];
+    });
+    const { onEncryptExisting } = open();
+    await toProjects();
+    expect(
+      await screen.findByText(/Done starts encrypting your 1 existing cloud/)
+    ).toBeVisible();
+    expect(migration.run).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(onEncryptExisting).toHaveBeenCalledOnce());
+    expect(migration.run).toHaveBeenCalledWith(['proj_a']);
+    // The server decides for new projects; nothing is saved here.
+    expect(preferences.save).not.toHaveBeenCalled();
+  });
+
+  it('says when the existing projects could not be counted, and retries', async () => {
+    migrationOpen();
+    migration.refresh
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementationOnce(async () => {
+        migration.state.projects = [{ projectId: 'proj_a', phase: 'waiting' }];
+      });
+    open();
+    await toProjects();
+    expect(
+      await screen.findByText(/Couldn’t count your existing cloud projects/)
+    ).toBeVisible();
+    // Done still works: they can be encrypted later from Settings.
+    expect(screen.getByRole('button', { name: 'Done' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(
+      await screen.findByRole('checkbox', {
+        name: /Encrypt my 1 existing cloud project\b/
+      })
+    ).toBeChecked();
+  });
+
+  it('lets a caller replace the projects step with its own', async () => {
+    migrationOpen();
+    keys.addPasskey.mockResolvedValue(ready);
+    const { onClose, onComplete } = open({
+      create: vi.fn(async () => passkey()),
+      skipProjectsStep: true
+    });
+    await waitFor(() => expect(preferences.config).toHaveBeenCalled());
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Continue with passkey' })
+    );
     expect(screen.getByRole('progressbar', { name: 'Step' })).toHaveAttribute(
       'aria-valuetext',
-      'Step 3 of 3'
+      'Step 2 of 2'
     );
-    fireEvent.change(screen.getByLabelText('Confirm recovery key'), {
-      target: { value: shown }
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Turn on encryption' }));
-    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    expect(keys.addPasskey).not.toHaveBeenCalled();
+    fireEvent.click(savedBox());
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Create passkey and turn on encryption'
+      })
+    );
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(migration.refresh).not.toHaveBeenCalled();
   });
 
-  it('stays open and says why when saving the choice fails before Encrypt existing', async () => {
-    prf.mockResolvedValue('unsupported');
-    preferences.config.mockResolvedValue({
-      enabled: true,
-      projectsEnabled: true
-    });
-    preferences.load.mockResolvedValue({ kind: 'unset', pinned: null });
+  it('stays open and says why when saving the choice fails', async () => {
+    migrationOpen();
     preferences.save.mockRejectedValue(
       new EncryptionFlowError('invalid-request', 'The setting was not saved.')
     );
-    keys.setUpEncryption.mockResolvedValue(ready);
-    const { onClose, onEncryptExisting } = open();
-    await waitFor(() => expect(prf).toHaveBeenCalled());
-    const shown = await throughConfirm();
-    fireEvent.change(screen.getByLabelText('Confirm recovery key'), {
-      target: { value: shown }
+    migration.refresh.mockImplementation(async () => {
+      migration.state.projects = [{ projectId: 'proj_a', phase: 'waiting' }];
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Turn on encryption' }));
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Encrypt existing projects…' })
-    );
+    const { onClose, onComplete, onEncryptExisting } = open();
+    await toProjects();
+    await screen.findByRole('checkbox', { name: /Encrypt my 1 existing/ });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'The setting was not saved.'
     );
+    expect(migration.run).not.toHaveBeenCalled();
     expect(onEncryptExisting).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+  // #2053 re-check: one write at a time, and nothing is erased or closed
+  // while it is in flight.
+  describe('while a key write is in flight', () => {
+    type Options = { recoverySecret: Uint8Array; attempts?: SetupAttempts };
+    const optionsOf = (call: number) =>
+      keys.setUpEncryption.mock.calls[call]![1] as Options;
+
+    async function typedLastGroup() {
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Use a recovery key only' })
+      );
+      const shown = shownKey();
+      fireEvent.click(savedBox());
+      const field = screen.getByLabelText('Last group of your recovery key');
+      fireEvent.change(field, { target: { value: lastRecoveryGroup(shown) } });
+      return field;
+    }
+
+    it('ignores a repeated Enter, and blocks Escape until the write settles', async () => {
+      prf.mockResolvedValue('supported');
+      preferences.config.mockResolvedValue({ enabled: false });
+      let fail!: (error: Error) => void;
+      keys.setUpEncryption.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            fail = reject;
+          })
+      );
+      const { onClose } = open();
+      const field = await typedLastGroup();
+      fireEvent.keyDown(field, { key: 'Enter' });
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(keys.setUpEncryption).toHaveBeenCalledOnce();
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+      expect(onClose).not.toHaveBeenCalled();
+      const secret = optionsOf(0).recoverySecret;
+      fail(new EncryptionFlowError('invalid-request', 'Refused.'));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Refused.');
+      // No second write was queued behind the first.
+      expect(keys.setUpEncryption).toHaveBeenCalledOnce();
+      expect(secret.some((byte) => byte !== 0)).toBe(true);
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it('erases the recovery key only after a write still in flight at unmount settles', async () => {
+      prf.mockResolvedValue('supported');
+      preferences.config.mockResolvedValue({ enabled: false });
+      let fail!: (error: Error) => void;
+      keys.setUpEncryption.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            fail = reject;
+          })
+      );
+      const { unmount } = open();
+      fireEvent.keyDown(await typedLastGroup(), { key: 'Enter' });
+      const secret = optionsOf(0).recoverySecret;
+      unmount();
+      expect(secret.some((byte) => byte !== 0)).toBe(true);
+      fail(new Error('Session ended'));
+      await waitFor(() =>
+        expect(secret.every((byte) => byte === 0)).toBe(true)
+      );
+    });
+
+    it('erases a passkey that arrives after the dialog closed', async () => {
+      prf.mockResolvedValue('supported');
+      preferences.config.mockResolvedValue({ enabled: false });
+      const made = passkey();
+      let arrive!: (secret: PasskeySecret) => void;
+      const create = vi.fn(
+        () =>
+          new Promise<PasskeySecret>((resolve) => {
+            arrive = resolve;
+          })
+      );
+      keys.setUpEncryption.mockRejectedValue(
+        new EncryptionFlowError('invalid-request', 'The account session ended.')
+      );
+      const { unmount } = open({ create });
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Continue with passkey' })
+      );
+      fireEvent.click(savedBox());
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Create passkey and turn on encryption'
+        })
+      );
+      unmount();
+      arrive(made);
+      await waitFor(() =>
+        expect(made.secret.every((byte) => byte === 0)).toBe(true)
+      );
+    });
+
+    it('keeps an unknown outcome when a retry is refused, until a read-back proves it', async () => {
+      prf.mockResolvedValue('supported');
+      preferences.config.mockResolvedValue({ enabled: false });
+      keys.setUpEncryption
+        .mockRejectedValueOnce(
+          new EncryptionFlowError('setup-unknown', SETUP_OUTCOME_UNKNOWN)
+        )
+        .mockRejectedValueOnce(
+          new E2eeApiError(429, 'Too many requests.', 'RATE_LIMITED')
+        )
+        .mockImplementationOnce(async (_ctx, options) => {
+          (options as Options).attempts!.proved = 'not-committed';
+          throw new TypeError('Failed to fetch');
+        });
+      const { onClose } = open();
+      fireEvent.keyDown(await typedLastGroup(), { key: 'Enter' });
+      const retry = await screen.findByRole('button', { name: 'Try again' });
+      fireEvent.click(retry);
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Too many requests.'
+      );
+      // A refusal of the retry says nothing about the first write.
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeVisible();
+      expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+      // The read-back found nothing: the person may leave again.
+      expect(
+        await screen.findByRole('button', { name: 'Turn on encryption' })
+      ).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Back' })).toBeVisible();
+      expect(optionsOf(2).attempts).toBe(optionsOf(0).attempts);
+    });
+
+    it('counts keys as committed when the load after the write fails', async () => {
+      prf.mockResolvedValue('supported');
+      preferences.config.mockResolvedValue({ enabled: false });
+      const made = passkey();
+      keys.setUpEncryption.mockImplementationOnce(async (_ctx, options) => {
+        (options as Options).attempts!.proved = 'committed';
+        throw new EncryptionFlowError(
+          'invalid-request',
+          'Encryption keys are unavailable right now.'
+        );
+      });
+      const { onClose } = open({ create: vi.fn(async () => made) });
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Continue with passkey' })
+      );
+      const shown = shownKey();
+      fireEvent.click(savedBox());
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Create passkey and turn on encryption'
+        })
+      );
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Encryption keys are unavailable right now.'
+      );
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Encryption is on with your recovery key'
+      );
+      expect(made.secret.every((byte) => byte === 0)).toBe(true);
+      expect(keys.addPasskey).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.change(
+        screen.getByLabelText('Last group of your recovery key'),
+        {
+          target: { value: lastRecoveryGroup(shown) }
+        }
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+      expect(keys.setUpEncryption).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('leaves the projects screen only through Done, holding default-on until then', async () => {
+    migrationOpen({ defaultOn: true });
+    migration.refresh.mockImplementation(async () => {
+      migration.state.projects = [{ projectId: 'proj_a', phase: 'waiting' }];
+    });
+    const { setupInProgress } = await import('../../lib/e2ee/setupInProgress');
+    const { onClose, onEncryptExisting, unmount } = open();
+    await toProjects();
+    await screen.findByText(/Done starts encrypting/);
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(setupInProgress('user_alice')).toBe(true);
+    expect(migration.run).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(onEncryptExisting).toHaveBeenCalledOnce());
+    expect(migration.run).toHaveBeenCalledWith(['proj_a']);
+    unmount();
+    expect(setupInProgress('user_alice')).toBe(false);
+  });
+});
+
+describe('lastRecoveryGroup', () => {
+  it('is the final group of four', () => {
+    expect(lastRecoveryGroup('ABCD-EFGH-JK01')).toBe('JK01');
   });
 });
