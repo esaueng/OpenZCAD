@@ -566,6 +566,7 @@ import {
 import { localAutosaveFailedStatus } from './lib/localAutosaveFailure';
 import {
   LocalProjectAutosave,
+  LocalProjectSaveError,
   sameLocalProjectContent,
   type LocalProjectAutosaveOptions,
   type LocalProjectWriteResult
@@ -5839,7 +5840,7 @@ export function App() {
         return writeOwnedProjectStorage(
           readWritableProjectClaim,
           document.projectId,
-          () => saveLocalProject(document)
+          (held) => saveLocalProject(document, { fence: held })
         );
       }
       return writeUnclaimedProjectStorage(document.projectId, () =>
@@ -7341,7 +7342,7 @@ export function App() {
           await writeOwnedProjectStorage(
             readWritableProjectClaim,
             remoteDocument.projectId,
-            () => saveLocalProject(remoteDocument)
+            (held) => saveLocalProject(remoteDocument, { fence: held })
           );
         } catch {
           setSaveState('offline');
@@ -8777,15 +8778,17 @@ export function App() {
       pendingStoragePromotionRef.current = null;
     projectOpenElsewhereRef.current = true;
     setProjectOpenElsewhere(true);
-    setSaveState('local');
     setStatus(PROJECT_EDITING_TAKEN_NOTICE, { sticky: true });
     // An account push not sent yet is the new owner's to send, from what
     // it read: its edits are on this device already, or kept below.
+    // Re-baselined even with nothing pending: a snapshot queued behind a
+    // request in flight is no longer pending, and must not go either.
     const controller = cloudProjectAutosaveRef.current;
     const syncedVersion = controller?.syncedVersion ?? null;
-    if (controller?.hasPendingChanges && syncedVersion !== null) {
+    if (controller && syncedVersion !== null) {
       controller.adoptAccountVersion(projectId, syncedVersion);
     }
+    setSaveState('local');
     if (localSaveTimeoutRef.current !== null) {
       window.clearTimeout(localSaveTimeoutRef.current);
       localSaveTimeoutRef.current = null;
@@ -8794,8 +8797,8 @@ export function App() {
     // separate project, as a departure from a project this tab no longer
     // holds keeps it (`departureBarrier`).
     const recovery = departureRecoveryRef.current!;
-    try {
-      await departureBarrier(localAutosave, {
+    const keepUnsaved = () =>
+      departureBarrier(localAutosave, {
         departing: () => projectId,
         copies: departureRecoveryCopies,
         host: recovery.host,
@@ -8815,6 +8818,15 @@ export function App() {
           setStatus(failure.message);
         }
       });
+    try {
+      try {
+        await keepUnsaved();
+      } catch (error) {
+        // A device write in flight when the project was taken failed: its
+        // snapshot is still queued, and is now refused and kept as a copy.
+        if (!(error instanceof LocalProjectSaveError)) throw error;
+        await keepUnsaved();
+      }
     } catch {
       // Not kept anywhere: the edit stays here, dirty, so closing the tab
       // still warns; the notice above says what to do.
@@ -12210,6 +12222,9 @@ export function App() {
     const live = managerRef.current;
     if (
       projectOwnershipRef.current !== ownership ||
+      // Taken from this tab while storage was read (Take over editing in
+      // another): it follows that tab now, read-only.
+      !ownership.owned ||
       !live ||
       live.document.projectId !== manager.document.projectId
     ) {
@@ -12234,6 +12249,7 @@ export function App() {
       return;
     }
     openedDocumentRef.current = managerRef.current?.document ?? null;
+    if (!ownership.owned) return;
     pendingStoragePromotionRef.current = null;
     projectOpenElsewhereRef.current = false;
     setProjectOpenElsewhere(false);
@@ -12256,6 +12272,7 @@ export function App() {
         synced !== null &&
         synced > (controller.syncedVersion ?? -1) &&
         projectOwnershipRef.current === ownership &&
+        ownership.owned &&
         managerRef.current?.document.projectId === projectId
       ) {
         remoteVersionsRef.current.set(projectId, synced);
@@ -12266,6 +12283,7 @@ export function App() {
       if (
         current?.projectId === projectId &&
         projectOwnershipRef.current === ownership &&
+        ownership.owned &&
         !controller.holdsDocument(current) &&
         !sharedAccountProjectRef.current &&
         // An encrypted project's room writes the account itself.
@@ -12353,7 +12371,7 @@ export function App() {
     const written = await writeLocalProjectUnderClaim(
       readWritableProjectClaim,
       pending.projectId,
-      () => saveLocalProject(pending),
+      (held) => saveLocalProject(pending, { fence: held }),
       untouched
     );
     if (
@@ -19847,7 +19865,7 @@ export function App() {
       writeOwnedProjectStorage(
         () => projectOwnershipRef.current,
         document.projectId,
-        () => saveLocalProject(document)
+        (held) => saveLocalProject(document, { fence: held })
       );
     if (shareSessionRef.current) {
       setStatus(

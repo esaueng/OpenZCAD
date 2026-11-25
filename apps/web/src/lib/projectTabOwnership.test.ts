@@ -338,4 +338,90 @@ describe('writes made before a tab claims the project', () => {
       expect(locks.isHeld('openzcad-project:project_a')).toBe(false)
     );
   });
+
+  it('queues again when the lock is taken while a grant is still deciding', async () => {
+    const locks = withLockManager();
+    // Hold the handoff-ticket check, so the steal lands between the queued
+    // grant and its promotion.
+    const request = locks.request.bind(locks);
+    let ticketChecks = 0;
+    let openTicket: () => void = () => undefined;
+    const ticketGate = new Promise<void>((resolve) => {
+      openTicket = resolve;
+    });
+    locks.request = ((
+      name: string,
+      options: LockOptions,
+      callback: (lock: Lock | null) => Promise<unknown>
+    ) => {
+      if (!name.startsWith('openzcad-project-handoff:')) {
+        return request(name, options, callback);
+      }
+      ticketChecks += 1;
+      return ticketGate.then(() => request(name, options, callback));
+    }) as typeof locks.request;
+    const promoted = vi.fn();
+    const lost = vi.fn();
+
+    const owner = await claimProjectOwnership('project_a', () => undefined);
+    const waiting = await claimProjectOwnership('project_a', promoted, {
+      onLost: lost
+    });
+    owner.release();
+    await vi.waitFor(() => expect(ticketChecks).toBe(1));
+    const taker = await claimProjectOwnership('project_a', () => undefined, {
+      steal: true
+    });
+    openTicket();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Never a second writer beside the taker.
+    expect(promoted).not.toHaveBeenCalled();
+    expect(lost).not.toHaveBeenCalled();
+    expect(taker.owned).toBe(true);
+    // Still waiting: promoted once the taker lets go.
+    taker.release();
+    await vi.waitFor(() => expect(promoted).toHaveBeenCalledTimes(1));
+    waiting.release();
+  });
+
+  it('refuses a write that reaches its commit after the project was taken', async () => {
+    withLockManager();
+    const owner = trackProjectStorage('project_a', {
+      onAnswered: vi.fn(),
+      onPromoted: vi.fn()
+    });
+    await owner.ownership.settled;
+    let started = false;
+    let commit: () => void = () => undefined;
+    const committing = new Promise<void>((resolve) => {
+      commit = resolve;
+    });
+    let heldAtCommit: boolean | null = null;
+    const written = writeOwnedProjectStorage(
+      () => owner.ownership,
+      'project_a',
+      async (held) => {
+        started = true;
+        // The storage transaction opening, slowly.
+        await committing;
+        heldAtCommit = held();
+        if (!heldAtCommit) throw new Error('fenced');
+      }
+    );
+    await vi.waitFor(() => expect(started).toBe(true));
+    const taker = trackProjectStorage('project_a', {
+      onAnswered: vi.fn(),
+      onPromoted: vi.fn()
+    });
+    await taker.ownership.settled;
+    await expect(taker.takeOver()).resolves.toBe(true);
+    await vi.waitFor(() => expect(owner.ownership.owned).toBe(false));
+
+    commit();
+    await expect(written).resolves.toBe(false);
+    expect(heldAtCommit).toBe(false);
+    owner.giveUp();
+    taker.giveUp();
+  });
 });

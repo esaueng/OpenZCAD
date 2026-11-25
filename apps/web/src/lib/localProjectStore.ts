@@ -1029,6 +1029,14 @@ function projectTransaction<T>(
   );
 }
 
+/** A save refused at commit: this tab no longer holds the project. */
+export class LocalProjectWriteFencedError extends Error {
+  constructor(projectId: string) {
+    super(`This tab no longer holds project ${projectId}; nothing was saved.`);
+    this.name = 'LocalProjectWriteFencedError';
+  }
+}
+
 /**
  * Stores a document and refreshes its shelf projection in the same
  * transaction. Split across two, a crash between them leaves the start screen
@@ -1036,11 +1044,25 @@ function projectTransaction<T>(
  * nothing else reads the documents store on that path, nothing would ever
  * notice the disagreement.
  */
-export function saveLocalProject(document: ProjectDocument): Promise<void> {
+export function saveLocalProject(
+  document: ProjectDocument,
+  options: {
+    /**
+     * Checked once the transaction exists, before anything is written:
+     * false refuses the write ({@link LocalProjectWriteFencedError}). A
+     * transaction opened before it turns false is ordered ahead of any the
+     * next owner opens after, so it cannot land on top of that owner's.
+     */
+    fence?: () => boolean;
+  } = {}
+): Promise<void> {
   return scopedTransaction(
     'readwrite',
     [STORE_NAME, SUMMARY_STORE_NAME, CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
     async (store) => {
+      if (options.fence && !options.fence()) {
+        throw new LocalProjectWriteFencedError(document.projectId);
+      }
       assertSafeLocalDocument(document, 'saved');
       await assertCurrentProjectId(store(ALIAS_STORE_NAME), document.projectId);
       store(STORE_NAME).put(document);

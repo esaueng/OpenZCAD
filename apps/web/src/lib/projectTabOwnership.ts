@@ -179,16 +179,34 @@ export function claimProjectOwnership(
   const queueForPromotion = async (): Promise<void> => {
     for (;;) {
       let requeue = false;
-      await locks.request(name, { signal: waiting.signal }, async (queued) => {
-        if (released || !queued) return;
-        if (await handoffPendingElsewhere(locks, projectId, options)) {
-          requeue = true;
-          return;
-        }
-        if (released) return;
-        onPromoted();
-        await hold();
-      });
+      // Granted, but not yet promoted: still asking whether a handoff is
+      // pending. A steal meanwhile takes a lock this tab never used; it
+      // must not be promoted on it, and queues again instead.
+      let deciding = false;
+      try {
+        await locks.request(
+          name,
+          { signal: waiting.signal },
+          async (queued) => {
+            if (released || !queued) return;
+            deciding = true;
+            if (await handoffPendingElsewhere(locks, projectId, options)) {
+              deciding = false;
+              requeue = true;
+              return;
+            }
+            // Stolen while deciding: the request has already been rejected.
+            if (released || !deciding) return;
+            deciding = false;
+            onPromoted();
+            await hold();
+          }
+        );
+      } catch (error) {
+        if (!deciding || !isAbortError(error)) throw error;
+        deciding = false;
+        requeue = true;
+      }
       if (!requeue || released) return;
     }
   };
@@ -348,7 +366,7 @@ export async function projectStorageWriteAccess(
 export async function writeOwnedProjectStorage(
   read: () => ProjectStorageOwnership | null | undefined,
   projectId: string,
-  write: () => Promise<void>
+  write: (held: () => boolean) => Promise<void>
 ): Promise<boolean> {
   const access = await projectStorageWriteAccess(read, projectId);
   if (!access) return false;
@@ -360,7 +378,15 @@ export async function writeOwnedProjectStorage(
     return false;
   }
   try {
-    await write();
+    // `held` lets the write check again where it commits (the storage
+    // transaction opening can wait): another tab may have taken the
+    // project meanwhile, and the lock it retains no longer fences that.
+    await write(access.held);
+  } catch (error) {
+    // Refused at commit, or failed once the project was taken: nothing
+    // of this write is the project's now. Not written.
+    if (!access.held()) return false;
+    throw error;
   } finally {
     access.release();
   }
@@ -379,7 +405,7 @@ export async function writeOwnedProjectStorage(
 export async function writeLocalProjectUnderClaim(
   read: () => ProjectStorageOwnership | null | undefined,
   projectId: string,
-  write: () => Promise<void>,
+  write: (held: () => boolean) => Promise<void>,
   untouched: boolean
 ): Promise<boolean | 'refused'> {
   if (await writeOwnedProjectStorage(read, projectId, write)) return true;
