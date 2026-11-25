@@ -11,6 +11,7 @@ import {
 import type { AuthSession } from '@openzcad/shared';
 import { isConsentVersionReady } from './glimpseCensus';
 import { isSealedSettingsStorageReady } from './settings';
+import { DEVICE_LAST_USED_EXPORT_SQL } from './e2eeDeviceLastUsed';
 
 /** Explicit projections keep credentials, token hashes and other users' data
  * out of the export. Project contents travel through the existing authorized
@@ -69,10 +70,10 @@ export async function exportAccountData(
       [session.userId]
     ],
     [
-      // The day each device last read its keys (migration 0069).
+      // The day each current device last used its keys (migration 0069).
       'e2ee_device_last_used',
-      'SELECT device_id, first_day, last_day FROM e2ee_device_last_used WHERE user_id = ?',
-      [session.userId]
+      DEVICE_LAST_USED_EXPORT_SQL,
+      [session.userId, session.userId, session.userId, session.userId]
     ],
     [
       'user_ai_credentials',

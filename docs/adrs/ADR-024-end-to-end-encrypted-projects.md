@@ -869,7 +869,7 @@ roles, project and revision counts, blob sizes and counts, timestamps, version
 numbers and save cadence, presence during live editing, schema versions,
 the envelope header fields, and each user's device list: device labels, when
 devices and unlock methods were added or removed, and their public keys. It
-also sees the UTC day each device last read its keys, never a time of day
+also sees the UTC day each device was last unlocked, never a time of day
 (amendment 2026-11-25).
 Project names, checkpoint names, revision reasons,
 upload file names, thumbnails, measurements, workspace view state, archived
@@ -2029,29 +2029,45 @@ plan of 2026-11-25, §6). The server learns one new fact, which
 [Plaintext metadata](#plaintext-metadata) now names.
 
 - **What is recorded.** For each certified device of the current identity
-  generation, the UTC day (`YYYY-MM-DD`) it last read the account with
-  `GET /api/e2ee/account?device=<id>`, the read that hands it the
-  account-key wrap it unlocks with, and the day that device's row started
-  (`e2ee_device_last_used`, migration 0069). Never a time, a session, an IP
-  address or a project. The server already sees each read's time in its
-  request logs; the table keeps only the coarse day, for as long as the
-  device stays listed.
-- **When it is written.** At most once per device per day: the Worker reads
-  the account's days with the account and writes only when the requesting
-  device's day is not today. The write is accepted only for an id the
-  current generation wraps the account key to, under the same session write
-  fence as other encryption writes (and erasure triggers), so a request
-  cannot plant a day for an id the device list does not name. The same write
-  deletes the days of devices the list no longer wraps to: a removed device
-  and every device of a replaced identity lose theirs.
+  generation, the UTC day (`YYYY-MM-DD`) it was last unlocked and used, and
+  the day that device's row started (`e2ee_device_last_used`, migration
+  0069). Never a time, a session, an IP address or a project. Unlock
+  targets (passkeys, the recovery key) are not devices and get no day.
+- **How it is reported.** An unlocked browser sends
+  `POST /api/e2ee/devices/last-used` with its device id in the body, at
+  most once per device per UTC day: it stamps the day in its own storage
+  and skips the request while the stamp says today. The id is never put in
+  a URL, and the account read carries no device id, so request logs do not
+  pair the stable device id with the time of every read. The report itself
+  still has a time in the request log, at most once a day per device; the
+  table keeps only the day.
+- **When it is written.** At most once per device per day: the Worker
+  writes only when the device's stored day is older than today. The write
+  is accepted only for an id the current generation certifies as a device
+  (an account-key wrap that is not an unlock target's), under the session
+  write fence every encryption write uses, and the erasure triggers, so a
+  request cannot plant a day for a passkey, a recovery key or an id the
+  device list does not name. The same write, under the same fence, deletes
+  the days of devices the list no longer names. A device-list append that
+  revokes devices deletes their days in its own batch, and an identity
+  replacement keeps only its new list's devices' days. The account read
+  shows, and the export holds, only the current list's devices.
+- **D1 parameter limit.** A removal's staged-project fence binds the
+  revoked ids as one JSON array per use (`json_each`), not one parameter per
+  id, so a clean-up of up to 63 devices stays under D1's 100 bound
+  parameters per statement.
 - **Trust.** The days are unsigned and only shown. They order the device
   rows and decide which devices the clean-up offers; nothing about keys,
   wraps or signatures reads them. A server that lies about them can make an
   active device look unused, which at worst suggests removing it; the user
   confirms the removal with a passkey or the recovery key, as for any other.
-  A device with no day is offered only once the account's days have been
-  recorded for 30 days, so devices that simply have not opened the app since
-  the migration are not called unused.
+- **30-day grace for devices with no day.** A device is offered for the
+  clean-up when its last day is 30 or more days old. A device with no day is
+  offered only when it was added more than 30 days ago and the account's
+  days have been recorded for at least 30 days (the earliest `first_day`
+  among the current devices). Without that, every device that simply had
+  not been unlocked since the migration would read as unused. This device
+  is never offered.
 - **Removing several devices.** The clean-up removes every stale device with
   one device-list entry (`removeDevices` in `accountKeys.ts`): the entry
   revokes them all, each naming this device as its replacement, and rotates

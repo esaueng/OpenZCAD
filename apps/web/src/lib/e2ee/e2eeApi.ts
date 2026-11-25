@@ -33,11 +33,12 @@ export class E2eeApiError extends Error {
  */
 export interface E2eeApi {
   config(): Promise<E2eeConfigResponse>;
+  account(): Promise<E2eeAccountResponse>;
   /**
-   * `deviceId`: this browser's own device, whose last-used day the Worker
-   * records on the read (migration 0069).
+   * Reports this unlocked device's use for today (migration 0069), the id
+   * in the body. Optional: older fakes and hosts leave it out.
    */
-  account(deviceId?: string): Promise<E2eeAccountResponse>;
+  recordDeviceUse?(deviceId: string): Promise<{ recorded: boolean }>;
   /** This account's replaced account keys, each wrapped under its successor. */
   accountKeyHistory(): Promise<E2eeAccountKeyHistoryResponse>;
   setup(request: E2eeSetupRequest): Promise<E2eeAccountResponse>;
@@ -106,13 +107,9 @@ export function createE2eeApi(fetcher: Fetch = desktopFetch): E2eeApi {
   const id = (value: string) => encodeURIComponent(value);
   return {
     config: () => call(fetcher, '/api/e2ee/config'),
-    account: (deviceId) =>
-      call(
-        fetcher,
-        deviceId
-          ? `/api/e2ee/account?device=${id(deviceId)}`
-          : '/api/e2ee/account'
-      ),
+    account: () => call(fetcher, '/api/e2ee/account'),
+    recordDeviceUse: (deviceId) =>
+      call(fetcher, '/api/e2ee/devices/last-used', 'POST', { deviceId }),
     accountKeyHistory: () => call(fetcher, '/api/e2ee/account-key-history'),
     setup: (request) => call(fetcher, '/api/e2ee/setup', 'POST', request),
     appendDeviceList: (request) =>

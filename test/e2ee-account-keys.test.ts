@@ -147,6 +147,9 @@ function server(db = migratedDatabase()): Server {
   return { db, enabled: true };
 }
 
+/** D1's limit on bound parameters per statement. */
+const D1_MAX_BOUND_PARAMETERS = 100;
+
 function fetcherFor(srv: Server, userId: string) {
   const base = d1Database(srv.db);
   const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
@@ -156,7 +159,14 @@ function fetcherFor(srv: Server, userId: string) {
     statement: D1PreparedStatement
   ): D1PreparedStatement => {
     const wrapped: D1PreparedStatement = {
-      bind: (...values) => wrap(sql, statement.bind(...values)),
+      bind: (...values) => {
+        // D1 refuses a statement with more bound parameters than this.
+        if (values.length > D1_MAX_BOUND_PARAMETERS)
+          throw new Error(
+            `too many SQL variables: ${values.length} in ${sql.slice(0, 80)}`
+          );
+        return wrap(sql, statement.bind(...values));
+      },
       first: () => statement.first(),
       all: async <T>() => {
         const result = await statement.all<T>();
@@ -1135,6 +1145,41 @@ describe('removing several devices at once (L11 plan §6)', () => {
     expect(ready(await loadEncryption(desk.ctx)).unlocked).toBe(true);
   });
 
+  it('removes every other device of a full list in one entry, within D1’s parameter limit', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    // The list's maximum: this device and 63 others, each enrolled.
+    for (let index = 1; index < 64; index++) {
+      const ctx = device(srv);
+      await enrollWithRecoveryKey(
+        ctx,
+        ready(await loadEncryption(ctx)),
+        recovery.secret,
+        `Old browser ${index}`
+      );
+    }
+    const before = ready(await loadEncryption(laptop));
+    expect(before.list.devices).toHaveLength(64);
+    const others = before.list.devices
+      .map((d) => d.deviceId)
+      .filter((id) => id !== before.device!.deviceId);
+    const after = ready(
+      await removeDevices(laptop, before, others, recovery.secret)
+    );
+    expect(after.list.devices.map((d) => d.deviceId)).toEqual([
+      before.device!.deviceId
+    ]);
+    expect(after.list.head.revoked).toHaveLength(63);
+    expect(after.list.head.sequence).toBe(before.list.head.sequence + 1);
+    expect(
+      count(
+        srv.db,
+        `SELECT COUNT(*) AS n FROM e2ee_key_wraps
+         WHERE purpose = 'account-key' AND target_id LIKE 'dev%'`
+      )
+    ).toBe(1);
+  }, 120_000);
+
   it('refuses this device, an empty or repeated set, and an unlisted device', async () => {
     const srv = server();
     const { recovery, laptop } = await setUp(srv);
@@ -1167,27 +1212,55 @@ describe('device last used (migration 0069)', () => {
       )
       .all() as { device_id: string; first_day: string; last_day: string }[];
 
+  /** `ctx` with every request it makes logged. */
+  function logged(srv: Server, ctx: E2eeContext) {
+    const requests: { path: string; method: string; body?: string }[] = [];
+    const fetcher = fetcherFor(srv, USER);
+    (ctx as { api: E2eeContext['api'] }).api = createE2eeApi(
+      async (path, init) => {
+        requests.push({
+          path,
+          method: init?.method ?? 'GET',
+          ...(typeof init?.body === 'string' ? { body: init.body } : {})
+        });
+        return fetcher(path, init);
+      }
+    );
+    return requests;
+  }
+
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it('records the day a device reads its keys, at most once a day', async () => {
+  it('records the day an unlocked device uses its keys, once a day, its id only in a body', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-11-25T08:00:00Z'));
     const srv = server();
     const { recovery, laptop } = await setUp(srv);
+    srv.db.exec('DELETE FROM e2ee_device_last_used');
+    const requests = logged(srv, laptop);
     const laptopId = ready(await loadEncryption(laptop)).device!.deviceId;
-    expect(rows(srv)).toEqual([
-      { device_id: laptopId, first_day: '2026-11-25', last_day: '2026-11-25' }
-    ]);
+    await vi.waitFor(() =>
+      expect(rows(srv)).toEqual([
+        { device_id: laptopId, first_day: '2026-11-25', last_day: '2026-11-25' }
+      ])
+    );
+    // The account read names no device; the report carries it in its body.
+    for (const request of requests)
+      expect(request.path).not.toContain(laptopId);
+    expect(requests).toContainEqual({
+      path: '/api/e2ee/devices/last-used',
+      method: 'POST',
+      body: JSON.stringify({ deviceId: laptopId })
+    });
     const writes: string[] = [];
     srv.beforeWrite = async (sql) => {
       if (sql.includes('INSERT INTO e2ee_device_last_used')) writes.push(sql);
     };
-    // Again the same day: read, not written.
+    // Again the same day: nothing written.
     vi.setSystemTime(new Date('2026-11-25T23:59:00Z'));
     const again = ready(await loadEncryption(laptop));
-    expect(writes).toEqual([]);
     expect(again.lastUsed).toEqual({
       since: '2026-11-25',
       devices: [{ deviceId: laptopId, day: '2026-11-25' }]
@@ -1195,22 +1268,27 @@ describe('device last used (migration 0069)', () => {
     // The next day: written once, the start kept.
     vi.setSystemTime(new Date('2026-11-26T00:01:00Z'));
     await loadEncryption(laptop);
+    await vi.waitFor(() =>
+      expect(rows(srv)).toEqual([
+        { device_id: laptopId, first_day: '2026-11-25', last_day: '2026-11-26' }
+      ])
+    );
     await loadEncryption(laptop);
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(writes).toHaveLength(1);
-    expect(rows(srv)).toEqual([
-      { device_id: laptopId, first_day: '2026-11-25', last_day: '2026-11-26' }
-    ]);
     // Another device records its own day.
     const phone = await enrolled(srv, recovery.secret, 'Phone');
     await loadEncryption(phone.ctx);
-    expect(
-      rows(srv)
-        .map((row) => row.device_id)
-        .sort()
-    ).toEqual([laptopId, phone.account.device!.deviceId].sort());
+    await vi.waitFor(() =>
+      expect(
+        rows(srv)
+          .map((row) => row.device_id)
+          .sort()
+      ).toEqual([laptopId, phone.account.device!.deviceId].sort())
+    );
   });
 
-  it('records nothing for a device the list does not wrap to, and drops removed ones', async () => {
+  it('records no unlock target or unknown id, and a removal drops the day at once', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-11-25T08:00:00Z'));
     const srv = server();
@@ -1218,32 +1296,28 @@ describe('device last used (migration 0069)', () => {
     const phone = await enrolled(srv, recovery.secret, 'Phone');
     const phoneId = phone.account.device!.deviceId;
     await loadEncryption(phone.ctx);
-    const api = createE2eeApi(fetcherFor(srv, USER));
-    // An id the device list never named, and a malformed one.
-    await api.account('dev_planted');
-    await api.account('bad id');
-    expect(rows(srv).map((row) => row.device_id)).not.toContain('dev_planted');
-    expect(rows(srv).some((row) => row.device_id === phoneId)).toBe(true);
-
-    await removeDevice(
-      laptop,
-      ready(await loadEncryption(laptop)),
-      phoneId,
-      recovery.secret
+    await vi.waitFor(() =>
+      expect(rows(srv).map((row) => row.device_id)).toContain(phoneId)
     );
-    // The removed device's day goes with the next day's write.
-    vi.setSystemTime(new Date('2026-11-26T08:00:00Z'));
-    await loadEncryption(laptop);
-    expect(rows(srv).map((row) => row.device_id)).toEqual([
-      ready(await loadEncryption(laptop)).device!.deviceId
-    ]);
+    const api = createE2eeApi(fetcherFor(srv, USER));
+    const account = ready(await loadEncryption(laptop));
+    // The recovery key's target has an account-key wrap too.
+    const target = account.list.unlockTargets[0]!.targetId;
+    for (const id of [target, 'dev_planted'])
+      expect(await api.recordDeviceUse!(id)).toEqual({ recorded: false });
+    expect(rows(srv).map((row) => row.device_id)).not.toContain(target);
+    await refusal(api.recordDeviceUse!('bad id'));
+
+    await removeDevice(laptop, account, phoneId, recovery.secret);
+    // Gone with the append itself, before any later write.
+    expect(rows(srv).map((row) => row.device_id)).not.toContain(phoneId);
     // And the removed device cannot plant one for itself.
-    lockAccount(USER);
-    await loadEncryption(phone.ctx);
+    vi.setSystemTime(new Date('2026-11-26T08:00:00Z'));
+    expect(await api.recordDeviceUse!(phoneId)).toEqual({ recorded: false });
     expect(rows(srv).map((row) => row.device_id)).not.toContain(phoneId);
   });
 
-  it('never fails the account read, and writes nothing during erasure', async () => {
+  it('never fails the load, and writes nothing during erasure', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-11-25T08:00:00Z'));
     const srv = server();
@@ -1256,6 +1330,11 @@ describe('device last used (migration 0069)', () => {
       .run(USER);
     const view = ready(await loadEncryption(laptop));
     expect(view.unlocked).toBe(true);
+    expect(
+      await createE2eeApi(fetcherFor(srv, USER)).recordDeviceUse!(
+        view.device!.deviceId
+      )
+    ).toEqual({ recorded: false });
     expect(rows(srv)).toEqual([]);
   });
 
@@ -5351,17 +5430,23 @@ describe('profile deletion', () => {
         }
       };
       const ctx = { ...device(srv) };
-      ctx.api = createE2eeApi(async (path, init) => {
-        const session = { userId: USER };
-        if (!['GET', 'HEAD', 'OPTIONS'].includes(init?.method ?? 'GET'))
-          await admitDevelopmentE2eeWrite(racing, session);
-        return handleE2eeRequest(
-          new Request(`https://zcad.test${path}`, init),
-          { DB: racing, AUTH_MODE: 'development', ENVIRONMENT: 'development' },
-          session,
-          true
-        );
-      });
+      (ctx as { api: E2eeContext['api'] }).api = createE2eeApi(
+        async (path, init) => {
+          const session = { userId: USER };
+          if (!['GET', 'HEAD', 'OPTIONS'].includes(init?.method ?? 'GET'))
+            await admitDevelopmentE2eeWrite(racing, session);
+          return handleE2eeRequest(
+            new Request(`https://zcad.test${path}`, init),
+            {
+              DB: racing,
+              AUTH_MODE: 'development',
+              ENVIRONMENT: 'development'
+            },
+            session,
+            true
+          );
+        }
+      );
       await expect(
         setUpEncryption(ctx, {
           recoverySecret: (await generateRecoveryKey()).secret,

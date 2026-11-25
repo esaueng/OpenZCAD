@@ -52,6 +52,7 @@ import {
   type VerifiedDeviceList
 } from '@openzcad/crypto';
 import { deviceApprovalCodeFromLink } from './deviceApprovalLink';
+import { realmStorageName } from '../deploymentRealm';
 import type {
   E2eeAccountKeyHistoryInput,
   E2eeAccountKeyHistoryRecord,
@@ -306,7 +307,7 @@ export interface AccountView {
    */
   readonly previous: readonly PreviousKeySet[];
   /**
-   * The day each device last read its keys, as the Worker reports it
+   * The day each device was last unlocked, as the Worker reports it
    * (migration 0069). Unsigned and shown only; null from an older Worker.
    */
   readonly lastUsed?: E2eeDeviceLastUsed | null;
@@ -831,13 +832,7 @@ export async function loadEncryption(
       );
   };
   requireCurrent();
-  // This browser's device, so the read records its last-used day. A
-  // failed local read only skips that.
-  const seen = await Promise.resolve()
-    .then(() => ctx.store.loadDevice(ctx.userId))
-    .catch(() => null);
-  requireCurrent();
-  const response = await ctx.api.account(seen?.deviceId);
+  const response = await ctx.api.account();
   requireCurrent();
   const previous = previousKeySets(response);
   const current = response.current;
@@ -957,9 +952,52 @@ export async function loadEncryption(
     previous,
     lastUsed: response.lastUsed ?? null
   };
+  // An unlocked device reports its day, at most once a day (migration
+  // 0069), beside the load: it never delays or fails it.
+  if (unlocked && device) void reportDeviceUse(ctx, device.deviceId);
   return identityChanged
     ? { kind: 'identity-changed', account }
     : { kind: 'ready', account };
+}
+
+const DEVICE_USE_PREFIX = realmStorageName('openzcad:e2ee-device-used:v1');
+/** Reports in flight, so parallel loads at startup send one. */
+const reportingDeviceUse = new Set<string>();
+
+/**
+ * Tells the Worker this device was used today (ADR-024 amendment
+ * 2026-11-25): once per device per UTC day, stamped in this browser's
+ * storage, with the id in the request body rather than in any URL. The
+ * Worker writes at most once a day anyway; a failure is retried on a
+ * later load.
+ */
+export async function reportDeviceUse(
+  ctx: Pick<E2eeContext, 'api' | 'userId'>,
+  deviceId: string
+): Promise<void> {
+  const send = ctx.api.recordDeviceUse;
+  if (!send) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const key = `${DEVICE_USE_PREFIX}:${ctx.userId}:${deviceId}`;
+  try {
+    if (globalThis.localStorage?.getItem(key) === today) return;
+  } catch {
+    // Blocked storage: the Worker's own once-a-day check still holds.
+  }
+  if (reportingDeviceUse.has(key)) return;
+  reportingDeviceUse.add(key);
+  try {
+    await send.call(ctx.api, deviceId);
+    try {
+      globalThis.localStorage?.setItem(key, today);
+    } catch {
+      // As above.
+    }
+  } catch {
+    // Shown days are best effort; the next load tries again.
+  } finally {
+    reportingDeviceUse.delete(key);
+  }
 }
 
 /** A recovery secret or a fresh, user-verified passkey ceremony. */

@@ -118,7 +118,15 @@ import {
   migrationLeaseOf
 } from './e2eeMigrationLease';
 import { PROJECT_MIGRATING_CODE } from '@openzcad/shared';
-import { deviceLastUsed } from './e2eeDeviceLastUsed';
+import {
+  DEVICE_LAST_USED_ROUTE,
+  deviceLastUsedReplacementStatements,
+  deviceLastUsedRevocationStatements,
+  isDeviceId,
+  isDeviceLastUsedStorageReady,
+  readDeviceLastUsed,
+  recordDeviceLastUsed
+} from './e2eeDeviceLastUsed';
 import {
   isE2eeProjectGroupStorageReady,
   isE2eeProjectAuthorityStorageReady,
@@ -579,6 +587,21 @@ function checkWrapTargets(
 
 // --- Routes ---------------------------------------------------------------
 
+/** The devices the current list's head certifies, or null with none. */
+function currentDeviceIds(account: E2eeAccountResponse): Set<string> | null {
+  const head = account.current?.entries.at(-1);
+  if (!head) return null;
+  try {
+    return new Set(
+      decodeDeviceListEntry(fromBase64Url(head.entry)).devices.map(
+        (device) => device.deviceId
+      )
+    );
+  } catch {
+    return null;
+  }
+}
+
 async function loadAccount(
   db: D1Database,
   userId: string
@@ -740,6 +763,8 @@ async function writeGeneration(
     fence?: { sql: string; binds: string[] };
     /** A replacement that drops devices ends the other sessions. */
     endSessions?: boolean;
+    /** The new list's devices: every other device's last-used day goes. */
+    deviceIds: readonly string[];
   }
 ): Promise<boolean> {
   const now = new Date().toISOString();
@@ -840,7 +865,13 @@ async function writeGeneration(
          WHERE user_id = ? AND generation < ? AND ${guard.sql}`
       )
       .bind(userId, input.generation - PREVIOUS_GENERATIONS, ...guard.binds),
-    ...(input.endSessions ? endOtherSessions(db, userId, guard) : [])
+    ...(input.endSessions ? endOtherSessions(db, userId, guard) : []),
+    ...(await deviceLastUsedReplacementStatements(
+      db,
+      userId,
+      input.deviceIds,
+      guard
+    ))
   ];
   const results = await db.batch(statements);
   return (results[0]?.meta?.changes ?? 0) === 1;
@@ -875,6 +906,7 @@ async function handleSetup(
     entryText,
     signatureText,
     entryHash: toHex(list.headHash),
+    deviceIds: list.head.devices.map((device) => device.deviceId),
     wraps,
     transition: null,
     previousHead: null,
@@ -1002,6 +1034,7 @@ async function handleReplaceIdentity(
     entryText,
     signatureText,
     entryHash: toHex(list.headHash),
+    deviceIds: list.head.devices.map((device) => device.deviceId),
     wraps,
     transition: {
       statement: transitionBody.statement as string,
@@ -1119,7 +1152,11 @@ function signedProjectsFence(
   deviceIds: readonly string[],
   leavesIn?: string
 ): { sql: string; binds: string[] } {
-  const marks = deviceIds.map(() => '?').join(', ');
+  // One JSON-array parameter per use, never one per id: D1 binds at most
+  // 100 parameters per statement, and a clean-up may revoke dozens of
+  // devices in one entry (several each use, and the caller's own binds).
+  const marks = 'SELECT value FROM json_each(?)';
+  const ids = JSON.stringify(deviceIds);
   const leaves = leavesIn
     ? `
      AND NOT EXISTS (SELECT 1 FROM e2ee_project_leaves l
@@ -1139,13 +1176,7 @@ function signedProjectsFence(
            OR EXISTS (SELECT 1 FROM e2ee_key_archives a
                       WHERE a.project_id = p.id
                         AND a.signer_device_id IN (${marks}))))${leaves})`,
-    binds: [
-      userId,
-      ...deviceIds,
-      ...deviceIds,
-      ...deviceIds,
-      ...(leavesIn ? [userId, ...deviceIds] : [])
-    ]
+    binds: [userId, ids, ids, ids, ...(leavesIn ? [userId, ids] : [])]
   };
 }
 
@@ -1493,7 +1524,16 @@ async function handleAppend(
     // A removed device keeps no session to act through.
     ...(list.head.revoked.some((revocation) => revocation.kind === 'device')
       ? endOtherSessions(db, userId, guard)
-      : [])
+      : []),
+    // Nor a last-used day (migration 0069).
+    ...(await deviceLastUsedRevocationStatements(
+      db,
+      userId,
+      list.head.revoked
+        .filter((revocation) => revocation.kind === 'device')
+        .map((revocation) => revocation.id),
+      guard
+    ))
   ];
   const results = await db.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
@@ -2168,13 +2208,11 @@ export async function handleE2eeRequest(
       );
     }
     const userId = session.userId;
-    const development =
-      env.AUTH_MODE === 'development' && env.ENVIRONMENT === 'development';
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
       authorization = await e2eeWriteAuthorization(
         request,
         session,
-        development
+        env.AUTH_MODE === 'development' && env.ENVIRONMENT === 'development'
       );
       if (!authorization)
         refuse(
@@ -2416,22 +2454,32 @@ export async function handleE2eeRequest(
     }
     if (pathname === '/api/e2ee/account' && method === 'GET') {
       const account = await loadAccount(db, userId);
-      // The device reading its account-key wrap records the day
-      // (migration 0069); a read without a device id records nothing.
-      const lastUsed = account.current
-        ? await deviceLastUsed(rawDb, userId, account, {
-            deviceId: new URL(request.url).searchParams.get('device'),
-            fence: async () =>
-              (await e2eeWriteAuthorization(request, session, development)) ??
-              (development
-                ? {
-                    sql: 'NOT EXISTS (SELECT 1 FROM account_erasure_requests WHERE user_id = ?)',
-                    binds: [userId]
-                  }
-                : null)
-          })
+      const listed = currentDeviceIds(account);
+      // Read only: the days are recorded by their own request below.
+      const lastUsed = listed
+        ? await readDeviceLastUsed(rawDb, userId, listed)
         : null;
       return json(lastUsed ? { ...account, lastUsed } : account);
+    }
+    if (pathname === DEVICE_LAST_USED_ROUTE && method === 'POST') {
+      // An unlocked device's own day, at most once a day (migration 0069).
+      // The id travels in the body, not the URL request logs keep.
+      if (!(await isDeviceLastUsedStorageReady(rawDb))) {
+        return json({ recorded: false });
+      }
+      const body = await readBody(request);
+      const deviceId = (body as { deviceId?: unknown } | null)?.deviceId;
+      if (!isDeviceId(deviceId)) invalid('A device id is required');
+      return json({
+        // Best effort: an erasure in progress refuses it, and says so
+        // nowhere else.
+        recorded: await recordDeviceLastUsed(
+          rawDb,
+          userId,
+          deviceId,
+          db.authorization
+        ).catch(() => false)
+      });
     }
     if (pathname === '/api/e2ee/account-key-history' && method === 'GET') {
       // Only the session's own rows: wraps open nothing without the newer

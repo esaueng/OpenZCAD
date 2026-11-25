@@ -6174,7 +6174,7 @@ export interface E2eeAccountResponse {
   /** Up to three replaced identities, newest first. */
   previous: E2eePreviousIdentityRecord[];
   /**
-   * The UTC day each listed device last read its keys (ADR-024 amendment
+   * The UTC day each listed device was last unlocked (ADR-024 amendment
    * 2026-11-25, migration 0069). Unsigned and only shown: the device list
    * stays the authority. Absent from an older Worker or before the
    * migration.

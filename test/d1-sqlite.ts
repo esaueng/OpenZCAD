@@ -38,6 +38,11 @@ class Statement {
   }
 
   async run() {
+    return this.runNow();
+  }
+
+  /** Synchronous, so a batch's transaction never yields mid-way. */
+  runNow() {
     // As D1: total_changes() moved by the statement, trigger writes included.
     const before = totalChanges(this.db);
     const prepared = this.db.prepare(this.sql);
@@ -56,6 +61,10 @@ class Statement {
   }
 
   async all<T>() {
+    return this.allNow<T>();
+  }
+
+  allNow<T>() {
     return {
       success: true,
       results: this.db.prepare(this.sql).all(...this.values) as T[],
@@ -68,14 +77,16 @@ export function d1Database(db: DatabaseSync): D1Database {
   return {
     prepare: (sql: string) => new Statement(db, sql),
     batch: async (statements: Statement[]) => {
+      // One synchronous transaction, as D1 runs a batch: no other request
+      // (a background write, say) can start a transaction inside it.
       db.exec('BEGIN');
       try {
         const results = [];
         for (const statement of statements) {
           results.push(
             /^\s*(SELECT|WITH)\b/i.test(statement.sql)
-              ? await statement.all()
-              : await statement.run()
+              ? statement.allNow()
+              : statement.runNow()
           );
         }
         db.exec('COMMIT');

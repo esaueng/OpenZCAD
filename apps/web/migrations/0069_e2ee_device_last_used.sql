@@ -1,12 +1,13 @@
--- The day each of an account's certified devices last read its encryption
--- keys (ADR-024 amendment 2026-11-25), so Settings › Encryption can show
+-- The day each of an account's certified devices was last unlocked
+-- (ADR-024 amendment 2026-11-25), so Settings › Encryption can show
 -- "used 2 days ago" and offer to remove devices nobody has used in 30 days.
 -- Days are UTC dates (YYYY-MM-DD), never times. `first_day` is when this
 -- row started, so a browser can tell a device that was not used from one
 -- that was used before the account's days were recorded at all. The Worker
--- writes a row at most once per device per day, only for a device the
--- account's current device list wraps the account key to, and drops rows
--- of devices that list no longer names.
+-- writes a row at most once per device per day, under the session write
+-- fence, only for a device (not an unlock target) the account's current
+-- device list certifies, and drops rows of devices that list no longer
+-- names.
 
 CREATE TABLE IF NOT EXISTS e2ee_device_last_used (
   user_id TEXT NOT NULL,
