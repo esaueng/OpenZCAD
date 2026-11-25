@@ -120,6 +120,33 @@ export function textLabelSegments(text: string): readonly LabelSegment[] {
 }
 
 /**
+ * A name whose diameter is the one measured beside it. A pick named from
+ * the committed face but measured from a live preview — a cylinder radius
+ * drag — kept the committed size in its name ("Cylindrical face Ø12 ·
+ * Ø 23 mm"). The diameter node takes the measured value instead; with no
+ * measured value, the name drops its number rather than show a stale one.
+ */
+export function labelWithDiameter(
+  segments: readonly LabelSegment[],
+  diameter: number | undefined
+): readonly LabelSegment[] {
+  if (!segments.some((segment) => segment.kind === 'diameter')) {
+    return segments;
+  }
+  if (diameter !== undefined && Number.isFinite(diameter)) {
+    return segments.map((segment) =>
+      segment.kind === 'diameter' ? { kind: 'diameter', diameter } : segment
+    );
+  }
+  const kept = segments.filter((segment) => segment.kind === 'text');
+  const last = kept.at(-1);
+  // The space that stood before the number goes with it.
+  return last?.kind === 'text'
+    ? [...kept.slice(0, -1), { kind: 'text', text: last.text.trimEnd() }]
+    : kept;
+}
+
+/**
  * Names a picked face from its exact surface measurements: directional names
  * for axis-aligned planes, feature names for holes/cylinders, and a stable
  * ordinal as the last resort. Never leaks the raw fingerprint.

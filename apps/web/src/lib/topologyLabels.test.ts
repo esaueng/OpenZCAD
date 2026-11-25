@@ -6,8 +6,12 @@ import {
   edgeLengthMeasurement,
   faceLabel,
   faceNameRank,
+  labelSegmentsText,
+  labelWithDiameter,
   ownedTopologyName,
-  topologySelectionLabel
+  textLabelSegments,
+  topologySelectionLabel,
+  type LabelSegment
 } from './topologyLabels';
 
 function makeBody(): BodyRepresentation {
@@ -244,5 +248,38 @@ describe('topologySelectionLabel', () => {
     expect(faceNameRank('Top face')).toBe(0);
     expect(faceNameRank('Right face')).toBe(5);
     expect(faceNameRank('Through hole Ø8')).toBe(6);
+  });
+});
+
+// Beta recording, 2026-11: dragging a union's cylinder Ø12→Ø23 read
+// "Union 1 · Cylindrical face Ø12 · Ø 23 mm" — the name, taken from the
+// committed face, kept the size the drag was replacing.
+describe('labelWithDiameter', () => {
+  const named: readonly LabelSegment[] = [
+    { kind: 'text', text: 'Union 1 · ' },
+    { kind: 'text', text: 'Cylindrical face ' },
+    { kind: 'diameter', diameter: 12 }
+  ];
+
+  it('names the measured diameter, not the committed one', () => {
+    const shown = labelWithDiameter(named, 23);
+    expect(labelSegmentsText(shown)).toBe('Union 1 · Cylindrical face Ø23');
+    // Still a live node, so the drag keeps rewriting it in place.
+    expect(shown.at(-1)).toEqual({ kind: 'diameter', diameter: 23 });
+  });
+
+  it('drops the number rather than show a stale one', () => {
+    expect(labelSegmentsText(labelWithDiameter(named, undefined))).toBe(
+      'Union 1 · Cylindrical face'
+    );
+    expect(labelSegmentsText(labelWithDiameter(named, Number.NaN))).toBe(
+      'Union 1 · Cylindrical face'
+    );
+  });
+
+  it('leaves a name without a diameter alone', () => {
+    const plain = textLabelSegments('Box 1 · Top face ');
+    expect(labelWithDiameter(plain, 23)).toBe(plain);
+    expect(labelWithDiameter(plain, undefined)).toBe(plain);
   });
 });

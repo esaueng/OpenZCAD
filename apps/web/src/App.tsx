@@ -1067,6 +1067,7 @@ import {
 import {
   edgeLabel,
   edgeLengthMeasurement,
+  labelWithDiameter,
   textLabelSegments,
   topologySelectionLabel,
   topologySelectionLabelSegments,
@@ -11326,7 +11327,19 @@ export function App() {
           detailDiameter: { diameter: geometry.diameter, units, ...scaled }
         };
       }
-      const label = topologySelectionLabelSegments(namingBody, namingTopology);
+      const namedLabel = topologySelectionLabelSegments(
+        namingBody,
+        namingTopology
+      );
+      // Named from the committed face, measured from the preview: the name's
+      // diameter is the measured one, as the line beside it reads, never
+      // the committed size the drag is replacing.
+      const label = fromSource
+        ? labelWithDiameter(
+            namedLabel,
+            geometry?.surfaceType === 'cylinder' ? geometry.diameter : undefined
+          )
+        : namedLabel;
       if (
         geometry?.featureType === 'blend' &&
         geometry.blendRadius !== undefined
