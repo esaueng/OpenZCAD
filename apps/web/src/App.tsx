@@ -566,6 +566,7 @@ import {
 import { localAutosaveFailedStatus } from './lib/localAutosaveFailure';
 import {
   LocalProjectAutosave,
+  LocalProjectSaveError,
   sameLocalProjectContent,
   type LocalProjectAutosaveOptions,
   type LocalProjectWriteResult
@@ -2490,22 +2491,33 @@ const PROJECT_EDITING_DECLINED_NOTICE =
   'Editing is locked: the other tab is finishing a save. Click here to try again.';
 /**
  * The tab editing the project never answered: it is frozen, or it loaded
- * before tabs could hand editing over. Neither ever will, and taking the
- * project anyway could lose a write it still has queued.
+ * before tabs could hand editing over. Neither ever will. Taking the project
+ * anyway (Take over editing, beside this notice) loses whatever that tab
+ * has not saved, so the user is asked first.
  */
 const PROJECT_EDITING_UNANSWERED_NOTICE =
   "Editing is locked: the other tab isn't responding. Reload or close it to edit here.";
 /** The lane's notice in a tab that handed editing to another tab. */
 const PROJECT_EDITING_MOVED_NOTICE =
   'Editing moved to another tab. Click here to edit in this tab.';
+/** The lane's notice in a tab another tab took the project from. */
+const PROJECT_EDITING_TAKEN_NOTICE =
+  'Another tab took over editing. Click here to edit in this tab.';
 /** The lane notices a tab that takes the project over can retire. */
 const PROJECT_HANDOFF_NOTICES: ReadonlySet<string> = new Set([
   PROJECT_OPEN_ELSEWHERE_NOTICE,
   PROJECT_EDITING_MOVING_NOTICE,
   PROJECT_EDITING_DECLINED_NOTICE,
   PROJECT_EDITING_UNANSWERED_NOTICE,
-  PROJECT_EDITING_MOVED_NOTICE
+  PROJECT_EDITING_MOVED_NOTICE,
+  PROJECT_EDITING_TAKEN_NOTICE
 ]);
+/**
+ * The Take over editing control's status action id: a press on it is that
+ * request, not the ask to hand editing over that any other press in a
+ * read-only tab is.
+ */
+const EDITING_TAKEOVER_ACTION = 'take-over-editing';
 /**
  * Takes a handoff notice off the lane. They are sticky, and `retireStatus`
  * leaves sticky text alone, so this clears it outright.
@@ -5828,7 +5840,7 @@ export function App() {
         return writeOwnedProjectStorage(
           readWritableProjectClaim,
           document.projectId,
-          () => saveLocalProject(document)
+          (held) => saveLocalProject(document, { fence: held })
         );
       }
       return writeUnclaimedProjectStorage(document.projectId, () =>
@@ -7330,7 +7342,7 @@ export function App() {
           await writeOwnedProjectStorage(
             readWritableProjectClaim,
             remoteDocument.projectId,
-            () => saveLocalProject(remoteDocument)
+            (held) => saveLocalProject(remoteDocument, { fence: held })
           );
         } catch {
           setSaveState('offline');
@@ -8698,6 +8710,142 @@ export function App() {
   const cancelProjectYieldRef = useRef(cancelProjectYield);
   cancelProjectYieldRef.current = cancelProjectYield;
 
+  /** True while Take over editing waits for the user's answer. */
+  const editingTakeoverAskingRef = useRef(false);
+  /** True while Take over editing is offered beside the status. */
+  const editingTakeoverOfferedRef = useRef(false);
+  /**
+   * Takes the open project from a tab that never answered the request to
+   * hand it over: asked first, since what that tab has not saved is lost.
+   * This tab is then promoted as by a handoff — it re-reads the stored
+   * project and fences its account writes on the last synced version
+   * (`adoptStoredProject`).
+   */
+  async function takeOverEditingHere() {
+    const tracker = projectEditingRef.current;
+    if (
+      !tracker ||
+      tracker.ownership.owned ||
+      projectHandoffBlockedRef.current ||
+      editingTakeoverAskingRef.current
+    ) {
+      return;
+    }
+    editingTakeoverAskingRef.current = true;
+    let confirmed: boolean;
+    try {
+      confirmed = await confirmInPage({
+        title: 'Take over editing in this tab?',
+        body: "The other tab stops editing this project, and edits it hasn't saved yet may be lost. A tab on this version of OpenZCAD keeps them as a separate project; one opened before it can't tell it was stopped, so close that tab afterwards.",
+        confirmLabel: 'Take over editing'
+      });
+    } finally {
+      editingTakeoverAskingRef.current = false;
+    }
+    if (
+      !confirmed ||
+      projectEditingRef.current !== tracker ||
+      tracker.ownership.owned
+    ) {
+      return;
+    }
+    // Asked for here: promotion clears the notice rather than announcing.
+    projectEditingAskedRef.current = true;
+    const owned = await tracker.takeOverEditing();
+    if (projectEditingRef.current !== tracker || owned) return;
+    projectEditingAskedRef.current = false;
+    setStatus(
+      "Couldn't take over editing. Close the other tab to edit here.",
+      { sticky: true }
+    );
+  }
+
+  /**
+   * Another tab took the open project from this one (Take over editing).
+   * Ownership is already gone, so no device write starts. Stop editing at
+   * once, send the account nothing more, and keep any edit not yet stored
+   * as a separate project, never on top of the new owner's copy; then
+   * follow that owner read-only, as any tab that does not hold the project.
+   */
+  async function projectTakenOver(ownership: ProjectStorageOwnership) {
+    if (projectOwnershipRef.current !== ownership) return;
+    const projectId = ownership.projectId;
+    // A drag or an in-place edit in progress would commit after the
+    // project has moved on; drop it, as a yield does.
+    cancelDirectManipulationRef.current?.();
+    cancelInPlaceRef.current?.();
+    projectYieldingRef.current = false;
+    projectEditingAskedRef.current = false;
+    if (pendingStoragePromotionRef.current === ownership)
+      pendingStoragePromotionRef.current = null;
+    projectOpenElsewhereRef.current = true;
+    setProjectOpenElsewhere(true);
+    setStatus(PROJECT_EDITING_TAKEN_NOTICE, { sticky: true });
+    // An account push not sent yet is the new owner's to send, from what
+    // it read: its edits are on this device already, or kept below.
+    // Re-baselined even with nothing pending: a snapshot queued behind a
+    // request in flight is no longer pending, and must not go either.
+    const controller = cloudProjectAutosaveRef.current;
+    const syncedVersion = controller?.syncedVersion ?? null;
+    if (controller && syncedVersion !== null) {
+      controller.adoptAccountVersion(projectId, syncedVersion);
+    }
+    setSaveState('local');
+    if (localSaveTimeoutRef.current !== null) {
+      window.clearTimeout(localSaveTimeoutRef.current);
+      localSaveTimeoutRef.current = null;
+    }
+    // Every write is refused now; an edit still queued is kept as a
+    // separate project, as a departure from a project this tab no longer
+    // holds keeps it (`departureBarrier`).
+    const recovery = departureRecoveryRef.current!;
+    const keepUnsaved = () =>
+      departureBarrier(localAutosave, {
+        departing: () => projectId,
+        copies: departureRecoveryCopies,
+        host: recovery.host,
+        onRefused: () => undefined,
+        onKept: (copy, source) => {
+          setProjects((current) =>
+            mergeProjectSummaries([summarizeLocalDocument(copy)], current)
+          );
+          setLocalSaveFailed(false);
+          void seedCopyThumbnail(null, copy);
+          announce(
+            `Your unsaved edits to ${source.name} were kept as a separate project, ${copy.name}.`
+          );
+        },
+        onCopyFailed: (failure) => {
+          setLocalSaveFailed(true);
+          setStatus(failure.message);
+        }
+      });
+    try {
+      try {
+        await keepUnsaved();
+      } catch (error) {
+        // A device write in flight when the project was taken failed: its
+        // snapshot is still queued, and is now refused and kept as a copy.
+        if (!(error instanceof LocalProjectSaveError)) throw error;
+        await keepUnsaved();
+      }
+    } catch {
+      // Not kept anywhere: the edit stays here, dirty, so closing the tab
+      // still warns; the notice above says what to do.
+      return;
+    }
+    if (projectOwnershipRef.current !== ownership) return;
+    // What is on screen is now accounted for: stored, or kept as a copy.
+    // Follow what the new owner stores from here.
+    const manager = managerRef.current;
+    if (manager?.document.projectId === projectId) {
+      openedDocumentRef.current = manager.document;
+    }
+    await mirrorStoredProjectRef.current(ownership);
+  }
+  const projectTakenOverRef = useRef(projectTakenOver);
+  projectTakenOverRef.current = projectTakenOver;
+
   /**
    * Exactly one tab writes a project's device storage.
    *
@@ -8755,7 +8903,8 @@ export function App() {
         cancelYield: () => cancelProjectYieldRef.current(),
         onRemoteSaved() {
           void mirrorStoredProjectRef.current(ownership);
-        }
+        },
+        onTakenOver: () => projectTakenOverRef.current(ownership)
       },
       { tabId: PROJECT_TAB_ID, transport }
     );
@@ -8789,14 +8938,40 @@ export function App() {
   // focusing it, or the first press inside it, moves the project over.
   useEffect(() => {
     const ask = (announce: boolean) => {
-      if (projectOpenElsewhereRef.current) {
+      if (
+        projectOpenElsewhereRef.current &&
+        // Answering Take over editing's question is not a request too.
+        !editingTakeoverAskingRef.current
+      ) {
         requestEditingHereRef.current(announce);
       }
     };
     // Only a press is the user trying to act (a disabled tool takes no
     // click of its own); arriving in the tab moves editing quietly.
     const focused = () => ask(false);
-    const pressed = () => ask(true);
+    const pressed = (event: Event) => {
+      // Moving focus (Tab, Shift+Tab) toward Take over editing is not an
+      // attempt to act: asking again would replace the notice, and the
+      // button with it, before focus got there.
+      if (
+        editingTakeoverOfferedRef.current &&
+        event instanceof KeyboardEvent &&
+        (event.key === 'Tab' || event.key === 'Shift')
+      ) {
+        return;
+      }
+      // Take over editing is its own request, made on click: asked again
+      // on its press, the notice it sits beside would be replaced first.
+      if (
+        event.target instanceof Element &&
+        event.target.closest(
+          `[data-status-action="${EDITING_TAKEOVER_ACTION}"]`
+        )
+      ) {
+        return;
+      }
+      ask(true);
+    };
     const visible = () => {
       if (document.visibilityState === 'visible' && document.hasFocus()) {
         ask(false);
@@ -12059,6 +12234,9 @@ export function App() {
     const live = managerRef.current;
     if (
       projectOwnershipRef.current !== ownership ||
+      // Taken from this tab while storage was read (Take over editing in
+      // another): it follows that tab now, read-only.
+      !ownership.owned ||
       !live ||
       live.document.projectId !== manager.document.projectId
     ) {
@@ -12083,6 +12261,7 @@ export function App() {
       return;
     }
     openedDocumentRef.current = managerRef.current?.document ?? null;
+    if (!ownership.owned) return;
     pendingStoragePromotionRef.current = null;
     projectOpenElsewhereRef.current = false;
     setProjectOpenElsewhere(false);
@@ -12105,6 +12284,7 @@ export function App() {
         synced !== null &&
         synced > (controller.syncedVersion ?? -1) &&
         projectOwnershipRef.current === ownership &&
+        ownership.owned &&
         managerRef.current?.document.projectId === projectId
       ) {
         remoteVersionsRef.current.set(projectId, synced);
@@ -12115,6 +12295,7 @@ export function App() {
       if (
         current?.projectId === projectId &&
         projectOwnershipRef.current === ownership &&
+        ownership.owned &&
         !controller.holdsDocument(current) &&
         !sharedAccountProjectRef.current &&
         // An encrypted project's room writes the account itself.
@@ -12202,7 +12383,7 @@ export function App() {
     const written = await writeLocalProjectUnderClaim(
       readWritableProjectClaim,
       pending.projectId,
-      () => saveLocalProject(pending),
+      (held) => saveLocalProject(pending, { fence: held }),
       untouched
     );
     if (
@@ -12231,6 +12412,9 @@ export function App() {
     // Tabs following this project re-read it from storage.
     if (projectOwnershipRef.current?.projectId === pending.projectId) {
       projectEditingRef.current?.announceSaved();
+      // Landed as another tab took the project: that tab sends the account
+      // what it read from here, and this one sends nothing more.
+      if (!projectOwnershipRef.current.owned) return;
     }
     if (accountDocumentUnavailableProjectIdRef.current === pending.projectId) {
       setSaveState('repair');
@@ -19693,7 +19877,7 @@ export function App() {
       writeOwnedProjectStorage(
         () => projectOwnershipRef.current,
         document.projectId,
-        () => saveLocalProject(document)
+        (held) => saveLocalProject(document, { fence: held })
       );
     if (shareSessionRef.current) {
       setStatus(
@@ -19778,7 +19962,9 @@ export function App() {
       try {
         savingDocument = savingManager.document;
         setSaveState('saving');
-        await saveLocalProject(savingDocument);
+        // Fenced where the transaction opens: a takeover while it waited
+        // must not let this write land on the new owner's save.
+        await saveLocalProject(savingDocument, { fence: access.held });
       } finally {
         access.release();
       }
@@ -19957,7 +20143,17 @@ export function App() {
               'Save point not made. Your work is saved on this device.'
             );
           }
-          controller?.schedule(savingManager.document);
+          // Not from a tab another tab took the project from meanwhile:
+          // that tab sends the account its own copy.
+          const claim = projectOwnershipRef.current;
+          if (
+            !(
+              claim?.projectId === savingManager.document.projectId &&
+              !claim.owned
+            )
+          ) {
+            controller?.schedule(savingManager.document);
+          }
         }
         return;
       }
@@ -37916,6 +38112,15 @@ export function App() {
     : parameterPreview
       ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
       : status;
+  // Take over editing, beside the notice that the tab editing the project
+  // never answered: not for a busy owner (declined), which answers again,
+  // nor a shared or encrypted member's project, which keeps the one-tab lock.
+  const editingTakeoverOffered =
+    visibleStatus === PROJECT_EDITING_UNANSWERED_NOTICE &&
+    projectOpenElsewhere &&
+    !sharedAccountProject &&
+    !encryptedMemberProject;
+  editingTakeoverOfferedRef.current = editingTakeoverOffered;
   const tone: 'ready' | 'warning' | 'running' =
     textOutlineBudgetError || geometry.state.phase === 'failed'
       ? 'warning'
@@ -41837,6 +42042,15 @@ export function App() {
               undoableStatusAt === statusEntry.at && managerRef.current?.canUndo
                 ? handleUndo
                 : undefined
+            }
+            statusAction={
+              editingTakeoverOffered
+                ? {
+                    id: EDITING_TAKEOVER_ACTION,
+                    label: 'Take over editing',
+                    run: () => void takeOverEditingHere()
+                  }
+                : null
             }
             prompt={workspacePrompt}
             promptResting={workspacePrompt === idleHint}

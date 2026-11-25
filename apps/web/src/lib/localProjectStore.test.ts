@@ -40,6 +40,7 @@ import {
   loadLocalProject,
   putSourceBlobIfAbsent,
   releaseSourceBlobClaim,
+  LocalProjectWriteFencedError,
   saveLocalProject,
   saveLocalProjectOrganization,
   saveLocalSaveStates,
@@ -605,6 +606,22 @@ describe('what a transaction leaves behind', () => {
     expect((await listLocalProjects()).map((project) => project.name)).toEqual([
       'Bracket'
     ]);
+  });
+
+  it('writes nothing once the fence says this tab no longer holds the project', async () => {
+    await saveLocalProject(projectDocument('Bracket', 'proj-a'));
+    let held = true;
+    const checked = vi.fn(() => held);
+    // The fence is asked where the transaction exists, not when the save
+    // was called: a takeover while the database opened is still caught.
+    const saving = saveLocalProject(projectDocument('Renamed', 'proj-a'), {
+      fence: checked
+    });
+    held = false;
+
+    await expect(saving).rejects.toBeInstanceOf(LocalProjectWriteFencedError);
+    expect(checked).toHaveBeenCalled();
+    expect((await loadLocalProject('proj-a'))?.name).toBe('Bracket');
   });
 
   it('gives every connection back, on the paths that fail as well', async () => {

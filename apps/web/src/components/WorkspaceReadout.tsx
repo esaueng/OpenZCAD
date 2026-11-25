@@ -97,6 +97,13 @@ interface WorkspaceReadoutProps {
    */
   onUndo?: () => void;
   /**
+   * A remedy for the state the status reports, offered beside it while it
+   * shows that status (Take over editing, beside the notice that the tab
+   * editing the project never answered). `id` marks the button
+   * (`data-status-action`).
+   */
+  statusAction?: { id: string; label: string; run(): void } | null;
+  /**
    * The context-sensitive next-step line the status bar showed beside the
    * message: what a click takes, what Escape does next. The tool card and the
    * selection dock carry it visually now; it stays here for assistive tech.
@@ -176,6 +183,7 @@ export function WorkspaceReadout({
   muted = false,
   onOpenLog,
   onUndo,
+  statusAction = null,
   prompt,
   promptResting = false,
   instructionDetails = null,
@@ -372,6 +380,12 @@ export function WorkspaceReadout({
   );
   const undoShown =
     shown && !sectionShown && Boolean(onUndo) && paced.status === line;
+  const statusActionShown =
+    shown &&
+    !sectionShown &&
+    !undoShown &&
+    statusAction !== null &&
+    paced.status === line;
   // The geometry line keeps the row while the model is not ready, and a
   // failed rebuild keeps it there for good: the cut's way off stays beside
   // it, or a phone with its view tools folded had none.
@@ -596,6 +610,16 @@ export function WorkspaceReadout({
             onClick={onUndo}
           >
             Undo
+          </button>
+        ) : null}
+        {statusActionShown && statusAction ? (
+          <button
+            type="button"
+            className="workspace-toast-undo"
+            data-status-action={statusAction.id}
+            onClick={statusAction.run}
+          >
+            {statusAction.label}
           </button>
         ) : null}
         <div
