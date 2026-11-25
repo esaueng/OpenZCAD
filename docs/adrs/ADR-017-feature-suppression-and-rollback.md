@@ -86,6 +86,16 @@ a passed-through body would otherwise be rewritten to names that stop
 resolving when the step is resumed. The repair is offered again on the first
 build with nothing suppressed. No stored document format changes.
 
+Amendment (24 November 2026): a dimension edit's carry of a hash-only
+fillet/chamfer pick (`edgeHashRepairs`, `exact-edge-selection-transport.ts`)
+is not withheld behind a manual suppression. A carry writes hashes, not
+names: it moves a pick that was stored against this same model, suppression
+included, to where the edit moved its edges, and the carry gate refuses any
+edit that suppresses or resumes a step. Withholding it refused every upstream
+resize of a part with a suppressed step and an unnamed pick downstream.
+Lineage repairs stay withheld there, and nothing after a failed step is
+carried.
+
 ## Amendment (5 October 2026): preflight an individual suppression
 
 The history action now rebuilds a suppression candidate before committing
