@@ -184,12 +184,12 @@ export interface IdentityKeyFollowUp {
   /** Aborted once the action has returned. */
   readonly signal: AbortSignal;
   /**
-   * Calls `use` with the identity key at once, after checking that the
+   * Calls `withKey` with the identity key at once, after checking that the
    * action has not returned and its session is live; otherwise throws
-   * without calling it. `use` must start its signature in that call.
+   * without calling it. `withKey` must start its signature in that call.
    */
   useIdentityKey<T>(
-    use: (identityPrivateKey: CryptoKey) => Promise<T>
+    withKey: (identityPrivateKey: CryptoKey) => Promise<T>
   ): Promise<T>;
 }
 
@@ -221,13 +221,13 @@ async function afterIdentityKey(
       ctx.afterIdentityKey({
         account,
         signal,
-        useIdentityKey: (use) => {
+        useIdentityKey: (withKey) => {
           // Checked and handed over in one synchronous step, so nothing
           // can end the action between the check and the signature.
           if (signal.aborted)
             throw new DOMException('The action has finished.', 'AbortError');
           requireActiveKeyContext(ctx);
-          return use(identityPrivateKey);
+          return withKey(identityPrivateKey);
         }
       }),
       new Promise((resolve) => {
