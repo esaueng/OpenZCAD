@@ -609,7 +609,7 @@ function AccountPanel({
               body:
                 method === 'passkey'
                   ? 'Your browser asks for the passkey you saved for OpenZCAD encryption.'
-                  : 'Your recovery key unlocks this device on its own. It can’t check that the device list it receives is the newest one, so approval from another device is safer when you have one.',
+                  : 'Your recovery key unlocks this device on its own.',
               actionLabel: 'Unlock this device',
               passkey: method === 'passkey',
               recoveryKey: method === 'recovery',
@@ -888,9 +888,18 @@ function DeviceStatusBadge({
 }
 
 /**
- * This device's way in: approval from another device (recommended, since it
- * hands over the newest verified device list), a passkey, or the recovery
- * key; and, while a request is open, the QR code and digits to show.
+ * The first-sight freshness limit of passkey and recovery-key unlock
+ * (ADR-024, Unlock and devices; accepted for passkey-first unlock in the
+ * amendment of 2026-11-25, D3), said once under the choices.
+ */
+export const UNLOCK_FRESHNESS_NOTE =
+  'A passkey or the recovery key can’t confirm this browser got your newest device list. Approval from another device can, so prefer it if you removed a device recently.';
+
+/**
+ * This device's way in, in order: a passkey when the account has one this
+ * browser can use (one touch: L11 decision D3), approval from another device
+ * (which hands over the newest verified device list), and the recovery key;
+ * and, while a request is open, the QR code and digits to show.
  */
 function EnrollPanel({
   account,
@@ -1067,31 +1076,36 @@ function EnrollPanel({
           </button>
         </SettingRow>
       ) : null}
-      <SettingRow
-        title="Approve from another device"
-        hint="Recommended. Shows a QR code your phone’s camera can open, or six digits to compare."
-      >
-        <button className="primary" type="button" disabled={busy} onClick={ask}>
-          <QrCode size={14} aria-hidden="true" />
-          Ask for approval
-        </button>
-      </SettingRow>
       {passkey ? (
         <SettingRow
-          title="Use your passkey"
+          title="Unlock with your passkey"
           hint="One touch, if your passkey is saved where this browser can reach it."
         >
           <button
-            className="secondary"
+            className="primary"
             type="button"
             disabled={busy}
             onClick={() => onUnlock('passkey')}
           >
             <Fingerprint size={14} aria-hidden="true" />
-            Use passkey
+            Unlock with passkey
           </button>
         </SettingRow>
       ) : null}
+      <SettingRow
+        title="Approve from another device"
+        hint={`${passkey ? '' : 'Recommended. '}Shows a QR code your phone’s camera can open, or six digits to compare.`}
+      >
+        <button
+          className={passkey ? 'secondary' : 'primary'}
+          type="button"
+          disabled={busy}
+          onClick={ask}
+        >
+          <QrCode size={14} aria-hidden="true" />
+          Ask for approval
+        </button>
+      </SettingRow>
       <SettingRow
         title="Use your recovery key"
         hint="Works on its own, when no other device is at hand."
@@ -1106,6 +1120,7 @@ function EnrollPanel({
           Enter recovery key
         </button>
       </SettingRow>
+      <Notice tone="info">{UNLOCK_FRESHNESS_NOTE}</Notice>
     </Group>
   );
 }

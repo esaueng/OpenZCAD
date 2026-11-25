@@ -3,6 +3,7 @@ import {
   createE2eeServer,
   installE2eeServer,
   finishSetupDialog,
+  lastRecoveryGroup,
   openEncryptionSettings,
   seedE2eeDevice
 } from './e2ee-fixtures';
@@ -168,7 +169,7 @@ test('hides Encryption while the server keeps the beta closed', async ({
   ).toHaveCount(0);
 });
 
-test('sets up encryption only after the recovery key is confirmed', async ({
+test('sets up with a recovery key only after its last group is typed back', async ({
   page,
   context
 }) => {
@@ -178,39 +179,46 @@ test('sets up encryption only after the recovery key is confirmed', async ({
   await page.goto('/');
   const settings = await openEncryptionSettings(page);
   await settings.getByRole('button', { name: 'Set up encryption' }).click();
-  const setup = settings.getByRole('dialog', { name: 'Set up encryption' });
-  // The first step says plainly what losing every way in costs (I80),
+  const intro = settings.getByRole('dialog', { name: 'Turn on encryption' });
+  // The first screen says plainly what losing every way in costs (I80),
   // passkeys included, before any key exists.
-  await expect(setup).toContainText(
+  await expect(intro).toContainText(
     'If you lose every device, every passkey and the recovery key, your encrypted cloud projects can’t be recovered, by you or by us.'
   );
-  await setup.getByRole('button', { name: 'Start' }).click();
+  await intro
+    .getByRole('button', { name: 'Use a recovery key only', exact: true })
+    .or(intro.getByRole('button', { name: 'Continue', exact: true }))
+    .click();
 
-  const recoveryKey = (await setup
-    .getByLabel('Recovery key', { exact: true })
-    .textContent())!;
+  const setup = settings.getByRole('dialog', {
+    name: 'Save your recovery key'
+  });
+  const shown = setup.getByLabel('Recovery key', { exact: true });
+  const recoveryKey = (await shown.textContent())!;
   expect(recoveryKey).toMatch(/^([0-9A-Z]{4}-){13}[0-9A-Z]{4}$/);
-  const proceed = setup.getByRole('button', { name: 'Continue' });
-  await expect(proceed).toBeDisabled();
+  const turnOn = setup.getByRole('button', { name: 'Turn on encryption' });
+  await expect(turnOn).toBeDisabled();
   await setup
     .getByRole('checkbox', { name: /I saved my recovery key/ })
     .check();
-  await proceed.click();
+  // The group asked for is hidden, so it is read from the saved copy (D2).
+  await expect(shown).toHaveText(`${recoveryKey.slice(0, -4)}••••`);
 
-  // A key that does not match is refused at its field; nothing is set up.
-  const confirm = setup.getByLabel('Confirm recovery key');
-  await confirm.fill(recoveryKey.replace(/^.{4}/, '0000'));
-  await setup.getByRole('button', { name: 'Turn on encryption' }).click();
+  // A group that does not match is refused at its field; nothing is set up.
+  const confirm = setup.getByLabel('Last group of your recovery key');
+  const last = recoveryKey.slice(-4);
+  await confirm.fill(last === '0000' ? '1111' : '0000');
+  await turnOn.click();
   await expect(confirm).toHaveAttribute('aria-invalid', 'true');
   await expect(setup.getByRole('alert')).toContainText(
-    'That does not match. Go back and check what you saved.'
+    'That does not match. Check the copy you saved.'
   );
   expect(
     server.db.prepare('SELECT COUNT(*) AS n FROM e2ee_identities').get()
   ).toEqual({ n: 0 });
 
-  await confirm.fill(recoveryKey.toLowerCase().replaceAll('-', ' '));
-  await setup.getByRole('button', { name: 'Turn on encryption' }).click();
+  await confirm.fill(last.toLowerCase());
+  await turnOn.click();
   await finishSetupDialog(settings);
   await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
   await expect(settings.getByText('Encryption is on')).toBeVisible();
@@ -256,22 +264,23 @@ test('ends setup by encrypting new projects, ticked by default', async ({
   await page.goto('/');
   const settings = await openEncryptionSettings(page);
   await settings.getByRole('button', { name: 'Set up encryption' }).click();
-  await settings.getByRole('button', { name: 'Start' }).click();
+  const intro = settings.getByRole('dialog', { name: 'Turn on encryption' });
+  await intro
+    .getByRole('button', { name: 'Use a recovery key only', exact: true })
+    .or(intro.getByRole('button', { name: 'Continue', exact: true }))
+    .click();
   const recoveryKey = (await settings
     .getByLabel('Recovery key', { exact: true })
     .textContent())!;
   await settings
     .getByRole('checkbox', { name: /I saved my recovery key/ })
     .check();
-  await settings.getByRole('button', { name: 'Continue' }).click();
-  await settings.getByLabel('Confirm recovery key').fill(recoveryKey);
+  await settings
+    .getByLabel('Last group of your recovery key')
+    .fill(lastRecoveryGroup(recoveryKey));
   await settings.getByRole('button', { name: 'Turn on encryption' }).click();
-  const skip = settings.getByRole('button', { name: 'Skip', exact: true });
-  await expect(
-    skip.or(settings.getByRole('dialog', { name: 'Your projects' })).first()
-  ).toBeVisible({ timeout: 30_000 });
-  if (await skip.isVisible()) await skip.click();
-  const projects = settings.getByRole('dialog', { name: 'Your projects' });
+  const projects = settings.getByRole('dialog', { name: 'You’re set' });
+  await expect(projects).toBeVisible({ timeout: 30_000 });
   const choice = projects.getByRole('checkbox', {
     name: /Encrypt new projects/
   });

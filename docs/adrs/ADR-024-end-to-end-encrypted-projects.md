@@ -262,7 +262,10 @@ device when new wraps are issued. Pinned devices reject that fork when they
 see it, but that later detection does not undo disclosure. Settings therefore
 recommends approval from an already unlocked device when possible, so its
 verified head is transferred. Recovery remains available when no such device
-exists; it carries this first-sight freshness limitation.
+exists; it carries this first-sight freshness limitation. (A passkey unlock
+carries the same limit; since the
+[amendment of 2026-11-25](#amendment-2026-11-25-passkey-first-setup-and-unlock)
+Settings offers a passkey first where the account has one.)
 
 Keychain sign/derive commands and browser WebCrypto keys both let executing
 frontend code use the device key without a separate prompt for each operation.
@@ -1957,3 +1960,73 @@ settings, which an account whose library is not encrypted stores readable.
   ciphertext. The account export includes the record as stored.
 - **Review.** This is a new account-key derivation and record format, so the
   Phase 8 outside review covers it with the other account records.
+
+## Amendment 2026-11-25: passkey-first setup and unlock
+
+Owner decisions D2 and D3 of the L11 plan for simpler sharing and
+encryption settings (`docs/plans/l11-sharing-and-encryption-overhaul.md`)
+change two client policies. Neither changes a key, wrap, record format,
+Worker route or migration.
+
+### Recovery-key confirmation (D2)
+
+Setup still generates the recovery key first, in memory, and the first
+device-list entry still certifies it as an unlock target. What changes is
+the order of the screens and how its saving is confirmed
+(`apps/web/src/components/encryption/SetupDialog.tsx`):
+
+- **With a passkey.** "Continue with passkey" creates the credential first,
+  inside the click, so the person touches their authenticator once. Then
+  `setUpEncryption` commits the identity, the recovery target and this
+  device, and `addPasskey` certifies the passkey with the recovery secret
+  already in memory and the credential just created. The person then saves
+  the recovery key (download, copy or print) and ticks "I saved it". Nothing
+  is typed back.
+- **Without a passkey** (recovery key only, a passkey that failed, or no
+  WebAuthn PRF, as in the desktop WebView), the person also types the key's
+  last group of four characters, which the screen masks meanwhile. A
+  recovery-key-only setup commits its keys only after that.
+- This supersedes the full retype of the 2026-11-16 plan. The last group
+  makes the person consult the copy they saved; it does not prove the rest
+  of that copy is correct, so a transcription error elsewhere is found only
+  when the key is used (its checksum then refuses it). That is the accepted
+  cost. With a passkey enrolled, the account has a way back in besides this
+  device and the recovery key, which is why no retype is asked.
+- **Failures.** A passkey ceremony cancelled or refused before setup
+  commits nothing, and setup continues as recovery key only. If setup
+  commits and certifying the passkey then fails, the account holds keys
+  with the recovery key as its only way in beyond this device, and the
+  save screen asks for the last group and cannot be dismissed until it is
+  confirmed. A credential the provider kept but nothing certified is named
+  for deletion, as [Unlock and devices](#unlock-and-devices) requires.
+- **Keys before the saved key.** On the passkey path the keys exist on the
+  server before the person confirms saving the recovery key. A tab closed
+  at that screen leaves an account reachable from this device and the
+  passkey, whose recovery key may be unsaved; Settings › Encryption can
+  replace it.
+
+### Passkey-first unlock (D3)
+
+On a device that is not unlocked, Settings › Encryption offers "Unlock with
+passkey" first when the account's device list certifies a passkey and this
+browser supports WebAuthn. Approval from another device comes second and
+the recovery key third. Without a usable passkey, approval stays first.
+
+This accepts, for passkey unlock, the first-sight freshness limit that
+[Unlock and devices](#unlock-and-devices) states for the recovery key: a
+browser without a saved device-list pin cannot tell whether the server
+supplied the newest device list, so a consistently forked pre-removal list
+can have new wraps issued to a removed device. Pinned devices still reject
+the fork when they see it, but cannot undo that disclosure. The unlock
+panel says this in one line and suggests approval after a recent device
+removal. Approval needs a second unlocked device at hand and, since
+approval always certifies (amendment 2026-11-16), a passkey or the recovery
+key on it, so it costs more than a passkey touch on the common path. This
+supersedes the plan of 2026-11-16, which kept approval first for this
+reason.
+
+### Review
+
+Neither decision changes the cryptography, but both change what the
+review packet describes: setup's confirmation (section 3.1) and the
+recommended unlock path (section 6, enrollment without pins). The packet is updated to match.
