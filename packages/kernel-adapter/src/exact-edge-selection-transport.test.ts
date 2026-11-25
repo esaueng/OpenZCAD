@@ -88,8 +88,16 @@ describe('edge provenance', () => {
 
   it('reads an unnamed face through the named faces that border it', () => {
     // The cap and side 2 are unnamed; side 3 is boss A's own side.
-    const fromA = edgeProvenance(layout(), 12, named({ 3: 'A.side', 4: 'Base' }));
-    const fromB = edgeProvenance(layout(), 12, named({ 3: 'B.side', 4: 'Base' }));
+    const fromA = edgeProvenance(
+      layout(),
+      12,
+      named({ 3: 'A.side', 4: 'Base' })
+    );
+    const fromB = edgeProvenance(
+      layout(),
+      12,
+      named({ 3: 'B.side', 4: 'Base' })
+    );
     expect(fromA).not.toBeNull();
     expect(fromB).not.toBeNull();
     // Another boss in the same role reads differently.
