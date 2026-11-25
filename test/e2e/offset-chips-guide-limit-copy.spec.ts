@@ -220,6 +220,13 @@ test('a drag cancelled on a refused frame logs its limit with units', async ({
     'max',
     { timeout: 30_000 }
   );
+  // Letting go here parks the refusal, so the prompt no longer promises an
+  // apply under the held hand.
+  const status = page.getByRole('contentinfo');
+  await expect(status).toContainText(
+    'Can’t move this face here · Release won’t apply'
+  );
+  await expect(status).not.toContainText('Release to apply');
   // Cancelled: no release-time refusal ever restates the limit.
   await page.keyboard.press('Escape');
   await page.mouse.up();

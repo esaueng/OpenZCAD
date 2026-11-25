@@ -1,5 +1,7 @@
 import {
+  commandSessionFor,
   escapeTarget,
+  isOperationState,
   isStaleSelectionError,
   refusalRulesOutSize,
   type CommandDiagnostic,
@@ -7,6 +9,7 @@ import {
 } from './machine';
 import { activeKeymap, keyHint } from '../keymap';
 import type { DimensionMode, EditControlState } from '../keypad';
+import { refusalSummary } from '../refusalSummary';
 
 /**
  * What the workspace should be telling you to do right now.
@@ -151,6 +154,14 @@ function armedStep(
 }
 
 function draggingStep(state: InteractionState): string {
+  // A refused frame under the hand is the gesture's settled verdict: it
+  // stays until a value builds (`recoverPreviewInteraction`), and letting go
+  // on it parks the refusal instead of applying (`drag-release`). So the
+  // step stops promising an apply, and names why in the refusal card's own
+  // short words, without flipping while the next frame is still checking.
+  if (isOperationState(state) && state.error) {
+    return refusedDragStep(state.error, commandSessionFor(state)?.title);
+  }
   if (state.mode === 'face') {
     return 'Release to apply · type to enter an exact value instead';
   }
@@ -158,6 +169,27 @@ function draggingStep(state: InteractionState): string {
     return `Release to apply the ${state.op} · type to enter an exact value`;
   }
   return 'Release to apply · type to enter an exact value instead';
+}
+
+/**
+ * The step while the frame under the hand was refused. "Drag back" is
+ * offered only when another value could build, as `failedStep` offers
+ * another value.
+ */
+function refusedDragStep(
+  error: CommandDiagnostic,
+  operationTitle = 'Edit'
+): string {
+  const { headline } = refusalSummary(error, operationTitle);
+  const sizeHelps =
+    !isStaleSelectionError(error) && !refusalRulesOutSize(error);
+  return [
+    headline,
+    'Release won’t apply',
+    sizeHelps ? 'drag back or type a value' : null
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 /**

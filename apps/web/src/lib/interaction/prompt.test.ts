@@ -391,6 +391,88 @@ describe('a refused value', () => {
   });
 });
 
+describe('a drag whose frame under the hand was refused', () => {
+  // Letting go on a refused frame parks the refusal (`drag-release` lands in
+  // `failed`); the step used to promise "Release to apply" all the same.
+  const limit = 'A neighbouring face would shrink to nothing past -6.4.';
+
+  it('stops promising an apply and names the refusal briefly', () => {
+    const refused = faceState('dragging', 'offset-face', limit);
+    const step = commandPrompt(refused)?.step;
+    expect(step).not.toMatch(/Release to apply/);
+    expect(step).toBe(
+      'Can’t move this face here · Release won’t apply · drag back or type a value'
+    );
+    expect(commandPromptText(refused)).toBe(
+      'Can’t move this face here · Release won’t apply · drag back or type a value · Esc cancels the drag'
+    );
+  });
+
+  it('keeps the accepted drag exactly as it was', () => {
+    expect(commandPrompt(faceState('dragging'))?.step).toBe(
+      'Release to apply · type to enter an exact value instead'
+    );
+    expect(
+      commandPrompt(faceState('dragging', 'resize-cylinder-radius'))?.step
+    ).toBe('Release to apply · type to enter an exact value instead');
+    expect(commandPrompt(edgeState('dragging', 'chamfer'))?.step).toBe(
+      'Release to apply the chamfer · type to enter an exact value'
+    );
+  });
+
+  it('names each direct edit by what it could not do', () => {
+    expect(
+      commandPrompt(faceState('dragging', 'resize-cylinder-radius', limit))
+        ?.step
+    ).toMatch(
+      /^Can’t resize this (?:cylinder|hole) here · Release won’t apply/
+    );
+    const resize = faceState('dragging', 'offset-face', limit);
+    if (resize.mode !== 'face') throw new Error('face state');
+    const resizing: InteractionState = {
+      ...resize,
+      target: { ...resize.target, resizeBodyFeatureId: 'feature-box' }
+    };
+    expect(commandPrompt(resizing)?.step).toMatch(
+      /^Can’t resize this body here · Release won’t apply/
+    );
+    const edge = edgeState('dragging', 'fillet');
+    if (edge.mode !== 'edges') throw new Error('edge state');
+    expect(
+      commandPrompt({ ...edge, error: { message: 'Radius too big.' } })?.step
+    ).toBe(
+      'Can’t round this edge here · Release won’t apply · drag back or type a value'
+    );
+  });
+
+  it('uses the refusal’s own short line when it carries one', () => {
+    const refused = faceState('dragging', 'offset-face', 'Too far.');
+    if (refused.mode !== 'face') throw new Error('face state');
+    expect(
+      commandPrompt({
+        ...refused,
+        error: {
+          message: 'Too far.',
+          headline: 'Total can’t go below 2 mm here'
+        }
+      })?.step
+    ).toBe(
+      'Total can’t go below 2 mm here · Release won’t apply · drag back or type a value'
+    );
+  });
+
+  it('offers no other value when no value could build', () => {
+    const refused = faceState(
+      'dragging',
+      'offset-face',
+      'Fillet could not be created with radius 1. Smaller radii failed too, so a different size is unlikely to help.'
+    );
+    expect(commandPrompt(refused)?.step).toBe(
+      'Can’t move this face here · Release won’t apply'
+    );
+  });
+});
+
 describe('the edit control’s key hints', () => {
   const hints = (
     editor: NonNullable<Parameters<typeof commandPromptText>[2]>['editor']
