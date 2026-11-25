@@ -11,11 +11,13 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { buildDemoDocument, DEMO_DEFINITIONS } from '../apps/web/src/lib/demos';
+import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
 import {
-  planFaceOffset,
-  withFaceTravelHint
-} from '../apps/web/src/lib/interaction/faceOffsetPlan';
-import { plainRefusal } from '../apps/web/src/lib/refusalLanguage';
+  FACE_SWEEP_BLOCKED,
+  plainRefusal,
+  withFaceSweepReading,
+  type FaceSweepReading
+} from '../apps/web/src/lib/refusalLanguage';
 
 /**
  * Design review, demo Mounting Bracket: dragging the base plate's top face
@@ -65,6 +67,15 @@ describe('demo bracket base-plate top face offset', () => {
     });
   }
 
+  /** What the display mesh says of the path, read as after a refusal. */
+  function reading(
+    candidate: ReturnType<typeof plan>
+  ): FaceSweepReading | undefined {
+    return candidate?.kind === 'direct-edit'
+      ? candidate.sweepReading?.()
+      : undefined;
+  }
+
   async function build(offset: number) {
     const candidate = plan(offset);
     expect(candidate).not.toBeNull();
@@ -87,9 +98,8 @@ describe('demo bracket base-plate top face offset', () => {
     async (offset) => {
       const candidate = plan(offset);
       expect(candidate?.kind).toBe('direct-edit');
-      expect(
-        (candidate as { travelHint?: () => string | undefined }).travelHint?.()
-      ).toBeUndefined();
+      // Nothing in the way on the mesh: no estimate to offer.
+      expect(reading(candidate)?.kind).not.toBe('blocked');
       const derived = await build(offset);
       expect(derived.warnings).toEqual([]);
       const volume = derived.bodyRepresentations[bodyId]?.volume ?? 0;
@@ -103,31 +113,31 @@ describe('demo bracket base-plate top face offset', () => {
   it('adds an approximate inward distance after the exact collision refusal', async () => {
     const candidate = plan(-10);
     expect(candidate?.kind).toBe('direct-edit');
-    const hint = (
-      candidate as { travelHint?: () => string | undefined }
-    ).travelHint?.();
-    expect(hint).toBe(
-      'The display mesh suggests about 8 mm of material behind this face.'
-    );
+    const estimate =
+      'The display mesh suggests about 8 mm of material behind this face.';
+    expect(reading(candidate)).toEqual({ kind: 'blocked', estimate });
     const warnings = (await build(-10)).warnings;
     expect(warnings.join('\n')).toMatch(/swept face reaches nonadjacent face/);
     const exact = plainRefusal(
       warnings[0]!.replace(/^Feature "[^"]+":\s*/, '')
     );
-    expect(withFaceTravelHint(exact.message, hint)).toBe(
-      `${exact.message}\n${hint}`
-    );
+    // A real obstruction keeps the collision sentence; the estimate leads
+    // the kernel's words in the detail.
+    expect(withFaceSweepReading(exact, () => reading(candidate))).toEqual({
+      ...exact,
+      message: FACE_SWEEP_BLOCKED,
+      detail: `${estimate}\n${exact.detail}`
+    });
   }, 60_000);
 
   it('adds an approximate outward distance after the exact collision refusal', async () => {
     const candidate = plan(10);
     expect(candidate?.kind).toBe('direct-edit');
-    const hint = (
-      candidate as { travelHint?: () => string | undefined }
-    ).travelHint?.();
-    expect(hint).toBe(
-      'The display mesh suggests another part of the body about 6 mm in front of this face.'
-    );
+    expect(reading(candidate)).toEqual({
+      kind: 'blocked',
+      estimate:
+        'The display mesh suggests another part of the body about 6 mm in front of this face.'
+    });
     const warnings = (await build(10)).warnings;
     expect(warnings.join('\n')).toMatch(/swept face reaches nonadjacent face/);
     // Should the kernel's own refusal ever reach the card, it now says what
@@ -137,30 +147,28 @@ describe('demo bracket base-plate top face offset', () => {
     ).toBe(
       'The face would run into another part of the body before it got that far.'
     );
-    expect(
-      withFaceTravelHint('The resulting body came back invalid.', hint)
-    ).toBe('The resulting body came back invalid.');
+    const other = { message: 'The resulting body came back invalid.' };
+    expect(withFaceSweepReading(other, () => reading(candidate))).toBe(other);
   }, 60_000);
 
   it('never refuses an offset just inside a limit that the kernel builds', async () => {
     for (const offset of [5.9, -7.9]) {
-      expect(
-        (
-          plan(offset) as { travelHint?: () => string | undefined }
-        ).travelHint?.()
-      ).toBeUndefined();
+      expect(reading(plan(offset))?.kind).not.toBe('blocked');
       expect((await build(offset)).warnings).toEqual([]);
     }
     // At the limit itself the kernel is the judge, and it refuses.
     expect((await build(-8)).warnings.join('\n')).toMatch(
       /swept face reaches nonadjacent face/
     );
+    // The mesh shows the far side right there, so the refusal is never
+    // reworded as the kernel's doubt about a clear path.
+    expect(reading(plan(-8))?.kind).not.toBe('clear');
     // Just past it, the mesh suggests a distance; the kernel still decides.
-    expect(
-      (plan(-8.1) as { travelHint?: () => string | undefined }).travelHint?.()
-    ).toBe(
-      'The display mesh suggests about 8 mm of material behind this face.'
-    );
+    expect(reading(plan(-8.1))).toEqual({
+      kind: 'blocked',
+      estimate:
+        'The display mesh suggests about 8 mm of material behind this face.'
+    });
   }, 120_000);
 
   it('keeps an exact build available when the display mesh suggests a false obstacle', async () => {
@@ -219,9 +227,10 @@ describe('demo bracket base-plate top face offset', () => {
       offset: 5
     });
     expect(candidate?.kind).toBe('direct-edit');
-    expect(
-      (candidate as { travelHint?: () => string | undefined }).travelHint?.()
-    ).toContain('about 1 mm');
+    const artifact = reading(candidate);
+    expect(artifact?.kind === 'blocked' && artifact.estimate).toContain(
+      'about 1 mm'
+    );
     const document = new CommandManager(withMeshArtifact).runTransaction(
       'Offset',
       [candidate!.command]

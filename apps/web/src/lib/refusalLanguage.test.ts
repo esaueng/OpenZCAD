@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { plainRefusal, stepImportRefusal } from './refusalLanguage';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  FACE_SWEEP_BLOCKED,
+  FACE_SWEEP_UNPROVEN,
+  plainRefusal,
+  stepImportRefusal,
+  withFaceSweepReading
+} from './refusalLanguage';
 
 describe('stepImportRefusal', () => {
   it('offers a fresh export while retaining the complete STEP parser diagnostic', () => {
@@ -637,5 +643,51 @@ describe('exact sweep path refusals (M04)', () => {
       'exact sweep path turns back on itself at joint 1'
     );
     expect(message).toContain('neither a mitre nor a round corner');
+  });
+});
+
+describe('withFaceSweepReading', () => {
+  // The kernel's words for a captured refusal on a threaded part, where the
+  // moved face cleared the thread that "blocked" it by about 22 mm.
+  const kernel =
+    'offset: move-face would change topology at face Some(Id(11608)), edge None: swept face reaches nonadjacent face 11744 before completing the move';
+  const refusal = { ...plainRefusal(kernel), limit: 4 };
+
+  it('reads a swept-face refusal as the collision sentence', () => {
+    expect(plainRefusal(kernel).message).toBe(FACE_SWEEP_BLOCKED);
+  });
+
+  it('says the kernel could not prove a path the mesh shows clear, without a limit', () => {
+    const reworded = withFaceSweepReading(refusal, () => ({ kind: 'clear' }));
+    expect(reworded.message).toBe(FACE_SWEEP_UNPROVEN);
+    expect(reworded.message).toBe(
+      "The geometry kernel couldn't prove this move is clear of nearby curved faces (such as a thread). Try a smaller step, or make the change before adding the thread."
+    );
+    // The kernel's own words stay behind it, exactly as recorded.
+    expect(reworded.detail).toBe(refusal.detail);
+    expect(reworded).not.toHaveProperty('limit');
+  });
+
+  it('keeps the collision sentence where the mesh shows an obstruction', () => {
+    const estimate =
+      'The display mesh suggests another part of the body about 6 mm in front of this face.';
+    expect(
+      withFaceSweepReading(refusal, () => ({ kind: 'blocked', estimate }))
+    ).toEqual({ ...refusal, detail: `${estimate}\n${refusal.detail}` });
+    expect(withFaceSweepReading(refusal, () => ({ kind: 'blocked' }))).toBe(
+      refusal
+    );
+  });
+
+  it('keeps the collision sentence when the mesh cannot say', () => {
+    expect(withFaceSweepReading(refusal, () => undefined)).toBe(refusal);
+    expect(withFaceSweepReading(refusal)).toBe(refusal);
+  });
+
+  it('reads the mesh only for the swept-face collision', () => {
+    const read = vi.fn(() => ({ kind: 'clear' as const }));
+    const other = { message: 'Unsupported adjacent surface.' };
+    expect(withFaceSweepReading(other, read)).toBe(other);
+    expect(read).not.toHaveBeenCalled();
   });
 });

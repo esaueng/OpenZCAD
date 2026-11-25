@@ -65,6 +65,24 @@ const CHORD_ALLOWANCE_RATIO = 4e-4;
 
 const cache = new WeakMap<BodyRepresentation, Map<string, PlanarFaceTravel>>();
 
+/**
+ * What windowed sweeps of one face have measured, per direction: how far the
+ * slab has been searched and the nearest obstacle found in it. A refused
+ * drag asks again on every frame, each a little farther; searching twice
+ * the asked reach answers most of those frames from here.
+ */
+interface SweepKnowledge {
+  searchedTo: number;
+  blockedAt: number;
+  /** The smallest doubled reach seen over the work budget; not tried again. */
+  unmeasurableFrom: number;
+}
+
+const sweepCache = new WeakMap<
+  BodyRepresentation,
+  Map<string, SweepKnowledge>
+>();
+
 function dot(a: Vector3, b: Vector3): number {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }
@@ -167,7 +185,11 @@ export function planarFaceTravel(
   let perBody = cache.get(representation);
   const cached = perBody?.get(key);
   if (cached) return cached;
-  const result = measure(representation, face);
+  const result = measure(representation, face) ?? {
+    inward: null,
+    outward: null,
+    tolerance: toleranceOf(representation)
+  };
   if (!perBody) {
     perBody = new Map();
     cache.set(representation, perBody);
@@ -176,16 +198,124 @@ export function planarFaceTravel(
   return result;
 }
 
-function measure(
+/**
+ * Pure. Whether the display mesh shows the prism a planar face sweeps
+ * through on a move of `offset` (signed along its outward normal) empty of
+ * every face it does not share an edge with, allowing the mesh's own
+ * tolerance past the end of the move. Null when the mesh cannot say.
+ *
+ * Only the triangles whose heights reach into the swept slab are measured,
+ * so a heavily tessellated body — a thread, a knurl — that exhausts the
+ * work budget of {@link planarFaceTravel} can still be answered. Like that
+ * estimate, this does not certify what the exact kernel will build; it
+ * decides only whether the display shows anything in the way.
+ */
+export function planarFaceSweepClear(
   representation: BodyRepresentation,
-  face: FaceTopology
-): PlanarFaceTravel {
+  face: FaceTopology,
+  offset: number
+): boolean | null {
+  if (!Number.isFinite(offset) || offset === 0) return null;
+  const key = `${face.topologyId}:${face.hash}:${offset > 0 ? '+' : '-'}`;
+  let perBody = sweepCache.get(representation);
+  const known = perBody?.get(key) ?? {
+    searchedTo: 0,
+    blockedAt: Infinity,
+    unmeasurableFrom: Infinity
+  };
+  if (!perBody) {
+    perBody = new Map();
+    sweepCache.set(representation, perBody);
+  }
+  perBody.set(key, known);
+  const reach = Math.abs(offset) + toleranceOf(representation);
+  if (reach > known.searchedTo) {
+    // The wider search can exceed the work budget where the asked one
+    // would not; fall back to the asked reach before giving up.
+    // A doubled slab already over budget is not tried again: past that
+    // point each frame costs one search, of the reach it asks about.
+    let searched = 2 * reach < known.unmeasurableFrom ? 2 * reach : reach;
+    let travel = measure(representation, face, slab(offset, searched));
+    if (!travel && searched > reach) {
+      known.unmeasurableFrom = Math.min(known.unmeasurableFrom, searched);
+      searched = reach;
+      travel = measure(representation, face, slab(offset, searched));
+    }
+    // Not remembered: clipping can split more triangles in a narrow slab
+    // than in a wide one, so a wider search may still fit.
+    if (!travel) return null;
+    const nearest = offset > 0 ? travel.outward : travel.inward;
+    known.searchedTo = searched;
+    known.blockedAt = Math.min(known.blockedAt, nearest ?? Infinity);
+  }
+  return reach < known.blockedAt;
+}
+
+/** Heights above the face's plane that a move of `offset` sweeps through. */
+function slab(offset: number, reach: number): [number, number] {
+  return offset > 0 ? [0, reach] : [-reach, 0];
+}
+
+function toleranceOf(representation: BodyRepresentation): number {
   const { min, max } = representation.bbox;
   const extent = Math.max(max.x - min.x, max.y - min.y, max.z - min.z, 0);
-  const tolerance = Number.isFinite(extent)
+  return Number.isFinite(extent)
     ? Math.max(extent * CHORD_ALLOWANCE_RATIO, 1e-5)
     : 1e-5;
-  const UNKNOWN: PlanarFaceTravel = { inward: null, outward: null, tolerance };
+}
+
+type Point3 = [number, number, number];
+
+/** The polygon's part with height (third coordinate) on `keep`'s side. */
+function clipHeight(
+  polygon: Point3[],
+  bound: number,
+  keep: (height: number) => boolean
+): Point3[] {
+  const result: Point3[] = [];
+  for (let i = 0; i < polygon.length; i += 1) {
+    const p = polygon[i]!;
+    const q = polygon[(i + 1) % polygon.length]!;
+    const pIn = keep(p[2]);
+    const qIn = keep(q[2]);
+    if (pIn) result.push(p);
+    if (pIn !== qIn) {
+      const t = (bound - p[2]) / (q[2] - p[2]);
+      result.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t, bound]);
+    }
+  }
+  return result;
+}
+
+/** A triangle's part between two heights, as a fan of triangles. */
+function clipToSlab(
+  triangle: Point3[],
+  low: number,
+  high: number
+): Array<[Point3, Point3, Point3]> {
+  let polygon = triangle;
+  if (Number.isFinite(low))
+    polygon = clipHeight(polygon, low, (height) => height >= low);
+  if (Number.isFinite(high))
+    polygon = clipHeight(polygon, high, (height) => height <= high);
+  const fan: Array<[Point3, Point3, Point3]> = [];
+  for (let i = 1; i + 1 < polygon.length; i += 1) {
+    fan.push([polygon[0]!, polygon[i]!, polygon[i + 1]!]);
+  }
+  return fan;
+}
+
+/**
+ * The measurement, or null when it cannot be made. `window` restricts it to
+ * obstacles whose heights above the face's plane reach into [low, high]; a
+ * height outside the window is not recorded.
+ */
+function measure(
+  representation: BodyRepresentation,
+  face: FaceTopology,
+  window: readonly [number, number] = [-Infinity, Infinity]
+): PlanarFaceTravel | null {
+  const tolerance = toleranceOf(representation);
   const geometry = face.geometry;
   const topology = representation.topology;
   const { vertices, indices } = representation.mesh;
@@ -195,7 +325,7 @@ function measure(
     !topology ||
     face.triangleCount <= 0
   ) {
-    return UNKNOWN;
+    return null;
   }
   // Adjacency is the kernel's edge-to-face map. Without it the faces that
   // would stretch cannot be told from the ones in the way, and guessing
@@ -211,17 +341,17 @@ function measure(
       for (const hash of edge.adjacentFaceHashes) adjacent.add(hash);
     }
   }
-  if (!adjacencyKnown) return UNKNOWN;
+  if (!adjacencyKnown) return null;
   adjacent.add(face.hash);
 
   const firstVertex = indices[face.triangleStart * 3];
-  if (firstVertex === undefined) return UNKNOWN;
+  if (firstVertex === undefined) return null;
   const frame = frameFor(geometry.normal, {
     x: vertices[firstVertex * 3]!,
     y: vertices[firstVertex * 3 + 1]!,
     z: vertices[firstVertex * 3 + 2]!
   });
-  if (!frame) return UNKNOWN;
+  if (!frame) return null;
 
   const toLocal = (index: number) =>
     local(
@@ -257,6 +387,12 @@ function measure(
   const flat = Math.max(1e-6, span * 1e-7);
   const inside = span * 1e-9;
 
+  // A windowed slab starts at the face's own flatness allowance, so a
+  // triangle that leaves the plane over the face is cut where it leaves,
+  // and that cut is sampled — and counted, at the allowance itself.
+  const windowed = Number.isFinite(window[0]) || Number.isFinite(window[1]);
+  const low = window[0] >= 0 ? Math.max(window[0], flat) : window[0];
+  const high = window[1] <= 0 ? Math.min(window[1], -flat) : window[1];
   const excluded = new Uint8Array(indices.length / 3);
   for (const other of topology.faces) {
     if (!adjacent.has(other.hash)) continue;
@@ -280,24 +416,47 @@ function measure(
       Math.max(a[0], b[0], c[0]) < minX ||
       Math.min(a[0], b[0], c[0]) > maxX ||
       Math.max(a[1], b[1], c[1]) < minY ||
-      Math.min(a[1], b[1], c[1]) > maxY
+      Math.min(a[1], b[1], c[1]) > maxY ||
+      Math.max(a[2], b[2], c[2]) < low ||
+      Math.min(a[2], b[2], c[2]) > high
     ) {
       continue;
     }
-    obstacles.push({
-      triangle: { ax: a[0], ay: a[1], bx: b[0], by: b[1], cx: c[0], cy: c[1] },
-      heights: [a[2], b[2], c[2]]
-    });
+    // A windowed search measures only the part of each triangle inside the
+    // slab. Samples sit at vertices of the overlap with the face, so a
+    // triangle rising through the slab — from the face's own plane at a
+    // shared corner to past the move, say — would otherwise be sampled only
+    // outside it and read as clear.
+    const pieces: Array<[Point3, Point3, Point3]> =
+      Number.isFinite(low) || Number.isFinite(high)
+        ? clipToSlab([a, b, c], low, high)
+        : [[a, b, c]];
+    for (const [p, q, r] of pieces) {
+      obstacles.push({
+        triangle: {
+          ax: p[0],
+          ay: p[1],
+          bx: q[0],
+          by: q[1],
+          cx: r[0],
+          cy: r[1]
+        },
+        heights: [p[2], q[2], r[2]]
+      });
+    }
   }
   if (obstacles.length * footprint.length * 12 > WORK_BUDGET) {
-    return UNKNOWN;
+    return null;
   }
 
   let outward = Infinity;
   let inward = Infinity;
   const record = (height: number) => {
-    if (height > flat) outward = Math.min(outward, height);
-    else if (height < -flat) inward = Math.min(inward, -height);
+    if (height < low || height > high) return;
+    if (windowed ? height >= flat : height > flat)
+      outward = Math.min(outward, height);
+    else if (windowed ? height <= -flat : height < -flat)
+      inward = Math.min(inward, -height);
   };
   const overFootprint = (x: number, y: number) =>
     footprint.some((piece) => barycentric(piece, x, y, inside) !== null);
