@@ -483,6 +483,22 @@ interface OperationLifecycle {
    * gesture keeps its phase, and releasing it there lands in `failed`.
    */
   error: CommandDiagnostic | null;
+  /**
+   * While dragging: the refusal the hand last met, kept once the hand has
+   * left the refused value (`preview-left`) until a later value builds
+   * (`drag-engage`). The value under the hand is unchecked meanwhile, so the
+   * prompt keeps naming the refusal and says the release checks the value,
+   * rather than promising an apply and flipping back when the next value is
+   * refused too. Never read for anything a release does.
+   */
+  priorRefusal?: CommandDiagnostic;
+  /**
+   * While dragging a chained face set (`FaceTarget.offsetFaceSet`): the value
+   * under the hand (`drag-hand`). Its coarse whole-chain preview can lag the
+   * hand, so a held refusal may belong to an older value, and whether a
+   * release parks it depends on the hand (`commitParksRefusal`).
+   */
+  handValue?: number;
 }
 
 export type InteractionState =
@@ -552,6 +568,17 @@ export type InteractionEvent =
    */
   | { type: 'drag-retake' }
   | { type: 'drag-release' }
+  /**
+   * The hand moved a chained face set's handle to `value` (see
+   * `OperationLifecycle.handValue`). Ignored for anything else.
+   */
+  | { type: 'drag-hand'; value: number }
+  /**
+   * The hand left a refused value for one not yet checked. The refusal stops
+   * being held (the chip and the release no longer answer to it) but stays
+   * as the drag's `priorRefusal` until a value builds.
+   */
+  | { type: 'preview-left' }
   | { type: 'set-face-offset-mode'; local: boolean }
   | { type: 'set-edge-op'; op: 'fillet' | 'chamfer' }
   | { type: 'toggle-edge-op' }
@@ -565,9 +592,10 @@ export type InteractionEvent =
     }
   /**
    * A live preview frame refused while the hand is still on the handle. The
-   * gesture stays `dragging` — the prompt, Escape and the held rail
-   * all belong to the drag until it is released — and only the value chip
-   * turns to its warning. Outside a drag it is a `validation-failed`.
+   * gesture stays `dragging` — Escape and the held rail belong to the drag
+   * until it is released — and the value chip turns to its warning. The
+   * prompt keeps to the drag too, but says the release will not apply.
+   * Outside a drag it is a `validation-failed`.
    */
   | {
       type: 'preview-refused';
@@ -638,6 +666,17 @@ const ARMED: OperationLifecycle = {
   lastValue: null,
   error: null
 };
+
+/** A drag's memory of the refusal it left and of the hand, dropped. */
+function withoutDragMemory<T extends OperationLifecycle>(state: T): T {
+  const { priorRefusal: _prior, handValue: _hand, ...rest } = state;
+  return rest as T;
+}
+
+function withoutPriorRefusal<T extends OperationLifecycle>(state: T): T {
+  const { priorRefusal: _prior, ...rest } = state;
+  return rest as T;
+}
 
 /**
  * Whether a command surface is showing this state's lifecycle. Callers use it
@@ -1022,20 +1061,45 @@ function reduceInteraction(
         ? { ...state, extrudeChoice: event.choice, phase: 'armed', error: null }
         : state;
     case 'drag-engage':
+      // Re-engaging a drag in place (a value built) keeps the hand's value;
+      // a new drag starts without either memory.
       return isOperationState(state) && state.phase !== 'validating'
-        ? { ...state, phase: 'dragging', error: null }
+        ? {
+            ...(state.phase === 'dragging'
+              ? withoutPriorRefusal(state)
+              : withoutDragMemory(state)),
+            phase: 'dragging',
+            error: null
+          }
         : state;
     case 'drag-retake':
       return state.mode === 'face' &&
         (state.op === 'offset-face' || state.op === 'resize-cylinder-radius') &&
         state.phase === 'validating'
-        ? { ...state, phase: 'dragging', error: null }
+        ? { ...withoutDragMemory(state), phase: 'dragging', error: null }
         : state;
     case 'drag-release':
       // Letting go on a refused frame is the refusal: the card, its Why and
       // its way out take over only now that the hand is off the handle.
       return isOperationState(state) && state.phase === 'dragging'
-        ? { ...state, phase: state.error ? 'failed' : 'armed' }
+        ? {
+            ...withoutDragMemory(state),
+            phase: state.error ? 'failed' : 'armed'
+          }
+        : state;
+    case 'drag-hand':
+      return state.mode === 'face' &&
+        state.op === 'offset-face' &&
+        state.target.offsetFaceSet &&
+        state.phase === 'dragging' &&
+        state.handValue !== event.value
+        ? { ...state, handValue: event.value }
+        : state;
+    case 'preview-left':
+      return isOperationState(state) &&
+        state.phase === 'dragging' &&
+        state.error
+        ? { ...state, error: null, priorRefusal: state.error }
         : state;
     case 'set-face-offset-mode':
       return state.mode === 'face' &&
@@ -1089,7 +1153,11 @@ function reduceInteraction(
     case 'preview-refused':
       if (!isOperationState(state)) return state;
       return state.phase === 'dragging'
-        ? { ...state, lastValue: event.value, error: event.diagnostic }
+        ? {
+            ...withoutPriorRefusal(state),
+            lastValue: event.value,
+            error: event.diagnostic
+          }
         : {
             ...state,
             phase: 'failed',
@@ -1791,6 +1859,83 @@ export function holdsRefusal(state: InteractionState): boolean {
     (state.phase === 'failed' ||
       (state.phase === 'dragging' && state.error !== null))
   );
+}
+
+/**
+ * Whether committing `value` now parks the refusal the operation holds,
+ * without asking the kernel again: the release of a refused drag, or Enter
+ * on a refused face offset. The face offset's commit and the drag prompt
+ * both read this, so the prompt never says a release won't apply when it
+ * would go on to validate or apply.
+ *
+ * - A face offset (a body resize too) parks it, except a chained set
+ *   released at another value than the refused one: its coarse lane can
+ *   still hold an older value's refusal, and validation judges the value
+ *   let go at.
+ * - A new extrude's release only ends the drag, and lands in the refusal.
+ * - A cylinder or hole resize, fillet or chamfer release validates its
+ *   value whatever the preview said.
+ *
+ * `value` defaults to the hand's: the one a release would commit.
+ */
+export function commitParksRefusal(
+  state: InteractionState,
+  value: number | undefined = isOperationState(state)
+    ? state.handValue
+    : undefined
+): boolean {
+  if (!holdsRefusal(state)) return false;
+  if (state.mode === 'region') return true;
+  if (state.mode !== 'face' || state.op !== 'offset-face') return false;
+  return !(
+    state.target.offsetFaceSet &&
+    value !== undefined &&
+    state.lastValue !== value
+  );
+}
+
+/**
+ * What a preview's outcome says about the drag: a value under the hand
+ * `built`, or the hand `left` a refused value for one not yet checked.
+ */
+export type PreviewSettlement = 'built' | 'left';
+
+/**
+ * A published success settles the drag as built only for the value under
+ * the hand. The scheduler can publish a value the hand has already moved
+ * past (to another refused one, say), and that success is no verdict on the
+ * value held now. An unknown hand takes the success as before.
+ */
+export function builtPreviewSettlement(
+  built: number,
+  hand: number | null | undefined
+): PreviewSettlement {
+  return hand === null || hand === undefined || built === hand
+    ? 'built'
+    : 'left';
+}
+
+/**
+ * A projected frame is never checked, so the hand has only left any
+ * refusal; except at zero, where letting go ends the gesture with no commit
+ * and nothing to check.
+ */
+export function projectedFrameSettlement(offset: number): PreviewSettlement {
+  return Math.abs(offset) <= 1e-9 ? 'built' : 'left';
+}
+
+/**
+ * The event a drag's settlement dispatches, or null for none. Either one
+ * stops holding a refusal (the chip and the release no longer answer to
+ * it); only `built` also forgets it as the drag's prior refusal.
+ */
+export function dragSettlementEvent(
+  state: InteractionState,
+  settled: PreviewSettlement
+): InteractionEvent | null {
+  if (!isOperationState(state) || state.phase !== 'dragging') return null;
+  if (settled === 'left') return state.error ? { type: 'preview-left' } : null;
+  return state.error || state.priorRefusal ? { type: 'drag-engage' } : null;
 }
 
 /**

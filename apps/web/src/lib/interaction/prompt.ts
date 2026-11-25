@@ -1,5 +1,8 @@
 import {
+  commandSessionFor,
+  commitParksRefusal,
   escapeTarget,
+  isOperationState,
   isStaleSelectionError,
   refusalRulesOutSize,
   type CommandDiagnostic,
@@ -7,6 +10,7 @@ import {
 } from './machine';
 import { activeKeymap, keyHint } from '../keymap';
 import type { DimensionMode, EditControlState } from '../keypad';
+import { refusalSummary } from '../refusalSummary';
 
 /**
  * What the workspace should be telling you to do right now.
@@ -151,6 +155,22 @@ function armedStep(
 }
 
 function draggingStep(state: InteractionState): string {
+  // Once the drag has met a refusal, the step names it in the refusal
+  // card's own short words until a value builds: a refused frame still
+  // held, or one the hand has left for a value not yet checked. What it
+  // says of the release is what the release does (`commitParksRefusal`),
+  // so the step never flips to "Release to apply" and back while the next
+  // value is checked.
+  if (isOperationState(state)) {
+    const refusal = state.error ?? state.priorRefusal;
+    if (refusal) {
+      return refusedDragStep(
+        refusal,
+        commitParksRefusal(state),
+        commandSessionFor(state)?.title
+      );
+    }
+  }
   if (state.mode === 'face') {
     return 'Release to apply · type to enter an exact value instead';
   }
@@ -158,6 +178,30 @@ function draggingStep(state: InteractionState): string {
     return `Release to apply the ${state.op} · type to enter an exact value`;
   }
   return 'Release to apply · type to enter an exact value instead';
+}
+
+/**
+ * The step while the drag has met a refusal. The release either parks the
+ * refusal ("won't apply") or asks the kernel about the value let go at
+ * ("checks this value"); never "apply", which only a built value earns.
+ * "Drag back" is offered only when another value could build, as
+ * `failedStep` offers another value.
+ */
+function refusedDragStep(
+  error: CommandDiagnostic,
+  releaseParks: boolean,
+  operationTitle = 'Edit'
+): string {
+  const { headline } = refusalSummary(error, operationTitle);
+  const sizeHelps =
+    !isStaleSelectionError(error) && !refusalRulesOutSize(error);
+  return [
+    headline,
+    releaseParks ? 'Release won’t apply' : 'Release checks this value',
+    sizeHelps ? 'drag back or type a value' : null
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 /**

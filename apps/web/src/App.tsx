@@ -990,6 +990,11 @@ import {
   sketchToolKeysSuspended,
   interactionReducer,
   commandSessionFor,
+  commitParksRefusal,
+  builtPreviewSettlement,
+  dragSettlementEvent,
+  projectedFrameSettlement,
+  type PreviewSettlement,
   holdsRefusal,
   isParkableRefusal,
   refusalCancelledInPlace,
@@ -6370,7 +6375,14 @@ export function App() {
             value: preview.document.radius,
             status: 'built'
           });
-          recoverPreviewInteraction();
+          // A late success for a radius the hand has left is no verdict on
+          // the radius held now.
+          recoverPreviewInteraction(
+            builtPreviewSettlement(
+              preview.document.radius,
+              cylinderRadiusHandValue.current
+            )
+          );
         }
         reusableRadiusPreview.current = preview
           ? { candidate: preview.document }
@@ -6587,7 +6599,14 @@ export function App() {
         }
         setLastValidPreview(preview.document.offset);
         setPreviewVerdict({ value: preview.document.offset, status: 'built' });
-        recoverPreviewInteraction();
+        // A face set's coarse lane publishes behind the hand: a late success
+        // for a value it has left is no verdict on the value held now.
+        recoverPreviewInteraction(
+          builtPreviewSettlement(
+            preview.document.offset,
+            offsetPreviewValueRef.current
+          )
+        );
         // Once a gesture has gone slow, the chip says "catching up" only
         // while the hand is actually ahead of the published geometry.
         setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
@@ -32197,8 +32216,9 @@ export function App() {
     stopCylinderRadiusRestCheck();
     // A refusal belongs to the size it was given for. The hand has left that
     // size, so the gesture is live again; the next size the kernel refuses
-    // says so when the hand rests on it.
-    recoverPreviewInteraction();
+    // says so when the hand rests on it. Until a size builds, the prompt
+    // keeps the refusal and says the release checks this size.
+    recoverPreviewInteraction('left');
     // Back at the starting size the part is simply itself again. Asking the
     // kernel to rebuild it there is refused ("must differ from its current
     // diameter"), which flagged a drag that merely passed its start as
@@ -32581,7 +32601,9 @@ export function App() {
         );
         setLastValidPreview(preview.document.size);
         setPreviewVerdict({ value: preview.document.size, status: 'built' });
-        recoverPreviewInteraction();
+        recoverPreviewInteraction(
+          builtPreviewSettlement(preview.document.size, edgeHandValue.current)
+        );
         setPreviewDeferred(edgePreview.degraded && edgePreview.lagging);
       },
       onFailure: ({ error, value }) => {
@@ -33404,7 +33426,8 @@ export function App() {
       ...(advice ? { advice } : {})
     };
     // Under a held handle the refusal is the chip's to show: the drag keeps
-    // its prompt, its Escape and its held rail until it is released.
+    // its Escape and its held rail until it is released, and its prompt
+    // says the release will not apply.
     const dragging = current.phase === 'dragging';
     dispatchInteraction({
       type: dragging ? 'preview-refused' : 'validation-failed',
@@ -33435,13 +33458,20 @@ export function App() {
       previewFailureRecordedForDrag.current = false;
   }, [interaction]);
 
-  /** The first buildable value after a refusal re-arms the live gesture. */
-  function recoverPreviewInteraction() {
+  /**
+   * The first buildable value after a refusal re-arms the live gesture.
+   *
+   * `left`: the hand only left the refused value for one not yet checked.
+   * The refusal stops being held, but the drag keeps it as its prior
+   * refusal, so the prompt does not promise an apply until a value builds.
+   */
+  function recoverPreviewInteraction(settled: PreviewSettlement = 'built') {
     const current = interactionRef.current;
     if (!isOperationState(current)) return;
     // A refused frame under the hand clears in place: the drag never left.
-    if (current.phase === 'dragging' && current.error) {
-      dispatchInteraction({ type: 'drag-engage' });
+    if (current.phase === 'dragging') {
+      const event = dragSettlementEvent(current, settled);
+      if (event) dispatchInteraction(event);
       return;
     }
     if (current.phase !== 'failed') {
@@ -33490,12 +33520,22 @@ export function App() {
       return;
     }
     offsetPreviewValueRef.current = offset;
+    // A chained set's release depends on the hand's value: its coarse lane
+    // can hold an older value's refusal (`commitParksRefusal`).
+    if (
+      current.target.offsetFaceSet &&
+      current.phase === 'dragging' &&
+      current.handValue !== offset
+    )
+      dispatchInteraction({ type: 'drag-hand', value: offset });
     if (!exactGeometry) {
       offsetPreview.clear();
       offsetLeadPreview.clear();
       setPreviewDeferred(false);
       setPreviewVerdict({ value: offset, status: 'unchecked' });
-      recoverPreviewInteraction();
+      // A projected frame is never checked: the hand has left any refusal.
+      // At zero, letting go ends the gesture with nothing to check.
+      recoverPreviewInteraction(projectedFrameSettlement(offset));
       if (offsetHandleTarget?.stepProfilePreview && Math.abs(offset) > 1e-9) {
         const target = current.target;
         offsetRestTimer.current = window.setTimeout(() => {
@@ -34167,13 +34207,12 @@ export function App() {
     // A refused value is not committed from a failed card; the value the
     // last passing preview showed is, and validation judges it again. A
     // release on a refused frame reads the drag before its release renders.
+    // The drag prompt reads the same rule, so it says "won't apply" exactly
+    // when this parks the refusal.
     if (
-      holdsRefusal(current) &&
+      commitParksRefusal(current, offset) &&
       !options?.keepingLastValid &&
-      !rimChoice &&
-      // A chained set's coarse lane can still hold an older value's refusal
-      // when the hand lets go elsewhere: validation judges that value.
-      !(current.target.offsetFaceSet && current.lastValue !== offset)
+      !rimChoice
     ) {
       setStatus(
         current.error

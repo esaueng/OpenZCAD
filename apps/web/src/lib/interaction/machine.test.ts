@@ -1995,8 +1995,10 @@ describe('a preview refused under a held handle', () => {
     expect(commandPrompt(refused, 'radius')?.escape).toBe(
       commandPrompt(before, 'radius')?.escape
     );
+    // The step stays the drag's, but stops promising an apply the release
+    // will not make: letting go here parks the refusal.
     expect(commandPrompt(refused, 'radius')?.step).toBe(
-      commandPrompt(before, 'radius')?.step
+      'Can’t move this face here · Release won’t apply · drag back or type a value'
     );
     expect(railHeld(refused)).toBe(true);
   });
@@ -2021,6 +2023,9 @@ describe('a preview refused under a held handle', () => {
     expect(isOperationState(recovered) && recovered.phase).toBe('dragging');
     expect(isOperationState(recovered) && recovered.error).toBeNull();
     expect(holdsRefusal(recovered)).toBe(false);
+    expect(commandPrompt(recovered, 'radius')?.step).toBe(
+      commandPrompt(draggingOffset(), 'radius')?.step
+    );
     expect(
       interactionReducer(recovered, { type: 'drag-release' })
     ).toMatchObject({ phase: 'armed', error: null });
