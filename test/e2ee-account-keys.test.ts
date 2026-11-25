@@ -64,6 +64,7 @@ import {
   AFTER_IDENTITY_KEY_TIMEOUT_MS,
   type AccountView,
   type IdentityKeyFollowUp,
+  type SetupAttempts,
   type E2eeContext,
   type EncryptionState
 } from '../apps/web/src/lib/e2ee/accountKeys';
@@ -683,6 +684,83 @@ describe('setup', () => {
       );
       const { account: phone } = await enrolled(srv, recovery.secret, 'Phone');
       expect(phone.fingerprint).toBe(account.fingerprint);
+    });
+
+    it('records the keys as committed before a failing follow-up load', async () => {
+      const srv = server();
+      const recovery = await generateRecoveryKey();
+      const real = fetcherFor(srv, USER);
+      let setupDone = false;
+      let accountFails = 1;
+      const ctx = {
+        ...device(srv),
+        api: createE2eeApi(async (path, init) => {
+          if (path === '/api/e2ee/account' && setupDone && accountFails > 0) {
+            accountFails--;
+            throw new TypeError('Failed to fetch');
+          }
+          const response = await real(path, init);
+          if (path === '/api/e2ee/setup') setupDone = true;
+          return response;
+        })
+      };
+      const attempts: SetupAttempts = { sent: [] };
+      const options = {
+        recoverySecret: recovery.secret,
+        label: 'Laptop',
+        attempts
+      };
+      await expect(setUpEncryption(ctx, options)).rejects.toThrow(TypeError);
+      expect(attempts.proved).toBe('committed');
+      // A retry meets its own pin and adopts the same write.
+      expect(ready(await setUpEncryption(ctx, options)).unlocked).toBe(true);
+      expect(attempts.proved).toBe('committed');
+    });
+
+    it('proves nothing when a retry is refused outright', async () => {
+      const srv = server();
+      const recovery = await generateRecoveryKey();
+      const ctx = losingAnswer(srv, { accountFails: 1 });
+      const attempts: SetupAttempts = { sent: [] };
+      const options = {
+        recoverySecret: recovery.secret,
+        label: 'Laptop',
+        attempts
+      };
+      await flowRefusal(setUpEncryption(ctx, options), 'setup-unknown');
+      expect(attempts.proved).toBeUndefined();
+      const limited = createE2eeApi(async (path, init) =>
+        path === '/api/e2ee/setup'
+          ? new Response(
+              JSON.stringify({ error: 'Too many requests', code: 'RATE' }),
+              { status: 429 }
+            )
+          : fetcherFor(srv, USER)(path, init)
+      );
+      const refused = await refusal(
+        setUpEncryption({ ...ctx, api: limited }, options)
+      );
+      expect(refused.status).toBe(429);
+      expect(attempts.proved).toBeUndefined();
+      // The first write was in fact taken; the next read-back proves it.
+      expect(ready(await setUpEncryption(ctx, options)).unlocked).toBe(true);
+      expect(attempts.proved).toBe('committed');
+    });
+
+    it('proves not committed when the read-back finds no keys', async () => {
+      const srv = server();
+      const attempts: SetupAttempts = { sent: [] };
+      const offline = createE2eeApi(async (path, init) => {
+        if (path === '/api/e2ee/setup') throw new TypeError('Failed to fetch');
+        return fetcherFor(srv, USER)(path, init);
+      });
+      await expect(
+        setUpEncryption(
+          { ...device(srv), api: offline },
+          { recoverySecret: generateSymmetricKey(), label: 'Laptop', attempts }
+        )
+      ).rejects.toThrow(TypeError);
+      expect(attempts.proved).toBe('not-committed');
     });
 
     it('rethrows when nothing was committed, and refuses another identity', async () => {

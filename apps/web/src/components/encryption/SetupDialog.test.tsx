@@ -8,7 +8,8 @@ import type * as UnlockedKeysModule from '../../lib/e2ee/unlockedKeys';
 import type {
   AccountView,
   E2eeContext,
-  EncryptionState
+  EncryptionState,
+  SetupAttempts
 } from '../../lib/e2ee/accountKeys';
 import type { PasskeyPrf, PasskeySecret } from '../../lib/e2ee/passkeys';
 import { E2eeApiError } from '../../lib/e2ee/e2eeApi';
@@ -109,7 +110,7 @@ function open({
   const onClose = vi.fn();
   const onComplete = vi.fn();
   const onEncryptExisting = vi.fn();
-  render(
+  const view = render(
     <SetupDialog
       ctx={
         {
@@ -126,7 +127,13 @@ function open({
       skipProjectsStep={skipProjectsStep}
     />
   );
-  return { onClose, onComplete, onEncryptExisting, create };
+  return {
+    onClose,
+    onComplete,
+    onEncryptExisting,
+    create,
+    unmount: view.unmount
+  };
 }
 
 const savedBox = () =>
@@ -587,6 +594,202 @@ describe('the setup dialog', () => {
     expect(onEncryptExisting).not.toHaveBeenCalled();
     expect(onComplete).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+  // #2053 re-check: one write at a time, and nothing is erased or closed
+  // while it is in flight.
+  describe('while a key write is in flight', () => {
+    type Options = { recoverySecret: Uint8Array; attempts?: SetupAttempts };
+    const optionsOf = (call: number) =>
+      keys.setUpEncryption.mock.calls[call]![1] as Options;
+
+    async function typedLastGroup() {
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Use a recovery key only' })
+      );
+      const shown = shownKey();
+      fireEvent.click(savedBox());
+      const field = screen.getByLabelText('Last group of your recovery key');
+      fireEvent.change(field, { target: { value: lastRecoveryGroup(shown) } });
+      return field;
+    }
+
+    it('ignores a repeated Enter, and blocks Escape until the write settles', async () => {
+      prf.mockResolvedValue('supported');
+      preferences.config.mockResolvedValue({ enabled: false });
+      let fail!: (error: Error) => void;
+      keys.setUpEncryption.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            fail = reject;
+          })
+      );
+      const { onClose } = open();
+      const field = await typedLastGroup();
+      fireEvent.keyDown(field, { key: 'Enter' });
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(keys.setUpEncryption).toHaveBeenCalledOnce();
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+      expect(onClose).not.toHaveBeenCalled();
+      const secret = optionsOf(0).recoverySecret;
+      fail(new EncryptionFlowError('invalid-request', 'Refused.'));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Refused.');
+      // No second write was queued behind the first.
+      expect(keys.setUpEncryption).toHaveBeenCalledOnce();
+      expect(secret.some((byte) => byte !== 0)).toBe(true);
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledOnce();
+    });
+
+    it('erases the recovery key only after a write still in flight at unmount settles', async () => {
+      prf.mockResolvedValue('supported');
+      preferences.config.mockResolvedValue({ enabled: false });
+      let fail!: (error: Error) => void;
+      keys.setUpEncryption.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            fail = reject;
+          })
+      );
+      const { unmount } = open();
+      fireEvent.keyDown(await typedLastGroup(), { key: 'Enter' });
+      const secret = optionsOf(0).recoverySecret;
+      unmount();
+      expect(secret.some((byte) => byte !== 0)).toBe(true);
+      fail(new Error('Session ended'));
+      await waitFor(() =>
+        expect(secret.every((byte) => byte === 0)).toBe(true)
+      );
+    });
+
+    it('erases a passkey that arrives after the dialog closed', async () => {
+      prf.mockResolvedValue('supported');
+      preferences.config.mockResolvedValue({ enabled: false });
+      const made = passkey();
+      let arrive!: (secret: PasskeySecret) => void;
+      const create = vi.fn(
+        () =>
+          new Promise<PasskeySecret>((resolve) => {
+            arrive = resolve;
+          })
+      );
+      keys.setUpEncryption.mockRejectedValue(
+        new EncryptionFlowError('invalid-request', 'The account session ended.')
+      );
+      const { unmount } = open({ create });
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Continue with passkey' })
+      );
+      fireEvent.click(savedBox());
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Create passkey and turn on encryption'
+        })
+      );
+      unmount();
+      arrive(made);
+      await waitFor(() =>
+        expect(made.secret.every((byte) => byte === 0)).toBe(true)
+      );
+    });
+
+    it('keeps an unknown outcome when a retry is refused, until a read-back proves it', async () => {
+      prf.mockResolvedValue('supported');
+      preferences.config.mockResolvedValue({ enabled: false });
+      keys.setUpEncryption
+        .mockRejectedValueOnce(
+          new EncryptionFlowError('setup-unknown', SETUP_OUTCOME_UNKNOWN)
+        )
+        .mockRejectedValueOnce(
+          new E2eeApiError(429, 'Too many requests.', 'RATE_LIMITED')
+        )
+        .mockImplementationOnce(async (_ctx, options) => {
+          (options as Options).attempts!.proved = 'not-committed';
+          throw new TypeError('Failed to fetch');
+        });
+      const { onClose } = open();
+      fireEvent.keyDown(await typedLastGroup(), { key: 'Enter' });
+      const retry = await screen.findByRole('button', { name: 'Try again' });
+      fireEvent.click(retry);
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Too many requests.'
+      );
+      // A refusal of the retry says nothing about the first write.
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeVisible();
+      expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+      // The read-back found nothing: the person may leave again.
+      expect(
+        await screen.findByRole('button', { name: 'Turn on encryption' })
+      ).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Back' })).toBeVisible();
+      expect(optionsOf(2).attempts).toBe(optionsOf(0).attempts);
+    });
+
+    it('counts keys as committed when the load after the write fails', async () => {
+      prf.mockResolvedValue('supported');
+      preferences.config.mockResolvedValue({ enabled: false });
+      const made = passkey();
+      keys.setUpEncryption.mockImplementationOnce(async (_ctx, options) => {
+        (options as Options).attempts!.proved = 'committed';
+        throw new EncryptionFlowError(
+          'invalid-request',
+          'Encryption keys are unavailable right now.'
+        );
+      });
+      const { onClose } = open({ create: vi.fn(async () => made) });
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Continue with passkey' })
+      );
+      const shown = shownKey();
+      fireEvent.click(savedBox());
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Create passkey and turn on encryption'
+        })
+      );
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Encryption keys are unavailable right now.'
+      );
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Encryption is on with your recovery key'
+      );
+      expect(made.secret.every((byte) => byte === 0)).toBe(true);
+      expect(keys.addPasskey).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.change(
+        screen.getByLabelText('Last group of your recovery key'),
+        {
+          target: { value: lastRecoveryGroup(shown) }
+        }
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+      expect(keys.setUpEncryption).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('leaves the projects screen only through Done, holding default-on until then', async () => {
+    migrationOpen({ defaultOn: true });
+    migration.refresh.mockImplementation(async () => {
+      migration.state.projects = [{ projectId: 'proj_a', phase: 'waiting' }];
+    });
+    const { setupInProgress } = await import('../../lib/e2ee/setupInProgress');
+    const { onClose, onEncryptExisting, unmount } = open();
+    await toProjects();
+    await screen.findByText(/Done starts encrypting/);
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(setupInProgress('user_alice')).toBe(true);
+    expect(migration.run).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(onEncryptExisting).toHaveBeenCalledOnce());
+    expect(migration.run).toHaveBeenCalledWith(['proj_a']);
+    unmount();
+    expect(setupInProgress('user_alice')).toBe(false);
   });
 });
 

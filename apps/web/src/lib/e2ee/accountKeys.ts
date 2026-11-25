@@ -1225,6 +1225,13 @@ export interface SetupAttempts {
     readonly identityKey: Uint8Array;
     readonly entry: Uint8Array;
   }[];
+  /**
+   * What the last call proved about these writes, if anything: the server
+   * took one (`committed`, set before any follow-up that may still fail),
+   * or a read-back found none of them (`not-committed`). An outright
+   * refusal or a failed read-back proves nothing and leaves it unset.
+   */
+  proved?: 'committed' | 'not-committed';
 }
 
 export const SETUP_OUTCOME_UNKNOWN =
@@ -1274,6 +1281,7 @@ async function setUpEncryptionLocked(
   }
 ): Promise<EncryptionState> {
   const attempts = options.attempts ?? { sent: [] };
+  attempts.proved = undefined;
   const persistedPin = await ctx.store.loadPin(ctx.userId);
   if (persistedPin && attempts.sent.length === 0) {
     lockAccount(ctx.userId);
@@ -1325,6 +1333,8 @@ async function setUpEncryptionLocked(
           )
     );
   }
+  // The keys exist now, whatever the follow-up below does.
+  attempts.proved = 'committed';
   const list = await acceptWrite(ctx, response, {
     identityKey: created.identityKey,
     replaceIdentityFrom: persistedPin,
@@ -1358,6 +1368,7 @@ async function adoptSetUpAttempt(
     ? attempts.sent.find((sent) => sameBytes(sent.identityKey, identity))
     : undefined;
   if (!ours) {
+    attempts.proved = 'not-committed';
     if (cause !== null) throw cause;
     lockAccount(ctx.userId);
     throw new EncryptionFlowError(
@@ -1365,6 +1376,7 @@ async function adoptSetUpAttempt(
       'This browser already trusts an encryption identity. Recover it instead of setting up a replacement.'
     );
   }
+  attempts.proved = 'committed';
   const pin = await ctx.store.loadPin(ctx.userId);
   const list = await acceptWrite(ctx, current, {
     identityKey: ours.identityKey,

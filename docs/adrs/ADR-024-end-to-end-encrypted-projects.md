@@ -2118,11 +2118,16 @@ acknowledged saving it (`apps/web/src/components/encryption/SetupDialog.tsx`):
   was set up elsewhere with another recovery key, and the dialog says so.
   A read-back that also fails leaves the outcome unknown (`setup-unknown`):
   the dialog then offers only "Try again", with the same recovery key and
-  the same credential, and cannot be closed or discard the key.
+  the same credential, and cannot be closed or discard the key. Only a
+  read-back that proves the write taken or absent (`SetupAttempts.proved`)
+  ends that state; a refused retry does not. Keys the server took count as
+  committed even when the load after them fails. One write runs at a time,
+  and the recovery and passkey secrets are erased only once it settles.
 - **Existing projects.** Default-on migration waits while the setup dialog
   is open (`setupInProgress.ts`): existing projects are encrypted only from
   the last screen's Done, never because the account became ready while the
-  dialog was still open. Closing the dialog releases the hold.
+  dialog was still open. Once keys exist, that screen is left only through
+  Done, which records its choices and releases the hold.
 
 ### Passkey-first unlock (D3)
 

@@ -61,8 +61,13 @@ export const LOSS_SENTENCE =
 
 type RecoveryKey = { secret: Bytes; formatted: string };
 
-/** A fresh recovery key, erased when its flow closes. */
-function useFreshRecoveryKey(): RecoveryKey | null {
+/**
+ * A fresh recovery key, erased when its flow closes, or once the write in
+ * `flight` settles if one is still wrapping keys with it.
+ */
+function useFreshRecoveryKey(flight?: {
+  write: Promise<unknown> | null;
+}): RecoveryKey | null {
   const [recovery, setRecovery] = useState<RecoveryKey | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -74,9 +79,12 @@ function useFreshRecoveryKey(): RecoveryKey | null {
     });
     return () => {
       cancelled = true;
-      made?.secret.fill(0);
+      const erase = () => made?.secret.fill(0);
+      const settling = flight?.write;
+      if (settling) void settling.finally(erase);
+      else erase();
     };
-  }, []);
+  }, [flight]);
   return recovery;
 }
 
@@ -380,7 +388,12 @@ export function SetupDialog({
    */
   skipProjectsStep?: boolean;
 }) {
-  const recovery = useFreshRecoveryKey();
+  /** The one key write in flight, if any (#2053 re-check). */
+  const [flight] = useState<{ write: Promise<unknown> | null }>(() => ({
+    write: null
+  }));
+  const [writing, setWriting] = useState(false);
+  const recovery = useFreshRecoveryKey(flight);
   const [step, setStep] = useState<SetupStep>('intro');
   const [method, setMethod] = useState<SetupMethod>('passkey');
   const [prf, setPrf] = useState<PasskeyPrfSupport | null>(null);
@@ -412,10 +425,17 @@ export function SetupDialog({
   useEffect(() => holdForSetup(userId), [userId]);
   useEffect(
     () => () => {
-      pendingPasskey.current?.secret.fill(0);
-      pendingPasskey.current = null;
+      // A credential created after an unmount is erased once its write
+      // settles, as the recovery key is.
+      const erase = () => {
+        pendingPasskey.current?.secret.fill(0);
+        pendingPasskey.current = null;
+      };
+      const settling = flight.write;
+      if (settling) void settling.finally(erase);
+      else erase();
     },
-    []
+    [flight]
   );
 
   useEffect(() => {
@@ -522,10 +542,17 @@ export function SetupDialog({
       setCommitted(true);
       return next;
     } catch (caught) {
-      const lost =
+      // Only a proof settles an unknown outcome: a refused retry does not.
+      const proved = attempts.current.proved;
+      if (proved === 'committed') {
+        setUnknown(false);
+        setCommitted(true);
+      } else if (proved === 'not-committed') setUnknown(false);
+      else if (
         caught instanceof EncryptionFlowError &&
-        caught.code === 'setup-unknown';
-      setUnknown(lost);
+        caught.code === 'setup-unknown'
+      )
+        setUnknown(true);
       if (
         caught instanceof E2eeApiError &&
         caught.code === 'E2EE_ALREADY_SET_UP'
@@ -540,16 +567,27 @@ export function SetupDialog({
     }
   };
 
+  /**
+   * Runs one key write at a time: a repeated Enter or click while one is in
+   * flight is ignored, and closing waits for it to settle.
+   */
+  const write = (work: () => Promise<EncryptionState | void>) => {
+    if (flight.write) return;
+    setWriting(true);
+    const settled = run(work, { onError: setError }).finally(() => {
+      flight.write = null;
+      setWriting(false);
+    });
+    flight.write = settled;
+  };
+
   /** Recovery key only: commit once the last group matched. */
   const turnOn = () =>
-    void run(
-      async () => {
-        const next = await commit();
-        afterSave();
-        return next;
-      },
-      { onError: setError }
-    );
+    write(async () => {
+      const next = await commit();
+      afterSave();
+      return next;
+    });
 
   /**
    * The passkey choice, after the key is saved. The credential is created
@@ -557,58 +595,61 @@ export function SetupDialog({
    * up and the passkey certified with the recovery secret in memory.
    */
   const turnOnWithPasskey = () =>
-    void run(
-      async () => {
-        if (!recovery) return;
-        setFallback(null);
-        let created = pendingPasskey.current;
-        if (!created) {
-          try {
-            created = await (ctx.passkeys ?? browserPasskeys).create();
-          } catch (caught) {
-            // Nothing was committed: continue with the recovery key only.
-            setFallback(passkeyProblem(caught));
-            setMethod('recovery');
-            return;
-          }
-          pendingPasskey.current = created;
-        }
-        let next: EncryptionState;
+    write(async () => {
+      if (!recovery) return;
+      setFallback(null);
+      let created = pendingPasskey.current;
+      if (!created) {
         try {
-          next = await commit();
+          created = await (ctx.passkeys ?? browserPasskeys).create();
         } catch (caught) {
-          // The credential certifies nothing yet: kept for a retry, and
-          // named for deletion if the person gives up.
-          throw created.enrollmentLabel
-            ? failedPasskeyEnrollment(caught, created.enrollmentLabel)
-            : caught;
+          // Nothing was committed: continue with the recovery key only.
+          setFallback(passkeyProblem(caught));
+          setMethod('recovery');
+          return;
         }
-        if (next.kind !== 'ready') {
+        pendingPasskey.current = created;
+      }
+      let next: EncryptionState;
+      try {
+        next = await commit();
+      } catch (caught) {
+        // Keys exist but the follow-up failed: no passkey is enrolled
+        // now, and the last group is asked before going on.
+        if (attempts.current.proved === 'committed') {
           forgetPasskey();
           setFallback('');
-          return next;
         }
-        let made = false;
-        try {
-          next = await addPasskey(
-            { ...ctx, passkeys: createdPasskey(created) },
-            next.account,
-            recovery.secret
-          );
-          made = true;
-          setPasskeyMade(true);
-        } catch (caught) {
-          // Keys exist and the recovery key was saved: ask for its last
-          // group, as a recovery-key-only setup does, before going on.
-          setFallback(passkeyProblem(caught, created));
-        } finally {
-          forgetPasskey();
-        }
-        if (made) afterSave();
+        // Otherwise the credential certifies nothing yet: kept for a
+        // retry, and named for deletion if the person gives up.
+        throw created.enrollmentLabel
+          ? failedPasskeyEnrollment(caught, created.enrollmentLabel)
+          : caught;
+      }
+      if (next.kind !== 'ready') {
+        forgetPasskey();
+        setFallback('');
         return next;
-      },
-      { onError: setError }
-    );
+      }
+      let made = false;
+      try {
+        next = await addPasskey(
+          { ...ctx, passkeys: createdPasskey(created) },
+          next.account,
+          recovery.secret
+        );
+        made = true;
+        setPasskeyMade(true);
+      } catch (caught) {
+        // Keys exist and the recovery key was saved: ask for its last
+        // group, as a recovery-key-only setup does, before going on.
+        setFallback(passkeyProblem(caught, created));
+      } finally {
+        forgetPasskey();
+      }
+      if (made) afterSave();
+      return next;
+    });
 
   const lastGroupMatches = () => {
     if (!recovery || !needsTyping) return true;
@@ -621,7 +662,7 @@ export function SetupDialog({
 
   /** Screen 2's primary button. */
   const confirmSaved = () => {
-    if (!recovery || !saved || !lastGroupMatches()) return;
+    if (flight.write || !recovery || !saved || !lastGroupMatches()) return;
     if (committed) afterSave();
     else if (usePasskey) turnOnWithPasskey();
     else turnOn();
@@ -633,54 +674,57 @@ export function SetupDialog({
    * here instead of in a dialog that has already gone (review finding).
    */
   const finish = () =>
-    void run(
-      async () => {
-        const unlocked = unlockedAccount(userId);
-        if (projects && !projects.required && unlocked) {
-          const preferences = {
-            userId,
-            accountKey: unlocked.accountKey,
-            api: preferenceApi,
-            pins: localStoragePreferencePins()
-          };
-          const stored = await loadProjectPreference(preferences);
-          const current =
-            stored.kind === 'verified' ? stored.encryptNewProjects : false;
-          if (current !== encryptNew) {
-            await saveProjectPreference(
-              preferences,
-              encryptNew,
-              preferenceFloor(stored)
-            );
-            encryptionStateChanged(userId);
-          }
+    write(async () => {
+      const unlocked = unlockedAccount(userId);
+      if (projects && !projects.required && unlocked) {
+        const preferences = {
+          userId,
+          accountKey: unlocked.accountKey,
+          api: preferenceApi,
+          pins: localStoragePreferencePins()
+        };
+        const stored = await loadProjectPreference(preferences);
+        const current =
+          stored.kind === 'verified' ? stored.encryptNewProjects : false;
+        if (current !== encryptNew) {
+          await saveProjectPreference(
+            preferences,
+            encryptNew,
+            preferenceFloor(stored)
+          );
+          encryptionStateChanged(userId);
         }
-        const started =
-          offerExisting &&
-          (projects?.required || encryptExisting) &&
-          existing !== null &&
-          existing !== 'failed' &&
-          existing.ids.length > 0
-            ? existing
-            : null;
-        if (started) {
-          // The page's own controller: Settings' "Encrypt existing
-          // projects" shows its progress, pause and errors.
-          void started.controller.run(started.ids).catch(() => undefined);
-        }
-        onComplete?.();
-        if (started && onEncryptExisting) onEncryptExisting();
-        else onClose();
-      },
-      { onError: setError }
-    );
+      }
+      const started =
+        offerExisting &&
+        (projects?.required || encryptExisting) &&
+        existing !== null &&
+        existing !== 'failed' &&
+        existing.ids.length > 0
+          ? existing
+          : null;
+      if (started) {
+        // The page's own controller: Settings' "Encrypt existing
+        // projects" shows its progress, pause and errors.
+        void started.controller.run(started.ids).catch(() => undefined);
+      }
+      onComplete?.();
+      if (started && onEncryptExisting) onEncryptExisting();
+      else onClose();
+    });
 
-  // Keys without a saved recovery key, or an outcome not yet known, must
-  // not be left behind by a stray Escape.
+  // A write in flight, keys without a saved recovery key, an outcome not
+  // yet known, or the projects screen (left only through Done, which
+  // records its choices and releases default-on migration) are never left
+  // by a stray Escape.
   const closable =
-    !busy && !unknown && !(step === 'save' && committed && !keySaved);
+    !busy &&
+    !writing &&
+    !unknown &&
+    step !== 'projects' &&
+    !(step === 'save' && committed && !keySaved);
   const close = () => {
-    if (closable) end();
+    if (closable && !flight.write) end();
   };
 
   if (!recovery || prf === null) return null;
