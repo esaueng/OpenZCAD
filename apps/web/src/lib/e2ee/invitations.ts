@@ -1736,6 +1736,10 @@ export async function syncInvitations(ctx: InvitationContext): Promise<{
   readonly outgoing: OwnerInvitation[];
   readonly joined: string[];
   readonly added: string[];
+  /** The invitations of `added`, as listed before they were completed. */
+  readonly completed: OwnerInvitation[];
+  /** The ready invitations whose Add failed, with why. */
+  readonly failed: { invitation: OwnerInvitation; error: unknown }[];
   readonly errors: unknown[];
 }> {
   const errors: unknown[] = [];
@@ -1743,6 +1747,8 @@ export async function syncInvitations(ctx: InvitationContext): Promise<{
   let outgoing: OwnerInvitation[] = [];
   let joined: string[] = [];
   let added: string[] = [];
+  let completed: OwnerInvitation[] = [];
+  let failed: { invitation: OwnerInvitation; error: unknown }[] = [];
   try {
     incoming = await acceptedInvitations(ctx);
     if (
@@ -1764,10 +1770,20 @@ export async function syncInvitations(ctx: InvitationContext): Promise<{
     outgoing = await sentInvitations(ctx);
     const result = await completeReadyInvitations(ctx, outgoing);
     added = result.added;
+    const listed = outgoing;
+    completed = listed.filter((entry) =>
+      added.includes(entry.record.invitationId)
+    );
+    failed = result.failed.flatMap(({ invitationId, error }) => {
+      const invitation = listed.find(
+        (entry) => entry.record.invitationId === invitationId
+      );
+      return invitation ? [{ invitation, error }] : [];
+    });
     errors.push(...result.failed.map((failure) => failure.error));
     if (added.length) outgoing = await sentInvitations(ctx);
   } catch (error) {
     errors.push(error);
   }
-  return { incoming, outgoing, joined, added, errors };
+  return { incoming, outgoing, joined, added, completed, failed, errors };
 }

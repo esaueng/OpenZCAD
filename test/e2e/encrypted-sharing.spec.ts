@@ -19,11 +19,12 @@ import {
 
 /**
  * ADR-024 Phase 5, slice 5-3b: the owner invites someone to an end-to-end
- * encrypted project from the sharing dialog; the invitee, sent to set up
- * encryption first, accepts the emailed link; both compare codes in
+ * encrypted project from the sharing dialog; the invitee's emailed link
+ * opens "Shared with you" (L11 plan of 2026-11-25, §3.2), which turns
+ * encryption on and accepts the link by itself; both compare codes in
  * Settings › Encryption › Contacts; the invitee's browser publishes its
  * KeyPackage, the owner's adds it by an MLS Commit with the role, and the
- * invitee opens the project from the shelf and decrypts it. The real
+ * invitee's landing joins by the Welcome and opens the project. The real
  * `/api/e2ee/*` Worker routes run over SQLite; each browser runs the real
  * MLS Worker.
  */
@@ -266,40 +267,48 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   ).not.toContain(BOB_EMAIL);
   await dialog.getByRole('button', { name: 'Close sharing' }).click();
 
-  // Bob opens the emailed link without keys: he is sent to set them up.
+  // Bob opens the emailed link without keys: "Shared with you" (L11 plan
+  // of 2026-11-25, §3.2) offers to turn encryption on, right there.
   await bob.goto(`/#encrypted-invite=${server.mailbox[0]!.token}`);
-  const bobSettings = bob.getByRole('dialog', { name: 'Settings' });
-  await expect(
-    bobSettings.getByText(
-      'You were invited to an end-to-end encrypted project. Set up encryption on this device first, then accept the invitation here.'
-    )
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await expect(
-    bobSettings.getByRole('button', { name: 'Set up encryption' })
-  ).toBeVisible();
+  const landing = bob.getByRole('dialog', { name: 'Shared with you' });
+  const turnOn = landing.getByRole('button', {
+    name: 'Turn on encryption to open it'
+  });
+  await expect(turnOn).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await expect(bob.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
   expect(new URL(bob.url()).hash).toBe('');
 
-  // Set up (seeded), he comes back and accepts.
-  const bobSeed = await seedE2eeDevice(bob, server, {
-    label: 'Bob browser',
-    userId: BOB_ID
-  });
-  await bob.reload();
-  const bobEncryption = await openEncryptionSettings(bob);
-  await bobEncryption
-    .getByRole('button', { name: 'Accept invitation' })
+  // He sets encryption up in the setup dialog and comes back to it.
+  await turnOn.click();
+  const bobBody = bob.locator('body');
+  await bobBody.getByRole('button', { name: 'Start', exact: true }).click();
+  const bobRecoveryKey = (await bobBody
+    .getByLabel('Recovery key', { exact: true })
+    .textContent())!;
+  await bobBody
+    .getByRole('checkbox', { name: /I saved my recovery key/ })
+    .check();
+  await bobBody.getByRole('button', { name: 'Continue', exact: true }).click();
+  await bobBody.getByLabel('Confirm recovery key').fill(bobRecoveryKey);
+  await bobBody
+    .getByRole('button', { name: 'Turn on encryption', exact: true })
     .click();
-  await expect(
-    bobEncryption.getByText(`${ALICE_EMAIL} invited you as a viewer`)
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  // The optional passkey and projects steps (`finishSetupDialog`, which
+  // expects no encryption dialog after: the landing is one).
+  const skip = bobBody.getByRole('button', { name: 'Skip', exact: true });
+  const done = bobBody.getByRole('button', { name: 'Done', exact: true });
+  await expect(skip.or(done).first()).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  if (await skip.isVisible()) await skip.click();
+  await done.click({ timeout: SYNC_BUDGET_MS });
 
-  // He compares codes with Alice and verifies her; his browser then
+  // Unlocked, the landing accepts the link by itself: no Accept click. He
+  // compares codes with Alice from it and verifies her; his browser then
   // publishes its KeyPackage.
-  await bobEncryption
-    .getByRole('button', { name: `Verify ${ALICE_EMAIL}` })
-    .first()
-    .click();
-  await verifyContact(bobEncryption, ALICE_EMAIL, bobSeed.recoveryKey);
+  await landing
+    .getByRole('button', { name: 'Compare codes' })
+    .click({ timeout: SYNC_BUDGET_MS });
+  const bobEncryption = bob.getByRole('dialog', { name: 'Settings' });
+  await verifyContact(bobEncryption, ALICE_EMAIL, bobRecoveryKey);
   await expect(
     bobEncryption.getByText(
       'Your keys are ready. Waiting for them to verify you and add you.'
@@ -310,6 +319,9 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
       .prepare('SELECT user_id, consumed_at FROM e2ee_key_packages')
       .all()
   ).toEqual([{ user_id: BOB_ID, consumed_at: null }]);
+  // Back on the landing, he waits for Alice's device.
+  await closeSettings(bob);
+  await expect(landing.getByRole('status')).toContainText('device to add you…');
 
   // Alice's sharing dialog: waiting for her to verify Bob.
   await alice.getByRole('button', { name: /Open project sharing/ }).click();
@@ -356,23 +368,12 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   await expect(dialog.getByText(/Waiting for/)).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Close sharing' }).click();
 
-  // Bob's shelf decrypts the shared project's name; he opens and reads it.
-  await bob.reload();
-  await expect(
-    bob
-      .getByRole('dialog', { name: 'Settings' })
-      .or(bob.getByRole('button', { name: 'Open settings' }))
-      .first()
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await closeSettings(bob);
-  const card = bob.locator('.start-tile-project', {
-    hasText: 'Secret bracket'
-  });
-  await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await card.locator('.start-tile-open').click();
+  // Bob did nothing more: his landing picked up the Welcome and opens the
+  // project, whose name his browser can read now.
   await expect(bob.locator('.breadcrumb')).toContainText('Secret bracket', {
-    timeout: SYNC_BUDGET_MS
+    timeout: ADD_BUDGET_MS
   });
+  await expect(landing).toHaveCount(0);
   await expect(bob.getByText('Box 1').first()).toBeVisible({
     timeout: SYNC_BUDGET_MS
   });

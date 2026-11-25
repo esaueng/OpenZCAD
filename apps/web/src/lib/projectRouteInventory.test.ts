@@ -108,6 +108,7 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
   '/api/e2ee/identity': [['/api/e2ee/identity', 'none']],
   '/api/e2ee/invitations': [['/api/e2ee/invitations', 'none']],
   '/api/e2ee/invitations/accept': [['/api/e2ee/invitations/accept', 'none']],
+  '/api/e2ee/invitations/pending': [['/api/e2ee/invitations/pending', 'read']],
   '/api/e2ee/invitations/sent': [['/api/e2ee/invitations/sent', 'read']],
   '/api/e2ee/project-preferences': [['/api/e2ee/project-preferences', 'none']],
   // Encrypted creates, copies and adoptions: the new project's encrypted
