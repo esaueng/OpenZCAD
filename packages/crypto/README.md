@@ -676,6 +676,14 @@ the expected project, invitation, inviter and email hash. Refusals are
 `ProjectInvitationError`s with a `reason` (`signature`, `signer-mismatch`,
 `expired`, `not-yet-valid`, `context-mismatch`).
 
+Version 4 is a renewal (ADR-024 amendment 2026-11-25): after the signer key
+hash it carries `u64 chainIssuedAt | u8 identity flag [| identity key hash] |
+u8 link flag [| link token hash]`. `chainIssuedAt` is the first statement's
+issuance, kept by every renewal; no statement may expire more than 30 days
+after it (`MAX_PROJECT_INVITATION_CHAIN_MS`), which encoding and decoding
+both enforce. Versions 1 to 3 are a chain of one
+(`invitationChainIssuedAt(value)` is their `issuedAt`).
+
 ## Tests
 
 `vectors.test.ts` holds fixed vectors built from injected keys, blob ids, IVs,

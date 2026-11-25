@@ -54,6 +54,11 @@ export const PROJECT_INVITATION_VERSION_1 = 1;
 export const PROJECT_INVITATION_VERSION_2 = 2;
 /** Version 1 plus the invited contact's identity key hash, and any link's. */
 export const PROJECT_INVITATION_VERSION_3 = 3;
+/**
+ * A renewed statement: version 3's optional identity and link, each behind
+ * a flag, and the chain's first issuance (`chainIssuedAt`).
+ */
+export const PROJECT_INVITATION_VERSION_4 = 4;
 
 const INVITATION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x49); // "OZI"
 
@@ -94,14 +99,45 @@ export interface ProjectInvitation {
    * versions 1 and 2.
    */
   readonly inviteeIdentityKeyHash?: Uint8Array;
+  /**
+   * When the invitation's first statement was issued (version 4), Unix
+   * milliseconds: a renewal (L11 plan of 2026-11-25, §3.4) signs a fresh
+   * statement for the same invitation and keeps this. No statement of the
+   * chain may expire more than `MAX_PROJECT_INVITATION_CHAIN_MS` after it.
+   * Absent from versions 1 to 3, which are a chain of one: their own
+   * `issuedAt` starts it.
+   */
+  readonly chainIssuedAt?: number;
 }
 
 /**
+ * The longest a chain of renewed statements may last, from the first
+ * statement's issuance to the last one's expiry (30 days). Even a server
+ * that keeps listing a cancelled invitation as pending cannot keep it open
+ * longer.
+ */
+export const MAX_PROJECT_INVITATION_CHAIN_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Where the statement's renewal chain began: its own issuance before v4. */
+export const invitationChainIssuedAt = (value: ProjectInvitation): number =>
+  value.chainIssuedAt ?? value.issuedAt;
+
+/**
  * Largest canonical invitation: three longest ids and the signer id, and a
- * version 3 statement's identity hash, link flag and link token hash.
+ * version 4 statement's chain start, identity flag and hash, and link flag
+ * and hash.
  */
 export const MAX_PROJECT_INVITATION_BYTES =
-  3 + 1 + 4 * (1 + MAX_ID_BYTES) + HASH_BYTES + 1 + 8 + 8 + 3 * HASH_BYTES + 1;
+  3 +
+  1 +
+  4 * (1 + MAX_ID_BYTES) +
+  HASH_BYTES +
+  1 +
+  8 +
+  8 +
+  8 +
+  3 * HASH_BYTES +
+  2;
 
 export type InvitationFailure =
   /** The signature does not verify under the given signing key. */
@@ -187,10 +223,25 @@ function checkInvitation(value: ProjectInvitation, code: E2eeErrorCode): void {
   ) {
     fail('inviteeIdentityKeyHash must be 32 bytes');
   }
+  if (value.chainIssuedAt !== undefined) {
+    if (!isUint(value.chainIssuedAt, Number.MAX_SAFE_INTEGER)) {
+      fail('chainIssuedAt must be Unix milliseconds');
+    }
+    if (value.chainIssuedAt > value.issuedAt) {
+      fail('A renewal chain cannot begin after its statement');
+    }
+  }
+  if (
+    value.expiresAt - invitationChainIssuedAt(value) >
+    MAX_PROJECT_INVITATION_CHAIN_MS
+  ) {
+    fail('An invitation and its renewals last at most 30 days');
+  }
 }
 
 /** The version a statement encodes as: the newest field it carries. */
 function invitationVersion(value: ProjectInvitation): number {
+  if (value.chainIssuedAt !== undefined) return PROJECT_INVITATION_VERSION_4;
   if (value.inviteeIdentityKeyHash !== undefined) {
     return PROJECT_INVITATION_VERSION_3;
   }
@@ -240,8 +291,12 @@ export async function invitationLinkTokenHash(token: string): Promise<Bytes> {
  * + signer device id | 32-byte signer key hash`; then for version 2 a
  * `32-byte link token hash`, and for version 3 a `32-byte invitee identity
  * key hash | u8 link (0 or 1)` followed, with a link, by its `32-byte link
- * token hash`. A value with `inviteeIdentityKeyHash` encodes as version 3,
- * one with only `linkTokenHash` as version 2, one with neither as version 1.
+ * token hash`. Version 4 follows the signer key hash with `u64
+ * chainIssuedAt | u8 identity (0 or 1)`, with an identity its `32-byte
+ * invitee identity key hash`, then `u8 link (0 or 1)` and, with a link, its
+ * `32-byte link token hash`. A value with `chainIssuedAt` encodes as
+ * version 4, else one with `inviteeIdentityKeyHash` as version 3, one with
+ * only `linkTokenHash` as version 2, one with neither as version 1.
  */
 export function encodeProjectInvitation(value: ProjectInvitation): Bytes {
   checkInvitation(value, 'invalid-argument');
@@ -257,6 +312,14 @@ export function encodeProjectInvitation(value: ProjectInvitation): Bytes {
     .u64(value.expiresAt);
   writeId(writer, value.signerDeviceId);
   writer.bytes(value.signerKeyHash);
+  if (version === PROJECT_INVITATION_VERSION_4) {
+    writer.u64(value.chainIssuedAt!);
+    writer.u8(value.inviteeIdentityKeyHash !== undefined ? 1 : 0);
+    if (value.inviteeIdentityKeyHash !== undefined) {
+      writer.bytes(value.inviteeIdentityKeyHash);
+    }
+    writer.u8(value.linkTokenHash !== undefined ? 1 : 0);
+  }
   if (version === PROJECT_INVITATION_VERSION_3) {
     writer
       .bytes(value.inviteeIdentityKeyHash!)
@@ -282,13 +345,21 @@ export function decodeProjectInvitation(bytes: Uint8Array): ProjectInvitation {
   if (
     version !== PROJECT_INVITATION_VERSION_1 &&
     version !== PROJECT_INVITATION_VERSION_2 &&
-    version !== PROJECT_INVITATION_VERSION_3
+    version !== PROJECT_INVITATION_VERSION_3 &&
+    version !== PROJECT_INVITATION_VERSION_4
   ) {
     throw new E2eeError(
       'unsupported-version',
       `Project invitation version ${version} is not supported`
     );
   }
+  const readFlag = (what: string): boolean => {
+    const value = reader.u8();
+    if (value > 1) {
+      throw new E2eeError('malformed', `Unknown invitation ${what} flag`);
+    }
+    return value === 1;
+  };
   const projectId = readId(reader);
   const invitationId = readId(reader);
   const inviterUserId = readId(reader);
@@ -302,7 +373,15 @@ export function decodeProjectInvitation(bytes: Uint8Array): ProjectInvitation {
   const signerDeviceId = readId(reader);
   const signerKeyHash = copyBytes(reader.bytes(HASH_BYTES));
   let inviteeIdentityKeyHash: Uint8Array | undefined;
+  let chainIssuedAt: number | undefined;
   let linked = version === PROJECT_INVITATION_VERSION_2;
+  if (version === PROJECT_INVITATION_VERSION_4) {
+    chainIssuedAt = reader.u64();
+    if (readFlag('identity')) {
+      inviteeIdentityKeyHash = copyBytes(reader.bytes(HASH_BYTES));
+    }
+    linked = readFlag('link');
+  }
   if (version === PROJECT_INVITATION_VERSION_3) {
     inviteeIdentityKeyHash = copyBytes(reader.bytes(HASH_BYTES));
     const flag = reader.u8();
@@ -326,7 +405,8 @@ export function decodeProjectInvitation(bytes: Uint8Array): ProjectInvitation {
     signerDeviceId,
     signerKeyHash,
     ...(linkTokenHash ? { linkTokenHash } : {}),
-    ...(inviteeIdentityKeyHash ? { inviteeIdentityKeyHash } : {})
+    ...(inviteeIdentityKeyHash ? { inviteeIdentityKeyHash } : {}),
+    ...(chainIssuedAt !== undefined ? { chainIssuedAt } : {})
   };
   checkInvitation(value, 'malformed');
   if (!equalBytes(encodeProjectInvitation(value), bytes)) {

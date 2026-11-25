@@ -123,20 +123,23 @@ export interface EncryptedSharingClient {
 /** The page's client: crypto loads with the first encrypted dialog. */
 export const pageEncryptedSharingClient: EncryptedSharingClient = {
   async list(projectId) {
-    const [{ encryptedInvitations }, invitations] = await Promise.all([
-      import('../lib/e2ee/encryptedProjects'),
-      import('../lib/e2ee/invitations')
-    ]);
-    const ctx = await encryptedInvitations();
-    const listed = await invitations.projectInvitations(ctx, projectId);
-    const { added, failed } = await invitations.completeReadyInvitations(
-      ctx,
-      listed
+    const [{ encryptedInvitations }, invitations, { syncInvitationsNow }] =
+      await Promise.all([
+        import('../lib/e2ee/encryptedProjects'),
+        import('../lib/e2ee/invitations'),
+        import('../lib/e2ee/invitationRunner')
+      ]);
+    // The app's invitation runner adds every ready invitee (single-flight
+    // with its background passes); a failed Add of this project's is said.
+    const pass = await syncInvitationsNow();
+    const failed = pass?.failed.find(
+      (failure) => failure.invitation.record.projectId === projectId
     );
-    if (failed.length) throw failed[0]!.error;
-    return added.length
-      ? invitations.projectInvitations(ctx, projectId)
-      : listed;
+    if (failed) throw failed.error;
+    return invitations.projectInvitations(
+      await encryptedInvitations(),
+      projectId
+    );
   },
   async invite(projectId, email, role, contact) {
     const [{ encryptedInvitations }, { inviteToEncryptedProject }] =
@@ -162,13 +165,12 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
     return invitableContacts(await encryptedInvitations(), email);
   },
   async revoke(projectId, invitationId) {
-    const [{ encryptedInvitations }, { declineInvitation }] = await Promise.all(
-      [
-        import('../lib/e2ee/encryptedProjects'),
-        import('../lib/e2ee/invitations')
-      ]
-    );
-    await declineInvitation(
+    const [{ encryptedInvitations }, { cancelInvitation }] = await Promise.all([
+      import('../lib/e2ee/encryptedProjects'),
+      import('../lib/e2ee/invitationTombstones')
+    ]);
+    // Recorded in the account's sealed tombstones first, then revoked.
+    await cancelInvitation(
       await encryptedInvitations(),
       projectId,
       invitationId
