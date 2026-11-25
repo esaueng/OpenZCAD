@@ -114,6 +114,7 @@ import type {
   RemovedMember
 } from './invitationStore';
 import { rememberExpectedProjectOwner } from './projectAuthority';
+import type { InvitationTombstones } from './invitationTombstones';
 
 // --- Context ----------------------------------------------------------------
 
@@ -145,6 +146,11 @@ export interface InvitationContext {
   readonly store: InvitationStore;
   /** The signed-in account's email, for checking a statement's hash. */
   readonly email?: string | null;
+  /**
+   * The invitations this account cancelled (`invitationTombstones.ts`):
+   * none of them is renewed or completed. The page always has one.
+   */
+  readonly tombstones?: InvitationTombstones;
   readonly now?: () => number;
 }
 
@@ -234,7 +240,9 @@ export type InvitationErrorCode =
    * invitation names no identity, or this browser has not seen every
    * removal from the project.
    */
-  | 'needs-confirmation';
+  | 'needs-confirmation'
+  /** This account cancelled the invitation (its sealed tombstones). */
+  | 'invitation-cancelled';
 
 export class InvitationError extends Error {
   override readonly name = 'InvitationError';
@@ -1069,6 +1077,21 @@ export async function addInvitedMember(
     ctx.groups.account.list,
     now(ctx)
   );
+  // An invitation this account cancelled is never completed, whatever the
+  // server lists; a record that cannot be read adds nobody (it throws).
+  // `authorize` asks again before claiming and before every Commit.
+  const cancelled = async () => {
+    if (
+      ctx.tombstones &&
+      (await ctx.tombstones.cancelled()).has(invitation.invitationId)
+    ) {
+      throw new InvitationError(
+        'invitation-cancelled',
+        'You cancelled this invitation. Nobody was added; invite them again.'
+      );
+    }
+  };
+  await cancelled();
   if (
     options.projectId !== undefined &&
     (invitation.projectId !== options.projectId ||
@@ -1111,8 +1134,10 @@ export async function addInvitedMember(
     );
   }
   // Asked before claiming anything, and again on every attempt of the
-  // Commit after catching up: a removal processed there stops the Add.
+  // Commit after catching up: a removal processed there stops the Add, and
+  // so does a cancellation that landed meanwhile.
   const authorize = async () => {
+    await cancelled();
     if (confirmed !== undefined) return;
     const gate = addGate(
       await removedMembers(ctx),
@@ -1736,6 +1761,10 @@ export async function syncInvitations(ctx: InvitationContext): Promise<{
   readonly outgoing: OwnerInvitation[];
   readonly joined: string[];
   readonly added: string[];
+  /** The invitations of `added`, as listed before they were completed. */
+  readonly completed: OwnerInvitation[];
+  /** The ready invitations whose Add failed, with why. */
+  readonly failed: { invitation: OwnerInvitation; error: unknown }[];
   readonly errors: unknown[];
 }> {
   const errors: unknown[] = [];
@@ -1743,6 +1772,8 @@ export async function syncInvitations(ctx: InvitationContext): Promise<{
   let outgoing: OwnerInvitation[] = [];
   let joined: string[] = [];
   let added: string[] = [];
+  let completed: OwnerInvitation[] = [];
+  let failed: { invitation: OwnerInvitation; error: unknown }[] = [];
   try {
     incoming = await acceptedInvitations(ctx);
     if (
@@ -1764,10 +1795,20 @@ export async function syncInvitations(ctx: InvitationContext): Promise<{
     outgoing = await sentInvitations(ctx);
     const result = await completeReadyInvitations(ctx, outgoing);
     added = result.added;
+    const listed = outgoing;
+    completed = listed.filter((entry) =>
+      added.includes(entry.record.invitationId)
+    );
+    failed = result.failed.flatMap(({ invitationId, error }) => {
+      const invitation = listed.find(
+        (entry) => entry.record.invitationId === invitationId
+      );
+      return invitation ? [{ invitation, error }] : [];
+    });
     errors.push(...result.failed.map((failure) => failure.error));
     if (added.length) outgoing = await sentInvitations(ctx);
   } catch (error) {
     errors.push(error);
   }
-  return { incoming, outgoing, joined, added, errors };
+  return { incoming, outgoing, joined, added, completed, failed, errors };
 }

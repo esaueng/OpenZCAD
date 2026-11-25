@@ -117,6 +117,8 @@ import {
   type InvitationContext
 } from './invitations';
 import { invitationStore } from './invitationStore';
+import { sealedInvitationTombstones } from './invitationTombstones';
+import { accountKeyByCommitment } from './sealedSettings';
 import {
   encryptionStateChanged,
   observeEncryptionState,
@@ -659,13 +661,22 @@ async function openStore(
     }),
     // Invitations (slice 5-3b): verified-contact checks through the same
     // contacts module the co-members' lists come from.
-    invitations: {
+    invitations: ((api) => ({
       groups,
-      api: createE2eeInvitationsApi(desktopFetch),
+      api,
       people: contactInvitationPeople(contacts, account),
       store: invitationStore(),
-      email
-    }
+      email,
+      // The invitations this account cancelled, sealed under its account
+      // key: none is renewed or completed here (ADR-024 2026-11-25).
+      tombstones: sealedInvitationTombstones({
+        userId,
+        api,
+        local: invitationStore(),
+        currentKey: () => unlockedAccount(userId)?.accountKey.slice() ?? null,
+        keyFor: (commitment) => accountKeyByCommitment(userId, commitment)
+      })
+    }))(createE2eeInvitationsApi(desktopFetch))
   };
 }
 

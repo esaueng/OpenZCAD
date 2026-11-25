@@ -44,6 +44,13 @@
  *   signs an acceptance only for one of these, never for an invitation the
  *   server merely lists.
  *
+ * - **Cancelled** (the owner's devices). The invitations this account
+ *   cancelled that this device knows of: those it cancelled itself and
+ *   those named in any sealed tombstones record it opened
+ *   (`invitationTombstones.ts`). Every renew and add decision uses them
+ *   together with the account's record, so a server that serves this
+ *   device another device's record cannot make it forget its own.
+ *
  * Everything is kept per account, like the contact pins; a memory store
  * stands in where IndexedDB is unavailable.
  */
@@ -151,6 +158,26 @@ export interface InvitationStore {
   removalHistory(userId: string): Promise<RemovalHistoryMark[]>;
   rememberIntent(userId: string, entry: InvitationIntent): Promise<void>;
   intents(userId: string): Promise<InvitationIntent[]>;
+  rememberCancelled(userId: string, entry: CancelledInvitation): Promise<void>;
+  cancelledHere(userId: string): Promise<CancelledInvitation[]>;
+}
+
+/** An invitation this account cancelled, as this device knows it. */
+export interface CancelledInvitation {
+  readonly invitationId: string;
+  /** Unix milliseconds. */
+  readonly cancelledAt: number;
+}
+
+function readCancelled(value: unknown): CancelledInvitation | null {
+  const entry = value as Partial<CancelledInvitation> | null;
+  return entry &&
+    isText(entry.invitationId) &&
+    typeof entry.cancelledAt === 'number' &&
+    Number.isSafeInteger(entry.cancelledAt) &&
+    entry.cancelledAt >= 0
+    ? { invitationId: entry.invitationId, cancelledAt: entry.cancelledAt }
+    : null;
 }
 
 const isText = (value: unknown, max = 512): value is string =>
@@ -270,6 +297,7 @@ export function memoryInvitationStore(): InvitationStore {
   const checks = new Map<string, RemovalCheckMark>();
   const history = new Map<string, RemovalHistoryMark>();
   const intents = new Map<string, InvitationIntent>();
+  const cancelled = new Map<string, CancelledInvitation>();
   const id = (...parts: string[]) => JSON.stringify(parts);
   const ofUser = <T>(map: Map<string, T>, userId: string) =>
     [...map].filter(([key]) => (JSON.parse(key) as string[])[0] === userId);
@@ -317,7 +345,11 @@ export function memoryInvitationStore(): InvitationStore {
     rememberIntent: async (userId, entry) => {
       intents.set(id(userId, entry.invitationId), { ...entry });
     },
-    intents: async (userId) => ofUser(intents, userId).map(([, v]) => v)
+    intents: async (userId) => ofUser(intents, userId).map(([, v]) => v),
+    rememberCancelled: async (userId, entry) => {
+      cancelled.set(id(userId, entry.invitationId), { ...entry });
+    },
+    cancelledHere: async (userId) => ofUser(cancelled, userId).map(([, v]) => v)
   };
 }
 
@@ -331,12 +363,13 @@ const REMOVED = 'removed';
 const INTENTS = 'intents';
 const REMOVAL_CHECKS = 'removalChecks';
 const REMOVAL_HISTORY = 'removalHistory';
+const CANCELLED = 'cancelled';
 
 let opening: Promise<IDBDatabase> | null = null;
 
 function openDatabase(): Promise<IDBDatabase> {
   opening ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(INVITATION_DATABASE, 5);
+    const request = indexedDB.open(INVITATION_DATABASE, 6);
     request.onupgradeneeded = () => {
       const db = request.result;
       for (const name of [
@@ -346,7 +379,8 @@ function openDatabase(): Promise<IDBDatabase> {
         REMOVED,
         INTENTS,
         REMOVAL_CHECKS,
-        REMOVAL_HISTORY
+        REMOVAL_HISTORY,
+        CANCELLED
       ]) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       }
@@ -458,7 +492,10 @@ export function indexedDbInvitationStore(): InvitationStore {
       all(REMOVAL_HISTORY, userId, readRemovalHistory),
     rememberIntent: (userId, entry) =>
       put(INTENTS, [userId, entry.invitationId], { ...entry }),
-    intents: (userId) => all(INTENTS, userId, readIntent)
+    intents: (userId) => all(INTENTS, userId, readIntent),
+    rememberCancelled: (userId, entry) =>
+      put(CANCELLED, [userId, entry.invitationId], { ...entry }),
+    cancelledHere: (userId) => all(CANCELLED, userId, readCancelled)
   };
 }
 
