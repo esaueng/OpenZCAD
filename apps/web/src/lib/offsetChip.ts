@@ -121,11 +121,14 @@ export function offsetChipTag(
   spanKnown: boolean
 ): OffsetChipTag {
   if (!spanKnown) {
+    // No span is either none opposite or one still being measured (the
+    // body's analysis landing; the tag then gains its caret), so the title
+    // states the condition rather than claiming which.
     return {
       text: 'Offset',
       switchable: false,
       title:
-        'Offset: a typed value is how far the face moves · No flat face lies opposite this one, so there is no Total to read'
+        'Offset: a typed value is how far the face moves · Total, the size the face sets, is offered only where a flat face lies opposite it'
     };
   }
   return mode === 'total'

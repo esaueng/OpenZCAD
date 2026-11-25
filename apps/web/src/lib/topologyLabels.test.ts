@@ -9,6 +9,7 @@ import {
   labelSegmentsText,
   labelWithDiameter,
   ownedTopologyName,
+  resizedFaceNameDiameter,
   textLabelSegments,
   topologySelectionLabel,
   type LabelSegment
@@ -281,5 +282,35 @@ describe('labelWithDiameter', () => {
     const plain = textLabelSegments('Box 1 · Top face ');
     expect(labelWithDiameter(plain, 23)).toBe(plain);
     expect(labelWithDiameter(plain, undefined)).toBe(plain);
+  });
+});
+
+// PR #2048 review: a Union's cylinder dragged out to a size the kernel
+// refused read "Cylindrical face Ø24 · Ø 42 mm" — the card rebuilt its name
+// from the last frame that built while the line beside it followed the hand.
+describe('resizedFaceNameDiameter', () => {
+  it("takes the preview's diameter while it answers for the hand", () => {
+    expect(resizedFaceNameDiameter(24, 12, 12)).toBe(24);
+  });
+
+  it('drops the number while the hand holds a refused or pending size', () => {
+    // Refused at R21 (Ø42); the frame on screen is still R12.
+    expect(resizedFaceNameDiameter(24, 12, 21)).toBeUndefined();
+    // No frame built yet for this drag.
+    expect(resizedFaceNameDiameter(24, undefined, 21)).toBeUndefined();
+    const named: readonly LabelSegment[] = [
+      { kind: 'text', text: 'Union 1 · Cylindrical face ' },
+      { kind: 'diameter', diameter: 12 }
+    ];
+    expect(
+      labelSegmentsText(
+        labelWithDiameter(named, resizedFaceNameDiameter(24, 12, 21))
+      )
+    ).toBe('Union 1 · Cylindrical face');
+  });
+
+  it('measures as before when no hand holds the handle', () => {
+    expect(resizedFaceNameDiameter(24, 12, null)).toBe(24);
+    expect(resizedFaceNameDiameter(undefined, 12, null)).toBeUndefined();
   });
 });

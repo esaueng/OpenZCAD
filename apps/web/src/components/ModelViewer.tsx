@@ -1493,6 +1493,12 @@ export interface ModelViewerProps {
     totalBaseline?: number,
     totalSense?: 1 | -1
   ): boolean;
+  /**
+   * Whether the armed face offset's tag offers Total beside Offset (a span
+   * is known to switch to), as it changes; null while no face offset's tag
+   * is shown. The prompt names only the modes the tag offers.
+   */
+  onOffsetTotalOffered?(offered: boolean | null): void;
   /** Imperative sink receiving the chip anchor in host pixels each frame. */
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
@@ -2755,6 +2761,7 @@ export function ModelViewer({
   offsetPreviewLimit = null,
   previewDeferred,
   onOpenOffsetKeypad,
+  onOffsetTotalOffered,
   keypadAnchorRef,
   offsetSetterRef,
   cylinderRadiusHandle: incomingCylinderRadiusHandle,
@@ -3127,6 +3134,8 @@ export function ModelViewer({
   previewDeferredRef.current = previewDeferred;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
   onOpenOffsetKeypadRef.current = onOpenOffsetKeypad;
+  const onOffsetTotalOfferedRef = useRef(onOffsetTotalOffered);
+  onOffsetTotalOfferedRef.current = onOffsetTotalOffered;
   const onCylinderRadiusPreviewRef = useRef(onCylinderRadiusPreview);
   onCylinderRadiusPreviewRef.current = onCylinderRadiusPreview;
   const onCylinderRadiusCommitRef = useRef(onCylinderRadiusCommit);
@@ -9047,6 +9056,8 @@ export function ModelViewer({
     }
     /** The edge value pill's last shown size; see `updateOffsetChip`. */
     const edgeLabelSize = { width: 64, height: 20 };
+    /** What `onOffsetTotalOffered` last heard; undefined before the first. */
+    let reportedOffsetTotal: boolean | null | undefined;
     function updateOffsetChip() {
       const chip = offsetChipRef.current;
       if (!chip) {
@@ -9063,6 +9074,20 @@ export function ModelViewer({
         regionChipRig ??
         offsetRigRef.current ??
         edgeRigRef.current;
+      // The prompt names the modes this face's tag offers: Total only once
+      // a span is known to switch to, as the tag gains its caret.
+      const offsetTotalOffered =
+        rig !== null &&
+        rig === offsetRigRef.current &&
+        rig.kind === 'offset-face' &&
+        regionChipRig === null
+          ? (offsetHandleRef.current?.totalBaseline ??
+              offsetExtentRef.current) != null
+          : null;
+      if (offsetTotalOffered !== reportedOffsetTotal) {
+        reportedOffsetTotal = offsetTotalOffered;
+        onOffsetTotalOfferedRef.current?.(offsetTotalOffered);
+      }
       let anchor: THREE.Vector3 | null = null;
       let text = '';
       if (rig) {

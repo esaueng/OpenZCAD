@@ -147,6 +147,25 @@ export function labelWithDiameter(
 }
 
 /**
+ * The diameter a resizing cylinder's name carries: the preview's measured
+ * one, but only while that preview answers for the radius the hand holds.
+ * The drag rewrites the name's number in place as the hand moves, and the
+ * card is rebuilt from the preview whenever the interaction steps; a
+ * refused or pending value rebuilt it with the last frame that built, so a
+ * drag held at a refused Ø42 read "Cylindrical face Ø24 · Ø 42 mm". With
+ * the hand elsewhere the name drops its number, and the measured line
+ * beside it, which follows the hand, is the one figure shown.
+ */
+export function resizedFaceNameDiameter(
+  measuredDiameter: number | undefined,
+  previewRadius: number | undefined,
+  handRadius: number | null
+): number | undefined {
+  if (handRadius === null) return measuredDiameter;
+  return previewRadius === handRadius ? measuredDiameter : undefined;
+}
+
+/**
  * Names a picked face from its exact surface measurements: directional names
  * for axis-aligned planes, feature names for holes/cylinders, and a stable
  * ordinal as the last resort. Never leaks the raw fingerprint.

@@ -872,7 +872,12 @@ describe('the offset chip tag', () => {
     expect(tag.title).toMatch(
       /^Offset: a typed value is how far the face moves/
     );
-    expect(tag.title).toMatch(/no Total/);
+    // True whether the span is absent or still being measured: it states
+    // when Total is offered, not that this face has none.
+    expect(tag.title).toMatch(
+      /Total, the size the face sets, is offered only where a flat face lies opposite it$/
+    );
+    expect(tag.title).not.toMatch(/No flat face lies opposite this one/);
   });
 
   it('names the mode on every face, switchable only with a span', () => {
