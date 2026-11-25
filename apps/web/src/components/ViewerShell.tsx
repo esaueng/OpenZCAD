@@ -300,6 +300,7 @@ interface ViewerShellProps {
     totalBaseline?: number,
     totalSense?: 1 | -1
   ): boolean;
+  onOffsetTotalOffered?: ModelViewerProps['onOffsetTotalOffered'];
   keypadAnchorRef: MutableRefObject<
     ((point: { x: number; y: number } | null) => void) | null
   >;
@@ -587,6 +588,7 @@ export function ViewerShell({
   offsetPreviewLimit = null,
   previewDeferred,
   onOpenOffsetKeypad,
+  onOffsetTotalOffered,
   keypadAnchorRef,
   offsetSetterRef,
   moveValuesSetterRef,
@@ -1100,6 +1102,7 @@ export function ViewerShell({
             ? () => onDatumOffsetEntry?.() ?? false
             : onOpenOffsetKeypad
         }
+        onOffsetTotalOffered={onOffsetTotalOffered}
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
         moveValuesSetterRef={moveValuesSetterRef}

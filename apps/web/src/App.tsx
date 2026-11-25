@@ -1076,6 +1076,8 @@ import {
 import {
   edgeLabel,
   edgeLengthMeasurement,
+  labelWithDiameter,
+  resizedFaceNameDiameter,
   textLabelSegments,
   topologySelectionLabel,
   topologySelectionLabelSegments,
@@ -4988,6 +4990,13 @@ export function App() {
    * handle keeps moving; the geometry does not, and the value chip says so.
    */
   const [previewDeferred, setPreviewDeferred] = useState(false);
+  /**
+   * Whether the armed face offset's tag offers Total (the viewer reports it
+   * as the span lands); null while no face offset's tag is shown.
+   */
+  const [offsetTotalOffered, setOffsetTotalOffered] = useState<boolean | null>(
+    null
+  );
   const previewDeferredRef = useRef(previewDeferred);
   previewDeferredRef.current = previewDeferred;
   /**
@@ -11545,7 +11554,29 @@ export function App() {
           detailDiameter: { diameter: geometry.diameter, units, ...scaled }
         };
       }
-      const label = topologySelectionLabelSegments(namingBody, namingTopology);
+      const namedLabel = topologySelectionLabelSegments(
+        namingBody,
+        namingTopology
+      );
+      // Named from the committed face, measured from the preview: the name's
+      // diameter is the measured one, as the line beside it reads, never
+      // the committed size the drag is replacing.
+      // While a drag holds a size the preview has not built (refused, or
+      // still on its way), the name drops its number instead.
+      const measuredDiameter =
+        geometry?.surfaceType === 'cylinder' ? geometry.diameter : undefined;
+      const label = fromSource
+        ? labelWithDiameter(
+            namedLabel,
+            resizingCylinder
+              ? resizedFaceNameDiameter(
+                  measuredDiameter,
+                  currentFaceGeometryPreview?.radius,
+                  cylinderRadiusHandValue.current
+                )
+              : measuredDiameter
+          )
+        : namedLabel;
       if (
         geometry?.featureType === 'blend' &&
         geometry.blendRadius !== undefined
@@ -39485,7 +39516,8 @@ export function App() {
                     : {}),
                 ...(edgeSelectionNaming && interaction.mode === 'edges'
                   ? { edgeNoun: edgeSelectionNaming.noun }
-                  : {})
+                  : {}),
+                ...(offsetTotalOffered !== null ? { offsetTotalOffered } : {})
               }) ??
               (tool === 'sketch'
                 ? sketchPlaneCardShown
@@ -40872,6 +40904,7 @@ export function App() {
             }
             previewDeferred={previewDeferred}
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
+            onOffsetTotalOffered={setOffsetTotalOffered}
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}
             cylinderRadiusHandle={

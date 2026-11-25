@@ -19,11 +19,14 @@ async function openCard(
   await user.click(screen.getByRole('button', { name }));
 }
 
-/** Opens the card that makes a new link, once links exist. */
-async function startNewLink(
+/**
+ * Opens a new link's options (L11: Create link alone makes a view-only link
+ * at once).
+ */
+async function openOptions(
   user: { click(element: Element): Promise<void> } = userEvent
 ) {
-  await user.click(screen.getByRole('button', { name: 'New link' }));
+  await user.click(await screen.findByRole('button', { name: 'Options…' }));
 }
 
 function fakeClient(states: EncryptedShareLinksState[]) {
@@ -273,6 +276,7 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     const user = userEvent.setup();
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
     expect(await screen.findByText('Only invited people')).toBeVisible();
+    await openOptions(user);
     const comments = screen.getByRole('checkbox', {
       name: /^Visitors can comment/
     });
@@ -291,6 +295,7 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     const user = userEvent.setup();
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
     expect(await screen.findByText('Only invited people')).toBeVisible();
+    await openOptions(user);
     const access = screen.getByRole('radiogroup', { name: 'Link access' });
     // An encrypted link still defaults to View.
     expect(within(access).getByRole('radio', { name: 'View' })).toBeChecked();
@@ -308,7 +313,7 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     await user.click(within(access).getByRole('radio', { name: 'Tweak' }));
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     expect(client.create).toHaveBeenCalledWith('proj_x', 'tweak');
-    // The output names the link it holds; the new-link card has closed.
+    // The output names the link it holds; the options have closed.
     expect(await screen.findByText('Tweak link is ready')).toBeVisible();
     expect(
       screen.queryByRole('radiogroup', { name: 'Link access' })
@@ -556,6 +561,7 @@ describe('EncryptedShareLinks names (ADR-024 amendment 2026-11-22)', () => {
     const user = userEvent.setup();
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
     await screen.findByText('Only invited people');
+    await openOptions(user);
     await user.type(
       screen.getByRole('textbox', { name: 'Link name' }),
       '  Client   review '
@@ -588,6 +594,7 @@ describe('EncryptedShareLinks names (ADR-024 amendment 2026-11-22)', () => {
     const client = fakeClient([empty]);
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
     await screen.findByText('Only invited people');
+    await openOptions();
     const field = screen.getByRole('textbox', { name: 'Link name' });
     await userEvent.click(field);
     await userEvent.paste('Bad\u0007name');
@@ -603,6 +610,7 @@ describe('EncryptedShareLinks names (ADR-024 amendment 2026-11-22)', () => {
     vi.mocked(client.rename!).mockRejectedValueOnce(new Error('offline'));
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
     await screen.findByText('Only invited people');
+    await openOptions();
     await userEvent.type(
       screen.getByRole('textbox', { name: 'Link name' }),
       'Supplier'
@@ -730,6 +738,7 @@ describe('EncryptedShareLinks without history (L08)', () => {
         onFreezeModel={onFreezeModel}
       />
     );
+    await openOptions(user);
     const history = await screen.findByRole('checkbox', {
       name: 'Include history'
     });
@@ -761,6 +770,7 @@ describe('EncryptedShareLinks without history (L08)', () => {
         onFreezeModel={onFreezeModel}
       />
     );
+    await openOptions(user);
     await user.click(
       await screen.findByRole('checkbox', { name: 'Include history' })
     );
@@ -842,10 +852,9 @@ describe('EncryptedShareLinks speed', () => {
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
     // Never "Anyone with a link" before the links are known.
     expect(screen.getByText('Checking links…')).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: 'New link' })
-    ).not.toBeInTheDocument();
     expect(screen.queryByText(/Anyone with a link/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create link' })).toBeDisabled();
+    await openOptions();
     expect(screen.getByRole('radio', { name: 'Tweak' })).toBeEnabled();
     expect(
       screen.getByRole('checkbox', { name: /^Visitors can comment/ })
@@ -925,6 +934,7 @@ describe('EncryptedShareLinks speed', () => {
       ).not.toBeInTheDocument()
     );
     expect(create).toBeEnabled();
+    await openOptions();
     expect(screen.getByRole('radio', { name: 'Tweak' })).toBeEnabled();
   });
 
@@ -948,6 +958,7 @@ describe('EncryptedShareLinks speed', () => {
       'could not be issued'
     );
     await waitFor(() => expect(create).toBeEnabled());
+    await openOptions();
     expect(screen.getByRole('radio', { name: 'Tweak' })).toBeEnabled();
   });
 
@@ -977,12 +988,10 @@ describe('EncryptedShareLinks speed', () => {
     expect(
       await screen.findByRole('textbox', { name: 'Share link' })
     ).toHaveValue(URL_A);
-    // The new-link card closed; another one opens at once.
+    // Create link is free for another link at once.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'New link' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Create link' })).toBeEnabled()
     );
-    await startNewLink();
-    expect(screen.getByRole('button', { name: 'Create link' })).toBeEnabled();
     // The refresh skips the upkeep pass the action already did.
     expect(client.list).toHaveBeenLastCalledWith('proj_x', { upkeep: false });
   });
@@ -1031,16 +1040,14 @@ describe('EncryptedShareLinks speed', () => {
     const client = fakeClient([active]);
     const user = userEvent.setup();
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
-    await user.click(await screen.findByRole('button', { name: 'New link' }));
     let fail: (error: Error) => void = () => undefined;
+    await screen.findByRole('button', { name: 'Copy View only link' });
     vi.mocked(client.list).mockImplementationOnce(
       () => new Promise((_, reject) => (fail = reject))
     );
     await user.click(screen.getByRole('button', { name: 'Create link' }));
-    const again = await screen.findByRole('button', { name: 'New link' });
-    await waitFor(() => expect(again).toBeEnabled());
-    await user.click(again);
     const create = screen.getByRole('button', { name: 'Create link' });
+    await waitFor(() => expect(create).toBeEnabled());
     // The second Create link starts; the first one's refresh fails while
     // it runs.
     vi.mocked(client.list).mockResolvedValue(active);
@@ -1055,7 +1062,7 @@ describe('EncryptedShareLinks speed', () => {
     made({ url: URL_A, shareId: 'shr_new' });
     await waitFor(() => expect(client.list).toHaveBeenCalledTimes(3));
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'New link' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Create link' })).toBeEnabled()
     );
     expect(screen.queryByText('First refresh failed')).not.toBeInTheDocument();
   });
@@ -1135,5 +1142,201 @@ describe('EncryptedShareLinks tab summary', () => {
     expect(onSummary).not.toHaveBeenCalledWith(
       expect.objectContaining({ count: 0 })
     );
+  });
+});
+
+describe('EncryptedShareLinks one click and confirm by (L11 §4)', () => {
+  const frozenModel = { projectId: 'proj_x' } as unknown as ProjectDocument;
+  const confirmBy = Date.UTC(2026, 11, 20, 12);
+  const expiring: EncryptedShareLinksState = {
+    ...active,
+    needsConfirmation: false,
+    confirmBy,
+    passkey: true
+  };
+  const chipName = `Confirm by ${new Date(confirmBy).toLocaleDateString(
+    undefined,
+    { month: 'short', day: 'numeric' }
+  )}`;
+
+  it('creates a view-only link without history in one click', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: false }
+    ]);
+    const onFreezeModel = vi.fn(async () => frozenModel);
+    render(
+      <EncryptedShareLinks
+        projectId="proj_x"
+        client={client}
+        onFreezeModel={onFreezeModel}
+      />
+    );
+    // No name, access or options to fill in first.
+    expect(
+      screen.queryByRole('textbox', { name: 'Link name' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Link access' })
+    ).not.toBeInTheDocument();
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    await waitFor(() =>
+      expect(client.create).toHaveBeenCalledWith('proj_x', 'frozen', {
+        frozenDocument: frozenModel
+      })
+    );
+    expect(onFreezeModel).toHaveBeenCalledWith({ parameters: false });
+    expect(client.rename).not.toHaveBeenCalled();
+    expect(client.confirm).not.toHaveBeenCalled();
+    expect(await screen.findByText('No history link is ready')).toBeVisible();
+  });
+
+  it('keeps Options… for a Tweak link with history', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: false }
+    ]);
+    const user = userEvent.setup();
+    render(
+      <EncryptedShareLinks
+        projectId="proj_x"
+        client={client}
+        onFreezeModel={vi.fn(async () => frozenModel)}
+      />
+    );
+    await openOptions(user);
+    expect(
+      screen.getByRole('checkbox', { name: 'Include history' })
+    ).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: 'Tweak' }));
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(client.create).toHaveBeenCalledWith('proj_x', 'tweak')
+    );
+    // Made: the options close back to one click.
+    expect(
+      await screen.findByRole('button', { name: 'Options…' })
+    ).toBeVisible();
+  });
+
+  it('shows a quiet chip, not the banner, while the confirmation still holds', async () => {
+    const onSummary = vi.fn();
+    const client = fakeClient([expiring, { ...expiring, confirmBy: null }]);
+    render(
+      <EncryptedShareLinks
+        projectId="proj_x"
+        client={client}
+        onSummary={onSummary}
+      />
+    );
+    const chip = await screen.findByRole('button', { name: chipName });
+    expect(
+      screen.queryByText(/Your links need your confirmation/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Confirm sharing…' })
+    ).not.toBeInTheDocument();
+    // Quiet: the Links tab gets no attention mark for it.
+    await waitFor(() =>
+      expect(onSummary).toHaveBeenLastCalledWith({
+        count: 2,
+        attention: false,
+        problem: null
+      })
+    );
+    // The chip confirms with the passkey at once.
+    await userEvent.click(chip);
+    expect(client.confirm).toHaveBeenCalledWith('proj_x', 'passkey');
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: chipName })
+      ).not.toBeInTheDocument()
+    );
+  });
+
+  it('creates a link without a prompt until the confirmation has expired', async () => {
+    const client = fakeClient([expiring]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByRole('button', { name: chipName });
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(client.create).toHaveBeenCalledWith('proj_x', 'view')
+    );
+    expect(client.confirm).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('group', { name: 'Confirm sharing' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens the recovery key form from the chip without a passkey', async () => {
+    const client = fakeClient([{ ...expiring, passkey: false }]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: chipName })
+    );
+    const group = screen.getByRole('group', { name: 'Confirm sharing' });
+    expect(within(group).getByLabelText('Recovery key')).toBeVisible();
+    expect(client.confirm).not.toHaveBeenCalled();
+    await userEvent.click(
+      within(group).getByRole('button', { name: 'Cancel' })
+    );
+    expect(screen.getByRole('button', { name: chipName })).toBeVisible();
+  });
+
+  it('shows the banner, and prompts on Create link, once it has expired', async () => {
+    const client = fakeClient([
+      { ...active, needsConfirmation: true, confirmBy: null, passkey: false }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    expect(
+      await screen.findByText(/Your links need your confirmation/)
+    ).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: /^Confirm by/ })
+    ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    expect(
+      screen.getByRole('group', { name: 'Confirm sharing' })
+    ).toHaveTextContent('To create the link');
+    expect(client.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('EncryptedShareLinks across an expiry (L11 review)', () => {
+  it('asks for the confirmation when it ended while the dialog stayed open', async () => {
+    const client = fakeClient([
+      {
+        ...active,
+        needsConfirmation: false,
+        confirmBy: null,
+        // The list said it held; by the click it has ended.
+        confirmedUntil: Date.now() - 1,
+        passkey: false
+      }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByRole('button', { name: 'Copy View only link' });
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    expect(
+      screen.getByRole('group', { name: 'Confirm sharing' })
+    ).toHaveTextContent('To create the link');
+    expect(client.create).not.toHaveBeenCalled();
+  });
+
+  it('creates at once while the confirmation still holds', async () => {
+    const client = fakeClient([
+      {
+        ...active,
+        needsConfirmation: false,
+        confirmedUntil: Date.now() + 20 * 86_400_000
+      }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByRole('button', { name: 'Copy View only link' });
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(client.create).toHaveBeenCalledWith('proj_x', 'view')
+    );
+    expect(client.confirm).not.toHaveBeenCalled();
   });
 });

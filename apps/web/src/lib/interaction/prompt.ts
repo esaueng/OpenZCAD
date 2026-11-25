@@ -54,6 +54,12 @@ export interface CommandPromptContext {
   edgeNoun?: string;
   /** The Slot has two placed centers before its size controls are offered. */
   slotStage?: 'radius' | 'exact' | 'keypad';
+  /**
+   * Whether the armed face offset's tag offers Total beside Offset. A face
+   * with no span to read (none opposite it, or not yet measured) offers only
+   * Offset, and the step names only that. Unknown, it names both.
+   */
+  offsetTotalOffered?: boolean;
 }
 
 /** How each rung of the Escape ladder reads to someone about to press it. */
@@ -97,7 +103,8 @@ const SKETCH_DRAWING_STEPS: Record<string, string> = {
 function armedStep(
   state: InteractionState,
   dimensionMode: DimensionMode,
-  edgeNoun?: string
+  edgeNoun?: string,
+  offsetTotalOffered?: boolean
 ): string {
   if (state.mode === 'face') {
     switch (state.op) {
@@ -107,9 +114,12 @@ function armedStep(
         return 'Drag the arrow to edit the fillet, or type an exact radius · R0 removes it';
       case 'remove-face-feature':
         return 'Remove this proven imported blend, or pick another face';
-      case 'offset-face':
+      case 'offset-face': {
+        // The modes the chip's tag offers: Total only beside a span.
+        const modes =
+          offsetTotalOffered === false ? 'Offset' : 'Offset or Total';
         if (state.target.resizeBodyFeatureId && !state.target.localFaceOffset) {
-          return 'Drag the arrow to resize the body, or type its Offset or Total · The opposite side stays fixed';
+          return `Drag the arrow to resize the body, or type its ${modes} · The opposite side stays fixed`;
         }
         // The key is the user's: a remap is named, an unbound one omitted.
         // Kept short: the lane is one line, and at a common bar width the
@@ -118,11 +128,12 @@ function armedStep(
         // the face moves (the default), or the Total size it leaves — never
         // "a distance" whatever the tag says (QA 2026-11-14 finding #9).
         return [
-          'Drag to push or pull the face, or type its Offset or Total',
+          `Drag to push or pull the face, or type its ${modes}`,
           keyHint(activeKeymap(), 'view-normal-to-face', 'views it head-on')
         ]
           .filter(Boolean)
           .join(' · ');
+      }
     }
   }
   if (state.mode === 'edges') {
@@ -234,7 +245,15 @@ export function commandPrompt(
   if (state.phase === 'dragging') {
     return { step: draggingStep(state), escape };
   }
-  return { step: armedStep(state, dimensionMode, context.edgeNoun), escape };
+  return {
+    step: armedStep(
+      state,
+      dimensionMode,
+      context.edgeNoun,
+      context.offsetTotalOffered
+    ),
+    escape
+  };
 }
 
 /**

@@ -114,3 +114,33 @@ for (const { width, hasTouch } of [
     await context.close();
   });
 }
+
+/**
+ * L11 (plan §4): Create link makes a link in one click, view only and
+ * without history, with nothing to fill in first. The first link still asks
+ * for the confirmation sharing needs, and only because there is none yet.
+ */
+test('the owner creates a view-only link without history in one click', async ({
+  browser
+}) => {
+  test.setTimeout(240_000);
+  const { server, context, links, errors, link } = await ownerWithShareLink(
+    browser,
+    { oneClick: true }
+  );
+  const parts = parseShareFragment(new URL(link).hash)!;
+  expect((await anonymousSnapshot(server, parts.token)).status).toBe(200);
+  await expect(links.getByText('No history link is ready')).toBeVisible();
+  await expect(
+    links.getByRole('button', { name: 'No history link', exact: true })
+  ).toBeVisible();
+  // The confirmation is fresh: neither the banner nor a Confirm by chip.
+  await expect(links.getByRole('button', { name: /^Confirm by / })).toHaveCount(
+    0
+  );
+  await expect(
+    links.getByText(/Your links need your confirmation/)
+  ).toHaveCount(0);
+  expect(errors).toEqual([]);
+  await context.close();
+});

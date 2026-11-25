@@ -8,7 +8,7 @@ import {
   useState
 } from 'react';
 import type { CSSProperties, RefObject } from 'react';
-import { Lock, Plus, UserRound, X } from 'lucide-react';
+import { Lock, UserRound, X } from 'lucide-react';
 import type {
   CollaborationMember,
   ProjectAccessRole,
@@ -1879,7 +1879,7 @@ function PlaintextShareLinks({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // The link whose Revoke is waiting for a yes (design review I2).
   const [revokingId, setRevokingId] = useState<string | null>(null);
-  // A new link closes the card that made it.
+  // A new link closes the options that made it.
   const createdId = created?.shareLinkId ?? null;
   useEffect(() => {
     if (createdId) setComposing(false);
@@ -1887,7 +1887,6 @@ function PlaintextShareLinks({
   const createdLink = created
     ? shareLinks.find((link) => link.shareLinkId === created.shareLinkId)
     : undefined;
-  const showComposer = composing || (shareLinks.length === 0 && !created);
 
   return (
     <section
@@ -1931,44 +1930,30 @@ function PlaintextShareLinks({
           </p>
         </div>
       ) : null}
-      {showComposer ? (
-        <ShareLinkComposer
-          canExcludeHistory={canExcludeHistory}
-          defaultMode="tweak"
-          nameable
-          nameMaxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
-          disabled={disabled}
-          commentsHint="Visitors see every comment and sign theirs with a name."
-          footnote="You see the address once, when the link is made."
-          {...(localImportSourceNames.length > 0
-            ? {
-                historyBlocker: (
-                  <p className="sharing-hint" role="alert">
-                    Save the source files for{' '}
-                    {localImportSourceNames.join(', ')} to your account with
-                    File → Save before creating a link.
-                  </p>
-                )
-              }
-            : {})}
-          {...(shareLinks.length > 0 || created
-            ? { onCancel: () => setComposing(false) }
-            : {})}
-          onCreate={(draft) =>
-            onCreate(draft.mode, draft.comments, draft.history, draft.name)
-          }
-        />
-      ) : (
-        <button
-          type="button"
-          className="secondary share-links-new"
-          disabled={disabled}
-          onClick={() => setComposing(true)}
-        >
-          <Plus size={13} aria-hidden="true" />
-          New link
-        </button>
-      )}
+      <ShareLinkComposer
+        canExcludeHistory={canExcludeHistory}
+        expanded={composing}
+        onExpandedChange={setComposing}
+        defaultMode="tweak"
+        nameable
+        nameMaxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
+        disabled={disabled}
+        commentsHint="Visitors see every comment and sign theirs with a name."
+        footnote="You see the address once, when the link is made."
+        {...(localImportSourceNames.length > 0
+          ? {
+              historyBlocker: (
+                <p className="sharing-hint" role="alert">
+                  Save the source files for {localImportSourceNames.join(', ')}{' '}
+                  to your account with File → Save before creating a link.
+                </p>
+              )
+            }
+          : {})}
+        onCreate={(draft) =>
+          onCreate(draft.mode, draft.comments, draft.history, draft.name)
+        }
+      />
       {shareLinks.length > 0 ? (
         <ul className="share-link-cards" aria-label="Share links">
           {shareLinks.map((shareLink) => {
