@@ -2002,27 +2002,49 @@ holds only ciphertext.
   when the statement names its token, is the invitee's acceptance: there is
   no separate Accept click. A listed invitation whose link was not opened
   on that device keeps one explicit Join.
-- **The identity added is the pin.** What later checks compare against is
-  the identity the owner's project group now holds for the member (the MLS
+- **The identity added is the pin, for every device of the account.**
+  Before an automatic add (or, for the invitee, before signing an
+  acceptance) the browser pins the identity in the account's **first-use
+  pins**: one record per account sealed under the account key
+  (`FIRST_USE_PINS_RECORD`, the sealed-record layout of the account
+  settings and share link names, `/api/e2ee/first-use-pins`, migration
+  0069), so every unlocked device of the account reads and merges it. It
+  keeps, per person, every identity a device accepted on first use, the
+  identity last trusted explicitly, and the identities a trust superseded.
+  An acceptor's identity counts only when it is the trusted one, or, with
+  nothing trusted, the only one pinned. Another one is a key change, never
+  a first use, also on a device that never saw them; so are two devices
+  that first saw different identities. Later checks also compare against
+  the identity the owner's project groups hold for the member (the MLS
   directory accepts only leaves certified by devices of their device list)
-  and the identity this browser pinned when it first saw them (the seen
-  contact pin, `contactPins.ts`). First-use pins are not written to the
-  identity-signed contacts list, so adding someone asks for no passkey or
-  recovery key; verifying someone still signs a contacts entry. Someone
-  already pinned with the same identity, as a member of another of the
-  owner's projects or a contact, is added as soon as their devices publish
-  KeyPackages for a new invitation.
+  and against what this browser saw of them (the seen contact pin,
+  `contactPins.ts`, which the member lists of every loaded group update).
+  The pins need no identity-key signature, so adding someone asks for no
+  passkey or recovery key; verifying someone still signs a contacts entry.
+  The server sees only the record's length, write times, revision,
+  sequence and account-key commitment; who is pinned stays inside the
+  ciphertext, and the account export includes the record as stored.
+  Where the record cannot be fetched or opened, nobody is a first use: the
+  owner confirms each add by contact code, and the invitee's browser joins
+  nothing. Someone already pinned with the same identity, as a member of
+  another of the owner's projects or a contact, is added as soon as their
+  devices publish KeyPackages for a new invitation.
 - **A changed identity is an alarm.** When the identity the server now
   shows for a person is not the one this browser pinned for them, seen or
   verified, nothing is added, wrapped, signed or published for them
   automatically, confirmed or not (`keys-changed` on both sides). The
   owner's sharing dialog shows "_name_'s encryption keys changed" with
   **Review** (the code comparison) and **Trust new keys**. Trusting is an
-  explicit first use again: this browser records that identity as trusted
-  (`ContactPin.trustedKeys`), which never verifies the contact, signs
-  nothing and is dropped when the identity changes again. The invitee's
-  browser likewise signs and publishes nothing for an owner whose pinned
-  identity changed until the person reviews it.
+  explicit first use again, recorded in the account's first-use pins (every
+  other identity known for the person, a verification the signed contacts
+  list holds for one included, is retired and never counts again) and in
+  this browser's contact pin (`ContactPin.trustedKeys`; the old verified
+  identity coming back is then refused as a rollback). It never verifies
+  the contact and signs nothing. The check runs again at Commit time, on
+  every attempt, so a change another tab or device recorded while an add
+  was under way stops it. The invitee's browser likewise signs and
+  publishes nothing for an owner whose pinned identity changed until the
+  person reviews it.
 - **Verification is optional, and shown.** Each member and each accepted
   invitation in the sharing dialog reads **Verified** (a verified contact
   whose key has not changed) or **Not verified**, with **Verify…** opening
@@ -2052,7 +2074,12 @@ holds only ciphertext.
   database or storage breach, a curious operator, a network or server
   observer) still sees only ciphertext, and the substitution is detectable
   afterwards: the codes do not match, and the substituted member shows in
-  the member list as Not verified, under their own contact code. Rejected:
+  the member list as Not verified, under their own contact code. The
+  first-use pins have the fork-consistency limit of the other account
+  records: each device refuses a record older than one it opened or wrote
+  (and then treats nobody as a first use), but the server can withhold the
+  record, or an update to it, from a device that never saw it, which then
+  treats that person as a first use. Rejected:
   putting a decryption secret in the invitation email, which the server
   writes and would read passively.
 - **Review.** This changes the trust model, so the Phase 8 outside review

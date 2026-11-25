@@ -363,3 +363,153 @@ test(
     await bobContext.close();
   }
 );
+
+/**
+ * A pin this browser kept for `userId`'s identity before (as the contact
+ * pins record what a browser saw of someone), with another identity than
+ * the one the server now shows: the next lookup is a key change.
+ */
+async function pinOtherIdentity(page: Page, ownerId: string, userId: string) {
+  await page.evaluate(
+    ([owner, contact]) =>
+      new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open('openzcad-e2ee-contacts', 1);
+        open.onupgradeneeded = () => {
+          const db = open.result;
+          if (!db.objectStoreNames.contains('lists'))
+            db.createObjectStore('lists');
+          if (!db.objectStoreNames.contains('contacts'))
+            db.createObjectStore('contacts');
+        };
+        open.onerror = () =>
+          reject(open.error ?? new Error('IndexedDB did not open'));
+        open.onsuccess = () => {
+          const tx = open.result.transaction('contacts', 'readwrite');
+          tx.objectStore('contacts').put(
+            {
+              contactUserId: contact,
+              identityKeyHash: 'ab'.repeat(32),
+              sequence: 0,
+              entryHash: '00'.repeat(32),
+              keyChanged: false,
+              seenAt: Date.now()
+            },
+            [owner, contact]
+          );
+          tx.oncomplete = () => {
+            open.result.close();
+            resolve();
+          };
+          tx.onerror = () =>
+            reject(tx.error ?? new Error('IndexedDB write failed'));
+        };
+      }),
+    [ownerId, userId] as const
+  );
+}
+
+test(
+  'blocks the automatic add of an invitee whose keys changed until the owner trusts the new keys',
+  { tag: '@ci-smoke' },
+  async ({ browser }) => {
+    test.setTimeout(240_000);
+    const server = createE2eeServer({ projectsEnabled: true });
+    server.db
+      .prepare('UPDATE users SET email = ? WHERE id = ?')
+      .run(ALICE_EMAIL, E2E_USER_ID);
+    addE2eeUser(server, BOB_ID, BOB_EMAIL);
+    const aliceContext = await browser.newContext();
+    const bobContext = await browser.newContext();
+    const errors: string[] = [];
+    const alice = await signIn(aliceContext, server, E2E_USER_ID, ALICE_EMAIL);
+    const bob = await signIn(bobContext, server, BOB_ID, BOB_EMAIL);
+    for (const page of [alice, bob]) {
+      page.on('pageerror', (error) => errors.push(error.message));
+    }
+    await alice.goto('/');
+    await seedE2eeDevice(alice, server, { label: 'Alice browser' });
+    const aliceSettings = await openEncryptionSettings(alice);
+    const toggle = aliceSettings.getByRole('checkbox', {
+      name: 'Encrypt new projects'
+    });
+    await expect(toggle).toBeEnabled();
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    await closeSettings(alice);
+    await alice.getByLabel('Project name').fill('Secret bracket');
+    await alice.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(alice, 'box');
+    await expect(
+      alice.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    const projectId = (
+      server.db.prepare('SELECT id FROM projects').get() as { id: string }
+    ).id;
+    // Alice's browser saw another identity for Bob before.
+    await pinOtherIdentity(alice, E2E_USER_ID, BOB_ID);
+
+    await alice.getByRole('button', { name: /Open project sharing/ }).click();
+    const dialog = alice.getByRole('dialog', { name: 'Project sharing' });
+    await dialog.getByLabel('Email').fill(BOB_EMAIL);
+    await dialog.getByRole('button', { name: 'Invite' }).click();
+    await expect(dialog.getByText('Invitation sent.')).toBeVisible({
+      timeout: SYNC_BUDGET_MS
+    });
+    await dialog.getByRole('button', { name: 'Close sharing' }).click();
+
+    // Bob sets up and his opened link is accepted; his keys are published.
+    await bob.goto(`/#encrypted-invite=${server.mailbox[0]!.token}`);
+    await expect(
+      bob
+        .getByRole('dialog', { name: 'Settings' })
+        .getByRole('button', { name: 'Set up encryption' })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await seedE2eeDevice(bob, server, { label: 'Bob browser', userId: BOB_ID });
+    await bob.reload();
+    const bobEncryption = await openEncryptionSettings(bob);
+    await expect(
+      bobEncryption.getByText(
+        'Your keys are ready. Waiting for them to add you.'
+      )
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await closeSettings(bob);
+
+    // Alice's dialog does not add him: his keys are not the ones her
+    // browser pinned. Review and Trust new keys are offered.
+    await alice.getByRole('button', { name: /Open project sharing/ }).click();
+    const changed = dialog.getByRole('group', {
+      name: "Invitation 1's encryption keys changed"
+    });
+    await expect(changed).toBeVisible({ timeout: ADD_BUDGET_MS });
+    await expect(changed.getByRole('button', { name: 'Review' })).toBeVisible();
+    const member = () =>
+      server.db
+        .prepare(
+          'SELECT role FROM project_members WHERE project_id = ? AND user_id = ?'
+        )
+        .get(projectId, BOB_ID);
+    expect(member()).toBeUndefined();
+    expect(
+      server.db
+        .prepare('SELECT COUNT(*) AS n FROM e2ee_welcomes WHERE project_id = ?')
+        .get(projectId)
+    ).toEqual({ n: 0 });
+
+    // Trusting the new keys is a first use again: he is added.
+    await changed.getByRole('button', { name: 'Trust new keys' }).click();
+    await expect
+      .poll(member, { timeout: ADD_BUDGET_MS })
+      .toEqual({ role: 'viewer' });
+    // The trust is the account's: recorded in its sealed first-use pins.
+    expect(
+      server.db
+        .prepare(
+          'SELECT COUNT(*) AS n FROM e2ee_first_use_pins WHERE user_id = ?'
+        )
+        .get(E2E_USER_ID)
+    ).toEqual({ n: 1 });
+    expect(errors).toEqual([]);
+    await aliceContext.close();
+    await bobContext.close();
+  }
+);

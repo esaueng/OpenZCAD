@@ -572,7 +572,15 @@ export async function inspectContact(
   // A different identity was already seen for this contact: the verified
   // one coming back is a rollback, not a reason to trust it again. Only a
   // signed key change or a new verification moves on from there.
-  if (verifiedSame && pin?.keyChanged && pin.identityKeyHash !== identityHash) {
+  // The same holds once the user trusted the replacement ("Trust new keys",
+  // which clears the pin's `keyChanged`): a verification signed for the
+  // identity it superseded never counts again.
+  if (
+    verifiedSame &&
+    pin &&
+    pin.identityKeyHash !== identityHash &&
+    (pin.keyChanged || pin.trustedKeys === pin.identityKeyHash)
+  ) {
     staleAnswer('device list');
   }
   // Fork consistency: the list must extend the signed verification and
@@ -910,6 +918,8 @@ export async function trustNewKeys(
     seenAt: now(ctx),
     trustedKeys: identity
   });
+  // Refused when another tab moved the pin to yet another identity: that
+  // one was not what the user trusted.
   if (!recorded) staleAnswer('device list');
 }
 

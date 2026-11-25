@@ -80,6 +80,11 @@ import {
   MAX_CONTACTS_RESEAL_BODY_BYTES
 } from './e2eeContacts';
 import {
+  FIRST_USE_PINS_ROUTE,
+  handleFirstUsePinsRequest,
+  MAX_FIRST_USE_PINS_BODY_BYTES
+} from './e2eeFirstUsePins';
+import {
   handleE2eeInvitationRequest,
   isE2eeInvitationPath,
   type E2eeInvitationHost
@@ -2276,6 +2281,17 @@ export async function handleE2eeRequest(
         userId,
         projectsEnabled,
         db.authorization
+      );
+    }
+    if (pathname === FIRST_USE_PINS_ROUTE) {
+      // First-use pins of other people's identities, sealed under the
+      // account key (e2eeFirstUsePins.ts, ADR-024 amendment 2026-11-25).
+      return await handleFirstUsePinsRequest(
+        request,
+        rawDb,
+        userId,
+        db.authorization,
+        () => readBody(request, MAX_FIRST_USE_PINS_BODY_BYTES)
       );
     }
     if (isE2eeContactsPath(pathname)) {

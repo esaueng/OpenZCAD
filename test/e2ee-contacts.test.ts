@@ -79,6 +79,13 @@ import {
   type InvitationContext
 } from '../apps/web/src/lib/e2ee/invitations';
 import { memoryInvitationStore } from '../apps/web/src/lib/e2ee/invitationStore';
+import {
+  createFirstUsePinsApi,
+  firstUseStanding,
+  memoryFirstUsePinState,
+  sealedFirstUsePins
+} from '../apps/web/src/lib/e2ee/firstUsePins';
+import { projectGroupAccount } from '../apps/web/src/lib/e2ee/projectGroups';
 import type { ProjectGroupContext } from '../apps/web/src/lib/e2ee/projectGroups';
 import {
   databaseBefore,
@@ -922,6 +929,166 @@ describe('verifying contacts in the browser', () => {
     expect((await alice.pins.readContact(ALICE, BOB))?.identityKeyHash).toBe(
       toHex(await publicKeyHash(bob.account.list.identityKey))
     );
+  });
+
+  /**
+   * One owner device's view of the account's first-use pins, over the real
+   * route: its own sequence pin and copy, the account's sealed record.
+   */
+  const ownerPins = (srv: Server, owner: Person) =>
+    sealedFirstUsePins(
+      {
+        userId: owner.keys.userId,
+        accountKey: async () =>
+          (
+            await projectGroupAccount(
+              owner.keys,
+              owner.account
+            ).currentAccountKey()
+          ).key,
+        device: memoryFirstUsePinState()
+      },
+      createFirstUsePinsApi(fetcher(srv, owner.keys.userId))
+    );
+
+  it('compares a second owner device against the identity the first pinned, never a first use (PR 2057 review)', async () => {
+    const { srv, alice, bob } = await pair();
+    const first = toHex(bob.account.list.identityKeyHash);
+    // The laptop adds Bob unverified: a first use, pinned for the account.
+    const laptop = contactInvitationPeople(
+      alice.contacts,
+      alice.account,
+      ownerPins(srv, alice)
+    );
+    expect(await laptop.inspect(BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: false,
+      firstUse: 'new'
+    });
+    await laptop.pin!(BOB, first);
+    expect(await laptop.inspect(BOB)).toMatchObject({
+      keyChanged: false,
+      firstUse: 'known'
+    });
+    // Bob's identity is replaced. A desktop of Alice's that never looked
+    // Bob up (no contact pin of its own) still sees a key change.
+    bob.account = ready(
+      await replaceRecoveryKey(
+        bob.keys,
+        bob.account,
+        (await generateRecoveryKey()).secret,
+        bob.recovery.secret
+      )
+    );
+    const second = toHex(bob.account.list.identityKeyHash);
+    const desktopContacts: ContactsContext = {
+      ...alice.contacts,
+      pins: memoryContactPins()
+    };
+    const desktop = contactInvitationPeople(
+      desktopContacts,
+      alice.account,
+      ownerPins(srv, alice)
+    );
+    expect(await desktop.inspect(BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: true
+    });
+    await expect(desktop.pin!(BOB, second)).rejects.toMatchObject({
+      code: 'keys-changed'
+    });
+    // A device that cannot open the account's pins treats nobody as a
+    // first use: the owner confirms each add.
+    const locked = contactInvitationPeople(
+      desktopContacts,
+      alice.account,
+      sealedFirstUsePins(
+        {
+          userId: ALICE,
+          accountKey: async () => null,
+          device: memoryFirstUsePinState()
+        },
+        createFirstUsePinsApi(fetcher(srv, ALICE))
+      )
+    );
+    expect(await locked.inspect(BOB)).toMatchObject({ firstUse: 'unknown' });
+    // Trust new keys on the desktop counts on every device of the account,
+    // the laptop's own downgrade included.
+    await desktop.trustNewKeys!(BOB, second);
+    expect(await laptop.inspect(BOB)).toMatchObject({ keyChanged: false });
+    expect(await desktop.inspect(BOB)).toMatchObject({ keyChanged: false });
+  });
+
+  it('never counts a verification of an identity that trusted new keys superseded (PR 2057 review)', async () => {
+    const { srv, alice, bob } = await pair();
+    const pins = ownerPins(srv, alice);
+    const people = contactInvitationPeople(alice.contacts, alice.account, pins);
+    let book = await loadContacts(alice.contacts, alice.account);
+    book = await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, BOB),
+      alice.recovery.secret
+    );
+    const first = toHex(bob.account.list.identityKeyHash);
+    expect(await people.inspect(BOB)).toMatchObject({ status: 'verified' });
+    // The old identity's device list, held back for later.
+    const path = `/api/e2ee/users/${BOB}/device-list`;
+    const oldAnswer = await (
+      await srv.call('GET', path, { user: ALICE })
+    ).text();
+    bob.account = ready(
+      await replaceRecoveryKey(
+        bob.keys,
+        bob.account,
+        (await generateRecoveryKey()).secret,
+        bob.recovery.secret
+      )
+    );
+    const second = toHex(bob.account.list.identityKeyHash);
+    expect(await people.inspect(BOB)).toMatchObject({ keyChanged: true });
+    await people.trustNewKeys!(BOB, second);
+    expect(await people.inspect(BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: false
+    });
+    // The server answers with the old identity again: a rollback, refused
+    // here, and the account's pins retired it, so no device counts it.
+    const replaying: ContactsContext = {
+      ...alice.contacts,
+      api: createContactsApi(async (p, init) =>
+        p === path
+          ? new Response(oldAnswer, {
+              status: 200,
+              headers: { 'content-type': 'application/json' }
+            })
+          : fetcher(srv, ALICE)(p, init)
+      )
+    };
+    await expect(inspectContact(replaying, book, BOB)).rejects.toMatchObject({
+      code: 'fork'
+    });
+    await expect(
+      contactInvitationPeople(replaying, alice.account, pins).inspect(BOB)
+    ).rejects.toMatchObject({ code: 'fork' });
+    expect((await alice.pins.readContact(ALICE, BOB))?.identityKeyHash).toBe(
+      second
+    );
+    const shared = await pins.read();
+    expect(firstUseStanding(shared, BOB, first)).toBe('changed');
+    expect(shared.people[BOB]!.retired).toContain(first);
+    // Even a browser with no pins of its own that is shown the old list
+    // finds it superseded.
+    const fresh = contactInvitationPeople(
+      { ...replaying, pins: memoryContactPins() },
+      alice.account,
+      ownerPins(srv, alice)
+    );
+    expect(await fresh.inspect(BOB)).toMatchObject({
+      status: 'seen',
+      keyChanged: true
+    });
   });
 
   it('refuses a result whose pin another tab moved past (#898 review)', async () => {

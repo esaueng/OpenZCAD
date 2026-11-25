@@ -63,6 +63,7 @@ import {
   memoryInvitationStore,
   type InvitationStore
 } from '../apps/web/src/lib/e2ee/invitationStore';
+import { FirstUsePinsUnavailable } from '../apps/web/src/lib/e2ee/firstUsePins';
 import {
   catchUpProjectGroup,
   commitProjectGroup,
@@ -296,10 +297,7 @@ const groupEpoch = (srv: Server, projectId: string) =>
  * made by a laptop that marks its removal history in `store`, as the page
  * does: it created the group, so it saw every removal.
  */
-async function ownersProject(
-  w: World,
-  members: readonly Account[] = [other]
-) {
+async function ownersProject(w: World, members: readonly Account[] = [other]) {
   const laptop = emailDevice(w, owner, 'owner_laptop', { members });
   const store = memoryInvitationStore();
   Object.assign(laptop.groups, {
@@ -827,6 +825,101 @@ describe('trust on first use: a changed identity blocks (ADR-024 amendment 2026-
     expect(again.errors).toEqual([]);
     expect(again.added).toEqual([invitation.invitationId]);
     expect(memberRole(w.srv, projectId, OTHER)).toBe('editor');
+  });
+
+  it('stops an Add whose acceptor’s keys another tab flagged as changed while it ran (PR 2057 review)', async () => {
+    const w = world();
+    const { projectId, laptop, ownerCtx, invitation, inviteeCtx } =
+      await invited(w, 'editor', { bind: false });
+    await publishInvitationKeyPackages(inviteeCtx);
+    // Checked unchanged, then another tab records the alarm while this one
+    // claims the KeyPackages: the Commit-time check reads it again.
+    laptop.before = async (path, init) => {
+      if (init.method === 'POST' && path.endsWith('/key-packages/claim')) {
+        keysChanged(w, OWNER, OTHER);
+      }
+    };
+    const [pending] = await projectInvitations(ownerCtx, projectId);
+    expect(pending).toMatchObject({ state: 'ready' });
+    await expect(addInvitedMember(ownerCtx, pending!.record)).rejects.toSatisfy(
+      refusedWith('keys-changed')
+    );
+    laptop.before = undefined;
+    expect(groupEpoch(w.srv, projectId)).toBe(1);
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+    expect(
+      (await projectInvitations(ownerCtx, projectId))[0]!.record.invitationId
+    ).toBe(invitation.invitationId);
+  });
+
+  it('pins the identity it adds for the account first, and adds nobody the account’s pins refuse or cannot vouch for', async () => {
+    const w = world();
+    const { projectId, ownerCtx, invitation, inviteeCtx } = await invited(
+      w,
+      'editor',
+      { bind: false }
+    );
+    await publishInvitationKeyPackages(inviteeCtx);
+    const pinned: string[] = [];
+    // Another device of the account pinned another identity for them.
+    const refused: InvitationContext = {
+      ...ownerCtx,
+      people: {
+        ...ownerCtx.people,
+        pin: async () => {
+          throw new InvitationError('keys-changed', 'another identity');
+        }
+      }
+    };
+    const [pending] = await projectInvitations(ownerCtx, projectId);
+    await expect(addInvitedMember(refused, pending!.record)).rejects.toSatisfy(
+      refusedWith('keys-changed')
+    );
+    // The account's pins cannot be read here: nobody is a first use, so the
+    // owner confirms, and a failed pin write stops an automatic add.
+    const unknown: InvitationContext = {
+      ...ownerCtx,
+      people: {
+        ...ownerCtx.people,
+        inspect: async (userId) => {
+          const person = await ownerCtx.people.inspect(userId);
+          return person && { ...person, firstUse: 'unknown' as const };
+        }
+      }
+    };
+    expect(await projectInvitations(unknown, projectId)).toMatchObject([
+      { state: 'confirm-add' }
+    ]);
+    await expect(addInvitedMember(unknown, pending!.record)).rejects.toSatisfy(
+      refusedWith('needs-confirmation')
+    );
+    const unwritable: InvitationContext = {
+      ...ownerCtx,
+      people: {
+        ...ownerCtx.people,
+        pin: async () => {
+          throw new FirstUsePinsUnavailable();
+        }
+      }
+    };
+    await expect(
+      addInvitedMember(unwritable, pending!.record)
+    ).rejects.toSatisfy(refusedWith('needs-confirmation'));
+    expect(groupEpoch(w.srv, projectId)).toBe(1);
+    // With the pin written, it adds them.
+    const recording: InvitationContext = {
+      ...ownerCtx,
+      people: {
+        ...ownerCtx.people,
+        pin: async (userId, identity) => {
+          pinned.push(`${userId}:${identity}`);
+        }
+      }
+    };
+    await addInvitedMember(recording, pending!.record);
+    expect(pinned).toEqual([`${OTHER}:${otherIdentity()}`]);
+    expect(memberRole(w.srv, projectId, OTHER)).toBe('editor');
+    expect(invitation.invitationId).toBe(pending!.record.invitationId);
   });
 
   it('joins on first use without verifying the owner, and never once the owner’s pinned identity changed', async () => {

@@ -105,6 +105,9 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
   '/api/e2ee/config': [['/api/e2ee/config', 'read']],
   '/api/e2ee/contacts': [['/api/e2ee/contacts', 'none']],
   '/api/e2ee/device-list': [['/api/e2ee/device-list', 'none']],
+  // Sealed under the account key in the browser (ADR-024 amendment
+  // 2026-11-25): no project's content.
+  '/api/e2ee/first-use-pins': [['/api/e2ee/first-use-pins', 'none', ['PUT']]],
   '/api/e2ee/identity': [['/api/e2ee/identity', 'none']],
   '/api/e2ee/invitations': [['/api/e2ee/invitations', 'none']],
   '/api/e2ee/invitations/accept': [['/api/e2ee/invitations/accept', 'none']],

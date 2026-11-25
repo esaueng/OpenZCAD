@@ -114,6 +114,13 @@ import {
 } from './contacts';
 import { E2eeApiError } from './e2eeApi';
 import {
+  firstUseStanding,
+  FirstUsePinsUnavailable,
+  pinFirstUse,
+  trustFirstUse,
+  type FirstUsePinStore
+} from './firstUsePins';
+import {
   addInvitee,
   joinProjectByWelcome,
   type InviteeKeyPackage,
@@ -146,6 +153,15 @@ export interface InvitationPerson {
    * false.
    */
   readonly keyChanged?: boolean;
+  /**
+   * Where their identity stands in the account's first-use pins, which
+   * every device of the account shares (`firstUsePins.ts`): `new` (no
+   * device of the account pinned anyone for them yet, so adding them is a
+   * first use), `known` (pinned or trusted, or verified), or `unknown` (the
+   * record could not be read here: nothing is a first use, and the owner
+   * confirms each add). Absent reads as `known`.
+   */
+  readonly firstUse?: 'new' | 'known' | 'unknown';
 }
 
 export interface InvitationPeople {
@@ -163,6 +179,14 @@ export interface InvitationPeople {
    * names, which is what the user was shown.
    */
   trustNewKeys?(userId: string, identityKeyHash: string): Promise<void>;
+  /**
+   * Pins `identityKeyHash` (hex) for `userId` in the account's first-use
+   * pins before an automatic add or join, so every device of the account
+   * compares against it. Throws `keys-changed` when the record holds
+   * another identity for them, and `FirstUsePinsUnavailable` when it cannot
+   * be read or written. Absent: nothing to pin (tests, older callers).
+   */
+  pin?(userId: string, identityKeyHash: string): Promise<void>;
 }
 
 export interface InvitationContext {
@@ -175,33 +199,63 @@ export interface InvitationContext {
   readonly now?: () => number;
 }
 
-/** `InvitationPeople` from the contacts module and this browser's pins. */
+/**
+ * `InvitationPeople` from the contacts module, this browser's pins and the
+ * account's first-use pins (`firstUse`, shared by the account's devices;
+ * ADR-024 amendment 2026-11-25). An identity is a key change when this
+ * browser pinned another one for the person (a seen or verified pin, which
+ * the project groups they share also read), or when the account's pins
+ * hold another one, or retired it after a trust. Only an explicit trust
+ * recorded in the account's pins, or a verification of an identity no
+ * trust superseded, counts against a change this browser noticed.
+ */
 export function contactInvitationPeople(
   contacts: ContactsContext,
-  account: AccountView
+  account: AccountView,
+  firstUse?: FirstUsePinStore
 ): InvitationPeople {
   const inspect = async (
     book: Awaited<ReturnType<typeof loadContacts>>,
     userId: string
   ): Promise<InvitationPerson | null> => {
+    let view: Awaited<ReturnType<typeof inspectContact>>;
     try {
-      const view = await inspectContact(contacts, book, userId);
-      return {
-        userId,
-        email: view.email,
-        status:
-          view.status === 'verified' && !view.keyChanged
-            ? 'verified'
-            : view.status === 'no-keys'
-              ? 'no-keys'
-              : 'seen',
-        list: view.list,
-        keyChanged: view.keyChanged && !view.keyChangeTrusted
-      };
+      view = await inspectContact(contacts, book, userId);
     } catch (error) {
       if (error instanceof E2eeApiError && error.status === 404) return null;
       throw error;
     }
+    let keyChanged = view.keyChanged && !view.keyChangeTrusted;
+    let verified = view.status === 'verified' && !view.keyChanged;
+    let standing: InvitationPerson['firstUse'] = 'known';
+    if (firstUse && view.list) {
+      const identity = toHex(view.list.identityKeyHash);
+      const pins = await firstUse.read().catch(() => null);
+      if (!pins) standing = 'unknown';
+      else {
+        const shared = firstUseStanding(pins, userId, identity);
+        const superseded =
+          pins.people[userId]?.retired.includes(identity) ?? false;
+        if (shared === 'trusted') keyChanged = false;
+        else if (shared === 'changed' && !(verified && !superseded)) {
+          keyChanged = true;
+        } else if (shared === 'new' && !verified) standing = 'new';
+        if (superseded) verified = false;
+      }
+    }
+    if (keyChanged) verified = false;
+    return {
+      userId,
+      email: view.email,
+      status: verified
+        ? 'verified'
+        : view.status === 'no-keys'
+          ? 'no-keys'
+          : 'seen',
+      list: view.list,
+      keyChanged,
+      firstUse: standing
+    };
   };
   return {
     async inspect(userId) {
@@ -232,7 +286,34 @@ export function contactInvitationPeople(
           'Their keys changed again since you reviewed them. Nothing was trusted; review them again.'
         );
       }
+      // The account's pins first: every device then counts this identity,
+      // and every other one known for them, the signed contacts list's
+      // verification included, never counts again.
+      if (firstUse) {
+        const verifiedIdentity = book.list?.contacts.get(userId);
+        await firstUse.change((pins, at) =>
+          trustFirstUse(
+            pins,
+            userId,
+            identityKeyHash,
+            at,
+            verifiedIdentity ? [toHex(verifiedIdentity.identityKeyHash)] : []
+          )
+        );
+      }
       await trustNewKeys(contacts, view);
+    },
+    async pin(userId, identityKeyHash) {
+      if (!firstUse) return;
+      const stored = await firstUse.change((pins, at) =>
+        pinFirstUse(pins, userId, identityKeyHash, at)
+      );
+      if (!stored) {
+        throw new InvitationError(
+          'keys-changed',
+          'Their encryption keys are not the ones your account pinned for them. Nothing was shared; review the change.'
+        );
+      }
     }
   };
 }
@@ -1059,7 +1140,10 @@ async function describe(
         claimedHere: claimed !== null,
         accepted: acceptor !== null,
         otherAccepted: named !== undefined && acceptor !== null && !bound,
-        gate: addGate(removed, record.projectId, record.acceptedByUserId ?? '')
+        gate:
+          person?.firstUse === 'unknown'
+            ? 'confirm'
+            : addGate(removed, record.projectId, record.acceptedByUserId ?? '')
       }),
       email: emails.get(record.invitationId) ?? person?.email ?? null,
       statement,
@@ -1244,9 +1328,29 @@ export async function addInvitedMember(
     );
   }
   // Asked before claiming anything, and again on every attempt of the
-  // Commit after catching up: a removal processed there stops the Add.
+  // Commit after catching up: a removal processed there stops the Add, and
+  // so does a key change another tab, device or lookup recorded meanwhile
+  // (the contact pins and the account's first-use pins are shared storage,
+  // read again here).
   const authorize = async () => {
+    const current = await ctx.people.inspect(invitee).catch(() => null);
+    if (
+      !current?.list ||
+      toHex(current.list.identityKeyHash) !== identity ||
+      current.keyChanged
+    ) {
+      throw new InvitationError(
+        'keys-changed',
+        'Their encryption keys changed while they were being added. Nothing was added; review the change.'
+      );
+    }
     if (confirmed !== undefined) return;
+    if (current.firstUse === 'unknown') {
+      throw new InvitationError(
+        'needs-confirmation',
+        'The keys of the people you share with could not be checked on this device. Confirm adding this person in the project’s sharing settings.'
+      );
+    }
     const gate = addGate(
       await removedMembers(ctx),
       invitation.projectId,
@@ -1266,6 +1370,21 @@ export async function addInvitedMember(
     }
   };
   await authorize();
+  // Pinned for every device of the account before anything is shared, so a
+  // later invitation compares against this identity wherever it is added.
+  try {
+    await ctx.people.pin?.(invitee, identity);
+  } catch (error) {
+    if (!(error instanceof FirstUsePinsUnavailable)) throw error;
+    // Only the owner's explicit confirmation of this identity goes ahead
+    // without the account's pins.
+    if (confirmed === undefined) {
+      throw new InvitationError(
+        'needs-confirmation',
+        'The keys of the people you share with could not be saved to your account. Confirm adding this person in the project’s sharing settings.'
+      );
+    }
+  }
   let claimed = await ctx.store
     .claim(userId, invitation.invitationId)
     .catch(() => null);
@@ -1771,6 +1890,12 @@ export async function publishInvitationKeyPackages(
         'The project owner’s encryption keys changed. Review the change before joining. Nothing was joined.'
       );
     }
+    if (owner.firstUse === 'unknown') {
+      throw new InvitationError(
+        'no-keys',
+        'The keys of the people you share with could not be checked on this device. Nothing was joined; try again.'
+      );
+    }
     const statement = await verifiedStatement(record, owner.list, now(ctx), {
       inviteeEmail: ctx.email
     });
@@ -1783,6 +1908,21 @@ export async function publishInvitationKeyPackages(
     );
     if (!accepted && !(await intendedHere(intents, record, statement))) {
       continue;
+    }
+    // Pinned for every device of this account before anything is signed.
+    try {
+      await ctx.people.pin?.(
+        record.inviterUserId,
+        toHex(owner.list.identityKeyHash)
+      );
+    } catch (error) {
+      if (error instanceof FirstUsePinsUnavailable) {
+        throw new InvitationError(
+          'no-keys',
+          'The keys of the people you share with could not be saved to your account. Nothing was joined; try again.'
+        );
+      }
+      throw error;
     }
     await rememberExpectedProjectOwner(
       ctx.groups,

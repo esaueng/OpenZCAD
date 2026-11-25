@@ -339,6 +339,15 @@ function HiddenPerson() {
   return <UserRound size={13} aria-hidden="true" />;
 }
 
+/** Whether two addresses (either may be unknown) are the same one. */
+function sameAddress(a: string | null, b: string | null): boolean {
+  return (
+    a !== null &&
+    b !== null &&
+    a.trim().toLowerCase() === b.trim().toLowerCase()
+  );
+}
+
 /**
  * Verified or Not verified (ADR-024 amendment 2026-11-25): whether the
  * owner compared codes with this person. Shown only; nothing waits on it.
@@ -1645,7 +1654,10 @@ export function ProjectSharingDialog({
                                   )}
                                 </span>
                               </span>
-                              {acceptor ? (
+                              {acceptor &&
+                              sameAddress(acceptor.email, invitation.email) ? (
+                                // The badge names the acceptor's keys: shown
+                                // only beside the address they accepted as.
                                 <TrustBadge
                                   name={label}
                                   userId={acceptor.userId}

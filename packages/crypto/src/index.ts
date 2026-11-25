@@ -370,6 +370,7 @@ export {
 } from './library-folders';
 export {
   ACCOUNT_SETTINGS_RECORD,
+  FIRST_USE_PINS_RECORD,
   openRecord,
   readSealedRecordHeader,
   sealRecord,

@@ -157,8 +157,9 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
   // accepted once this device is ready, with no separate click.
   const accepting = useRef<string | null>(null);
   const accept = async () => {
-    if (!token || accepting.current === token) return;
-    accepting.current = token;
+    const opened = token;
+    if (!opened || accepting.current === opened) return;
+    accepting.current = opened;
     setBusy(true);
     setError(null);
     try {
@@ -166,10 +167,15 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
         await import('../lib/e2ee/invitations');
       // An invitation whose statement names no link (an older app's) is
       // listed below for an explicit Join.
-      await acceptEncryptedInvitation(await pageInvitations(), token);
-      clearPendingEncryptedInvitation();
+      await acceptEncryptedInvitation(await pageInvitations(), opened);
+      // Only the token this request accepted: a link opened meanwhile, and
+      // captured in its place, stays for its own acceptance.
+      if (pendingEncryptedInvitation() === opened) {
+        clearPendingEncryptedInvitation();
+      }
     } catch (caught) {
-      setError(messageFor(caught));
+      // A newer link's acceptance owns the row (and its Try again) now.
+      if (accepting.current === opened) setError(messageFor(caught));
       setBusy(false);
       return;
     }

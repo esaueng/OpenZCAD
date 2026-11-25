@@ -250,6 +250,37 @@ describe('EncryptedInvitations', () => {
     ).toBeNull();
   });
 
+  it('keeps a link opened while an older one was being accepted (PR 2057 review)', async () => {
+    syncInvitations.mockResolvedValue({
+      incoming: [],
+      outgoing: [],
+      joined: [],
+      added: [],
+      errors: []
+    });
+    pendingToken = 'tok_first';
+    acceptEncryptedInvitation.mockImplementation(async () => {
+      // Another link is opened in this tab while the first is accepted.
+      pendingToken = 'tok_second';
+      return { linked: true };
+    });
+    const cleared: (string | null)[] = [];
+    clearPendingEncryptedInvitation.mockImplementation(() => {
+      cleared.push(pendingToken);
+      pendingToken = null;
+    });
+    render(<EncryptedInvitations ready />);
+    // The first acceptance leaves the newer link alone; that one is then
+    // accepted in its turn, and only then cleared.
+    await waitFor(() =>
+      expect(acceptEncryptedInvitation).toHaveBeenCalledTimes(2)
+    );
+    expect(acceptEncryptedInvitation.mock.calls.map((call) => call[1])).toEqual(
+      ['tok_first', 'tok_second']
+    );
+    await waitFor(() => expect(cleared).toEqual(['tok_second']));
+  });
+
   it('never joins an invitation whose owner keys changed: it offers a review instead', async () => {
     syncInvitations.mockResolvedValue(listing({ state: 'owner-keys-changed' }));
     render(<EncryptedInvitations ready />);

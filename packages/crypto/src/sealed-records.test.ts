@@ -12,6 +12,7 @@ import {
   readSealedRecordHeader,
   sealRecord,
   sealRecordWith,
+  FIRST_USE_PINS_RECORD,
   SHARE_LINK_NAMES_RECORD
 } from './sealed-records';
 import { PROJECT_PREFERENCES_MAC_INFO } from './account-records';
@@ -229,5 +230,57 @@ describe('sealed share link names (ADR-024 amendment 2026-11-22)', () => {
         )
       )
     ).toBe('limit-exceeded');
+  });
+});
+
+describe('sealed first-use pins (ADR-024 amendment 2026-11-25)', () => {
+  it('uses its own labels, and opens for its own key, account and kind only', async () => {
+    expect(FIRST_USE_PINS_RECORD.keyInfo).toBe(
+      'OpenZCAD E2EE v1 first-use pins key'
+    );
+    expect(FIRST_USE_PINS_RECORD.aadLabel).toBe(
+      'OpenZCAD E2EE v1 first-use pins\0'
+    );
+    for (const other of [
+      LIBRARY_FOLDERS_KEY_INFO,
+      PROJECT_PREFERENCES_MAC_INFO,
+      ACCOUNT_SETTINGS_RECORD.keyInfo,
+      SHARE_LINK_NAMES_RECORD.keyInfo
+    ])
+      expect(FIRST_USE_PINS_RECORD.keyInfo).not.toBe(other);
+    const pins = new TextEncoder().encode('{"version":1,"people":{}}');
+    const sealed = await sealRecord(
+      FIRST_USE_PINS_RECORD,
+      ACCOUNT_KEY,
+      'user_alice',
+      3,
+      pins
+    );
+    expect(
+      await openRecord(FIRST_USE_PINS_RECORD, ACCOUNT_KEY, 'user_alice', sealed)
+    ).toEqual({ sequence: 3, plaintext: pins });
+    expect(
+      await code(
+        openRecord(FIRST_USE_PINS_RECORD, OTHER_KEY, 'user_alice', sealed)
+      )
+    ).toBe('context-mismatch');
+    expect(
+      await code(
+        openRecord(FIRST_USE_PINS_RECORD, ACCOUNT_KEY, 'user_bob', sealed)
+      )
+    ).toBe('authentication-failed');
+    // Link names never open as pins.
+    const names = await sealRecord(
+      SHARE_LINK_NAMES_RECORD,
+      ACCOUNT_KEY,
+      'user_alice',
+      3,
+      pins
+    );
+    expect(
+      await code(
+        openRecord(FIRST_USE_PINS_RECORD, ACCOUNT_KEY, 'user_alice', names)
+      )
+    ).not.toBe('opened');
   });
 });

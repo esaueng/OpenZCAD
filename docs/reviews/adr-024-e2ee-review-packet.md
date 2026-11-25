@@ -448,9 +448,14 @@ the browser side first, then the Worker's defense in depth.
 - Trust on first use (amendment 2026-11-25): nothing below requires a
   verified contact any more. Verification is shown (`acceptor.verified`,
   `ownerVerified`, `peopleTrust`), and a person whose identity is not the
-  one this browser pinned (`InvitationPerson.keyChanged`, from
-  `ContactView.keyChanged` unless `keyChangeTrusted`) is never added,
-  signed for or published for (`keys-changed`, `owner-keys-changed`).
+  one pinned for them (`InvitationPerson.keyChanged`: this browser's
+  `ContactView.keyChanged` unless trusted, or the account's first-use pins)
+  is never added, signed for or published for (`keys-changed`,
+  `owner-keys-changed`), rechecked at Commit time. The account's first-use
+  pins (`apps/web/src/lib/e2ee/firstUsePins.ts`, `FIRST_USE_PINS_RECORD` in
+  `sealed-records.ts`, Worker `apps/web/worker/e2eeFirstUsePins.ts`,
+  migration 0069) are shared by its devices; an unreadable record makes
+  nobody a first use (`firstUse: 'unknown'`, owner confirmation).
 - Browser: `inviteToEncryptedProject` (email-only from the sharing dialog;
   a caller may still bind a verified contact's identity, version 3),
   `acceptEncryptedInvitation` (records intent only when the returned
@@ -901,8 +906,10 @@ and on the scenario and archive tests.
     acceptance of the exact owner-signed statement, or get a person whose
     pinned identity changed added, signed for or published for without the
     user's Review or Trust new keys (`InvitationPerson.keyChanged`,
-    `ContactPin.trustedKeys`)? Do the pins hold across tabs and across the
-    owner's other devices, whose first sight may differ?
+    `ContactPin.trustedKeys`, the sealed first-use pins and their merge in
+    `firstUsePins.ts`)? Do the pins hold across tabs and across the owner's
+    other devices, beyond withholding of the record from a device that
+    never saw it?
 
 ## 8. Finding intake
 

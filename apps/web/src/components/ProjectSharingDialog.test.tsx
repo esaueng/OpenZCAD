@@ -1471,6 +1471,23 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
         }
       },
       {
+        // Accepted by someone other than the address invited: a badge
+        // there would name the wrong person's keys.
+        record: encryptedRecord('inv_elsewhere', {
+          acceptedByUserId: toUserId('user_carol')
+        }),
+        state: 'needs-acceptance',
+        email: 'bob@example.com',
+        statement: null,
+        acceptor: {
+          userId: 'user_carol',
+          identityKeyHash: 'cc'.repeat(32),
+          code: '12345 67890',
+          email: 'carol@example.com',
+          verified: true
+        }
+      },
+      {
         record: encryptedRecord('inv_done', {
           acceptedByUserId: member,
           completedAt: '2026-10-24T01:00:00.000Z'
@@ -1509,7 +1526,12 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       screen.getByText(/^Waiting for them to accept again · Viewer · \d+d$/)
     ).toBeVisible();
     // Verification is shown, never waited on: Not verified, with Verify….
+    // Only beside the address the acceptor accepted as.
     expect(screen.getByText('Not verified')).toBeVisible();
+    expect(screen.queryByText('Verified')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Verify bob@example.com' })
+    ).not.toBeInTheDocument();
     // Completed ones are members now, not pending rows.
     expect(screen.queryByText(/^Added/)).not.toBeInTheDocument();
     // Share links are the encrypted ones (slice 5-10), never the plaintext
