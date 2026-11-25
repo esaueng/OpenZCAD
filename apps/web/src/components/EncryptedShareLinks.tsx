@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Plus } from 'lucide-react';
 import type { ProjectDocument } from '@openzcad/shared';
 import {
   normalizeShareLinkLabel,
@@ -25,9 +24,12 @@ import { shareLinkCreationProblem } from '../lib/projectShareLink';
  * and revokes links; each row says until when visitors accept it or that it
  * needs confirming, or that its revocation is still pending on the server
  * (revoking it again retries). Links stay readable only while the owner's identity key
- * has recently confirmed them (the share delegation): the section asks for
- * a passkey or the recovery key when there is none or it ends within a
- * week. After a removal it offers to reissue the links, and after an owner
+ * has recently confirmed them (the share delegation). L11 (D4): any action
+ * that opens the identity key renews it in passing in its last two weeks,
+ * meanwhile the section shows a quiet "Confirm by" chip, and Create link
+ * asks for a passkey or the recovery key only when there is none or it has
+ * expired. Create link makes a view-only link at once; Options… holds the
+ * rest. After a removal it offers to reissue the links, and after an owner
  * identity change it says the old links were turned off.
  */
 
@@ -68,8 +70,21 @@ export interface EncryptedShareLinksState {
     mode: EncryptedShareLinkMode;
   }[];
   readonly links: readonly EncryptedShareLinkRow[];
-  /** The owner's confirmation (share delegation) needs the identity key. */
+  /**
+   * The owner's confirmation (share delegation) is missing or expired, so
+   * links need the identity key before they open for visitors.
+   */
   readonly needsConfirmation: boolean;
+  /**
+   * L11 (D4): the confirmation still holds but ends soon, at this time; it
+   * is renewed in passing, or from the "Confirm by" chip. Null otherwise.
+   */
+  readonly confirmBy?: number | null;
+  /**
+   * When the owner's current confirmation ends (valid or expiring), so a
+   * dialog left open past it asks again; null without one.
+   */
+  readonly confirmedUntil?: number | null;
   /**
    * The account has a passkey, so Create link confirms with it straight
    * away; without one it asks for the recovery key.
@@ -234,7 +249,15 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         name: names[link.shareId] ?? null
       })),
       needsConfirmation:
-        view.isOwner && links.delegationNeedsRenewal(view.delegation),
+        view.isOwner && links.delegationNeedsConfirming(view.delegation),
+      confirmBy:
+        view.isOwner && view.delegation.status === 'expiring'
+          ? (view.delegation.delegation?.expiresAt ?? null)
+          : null,
+      confirmedUntil:
+        view.isOwner && !links.delegationNeedsConfirming(view.delegation)
+          ? (view.delegation.delegation?.expiresAt ?? null)
+          : null,
       passkey: hasPasskey(),
       retired: work?.retired ?? [],
       removalNotice: work?.notice ?? null,
@@ -433,6 +456,12 @@ const MODE_LABEL: Record<EncryptedShareLinkMode, string> = {
   frozen: 'No history'
 };
 
+const shortDate = (time: number) =>
+  new Date(time).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric'
+  });
+
 function expiryText(row: EncryptedShareLinkRow): string {
   if (row.status !== 'active' || row.expiresAt === null) {
     // A link without history is published only from its own model: with
@@ -441,10 +470,7 @@ function expiryText(row: EncryptedShareLinkRow): string {
       ? 'Needs an update'
       : STATUS_LABEL[row.status];
   }
-  return `Active until ${new Date(row.expiresAt).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric'
-  })}`;
+  return `Active until ${shortDate(row.expiresAt)}`;
 }
 
 /**
@@ -513,7 +539,8 @@ export function EncryptedShareLinks({
   const [created, setCreated] = useState<string | null>(null);
   // The new link's name in the output: the owner's, or its mode's.
   const [createdName, setCreatedName] = useState('View only link');
-  // The new-link card is open (it always is while there are no links).
+  // The new link's options are open (Options…); closed, Create link makes
+  // a view-only link at once (L11).
   const [composing, setComposing] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // L08: whether each open `frozen` link shares the model's parameters;
@@ -589,12 +616,14 @@ export function EncryptedShareLinks({
   // Confirmed (here, or partly before a later step failed): the form and
   // its Cancel go away, so nothing may stay waiting on them.
   const needsConfirmation = state?.needsConfirmation;
+  const confirmBy = state?.confirmBy ?? null;
+  const renewable = needsConfirmation === true || confirmBy !== null;
   useEffect(() => {
-    if (needsConfirmation !== false) return;
+    if (needsConfirmation !== false || confirmBy !== null) return;
     setConfirming(false);
     setCreateAfterConfirm(false);
     setRecoveryKey('');
-  }, [needsConfirmation]);
+  }, [needsConfirmation, confirmBy]);
 
   useEffect(
     () =>
@@ -732,14 +761,20 @@ export function EncryptedShareLinks({
     setTransientRemoval((current) => (current === transient ? null : current));
   };
   const disabled = busy !== null || state === null;
-  // The form shows only while sharing needs confirming, so only then may
-  // it hold the other controls: a refresh that finds the confirmation
-  // (in any order with the action that made it) frees them.
-  const awaitingConfirmation = confirming && !!state?.needsConfirmation;
+  // The form shows only while sharing needs or can take a confirmation,
+  // so only then may it hold the other controls: a refresh that finds the
+  // confirmation (in any order with the action that made it) frees them.
+  const awaitingConfirmation = confirming && renewable;
+  const showConfirmNotice =
+    !awaitingConfirmation && links.length > 0 && needsConfirmation === true;
+  const showConfirmBy =
+    !awaitingConfirmation &&
+    links.length > 0 &&
+    needsConfirmation === false &&
+    confirmBy !== null;
   const showRemoval =
     Boolean(transient || state?.removalNotice) && removalLinks.length > 0;
   const showRetired = !!state && state.retired.length > 0;
-  const showComposer = composing || (links.length === 0 && !created);
 
   // The Links tab's count, and a mark while a link needs the owner.
   const linkCount = state === null ? null : links.length;
@@ -758,12 +793,31 @@ export function EncryptedShareLinks({
   }, [onSummary, linkCount, attention, error]);
 
   const requestCreate = (draft: ShareLinkDraft) => {
+    // A confirmation that ended while the dialog stayed open counts as
+    // expired now, not as the list last said.
+    const lapsed =
+      !!state &&
+      !state.needsConfirmation &&
+      state.confirmedUntil != null &&
+      Date.now() >= state.confirmedUntil;
+    if (lapsed)
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              needsConfirmation: true,
+              confirmBy: null,
+              confirmedUntil: null
+            }
+          : current
+      );
     // One action (design review I79): Create link asks for the
     // confirmation sharing needs, then makes the link.
-    if (!state?.needsConfirmation) {
+    if (!state?.needsConfirmation && !lapsed) {
       void run('create', () => createLink(draft));
       return;
     }
+    if (!state) return;
     pendingDraft.current = draft;
     setCreateAfterConfirm(true);
     if (!state.passkey) {
@@ -782,6 +836,23 @@ export function EncryptedShareLinks({
       setCreateAfterConfirm(false);
       pendingDraft.current = null;
       await createLink(draft);
+    });
+  };
+
+  // The "Confirm by" chip: a passkey prompt at once where the account has
+  // one (cancelled or refused, the form offers the recovery key too).
+  const confirmEarly = () => {
+    if (!state?.passkey) {
+      setConfirming(true);
+      return;
+    }
+    void run('confirm', async () => {
+      try {
+        await client.confirm(projectId, 'passkey');
+      } catch (caught) {
+        setConfirming(true);
+        throw caught;
+      }
     });
   };
 
@@ -813,92 +884,106 @@ export function EncryptedShareLinks({
         </p>
       ) : null}
 
-      {state?.needsConfirmation ? (
-        confirming ? (
-          <div
-            className="sharing-share-confirm"
-            role="group"
-            aria-label="Confirm sharing"
-          >
-            <p className="sharing-tag">
-              {createAfterConfirm
-                ? 'To create the link, confirm with your passkey or recovery key.'
-                : 'Confirm with your passkey or recovery key.'}{' '}
-              Visitors trust a link only while you have confirmed it in the last
-              30 days.
-            </p>
-            <input
-              className="sharing-share-url"
-              type="text"
-              aria-label="Recovery key"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="XXXX-XXXX-…"
-              value={recoveryKey}
-              onChange={(event) => setRecoveryKey(event.target.value)}
-            />
-            <div className="sharing-share-actions">
-              <button
-                type="button"
-                className="primary"
-                disabled={disabled || recoveryKey.trim() === ''}
-                onClick={() =>
-                  void run('confirm', async () => {
-                    await client.confirm(projectId, {
-                      recoveryKey: recoveryKey.trim()
-                    });
-                    setRecoveryKey('');
-                    setConfirming(false);
-                    await finishConfirm();
-                  })
-                }
-              >
-                Confirm with recovery key
-              </button>
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() =>
-                  void run('confirm', async () => {
-                    await client.confirm(projectId, 'passkey');
-                    setConfirming(false);
-                    await finishConfirm();
-                  })
-                }
-              >
-                Confirm with passkey
-              </button>
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => {
-                  setConfirming(false);
-                  setCreateAfterConfirm(false);
-                  pendingDraft.current = null;
-                  setRecoveryKey('');
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : links.length > 0 ? (
-          // Without links, Create link asks for this itself; only existing
-          // links need a separate nudge to keep opening.
-          <div className="sharing-share-notice" role="status">
-            <span className="sharing-tag">
-              Your links need your confirmation to keep opening for visitors.
-            </span>
+      {awaitingConfirmation ? (
+        <div
+          className="sharing-share-confirm"
+          role="group"
+          aria-label="Confirm sharing"
+        >
+          <p className="sharing-tag">
+            {createAfterConfirm
+              ? 'To create the link, confirm with your passkey or recovery key.'
+              : 'Confirm with your passkey or recovery key.'}{' '}
+            Visitors trust a link only while you have confirmed it in the last
+            30 days.
+          </p>
+          <input
+            className="sharing-share-url"
+            type="text"
+            aria-label="Recovery key"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="XXXX-XXXX-…"
+            value={recoveryKey}
+            onChange={(event) => setRecoveryKey(event.target.value)}
+          />
+          <div className="sharing-share-actions">
             <button
               type="button"
-              className="sharing-row-action"
-              disabled={disabled}
-              onClick={() => setConfirming(true)}
+              className="primary"
+              disabled={disabled || recoveryKey.trim() === ''}
+              onClick={() =>
+                void run('confirm', async () => {
+                  await client.confirm(projectId, {
+                    recoveryKey: recoveryKey.trim()
+                  });
+                  setRecoveryKey('');
+                  setConfirming(false);
+                  await finishConfirm();
+                })
+              }
             >
-              Confirm sharing…
+              Confirm with recovery key
+            </button>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() =>
+                void run('confirm', async () => {
+                  await client.confirm(projectId, 'passkey');
+                  setConfirming(false);
+                  await finishConfirm();
+                })
+              }
+            >
+              Confirm with passkey
+            </button>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => {
+                setConfirming(false);
+                setCreateAfterConfirm(false);
+                pendingDraft.current = null;
+                setRecoveryKey('');
+              }}
+            >
+              Cancel
             </button>
           </div>
-        ) : null
+        </div>
+      ) : null}
+
+      {/* Without links, Create link asks for this itself; only existing
+          links need a separate nudge to keep opening. */}
+      {showConfirmNotice ? (
+        <div className="sharing-share-notice" role="status">
+          <span className="sharing-tag">
+            Your links need your confirmation to keep opening for visitors.
+          </span>
+          <button
+            type="button"
+            className="sharing-row-action"
+            disabled={disabled}
+            onClick={() => setConfirming(true)}
+          >
+            Confirm sharing…
+          </button>
+        </div>
+      ) : null}
+
+      {/* L11 (D4): still trusted, and renewed in passing by any action
+          that opens the identity key; a quiet chip until it expires. */}
+      {showConfirmBy && confirmBy !== null ? (
+        <button
+          type="button"
+          className="share-links-confirm-by"
+          disabled={disabled}
+          title={`Visitors trust your links until ${shortDate(confirmBy)}. Confirm to keep them opening for another 30 days.`}
+          onClick={confirmEarly}
+        >
+          Confirm by {shortDate(confirmBy)}
+        </button>
       ) : null}
 
       {showRemoval ? (
@@ -976,31 +1061,18 @@ export function EncryptedShareLinks({
         </div>
       ) : null}
 
-      {showComposer ? (
-        <ShareLinkComposer
-          canExcludeHistory={Boolean(onFreezeModel)}
-          nameable={Boolean(client.rename)}
-          nameMaxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
-          disabled={busy !== null || awaitingConfirmation}
-          createDisabled={state === null}
-          commentsHint="Visitors see only this link’s comments."
-          footnote="End-to-end encrypted: the key is in the link."
-          {...(links.length > 0 || created
-            ? { onCancel: () => setComposing(false) }
-            : {})}
-          onCreate={requestCreate}
-        />
-      ) : (
-        <button
-          type="button"
-          className="secondary share-links-new"
-          disabled={disabled}
-          onClick={() => setComposing(true)}
-        >
-          <Plus size={13} aria-hidden="true" />
-          New link
-        </button>
-      )}
+      <ShareLinkComposer
+        canExcludeHistory={Boolean(onFreezeModel)}
+        expanded={composing}
+        onExpandedChange={setComposing}
+        nameable={Boolean(client.rename)}
+        nameMaxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
+        disabled={busy !== null || awaitingConfirmation}
+        createDisabled={state === null}
+        commentsHint="Visitors see only this link’s comments."
+        footnote="End-to-end encrypted: the key is in the link."
+        onCreate={requestCreate}
+      />
 
       {links.length > 0 ? (
         <ul className="share-link-cards" aria-label="Active share links">

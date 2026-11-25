@@ -164,8 +164,12 @@ const DAY_MS = 86_400_000;
 export const SHARE_AUTHORITY_LIFETIME_MS = 7 * DAY_MS;
 /** A delegation's lifetime: the ADR's maximum, 30 days. */
 export const SHARE_DELEGATION_LIFETIME_MS = 30 * DAY_MS;
-/** The owner's browser asks to renew the delegation in its last week. */
-export const SHARE_DELEGATION_RENEWAL_MS = 7 * DAY_MS;
+/**
+ * L11 (D4): in its last two weeks any action the identity key authorizes
+ * renews the delegation in passing, and the Links tab says when to confirm
+ * by. Create link asks only once it has expired.
+ */
+export const SHARE_DELEGATION_RENEWAL_MS = 14 * DAY_MS;
 /** A statement is renewed while online with two days or less left (judgment). */
 export const SHARE_AUTHORITY_RENEWAL_MS = 2 * DAY_MS;
 const SCHEMA_VERSION = 1;
@@ -387,11 +391,24 @@ function workLock<T>(
   });
 }
 
-/** What the delegation flows need: no store, so a removal can renew it. */
-export type ShareDelegationContext = Pick<
-  ShareLinksContext,
-  'groups' | 'api' | 'now'
->;
+/**
+ * What the delegation flows need: no store and no MLS sessions, so a
+ * removal, or any action that opened the identity key, can renew it.
+ */
+export interface ShareDelegationContext {
+  readonly groups: {
+    readonly account: Pick<
+      ProjectGroupContext['account'],
+      'list' | 'generation'
+    >;
+    readonly device: Pick<
+      NonNullable<ProjectGroupContext['device']>,
+      'deviceId'
+    > | null;
+  };
+  readonly api: E2eeShareLinksApi;
+  readonly now?: () => number;
+}
 
 function requireDevice(ctx: ShareLinksContext) {
   const device = ctx.groups.device;
@@ -455,7 +472,7 @@ export type DelegationStatus =
   /** None stored, or not one this browser can verify. */
   | 'missing'
   | 'expired'
-  /** In its last week: renew. */
+  /** In its last two weeks: renewed in passing, and still trusted. */
   | 'expiring'
   /** It names other devices than the owner's certified ones now. */
   | 'stale-devices'
@@ -469,13 +486,21 @@ export interface ShareDelegationState {
   readonly namesThisDevice: boolean;
 }
 
-/** Whether a delegation needs the identity key again. */
+/** Whether a delegation is due for the identity key again (in passing). */
 export const delegationNeedsRenewal = (state: ShareDelegationState) =>
   state.status !== 'valid';
 
+/**
+ * Whether sharing must ask for the identity key before a link is created
+ * (L11 D4): none, expired, or naming other devices than the certified
+ * ones. One that is only expiring still works and is renewed in passing.
+ */
+export const delegationNeedsConfirming = (state: ShareDelegationState) =>
+  state.status !== 'valid' && state.status !== 'expiring';
+
 /** Checks a delegation record against this account's identity and devices. */
 export async function readDelegation(
-  ctx: Pick<ShareLinksContext, 'groups' | 'now'>,
+  ctx: Pick<ShareDelegationContext, 'groups' | 'now'>,
   record: E2eeShareDelegationRecord | null
 ): Promise<ShareDelegationState> {
   const list = ctx.groups.account.list;
@@ -523,7 +548,7 @@ export async function readDelegation(
       ? 'expired'
       : !sameDevices
         ? 'stale-devices'
-        : delegation.expiresAt - now <= SHARE_DELEGATION_RENEWAL_MS
+        : delegation.expiresAt - now < SHARE_DELEGATION_RENEWAL_MS
           ? 'expiring'
           : 'valid';
   return { status, delegation, record, namesThisDevice };
@@ -563,6 +588,22 @@ export async function renewShareDelegation(
     signature: b64(signed.signature)
   });
   return readDelegation(ctx, delegation);
+}
+
+/**
+ * L11 (D4): renews the delegation with an identity key some other action
+ * opened, when the account has one (it has confirmed links) and it is due:
+ * in its last two weeks, expired, or naming other devices. Returns the new
+ * state, or null when nothing was signed. The caller treats a failure as
+ * best effort.
+ */
+export async function renewShareDelegationInPassing(
+  ctx: ShareDelegationContext,
+  sign: (value: ShareDelegation) => Promise<SignedStatement>
+): Promise<ShareDelegationState | null> {
+  const state = await shareDelegationState(ctx);
+  if (!state.record || !delegationNeedsRenewal(state)) return null;
+  return renewShareDelegation(ctx, sign);
 }
 
 /** A `sign` for `renewShareDelegation` from an open identity key. */
