@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { admitDevelopmentE2eeWrite } from '../apps/web/worker/e2eeWriteAuthorization';
 import type { DatabaseSync } from 'node:sqlite';
 import {
@@ -55,6 +55,7 @@ import {
   openAccountKeyChain,
   parseScanCode,
   removeDevice,
+  removeDevices,
   revokeReadOnlyDevices,
   replaceRecoveryKey,
   requestApproval,
@@ -210,7 +211,8 @@ function fetcherFor(srv: Server, userId: string) {
       srv.enabled
     );
     if (!srv.tamper || !response.ok) return response;
-    const body = srv.tamper(path, await response.json());
+    // By route: the account read carries this browser's device id.
+    const body = srv.tamper(path.split('?')[0]!, await response.json());
     return new Response(JSON.stringify(body), {
       status: response.status,
       headers: response.headers
@@ -1058,6 +1060,209 @@ describe('removing a device', () => {
       removeDevice(laptop, account, account.device!.deviceId, recovery.secret),
       'invalid-request'
     );
+  });
+});
+
+describe('removing several devices at once (L11 plan §6)', () => {
+  it('revokes them all in one entry, with one rotation, and wraps nothing new to them', async () => {
+    const srv = server();
+    const { recovery, laptop, account } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const tablet = await enrolled(srv, recovery.secret, 'Tablet');
+    const desk = await enrolled(srv, recovery.secret, 'Desk');
+    const before = ready(await loadEncryption(laptop));
+    const gone = [
+      phone.account.device!.deviceId,
+      tablet.account.device!.deviceId
+    ];
+    const appends: string[] = [];
+    srv.beforeWrite = async (sql) => {
+      if (sql.includes('INSERT INTO e2ee_device_list_entries'))
+        appends.push(sql);
+    };
+    const after = ready(
+      await removeDevices(laptop, before, gone, recovery.secret)
+    );
+    srv.beforeWrite = undefined;
+    // One entry, one rotation of both keys.
+    expect(appends).toHaveLength(1);
+    expect(after.list.head.sequence).toBe(before.list.head.sequence + 1);
+    expect(after.list.head.revoked).toEqual(
+      gone
+        .map((id) => ({
+          kind: 'device',
+          id,
+          replacedBy: before.device!.deviceId
+        }))
+        .sort((a, b) => (a.id < b.id ? -1 : 1))
+    );
+    expect(after.list.devices.map((d) => d.label).sort()).toEqual([
+      'Desk',
+      'Laptop'
+    ]);
+    expect(after.list.head.encryptionKey).not.toEqual(
+      before.list.head.encryptionKey
+    );
+    expect(after.list.head.accountKeyCommitment).not.toEqual(
+      account.list.head.accountKeyCommitment
+    );
+    // The new account key is wrapped to the survivors only.
+    for (const id of gone) {
+      expect(
+        count(
+          srv.db,
+          'SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE target_id = ?',
+          id
+        )
+      ).toBe(0);
+    }
+    expect(
+      after.wraps
+        .filter((wrap) => wrap.purpose === 'account-key')
+        .map((wrap) => wrap.targetId)
+    ).not.toEqual(expect.arrayContaining([gone[0]]));
+    for (const removed of [phone, tablet]) {
+      lockAccount(USER);
+      const view = ready(await loadEncryption(removed.ctx));
+      expect(view.deviceStatus).toBe('removed');
+      expect(view.unlocked).toBe(false);
+    }
+    // The device left out keeps working after the one rotation.
+    lockAccount(USER);
+    expect(ready(await loadEncryption(desk.ctx)).unlocked).toBe(true);
+  });
+
+  it('refuses this device, an empty or repeated set, and an unlisted device', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const account = ready(await loadEncryption(laptop));
+    const phoneId = phone.account.device!.deviceId;
+    for (const ids of [
+      [phoneId, account.device!.deviceId],
+      [],
+      [phoneId, phoneId],
+      [phoneId, 'dev_unknown']
+    ]) {
+      await flowRefusal(
+        removeDevices(laptop, account, ids, recovery.secret),
+        'invalid-request'
+      );
+    }
+    // Nothing was written.
+    expect(ready(await loadEncryption(laptop)).list.head.sequence).toBe(
+      account.list.head.sequence
+    );
+  });
+});
+
+describe('device last used (migration 0069)', () => {
+  const rows = (srv: Server) =>
+    srv.db
+      .prepare(
+        'SELECT device_id, first_day, last_day FROM e2ee_device_last_used ORDER BY device_id'
+      )
+      .all() as { device_id: string; first_day: string; last_day: string }[];
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('records the day a device reads its keys, at most once a day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-25T08:00:00Z'));
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const laptopId = ready(await loadEncryption(laptop)).device!.deviceId;
+    expect(rows(srv)).toEqual([
+      { device_id: laptopId, first_day: '2026-11-25', last_day: '2026-11-25' }
+    ]);
+    const writes: string[] = [];
+    srv.beforeWrite = async (sql) => {
+      if (sql.includes('INSERT INTO e2ee_device_last_used')) writes.push(sql);
+    };
+    // Again the same day: read, not written.
+    vi.setSystemTime(new Date('2026-11-25T23:59:00Z'));
+    const again = ready(await loadEncryption(laptop));
+    expect(writes).toEqual([]);
+    expect(again.lastUsed).toEqual({
+      since: '2026-11-25',
+      devices: [{ deviceId: laptopId, day: '2026-11-25' }]
+    });
+    // The next day: written once, the start kept.
+    vi.setSystemTime(new Date('2026-11-26T00:01:00Z'));
+    await loadEncryption(laptop);
+    await loadEncryption(laptop);
+    expect(writes).toHaveLength(1);
+    expect(rows(srv)).toEqual([
+      { device_id: laptopId, first_day: '2026-11-25', last_day: '2026-11-26' }
+    ]);
+    // Another device records its own day.
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    await loadEncryption(phone.ctx);
+    expect(
+      rows(srv)
+        .map((row) => row.device_id)
+        .sort()
+    ).toEqual([laptopId, phone.account.device!.deviceId].sort());
+  });
+
+  it('records nothing for a device the list does not wrap to, and drops removed ones', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-25T08:00:00Z'));
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const phoneId = phone.account.device!.deviceId;
+    await loadEncryption(phone.ctx);
+    const api = createE2eeApi(fetcherFor(srv, USER));
+    // An id the device list never named, and a malformed one.
+    await api.account('dev_planted');
+    await api.account('bad id');
+    expect(rows(srv).map((row) => row.device_id)).not.toContain('dev_planted');
+    expect(rows(srv).some((row) => row.device_id === phoneId)).toBe(true);
+
+    await removeDevice(
+      laptop,
+      ready(await loadEncryption(laptop)),
+      phoneId,
+      recovery.secret
+    );
+    // The removed device's day goes with the next day's write.
+    vi.setSystemTime(new Date('2026-11-26T08:00:00Z'));
+    await loadEncryption(laptop);
+    expect(rows(srv).map((row) => row.device_id)).toEqual([
+      ready(await loadEncryption(laptop)).device!.deviceId
+    ]);
+    // And the removed device cannot plant one for itself.
+    lockAccount(USER);
+    await loadEncryption(phone.ctx);
+    expect(rows(srv).map((row) => row.device_id)).not.toContain(phoneId);
+  });
+
+  it('never fails the account read, and writes nothing during erasure', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-25T08:00:00Z'));
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    srv.db.exec('DELETE FROM e2ee_device_last_used');
+    srv.db
+      .prepare(
+        "INSERT INTO account_erasure_requests (user_id, scope, started_at, updated_at) VALUES (?, 'profile', 1, 1)"
+      )
+      .run(USER);
+    const view = ready(await loadEncryption(laptop));
+    expect(view.unlocked).toBe(true);
+    expect(rows(srv)).toEqual([]);
+  });
+
+  it('reports no days from an account read without the migration', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    srv.db.exec('DROP TABLE e2ee_device_last_used');
+    const view = ready(await loadEncryption(laptop));
+    expect(view.unlocked).toBe(true);
+    expect(view.lastUsed).toBeNull();
   });
 });
 

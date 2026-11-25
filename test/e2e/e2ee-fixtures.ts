@@ -569,6 +569,22 @@ export async function openEncryptionSettings(page: Page) {
 }
 
 /**
+ * Settings › Encryption's Refresh, folded under Advanced since the L11 plan
+ * of 2026-11-25 (§6): opens Advanced first when it is closed.
+ */
+export async function refreshEncryption(settings: Locator): Promise<void> {
+  const refresh = settings
+    .locator('.setting-row')
+    .filter({ hasText: 'Reload encryption keys' })
+    .getByRole('button', { name: 'Refresh', exact: true });
+  if (!(await refresh.isVisible()))
+    await settings
+      .getByText('Advanced encryption settings', { exact: true })
+      .click();
+  await refresh.click();
+}
+
+/**
  * Runs Settings › Encryption's setup dialog from its first step to the end
  * (L11 plan §4.2): the loss warning, the recovery key saved and typed back,
  * then the optional passkey and projects steps. Returns the recovery key.

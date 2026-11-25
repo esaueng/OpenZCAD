@@ -12,7 +12,7 @@ import {
 
 /**
  * ADR-024 Phase 5, slice 5-1: two accounts that share a project verify each
- * other in Settings › Encryption › Contacts by comparing digit groups, each
+ * other in Settings › Encryption › People by comparing digit groups, each
  * signing the verification into their own contacts list with the recovery
  * key, over the real Worker routes.
  */
@@ -78,7 +78,11 @@ test('two accounts verify each other by comparing digit groups', async ({
   const bobSettings = await openEncryptionSettings(bob);
   for (const settings of [aliceSettings, bobSettings]) {
     await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
-    await expect(settings.getByText('0 verified')).toBeVisible();
+    // People (L11 plan §6): one person, not verified yet.
+    await expect(settings.getByText('1 · 0 verified')).toBeVisible();
+    await expect(
+      settings.getByText('Not verified', { exact: true })
+    ).toBeVisible();
   }
 
   // Each opens the other; nobody is verified yet, only seen.
@@ -91,27 +95,29 @@ test('two accounts verify each other by comparing digit groups', async ({
   const code = (settings: typeof aliceSettings, label: string) =>
     settings.getByLabel(label, { exact: true });
   const digits = /^(\d{5} ){7}\d{5}$/;
-  // Bob reads his code; Alice's screen shows the same digits for him.
+  // Bob reads his code from the verify panel (it is no longer in the
+  // list); Alice's screen shows the same digits for him.
   const bobReads = (await code(
     bobSettings,
-    'Your contact code'
+    'Your code to read'
   ).textContent())!;
   expect(bobReads).toMatch(digits);
   await expect(code(aliceSettings, `${BOB_EMAIL}’s contact code`)).toHaveText(
     bobReads
   );
-  await expect(code(bobSettings, 'Your code to read')).toHaveText(bobReads);
+  // Advanced shows the same code.
+  await bobSettings.getByText('Advanced encryption settings').click();
+  await expect(code(bobSettings, 'Your contact code')).toHaveText(bobReads);
   // Alice reads hers back in the same call.
   const aliceReads = (await code(
     aliceSettings,
-    'Your contact code'
+    'Your code to read'
   ).textContent())!;
   expect(aliceReads).toMatch(digits);
   expect(aliceReads).not.toBe(bobReads);
   await expect(code(bobSettings, `${ALICE_EMAIL}’s contact code`)).toHaveText(
     aliceReads
   );
-  await expect(code(aliceSettings, 'Your code to read')).toHaveText(aliceReads);
 
   // Both codes match: each signs the verification with the recovery key.
   for (const [settings, name, recoveryKey] of [
@@ -127,7 +133,7 @@ test('two accounts verify each other by comparing digit groups', async ({
     await expect(
       settings.getByRole('button', { name: 'Stop trusting' })
     ).toBeVisible();
-    await expect(settings.getByText('1 verified')).toBeVisible();
+    await expect(settings.getByText('1 · 1 verified')).toBeVisible();
   }
   expect(
     server.db
@@ -143,7 +149,7 @@ test('two accounts verify each other by comparing digit groups', async ({
   // A reload keeps the verification: it comes from the signed list.
   await alice.reload();
   const reloaded = await openEncryptionSettings(alice);
-  await expect(reloaded.getByText('1 verified')).toBeVisible();
+  await expect(reloaded.getByText('1 · 1 verified')).toBeVisible();
   await expect(reloaded.getByText('Verified', { exact: true })).toBeVisible();
 
   await aliceContext.close();

@@ -307,10 +307,14 @@ for (const cachedNames of [false, true])
           }
         })
       );
-      await page.route('**/api/e2ee/account', async (route) => {
-        await encryption.promise;
-        await route.fulfill({ json: { current: null, previous: [] } });
-      });
+      await page.route(
+        // With or without this browser's ?device= id.
+        (url) => url.pathname === '/api/e2ee/account',
+        async (route) => {
+          await encryption.promise;
+          await route.fulfill({ json: { current: null, previous: [] } });
+        }
+      );
       try {
         await page.goto('/', { waitUntil: 'domcontentloaded' });
         await expect(page.locator('.start-tile-project')).toHaveCount(150);

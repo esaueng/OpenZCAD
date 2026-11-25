@@ -24,7 +24,8 @@ vi.mock('../lib/e2ee/contacts', async (importOriginal) => ({
   })
 }));
 
-const { EncryptionContacts } = await import('./EncryptionContacts');
+const { EncryptionContacts, OwnContactCode } =
+  await import('./EncryptionContacts');
 
 const account = {
   userId: 'user_alice',
@@ -95,9 +96,10 @@ describe('EncryptionContacts', () => {
         onConfirmFromDevice={confirm}
       />
     );
-    expect(await screen.findByText('Seen')).toBeTruthy();
+    // Seen elsewhere reads as Not verified here (L11 plan §6, People).
+    expect(await screen.findByText('Not verified')).toBeTruthy();
     expect(screen.queryByText('Verified')).toBeNull();
-    expect(screen.getByText('0 verified')).toBeTruthy();
+    expect(screen.getByText('1 · 0 verified')).toBeTruthy();
     expect(
       screen.getByText(/No other device of yours has confirmed/)
     ).toBeTruthy();
@@ -117,7 +119,9 @@ describe('EncryptionContacts', () => {
       />
     );
     expect(await screen.findByText('Verified')).toBeTruthy();
-    await waitFor(() => expect(screen.getByText('1 verified')).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText('1 · 1 verified')).toBeTruthy()
+    );
     expect(screen.queryByText(/No other device of yours/)).toBeNull();
   });
 
@@ -179,5 +183,44 @@ describe('EncryptionContacts', () => {
     expect(
       screen.queryByRole('button', { name: 'Seal contacts list' })
     ).toBeNull();
+  });
+
+  it('lists People as Verified or Not verified, without your own code (L11 plan §6)', async () => {
+    loadContacts.mockResolvedValue({
+      ...book(true),
+      contacts: [
+        { userId: 'user_bob', email: 'bob@example.com', standing: 'verified' },
+        {
+          userId: 'user_carol',
+          email: 'carol@example.com',
+          standing: 'not-checked'
+        },
+        { userId: 'user_dan', email: 'dan@example.com', standing: 'seen' }
+      ]
+    });
+    render(<EncryptionContacts keys={keys} account={account} />);
+    expect(await screen.findByRole('heading', { name: 'People' })).toBeTruthy();
+    expect(screen.getByText('3 · 1 verified')).toBeTruthy();
+    expect(screen.getAllByText('Verified')).toHaveLength(1);
+    expect(screen.getAllByText('Not verified')).toHaveLength(2);
+    expect(
+      screen.getByRole('button', { name: 'Verify carol@example.com' })
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Check bob@example.com' })
+    ).toBeTruthy();
+    // Your own code is in the verify panel and under Advanced, not here.
+    expect(screen.queryByText('Your contact code')).toBeNull();
+  });
+
+  it('shows your own contact code on its own, for Advanced', async () => {
+    render(<OwnContactCode account={account} />);
+    expect(
+      (await screen.findByLabelText('Your contact code')).textContent
+    ).toBe('00000 00000 00000 00000 00000 00000 00000 00000');
+    fireEvent.click(screen.getByRole('button', { name: 'Show QR code' }));
+    expect(
+      screen.getByRole('img', { name: 'Your contact code as a QR code' })
+    ).toBeTruthy();
   });
 });

@@ -69,6 +69,12 @@ export async function exportAccountData(
       [session.userId]
     ],
     [
+      // The day each device last read its keys (migration 0069).
+      'e2ee_device_last_used',
+      'SELECT device_id, first_day, last_day FROM e2ee_device_last_used WHERE user_id = ?',
+      [session.userId]
+    ],
+    [
       'user_ai_credentials',
       'SELECT token_hint, updated_at, last_validated_at FROM user_ai_credentials WHERE user_id = ?',
       [session.userId]

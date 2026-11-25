@@ -41,6 +41,7 @@ import {
 } from './auth';
 import { libraryFolderErasureStatements } from './libraryFolderSets';
 import { shareLinkNameErasureStatements } from './shareLinkNames';
+import { deviceLastUsedErasureStatements } from './e2eeDeviceLastUsed';
 import {
   isAccountErasureReady,
   isProjectObjectStorageReady
@@ -755,6 +756,8 @@ export async function deleteAccountData(
         ...(await libraryFolderErasureStatements(db, session.userId)),
         // Sealed share link names are profile data too (migration 0067).
         ...(await shareLinkNameErasureStatements(db, session.userId)),
+        // Devices' last-used days (migration 0069), when the table exists.
+        ...(await deviceLastUsedErasureStatements(db, session.userId)),
         // L08 encrypted comment logs this account wrote (migration 0060),
         // when the table exists.
         ...(input.scope === 'all' &&

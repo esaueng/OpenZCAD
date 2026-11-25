@@ -9,6 +9,7 @@ import {
   E2E_USER_ID,
   installE2eeServer,
   openEncryptionSettings,
+  refreshEncryption,
   seedE2eeDevice
 } from './e2ee-fixtures';
 
@@ -51,7 +52,7 @@ test('a delayed tab cannot overwrite the device-list pin advanced by another tab
       return valid;
     };
   });
-  await settings.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await refreshEncryption(settings);
   await expect
     .poll(() =>
       page.evaluate(
@@ -72,9 +73,7 @@ test('a delayed tab cannot overwrite the device-list pin advanced by another tab
     await parseRecoveryKey(seeded.recoveryKey),
     'Another browser'
   );
-  await otherSettings
-    .getByRole('button', { name: 'Refresh', exact: true })
-    .click();
+  await refreshEncryption(otherSettings);
   await expect(otherSettings.getByText('2 devices', { exact: true })).toBeVisible();
 
   const readSequence = () =>
@@ -144,9 +143,7 @@ test('the saved recovery key restores a certified browser after its replacement 
   );
   // The first tab still holds its earlier AccountView; the other tab moves
   // the shared pin forward before the explicit replacement starts.
-  await otherSettings
-    .getByRole('button', { name: 'Refresh', exact: true })
-    .click();
+  await refreshEncryption(otherSettings);
   await expect(otherSettings.getByText('2 devices', { exact: true })).toBeVisible();
   await settings.getByRole('button', { name: 'Replace…', exact: true }).click();
   const newKey = (await settings
@@ -169,7 +166,7 @@ test('the saved recovery key restores a certified browser after its replacement 
   await expect(
     settings.getByRole('dialog', { name: 'Replace recovery key' })
   ).toHaveCount(0);
-  await settings.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await refreshEncryption(settings);
   await expect(settings.getByRole('alert')).toContainText(
     'replaced on another device'
   );

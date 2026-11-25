@@ -1,6 +1,8 @@
 import { expect, stubApi, test } from './openzcad-fixtures';
+import { loadEncryption } from '../../apps/web/src/lib/e2ee/accountKeys';
 import {
   createE2eeServer,
+  E2E_USER_ID,
   installE2eeServer,
   finishSetupDialog,
   openEncryptionSettings,
@@ -336,6 +338,78 @@ test('removes another device with the recovery key and rotates the keys', async 
       .prepare('SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
       .get()
   ).toEqual({ n: 3 });
+});
+
+test('removes every device unused for 30 days with one rotation (L11 plan §6)', async ({
+  page,
+  context
+}) => {
+  const server = createE2eeServer();
+  await stubApi(page);
+  await installE2eeServer(context, server);
+  await page.goto('/');
+  const seeded = await seedE2eeDevice(page, server, {
+    label: 'This browser',
+    otherDevices: ['Old laptop', 'Old phone', 'Office PC']
+  });
+  // Days as the Worker recorded them: two devices last read their keys
+  // three months ago; recording itself started then too.
+  const listed = await loadEncryption(server.nodeDevice());
+  if (listed.kind !== 'ready') throw new Error('seed failed');
+  const idOf = (label: string) =>
+    listed.account.list.devices.find((d) => d.label === label)!.deviceId;
+  const old = new Date(Date.now() - 90 * 86_400_000).toISOString().slice(0, 10);
+  server.db
+    .prepare('UPDATE e2ee_device_last_used SET first_day = ?')
+    .run(old);
+  for (const label of ['Old laptop', 'Old phone'])
+    server.db
+      .prepare(
+        `INSERT INTO e2ee_device_last_used (user_id, device_id, first_day, last_day)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (user_id, device_id) DO UPDATE SET last_day = excluded.last_day`
+      )
+      .run(E2E_USER_ID, idOf(label), old, old);
+  const entries = () =>
+    (
+      server.db
+        .prepare('SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+        .get() as { n: number }
+    ).n;
+  const before = entries();
+
+  const settings = await openEncryptionSettings(page);
+  await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
+  // Four devices: three listed, this one first, the rest behind Show all.
+  await expect(settings.getByText('4 devices', { exact: true })).toBeVisible();
+  await expect(settings.getByText('In use now', { exact: false })).toBeVisible();
+  await expect(
+    settings.getByRole('button', { name: 'Show all 4' })
+  ).toBeVisible();
+  await settings
+    .getByRole('button', { name: 'Remove them', exact: true })
+    .click();
+  const dialog = settings.getByRole('dialog', {
+    name: 'Remove 2 unused devices'
+  });
+  await expect(dialog).toContainText('Old laptop');
+  await expect(dialog).toContainText('Old phone');
+  await dialog.getByLabel('Recovery key', { exact: true }).fill(seeded.recoveryKey);
+  await dialog.getByRole('button', { name: 'Remove devices' }).click();
+  await expect(settings.getByText('2 devices', { exact: true })).toBeVisible();
+  await expect(settings.getByText('Old laptop')).toHaveCount(0);
+  await expect(settings.getByText('Old phone')).toHaveCount(0);
+  await expect(
+    settings.getByRole('button', { name: 'Remove them', exact: true })
+  ).toHaveCount(0);
+  // One device-list entry revoked both, and neither keeps a wrap.
+  expect(entries()).toBe(before + 1);
+  for (const label of ['Old laptop', 'Old phone'])
+    expect(
+      server.db
+        .prepare('SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE target_id = ?')
+        .get(idOf(label))
+    ).toEqual({ n: 0 });
 });
 
 for (const deletionFails of [false, true]) {

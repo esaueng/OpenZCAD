@@ -274,6 +274,11 @@ operator attention. Migration `0055_r2_key_tombstone_version_bodies.sql`
 extends the same guard to encrypted document version bodies, and
 `0056_project_instances.sql` gives every project row a random instance id, so
 a deletion never touches a project created again under the same id.
+Migration `0069_e2ee_device_last_used.sql` stores the UTC day each encryption
+device last read its keys, so Settings › Encryption can show when a device was
+last used and offer to remove devices unused for 30 days. Until it is applied
+the page shows no last-used days, and a device without a day is offered for
+removal only after 30 days of recorded days.
 Migration numbers can have gaps.
 
 **Upgrading across migration 0049** (`0049_unified_account_storage.sql`):

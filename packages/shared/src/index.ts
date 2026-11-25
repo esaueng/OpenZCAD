@@ -6173,6 +6173,20 @@ export interface E2eeAccountResponse {
   current: E2eeIdentityRecord | null;
   /** Up to three replaced identities, newest first. */
   previous: E2eePreviousIdentityRecord[];
+  /**
+   * The UTC day each listed device last read its keys (ADR-024 amendment
+   * 2026-11-25, migration 0069). Unsigned and only shown: the device list
+   * stays the authority. Absent from an older Worker or before the
+   * migration.
+   */
+  lastUsed?: E2eeDeviceLastUsed;
+}
+
+/** Coarse device activity: days (`YYYY-MM-DD`, UTC), never times. */
+export interface E2eeDeviceLastUsed {
+  /** The earliest day any row of this account started on, or null. */
+  since: string | null;
+  devices: { deviceId: string; day: string }[];
 }
 
 export interface E2eeSetupRequest {

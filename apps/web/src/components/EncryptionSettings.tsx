@@ -14,8 +14,7 @@ import {
   RefreshCcw,
   ShieldAlert,
   ShieldCheck,
-  ShieldOff,
-  Trash2
+  ShieldOff
 } from 'lucide-react';
 import {
   addPasskey,
@@ -29,6 +28,7 @@ import {
   forgetThisDevice,
   loadEncryption,
   removeDevice,
+  removeDevices,
   removePasskey,
   requestApproval,
   revokeReadOnlyDevices,
@@ -75,7 +75,7 @@ import { ExistingProjectEncryption } from './ExistingProjectEncryption';
 import { StopProjectEncryption } from './StopProjectEncryption';
 import { EncryptedPinRecovery } from './EncryptedPinReset';
 import { EncryptedProjectRecovery } from './EncryptedProjectRecovery';
-import { EncryptionContacts } from './EncryptionContacts';
+import { EncryptionContacts, OwnContactCode } from './EncryptionContacts';
 import { EncryptedInvitations } from './EncryptedInvitations';
 import { AssistantAccessSettings } from './AssistantAccessSettings';
 import {
@@ -91,6 +91,7 @@ import {
   SetupDialog
 } from './encryption/SetupDialog';
 import { QrScanner, ScanCodeDisplay } from './encryption/qr';
+import { AddDeviceDialog, DevicesGroup } from './encryption/DevicesGroup';
 import {
   formatDate,
   messageFor,
@@ -103,12 +104,14 @@ import '../styles/components/encryption.css';
 const EXISTING_PROJECTS_ID = 'encryption-existing-projects';
 
 /**
- * Settings › Encryption (ADR-024; simplified in the L11 plan of 2026-11-16).
- * One status line with one next action, then this device's unlock options
- * or the requests to join, the devices and ways in (passkeys, recovery
- * key), projects, people, and everything rare folded under Advanced. Setup,
- * recovery-key replacement and every key-authorized action are dialogs.
- * Loaded lazily with its crypto, only when the section opens.
+ * Settings › Encryption (ADR-024; simplified in the L11 plans of 2026-11-16
+ * and 2026-11-25, §6). One status line, then this device's unlock options;
+ * cards only for what needs doing (requests to join, invitations, projects
+ * not yet encrypted); "Encrypt new projects"; the ways in (passkeys,
+ * recovery key); the devices, most recently used first; people; and
+ * everything rare, Refresh included, folded under Advanced. Setup, adding a
+ * device, recovery-key replacement and every key-authorized action are
+ * dialogs. Loaded lazily with its crypto, only when the section opens.
  */
 export function EncryptionSettings({ userId }: { userId: string }) {
   const version = useSyncExternalStore(
@@ -137,6 +140,7 @@ type Dialog =
   | null
   | { kind: 'setup' }
   | { kind: 'replace' }
+  | { kind: 'add-device' }
   | { kind: 'authorize'; request: AuthorizeRequest };
 
 function AccountEncryptionSettings({ userId }: { userId: string }) {
@@ -249,6 +253,19 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
         request={dialog.request}
         onClose={closeDialog}
       />
+    ) : dialog?.kind === 'add-device' &&
+      state?.kind === 'ready' &&
+      state.account.unlocked ? (
+      <AddDeviceDialog
+        {...shared}
+        account={state.account}
+        passkey={
+          passkeysAvailable() &&
+          state.account.list.unlockTargets.some((t) => t.kind === 'passkey')
+        }
+        onAuthorize={(request) => setDialog({ kind: 'authorize', request })}
+        onClose={closeDialog}
+      />
     ) : null;
 
   if (!state) {
@@ -332,18 +349,20 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
           setRequest={setRequest}
           onReload={reload}
           openDialog={setDialog}
-          projects={
+          actions={
             <>
               {state.kind === 'ready' ? (
                 <EncryptedInvitations ready={state.account.unlocked} />
               ) : null}
-              <div id={EXISTING_PROJECTS_ID}>
+              <div
+                id={EXISTING_PROJECTS_ID}
+                className="encryption-existing-projects"
+              >
                 <ExistingProjectEncryption
                   userId={userId}
                   unlocked={unlocked}
                 />
               </div>
-              <AssistantAccessSettings userId={userId} unlocked={unlocked} />
               <EncryptedPinRecovery />
             </>
           }
@@ -376,7 +395,10 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
             ) : null
           }
           advanced={
-            <StopProjectEncryption userId={userId} unlocked={unlocked} />
+            <>
+              <AssistantAccessSettings userId={userId} unlocked={unlocked} />
+              <StopProjectEncryption userId={userId} unlocked={unlocked} />
+            </>
           }
         />
       )}
@@ -395,12 +417,19 @@ function RetryButton({ onClick }: { onClick(): void }) {
 }
 
 /** What a removal left for the other devices, in plain words. */
-function removalNotice(outcome: RemovalOutcome): string | null {
+function removalNotice(
+  outcome: RemovalOutcome,
+  removed: 'device' | 'devices' = 'device'
+): string | null {
   const left = outcome.left.filter((item) => item.projectId !== '*').length;
   if (outcome.left.length === 0) return null;
+  const done =
+    removed === 'devices'
+      ? 'The devices were removed'
+      : 'The device was removed';
   if (left === 0)
-    return 'The device was removed, but its encrypted projects could not be updated yet. Your other devices update each one before their next save.';
-  return `The device was removed. ${left} encrypted ${left === 1 ? 'project gets' : 'projects get'} new keys the next time another of your devices saves ${left === 1 ? 'it' : 'them'}.`;
+    return `${done}, but ${removed === 'devices' ? 'their' : 'its'} encrypted projects could not be updated yet. Your other devices update each one before their next save.`;
+  return `${done}. ${left} encrypted ${left === 1 ? 'project gets' : 'projects get'} new keys the next time another of your devices saves ${left === 1 ? 'it' : 'them'}.`;
 }
 
 interface StatusLine {
@@ -487,7 +516,7 @@ function AccountPanel({
   setRequest,
   onReload,
   openDialog,
-  projects,
+  actions,
   contacts,
   advanced,
   ...shared
@@ -499,11 +528,14 @@ function AccountPanel({
   setRequest(step: NewDeviceApprovalStep | null): void;
   onReload(): Promise<boolean>;
   openDialog(dialog: Dialog): void;
-  /** Invitations, existing projects, assistant access and pin recovery. */
-  projects: ReactNode;
-  /** The contacts list, once this device holds keys. */
+  /**
+   * What needs doing, each part shown only when it does: invitations,
+   * projects not yet encrypted and this device's pin problems.
+   */
+  actions: ReactNode;
+  /** The people list, once this device holds keys. */
   contacts: ReactNode;
-  /** Rare, beta-only project tools, folded under Advanced. */
+  /** Assistant access and other rare project tools, under Advanced. */
   advanced: ReactNode;
 }) {
   const { ctx, busy, run } = shared;
@@ -518,9 +550,9 @@ function AccountPanel({
     passkeysAvailable() && !identityChanged && passkeys.length > 0;
   const [removalLeft, setRemovalLeft] = useState<string | null>(null);
   const [encryptNew, setEncryptNew] = useState<boolean | null>(null);
-  const projectStep = () =>
+  const projectStep = (removed: 'device' | 'devices' = 'device') =>
     projectRemovalStep(ctx, (outcome) =>
-      setRemovalLeft(removalNotice(outcome))
+      setRemovalLeft(removalNotice(outcome, removed))
     );
   const authorize = (request: AuthorizeRequest) =>
     openDialog({ kind: 'authorize', request });
@@ -541,8 +573,6 @@ function AccountPanel({
     !enrolled ||
     waiting ||
     account.deviceStatus === 'approved';
-  const deviceCount =
-    account.list.devices.length + account.approvedDevices.length;
   const label = thisDevice?.label ?? defaultDeviceLabel(navigator.userAgent);
 
   return (
@@ -559,15 +589,6 @@ function AccountPanel({
                 account={account}
                 identityChanged={identityChanged}
               />
-              <button
-                className="secondary"
-                type="button"
-                disabled={busy}
-                onClick={() => void onReload()}
-              >
-                <RefreshCcw size={13} aria-hidden="true" />
-                Refresh
-              </button>
               {thisDevice && account.deviceStatus === 'removed' ? (
                 <button
                   className="secondary"
@@ -622,6 +643,7 @@ function AccountPanel({
         />
       ) : null}
 
+      {/* Needs attention: each card only while something waits. */}
       {certified ? (
         <ApprovalRequests
           {...shared}
@@ -630,80 +652,16 @@ function AccountPanel({
           onAuthorize={authorize}
         />
       ) : null}
+      {actions}
 
-      <Group
-        title="Devices"
-        note={`${deviceCount} ${deviceCount === 1 ? 'device' : 'devices'}`}
-      >
-        {[...account.list.devices]
-          .sort(
-            (a, b) =>
-              Number(b.deviceId === thisDevice?.deviceId) -
-              Number(a.deviceId === thisDevice?.deviceId)
-          )
-          .map((device) => (
-            <SettingRow
-              key={device.deviceId}
-              title={device.label}
-              hint={`Added ${formatDate(device.addedAt)}`}
-            >
-              {device.deviceId === thisDevice?.deviceId ? (
-                <Status tone="good">This device</Status>
-              ) : certified ? (
-                // A locked device shows no Remove at all: a disabled one
-                // beside the only certified device read as a threat (I83).
-                <button
-                  className="secondary"
-                  type="button"
-                  disabled={busy}
-                  aria-label={`Remove ${device.label}`}
-                  onClick={() =>
-                    authorize({
-                      title: `Remove ${device.label}`,
-                      body: 'It won’t open anything new. Your keys are replaced; your other devices keep working, and devices that aren’t finished setting up must be approved again.',
-                      actionLabel: 'Remove device',
-                      danger: true,
-                      passkey: canUsePasskey,
-                      work: (authorization) =>
-                        removeDevice(
-                          ctx,
-                          account,
-                          device.deviceId,
-                          authorization,
-                          projectStep()
-                        )
-                    })
-                  }
-                >
-                  <Trash2 size={14} aria-hidden="true" />
-                  Remove
-                </button>
-              ) : null}
-            </SettingRow>
-          ))}
-        {account.approvedDevices.map((device) => (
-          <SettingRow
-            key={device.deviceId}
-            title={device.label}
-            hint={`Approved ${formatDate(device.approvedAt)} · can open, can’t save`}
-          >
-            <Status tone="warning">
-              {device.deviceId === thisDevice?.deviceId
-                ? 'This device · not finished'
-                : 'Not finished'}
-            </Status>
-          </SettingRow>
-        ))}
-        {certified ? (
-          <SettingRow
-            title="Add a device"
-            hint="On the new device, sign in and open Settings › Encryption, then choose Ask for approval. Point this device’s camera (or your phone’s camera app) at the QR code it shows, or compare codes."
-          />
-        ) : null}
-      </Group>
+      <ProjectEncryptionPreference
+        userId={userId}
+        unlocked={account.unlocked && !identityChanged}
+        onEncryptNewChange={setEncryptNew}
+      />
 
       {enrolled && !identityChanged ? (
-        <Group title="Passkeys and recovery key">
+        <Group title="Unlock">
           <SettingRow
             title="Passkeys"
             hint={
@@ -711,7 +669,7 @@ function AccountPanel({
                 ? 'Not available in this browser. Add one from a browser that supports passkeys.'
                 : passkeys.length === 0
                   ? 'Unlock new devices and confirm changes with one touch, instead of typing the recovery key.'
-                  : 'Unlock new devices and confirm changes with one touch.'
+                  : `${passkeys.length} saved. Unlock new devices and confirm changes with one touch.`
             }
           >
             <button
@@ -741,6 +699,7 @@ function AccountPanel({
               key={target.targetId}
               title={`Passkey ${index + 1}`}
               hint={`Added ${formatDate(target.addedAt)} · ${target.targetId.slice(3, 15)}`}
+              compact
             >
               <button
                 className="secondary"
@@ -790,12 +749,47 @@ function AccountPanel({
         </Group>
       ) : null}
 
-      <ProjectEncryptionPreference
-        userId={userId}
-        unlocked={account.unlocked && !identityChanged}
-        onEncryptNewChange={setEncryptNew}
+      <DevicesGroup
+        account={account}
+        certified={certified}
+        busy={busy}
+        onAddDevice={() => openDialog({ kind: 'add-device' })}
+        onRemove={(device) =>
+          authorize({
+            title: `Remove ${device.label}`,
+            body: 'It won’t open anything new. Your keys are replaced; your other devices keep working, and devices that aren’t finished setting up must be approved again.',
+            actionLabel: 'Remove device',
+            danger: true,
+            passkey: canUsePasskey,
+            work: (authorization) =>
+              removeDevice(
+                ctx,
+                account,
+                device.deviceId,
+                authorization,
+                projectStep()
+              )
+          })
+        }
+        onRemoveStale={(devices) =>
+          authorize({
+            title: `Remove ${devices.length} unused ${devices.length === 1 ? 'device' : 'devices'}`,
+            body: `${devices.map((device) => device.label).join(', ')}. ${devices.length === 1 ? 'It won’t' : 'They won’t'} open anything new. Your keys are replaced once; your other devices keep working, and devices that aren’t finished setting up must be approved again.`,
+            actionLabel:
+              devices.length === 1 ? 'Remove device' : 'Remove devices',
+            danger: true,
+            passkey: canUsePasskey,
+            work: (authorization) =>
+              removeDevices(
+                ctx,
+                account,
+                devices.map((device) => device.deviceId),
+                authorization,
+                projectStep(devices.length === 1 ? 'device' : 'devices')
+              )
+          })
+        }
       />
-      {projects}
 
       {/* Contacts sign with this device's keys; a locked one has none yet. */}
       {enrolled && !identityChanged ? contacts : null}
@@ -810,7 +804,11 @@ function AccountPanel({
               {account.fingerprint}
             </code>
           </SettingRow>
+          {enrolled && !identityChanged ? (
+            <OwnContactCode account={account} />
+          ) : null}
         </Group>
+        {advanced}
         {account.approvedDevices.length > 0 ? (
           <Group
             title="Read-only devices"
@@ -853,8 +851,23 @@ function AccountPanel({
             canUsePasskey={canUsePasskey}
           />
         ) : null}
-        {advanced}
         <PreviousKeySets previous={account.previous} />
+        <Group title="Reload">
+          <SettingRow
+            title="Reload encryption keys"
+            hint="The page reads them again by itself when they change."
+          >
+            <button
+              className="secondary"
+              type="button"
+              disabled={busy}
+              onClick={() => void onReload()}
+            >
+              <RefreshCcw size={13} aria-hidden="true" />
+              Refresh
+            </button>
+          </SettingRow>
+        </Group>
       </MoreGroups>
     </>
   );

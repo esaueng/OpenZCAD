@@ -161,6 +161,29 @@ function MigrationPanel({ controller }: { controller: MigrationController }) {
   const finishing = remaining.filter((p) => p.cutOver).length;
   const plaintext = remaining.length - finishing;
   const resumable = state.projects.some((p) => p.phase === 'paused');
+  // A run on this page keeps its results in view once it finishes.
+  const [ranHere, setRanHere] = useState(false);
+  useEffect(() => {
+    if (state.running) setRanHere(true);
+  }, [state.running]);
+  // Nothing to do (L11 plan §6): no card at all, rather than "all
+  // encrypted" beside a disabled button. A finished project that still
+  // asks for something (links to reissue, members to resolve) keeps it.
+  const followUps = state.projects.some(
+    (p) =>
+      p.unresolved ||
+      (p.revoked?.shareLinks.length ?? 0) > 0 ||
+      (p.revoked?.invitations.length ?? 0) > 0
+  );
+  if (
+    remaining.length === 0 &&
+    !state.running &&
+    !state.error &&
+    !state.otherTab &&
+    !followUps &&
+    !ranHere
+  )
+    return null;
 
   return (
     <Group title="Encrypt existing projects">

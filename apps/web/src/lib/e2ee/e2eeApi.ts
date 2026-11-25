@@ -33,7 +33,11 @@ export class E2eeApiError extends Error {
  */
 export interface E2eeApi {
   config(): Promise<E2eeConfigResponse>;
-  account(): Promise<E2eeAccountResponse>;
+  /**
+   * `deviceId`: this browser's own device, whose last-used day the Worker
+   * records on the read (migration 0069).
+   */
+  account(deviceId?: string): Promise<E2eeAccountResponse>;
   /** This account's replaced account keys, each wrapped under its successor. */
   accountKeyHistory(): Promise<E2eeAccountKeyHistoryResponse>;
   setup(request: E2eeSetupRequest): Promise<E2eeAccountResponse>;
@@ -102,7 +106,13 @@ export function createE2eeApi(fetcher: Fetch = desktopFetch): E2eeApi {
   const id = (value: string) => encodeURIComponent(value);
   return {
     config: () => call(fetcher, '/api/e2ee/config'),
-    account: () => call(fetcher, '/api/e2ee/account'),
+    account: (deviceId) =>
+      call(
+        fetcher,
+        deviceId
+          ? `/api/e2ee/account?device=${id(deviceId)}`
+          : '/api/e2ee/account'
+      ),
     accountKeyHistory: () => call(fetcher, '/api/e2ee/account-key-history'),
     setup: (request) => call(fetcher, '/api/e2ee/setup', 'POST', request),
     appendDeviceList: (request) =>

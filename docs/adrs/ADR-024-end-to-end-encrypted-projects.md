@@ -865,7 +865,9 @@ The server still sees account emails and display names, member lists and
 roles, project and revision counts, blob sizes and counts, timestamps, version
 numbers and save cadence, presence during live editing, schema versions,
 the envelope header fields, and each user's device list: device labels, when
-devices and unlock methods were added or removed, and their public keys.
+devices and unlock methods were added or removed, and their public keys. It
+also sees the UTC day each device last read its keys, never a time of day
+(amendment 2026-11-25).
 Project names, checkpoint names, revision reasons,
 upload file names, thumbnails, measurements, workspace view state, archived
 exports, library folders, share link names (amendment 2026-11-22) and the
@@ -1957,3 +1959,47 @@ settings, which an account whose library is not encrypted stores readable.
   ciphertext. The account export includes the record as stored.
 - **Review.** This is a new account-key derivation and record format, so the
   Phase 8 outside review covers it with the other account records.
+
+## Amendment 2026-11-25: device last-used days
+
+Settings › Encryption listed every device the account ever certified with no
+way to tell which ones are still used: an account in the beta had eleven,
+most of them old browsers. Each device row now shows when it was last used,
+and the page offers to remove the devices nobody has used for 30 days (L11
+plan of 2026-11-25, §6). The server learns one new fact, which
+[Plaintext metadata](#plaintext-metadata) now names.
+
+- **What is recorded.** For each certified device of the current identity
+  generation, the UTC day (`YYYY-MM-DD`) it last read the account with
+  `GET /api/e2ee/account?device=<id>`, the read that hands it the
+  account-key wrap it unlocks with, and the day that device's row started
+  (`e2ee_device_last_used`, migration 0069). Never a time, a session, an IP
+  address or a project. The server already sees each read's time in its
+  request logs; the table keeps only the coarse day, for as long as the
+  device stays listed.
+- **When it is written.** At most once per device per day: the Worker reads
+  the account's days with the account and writes only when the requesting
+  device's day is not today. The write is accepted only for an id the
+  current generation wraps the account key to, under the same session write
+  fence as other encryption writes (and erasure triggers), so a request
+  cannot plant a day for an id the device list does not name. The same write
+  deletes the days of devices the list no longer wraps to: a removed device
+  and every device of a replaced identity lose theirs.
+- **Trust.** The days are unsigned and only shown. They order the device
+  rows and decide which devices the clean-up offers; nothing about keys,
+  wraps or signatures reads them. A server that lies about them can make an
+  active device look unused, which at worst suggests removing it; the user
+  confirms the removal with a passkey or the recovery key, as for any other.
+  A device with no day is offered only once the account's days have been
+  recorded for 30 days, so devices that simply have not opened the app since
+  the migration are not called unused.
+- **Removing several devices.** The clean-up removes every stale device with
+  one device-list entry (`removeDevices` in `accountKeys.ts`): the entry
+  revokes them all, each naming this device as its replacement, and rotates
+  the encryption and account keys once. The new account key is wrapped only
+  to the devices and unlock targets the entry keeps. The encrypted projects'
+  revocation cutoffs name that one entry, and each project rotates once past
+  it, as for a single removal. The format and the Worker already allowed
+  several revocations per entry; only the browser removed one at a time.
+- **Account data.** The days are in the account export and are erased with
+  the profile.

@@ -950,6 +950,31 @@ describe('Settings › Encryption › Encrypt existing projects', () => {
     expect(container.textContent).toBe('');
   });
 
+  it('shows no card when every project is already encrypted (L11 plan §6)', async () => {
+    const fake = fakeEngine(async () => undefined);
+    const controller = controllerWith(fake, null, {
+      plaintext: {
+        listProjects: async () => [PROJECTS[2]!]
+      } as unknown as MigrationPlaintextSource
+    });
+    const { container } = render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    await act(async () => undefined);
+    await act(() => controller.refresh());
+    expect(controller.getState().projects).toEqual([]);
+    expect(screen.queryByText('All your projects are encrypted')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Encrypt projects' })
+    ).toBeNull();
+    expect(container.textContent).toBe('');
+  });
+
   it('says plainly what encrypting means, then shows progress, errors and retry', async () => {
     let fail = true;
     const fake = fakeEngine(async (summary, report) => {

@@ -118,6 +118,7 @@ import {
   migrationLeaseOf
 } from './e2eeMigrationLease';
 import { PROJECT_MIGRATING_CODE } from '@openzcad/shared';
+import { deviceLastUsed } from './e2eeDeviceLastUsed';
 import {
   isE2eeProjectGroupStorageReady,
   isE2eeProjectAuthorityStorageReady,
@@ -2167,11 +2168,13 @@ export async function handleE2eeRequest(
       );
     }
     const userId = session.userId;
+    const development =
+      env.AUTH_MODE === 'development' && env.ENVIRONMENT === 'development';
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
       authorization = await e2eeWriteAuthorization(
         request,
         session,
-        env.AUTH_MODE === 'development' && env.ENVIRONMENT === 'development'
+        development
       );
       if (!authorization)
         refuse(
@@ -2412,7 +2415,23 @@ export async function handleE2eeRequest(
       );
     }
     if (pathname === '/api/e2ee/account' && method === 'GET') {
-      return json(await loadAccount(db, userId));
+      const account = await loadAccount(db, userId);
+      // The device reading its account-key wrap records the day
+      // (migration 0069); a read without a device id records nothing.
+      const lastUsed = account.current
+        ? await deviceLastUsed(rawDb, userId, account, {
+            deviceId: new URL(request.url).searchParams.get('device'),
+            fence: async () =>
+              (await e2eeWriteAuthorization(request, session, development)) ??
+              (development
+                ? {
+                    sql: 'NOT EXISTS (SELECT 1 FROM account_erasure_requests WHERE user_id = ?)',
+                    binds: [userId]
+                  }
+                : null)
+          })
+        : null;
+      return json(lastUsed ? { ...account, lastUsed } : account);
     }
     if (pathname === '/api/e2ee/account-key-history' && method === 'GET') {
       // Only the session's own rows: wraps open nothing without the newer

@@ -12,6 +12,7 @@ import {
   installE2eeServer,
   approveWithRecoveryKey,
   openEncryptionSettings,
+  refreshEncryption,
   seedE2eeDevice,
   type E2eeServer
 } from './e2ee-fixtures';
@@ -300,11 +301,12 @@ test('two approval tabs retain one staged device and can both unlock it', async 
     const code = (await otherSettings
       .getByLabel('Device approval code')
       .textContent())!;
-    await settings
-      .getByRole('button', { name: 'Refresh', exact: true })
-      .click();
+    await refreshEncryption(settings);
     await expect(
-      settings.getByRole('button', { name: 'Refresh', exact: true })
+      settings
+        .locator('.setting-row')
+        .filter({ hasText: 'Reload encryption keys' })
+        .getByRole('button', { name: 'Refresh', exact: true })
     ).toBeEnabled();
     await expect(
       settings.getByText('Requests to join', { exact: true })
@@ -316,9 +318,7 @@ test('two approval tabs retain one staged device and can both unlock it', async 
     await expect(
       otherSettings.getByText('Unlocked', { exact: true })
     ).toBeVisible({ timeout: 15_000 });
-    await firstSettings
-      .getByRole('button', { name: 'Refresh', exact: true })
-      .click();
+    await refreshEncryption(firstSettings);
     for (const panel of [firstSettings, otherSettings]) {
       await expect(panel.getByText('Unlocked', { exact: true })).toBeVisible();
       await expect(panel.getByText('Unlocked', { exact: true })).toBeVisible();
@@ -630,12 +630,12 @@ test('lists a legacy read-only device as not finished, and revokes it', async ({
     kind: 'scan',
     code: request.scanCode
   });
-  await settings.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await refreshEncryption(settings);
   await expect(settings.getByText('Old phone', { exact: true })).toBeVisible();
   await expect(
     settings.getByText('Not finished', { exact: true })
   ).toBeVisible();
-  await settings.getByText('Advanced encryption settings').click();
+  // Refresh lives under Advanced, which it left open.
   await settings
     .getByRole('button', { name: 'Revoke read-only devices', exact: true })
     .click();

@@ -36,12 +36,15 @@ export function Group({
   title,
   note,
   tone,
+  action,
   children
 }: {
   title?: string;
   /** A few words beside the title, such as when a group's controls pause. */
   note?: string;
   tone?: 'danger';
+  /** One button at the right of the title, such as "Add a device". */
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -50,6 +53,9 @@ export function Group({
         <div className="settings-group-head">
           <h3>{title}</h3>
           {note ? <span>{note}</span> : null}
+          {action ? (
+            <div className="settings-group-action">{action}</div>
+          ) : null}
         </div>
       ) : null}
       <div className="settings-card">{children}</div>

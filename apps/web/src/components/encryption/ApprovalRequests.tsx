@@ -1,4 +1,9 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import {
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type ReactNode
+} from 'react';
 import { QrCode, ScanLine } from 'lucide-react';
 import type { E2eeApprovalRecord } from '@openzcad/shared';
 import {
@@ -47,12 +52,15 @@ export function ApprovalRequests({
   account,
   passkey,
   onAuthorize,
+  whenEmpty = null,
   ...shared
 }: Shared & {
   account: AccountView;
   /** This account has a passkey this browser can use. */
   passkey: boolean;
   onAuthorize(request: AuthorizeRequest): void;
+  /** Shown while no device asks (the Add a device dialog's wait). */
+  whenEmpty?: ReactNode;
 }) {
   const { ctx, busy, run } = shared;
   const [approvals, setApprovals] = useState<E2eeApprovalRecord[] | null>(null);
@@ -180,7 +188,7 @@ export function ApprovalRequests({
 
   const linkedRecord = approvals?.find((item) => item.id === linked) ?? null;
   const others = (approvals ?? []).filter((item) => item.id !== linked);
-  if (!link && others.length === 0) return null;
+  if (!link && others.length === 0) return <>{whenEmpty}</>;
 
   return (
     <Group
