@@ -689,6 +689,39 @@
   box-shadow: var(--shadow-2);
 }
 
+/* In the card over the bar (a pick's guidance), the compact refusal wraps
+   as the card's own words do: the remedies go under the status when the
+   stage is too narrow for both, rather than over it. */
+.workspace-hint:is(.is-selection, .is-raised)
+  .edit-refusal.is-bar
+  .edit-refusal-row {
+  flex-wrap: wrap;
+}
+
+/* A phone's stage is narrower than the explanation, which took 400px from
+   wherever the line started and ran past the window's right edge (51px at
+   390px wide). There the refusal spans the card and its explanation keeps to
+   it; a rim choice puts both choices on a line of their own, under the
+   status they answer. */
+@media (max-width: 520px) {
+  .workspace-hint:is(.is-selection, .is-raised) .edit-refusal.is-bar {
+    flex: 1 1 100%;
+  }
+
+  .workspace-hint:is(.is-selection, .is-raised)
+    .edit-refusal.is-bar
+    .edit-refusal-card {
+    right: 0;
+    width: auto;
+  }
+
+  .workspace-hint:is(.is-selection, .is-raised)
+    .edit-refusal.is-bar[data-status='choice-required']
+    .edit-refusal-line {
+    flex-basis: 100%;
+  }
+}
+
 .workspace-hint.has-notice {
   /* The compact refusal opens upward, outside this row. Ordinary hints
      clip their text, but doing so here hides the entire explanation. */
