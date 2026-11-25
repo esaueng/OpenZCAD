@@ -1,4 +1,4 @@
-import { act, render } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   AccountView,
@@ -13,7 +13,8 @@ vi.mock('../lib/e2ee/accountKeys', async (original) => ({
   advanceApprovalAsNewDevice: advance
 }));
 const { EncryptionFlowError } = await import('../lib/e2ee/accountKeys');
-const { EnrollPanel } = await import('./EncryptionSettings');
+const { EnrollPanel, UNLOCK_FRESHNESS_NOTE } =
+  await import('./EncryptionSettings');
 
 afterEach(() => {
   vi.useRealTimers();
@@ -71,4 +72,56 @@ describe('device approval polling', () => {
       expect(advance).toHaveBeenCalledOnce();
     }
   );
+});
+
+describe('the unlock panel', () => {
+  function panel(passkey: boolean) {
+    const onUnlock = vi.fn();
+    render(
+      <EnrollPanel
+        account={
+          {
+            device: { label: 'Laptop' },
+            deviceStatus: 'none'
+          } as unknown as AccountView
+        }
+        ctx={{ userId: 'user_alice' } as E2eeContext}
+        busy={false}
+        run={vi.fn()}
+        setStep={vi.fn()}
+        passkey={passkey}
+        onUnlock={onUnlock}
+        step={null}
+      />
+    );
+    return onUnlock;
+  }
+  const actions = () =>
+    screen
+      .getAllByRole('button')
+      .map((button) => [button.textContent, button.className]);
+
+  it('puts the passkey first when the account has one this browser can use (D3)', () => {
+    const onUnlock = panel(true);
+    expect(actions()).toEqual([
+      ['Unlock with passkey', 'primary'],
+      ['Ask for approval', 'secondary'],
+      ['Enter recovery key', 'secondary']
+    ]);
+    // The freshness limit it accepts is still said, once.
+    expect(screen.getByText(UNLOCK_FRESHNESS_NOTE)).toBeVisible();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Unlock with passkey' })
+    );
+    expect(onUnlock).toHaveBeenCalledWith('passkey');
+  });
+
+  it('keeps approval first without a usable passkey', () => {
+    panel(false);
+    expect(actions()).toEqual([
+      ['Ask for approval', 'primary'],
+      ['Enter recovery key', 'secondary']
+    ]);
+    expect(screen.getByText(/^Recommended\./)).toBeVisible();
+  });
 });

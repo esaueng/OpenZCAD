@@ -67,7 +67,7 @@ import type {
   E2eeWrapRecord
 } from '@openzcad/shared';
 import { DEVICE_LIST_REALM, inDeviceListRealm } from '../deploymentRealm';
-import type { E2eeApi } from './e2eeApi';
+import { E2eeApiError, type E2eeApi } from './e2eeApi';
 import { confirmApprovalCancellation } from './approvalCancellation';
 import {
   EMPTY_CONTACTS_HASH,
@@ -129,6 +129,8 @@ export type EncryptionFlowErrorCode =
   | 'missing-wrap'
   | 'approval-gone'
   | 'certification-required'
+  /** A setup's answer was lost and the account could not be read back. */
+  | 'setup-unknown'
   | 'invalid-request';
 
 export class EncryptionFlowError extends Error {
@@ -1265,13 +1267,45 @@ function requireActiveKeyContext(ctx: E2eeContext): void {
 }
 
 /**
+ * The identities a caller's setups sent, kept across its retries. A setup
+ * whose answer is lost may still have committed, so a later read-back
+ * recognises any of them as this caller's own (L11 slice 5 review).
+ */
+export interface SetupAttempts {
+  readonly sent: {
+    readonly identityKey: Uint8Array;
+    readonly entry: Uint8Array;
+  }[];
+  /**
+   * What the last call proved about these writes, if anything: the server
+   * took one (`committed`, set before any follow-up that may still fail),
+   * or a read-back found none of them (`not-committed`). An outright
+   * refusal or a failed read-back proves nothing and leaves it unset.
+   */
+  proved?: 'committed' | 'not-committed';
+}
+
+export const SETUP_OUTCOME_UNKNOWN =
+  'Couldn’t tell whether encryption was turned on: the server didn’t answer. Check your connection and try again. Your recovery key stays the same.';
+
+/**
  * First setup: a new identity, recovery target, account key and encryption
  * key, with this device certified in a fresh device list. The recovery key
  * must have been shown to the user and confirmed before this is called.
+ *
+ * A failure that may hide a commit (no answer, a server error, or "already
+ * set up") reads the account back. An identity listed in `attempts` is
+ * this caller's: its write is accepted as if the answer had arrived. No
+ * identity, or another one, rethrows the failure. A read-back that fails
+ * throws `setup-unknown`.
  */
 export async function setUpEncryption(
   ctx: E2eeContext,
-  options: { recoverySecret: Uint8Array; label: string }
+  options: {
+    recoverySecret: Uint8Array;
+    label: string;
+    attempts?: SetupAttempts;
+  }
 ): Promise<EncryptionState> {
   return ctx.store.withDeviceLock(ctx.userId, async () => {
     requireActiveKeyContext(ctx);
@@ -1279,18 +1313,36 @@ export async function setUpEncryption(
   });
 }
 
+/** Refusals that prove the server wrote nothing. */
+function refusedOutright(error: unknown): boolean {
+  return (
+    error instanceof E2eeApiError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.code !== 'E2EE_ALREADY_SET_UP'
+  );
+}
+
 async function setUpEncryptionLocked(
   ctx: E2eeContext,
-  options: { recoverySecret: Uint8Array; label: string }
+  options: {
+    recoverySecret: Uint8Array;
+    label: string;
+    attempts?: SetupAttempts;
+  }
 ): Promise<EncryptionState> {
+  const attempts = options.attempts ?? { sent: [] };
+  attempts.proved = undefined;
   const persistedPin = await ctx.store.loadPin(ctx.userId);
-  if (persistedPin) {
+  if (persistedPin && attempts.sent.length === 0) {
     lockAccount(ctx.userId);
     throw new EncryptionFlowError(
       'invalid-request',
       'This browser already trusts an encryption identity. Recover it instead of setting up a replacement.'
     );
   }
+  // An earlier attempt was accepted here before its follow-up failed.
+  if (persistedPin) return adoptSetUpAttempt(ctx, attempts, null);
   const device = await withNewDevice(
     ctx,
     options.label,
@@ -1307,16 +1359,80 @@ async function setUpEncryptionLocked(
   // Keys first: a setup that reaches the server without them still opens
   // with the recovery key, while the reverse would strand this device.
   requireActiveKeyContext(ctx);
-  const response = await ctx.api.setup({
-    identityKey: b64(created.identityKey),
-    entry: b64(created.signed.entry),
-    signature: b64(created.signed.signature),
-    wraps: created.wraps
+  attempts.sent.push({
+    identityKey: created.identityKey,
+    entry: created.signed.entry
   });
+  let response: E2eeAccountResponse;
+  try {
+    response = await ctx.api.setup({
+      identityKey: b64(created.identityKey),
+      entry: b64(created.signed.entry),
+      signature: b64(created.signed.signature),
+      wraps: created.wraps
+    });
+  } catch (error) {
+    if (refusedOutright(error)) throw error;
+    return adoptSetUpAttempt(
+      ctx,
+      attempts,
+      error instanceof Error
+        ? error
+        : new EncryptionFlowError(
+            'invalid-request',
+            'Encryption could not be set up.'
+          )
+    );
+  }
+  // The keys exist now, whatever the follow-up below does.
+  attempts.proved = 'committed';
   const list = await acceptWrite(ctx, response, {
     identityKey: created.identityKey,
     replaceIdentityFrom: persistedPin,
     written: created.signed.entry
+  });
+  await pinEmptyContacts(ctx, list);
+  return loadEncryption(ctx);
+}
+
+/**
+ * Reads the account back after a setup whose outcome is unknown, and
+ * accepts the write if the identity there is one this caller sent.
+ */
+async function adoptSetUpAttempt(
+  ctx: E2eeContext,
+  attempts: SetupAttempts,
+  cause: Error | null
+): Promise<EncryptionState> {
+  requireActiveKeyContext(ctx);
+  let current: E2eeAccountResponse;
+  try {
+    current = await ctx.api.account();
+  } catch {
+    throw new EncryptionFlowError('setup-unknown', SETUP_OUTCOME_UNKNOWN);
+  }
+  requireActiveKeyContext(ctx);
+  const identity = current.current
+    ? fromBase64Url(current.current.identityKey)
+    : null;
+  const ours = identity
+    ? attempts.sent.find((sent) => sameBytes(sent.identityKey, identity))
+    : undefined;
+  if (!ours) {
+    attempts.proved = 'not-committed';
+    if (cause !== null) throw cause;
+    lockAccount(ctx.userId);
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'This browser already trusts an encryption identity. Recover it instead of setting up a replacement.'
+    );
+  }
+  attempts.proved = 'committed';
+  const pin = await ctx.store.loadPin(ctx.userId);
+  const list = await acceptWrite(ctx, current, {
+    identityKey: ours.identityKey,
+    ...(pin ? { pin } : { replaceIdentityFrom: null }),
+    written: ours.entry
   });
   await pinEmptyContacts(ctx, list);
   return loadEncryption(ctx);

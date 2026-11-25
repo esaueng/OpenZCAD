@@ -140,6 +140,41 @@ describe('default-on automatic migration', () => {
     migration.dispose();
   });
 
+  // L11 slice 5 review (#2053): the account turns ready halfway through
+  // the setup dialog, whose last screen decides about existing projects.
+  it('waits while the setup dialog is open, and checks again once it closes', async () => {
+    const { automaticProjectMigration } = await import('./automaticMigration');
+    const { encryptionStateChanged } = await import('./encryptionStateEvents');
+    const { holdForSetup } = await import('./setupInProgress');
+    const f = fixture();
+    const release = holdForSetup('account');
+    const migration = automaticProjectMigration('account', f.attention, f.deps);
+    await migration.check();
+    encryptionStateChanged('account');
+    await migration.check();
+    expect(f.deps.prepare).not.toHaveBeenCalled();
+    expect(f.controller.run).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(f.controller.run).toHaveBeenCalledOnce());
+    migration.dispose();
+  });
+
+  it('does not start a run when setup opens while it was preparing', async () => {
+    const { automaticProjectMigration } = await import('./automaticMigration');
+    const { holdForSetup } = await import('./setupInProgress');
+    const f = fixture();
+    let release: (() => void) | undefined;
+    vi.mocked(f.controller.refresh).mockImplementationOnce(async () => {
+      release = holdForSetup('account');
+    });
+    const migration = automaticProjectMigration('account', f.attention, f.deps);
+    await migration.check();
+    expect(f.controller.run).not.toHaveBeenCalled();
+    release!();
+    await vi.waitFor(() => expect(f.controller.run).toHaveBeenCalledOnce());
+    migration.dispose();
+  });
+
   it('respects a manual run and never restarts it from setup notifications', async () => {
     const { automaticProjectMigration } = await import('./automaticMigration');
     const { encryptionStateChanged } = await import('./encryptionStateEvents');

@@ -262,7 +262,10 @@ device when new wraps are issued. Pinned devices reject that fork when they
 see it, but that later detection does not undo disclosure. Settings therefore
 recommends approval from an already unlocked device when possible, so its
 verified head is transferred. Recovery remains available when no such device
-exists; it carries this first-sight freshness limitation.
+exists; it carries this first-sight freshness limitation. (A passkey unlock
+carries the same limit; since the
+[amendment of 2026-11-25](#amendment-2026-11-25-passkey-first-setup-and-unlock)
+Settings offers a passkey first where the account has one.)
 
 Keychain sign/derive commands and browser WebCrypto keys both let executing
 frontend code use the device key without a separate prompt for each operation.
@@ -2134,6 +2137,94 @@ at 30 days from the invitation's first statement, as against seven before
 renewal. What the server sees of the record: its length, write times,
 revision count, sequence and the account-key commitment in its header. The
 account export includes it as stored, and account erasure deletes it.
+
+## Amendment 2026-11-25: passkey-first setup and unlock
+
+Owner decisions D2 and D3 of the L11 plan for simpler sharing and
+encryption settings (`docs/plans/l11-sharing-and-encryption-overhaul.md`)
+change two client policies. Neither changes a key, wrap, record format,
+Worker route or migration.
+
+### Recovery-key confirmation (D2)
+
+Setup still generates the recovery key first, in memory, and the first
+device-list entry still certifies it as an unlock target. Nothing is
+created or committed until the person has seen the recovery key and
+acknowledged saving it (`apps/web/src/components/encryption/SetupDialog.tsx`):
+
+- **Order.** The first screen only chooses: "Continue with passkey" or "Use
+  a recovery key only". The second shows the recovery key (download, copy,
+  print) and "I saved it". Only its primary button commits: on the passkey
+  path it creates the credential inside that click, so it keeps the user
+  gesture, then `setUpEncryption` commits the identity, the recovery target
+  and this device, then `addPasskey` certifies the passkey with the
+  recovery secret in memory and the credential just created. The person
+  confirms the passkey once, or twice where the browser evaluates PRF only
+  on a follow-up assertion (Safari), and the screen says it may ask twice.
+- **What is typed.** With the passkey path, nothing is typed back. With a
+  recovery key only (chosen, a passkey cancelled or refused before the
+  commit, or no WebAuthn PRF, as in the desktop WebView), the person also
+  types the key's last group of four characters, which the screen masks
+  meanwhile, before the commit.
+- This supersedes the full retype of the 2026-11-16 plan. The last group
+  makes the person consult the copy they saved; it does not prove the rest
+  of that copy is correct, so a transcription error elsewhere is found only
+  when the key is used (its checksum then refuses it). That is the accepted
+  cost. With a passkey enrolled, the account has a way back in besides this
+  device and the recovery key, which is why no retype is asked.
+- **Failures.** A passkey ceremony cancelled or refused before the commit
+  commits nothing, and setup continues as recovery key only. If the commit
+  succeeds and certifying the passkey then fails, the account holds keys
+  whose recovery key the person has already seen and acknowledged; the
+  screen asks for its last group and cannot be dismissed until it is typed.
+  A credential the provider kept but nothing certified is named for
+  deletion, as [Unlock and devices](#unlock-and-devices) requires.
+- **A lost answer.** A setup whose answer does not arrive (no response, a
+  server error, or `E2EE_ALREADY_SET_UP`) may still have committed, so
+  `setUpEncryption` reads the account back. The dialog passes the
+  identities its attempts sent (`SetupAttempts`); an identity there is its
+  own, and the write is accepted as if the answer had arrived (pin and
+  empty contacts list included). No identity means nothing was committed,
+  and the person may retry or cancel. Another identity means the account
+  was set up elsewhere with another recovery key, and the dialog says so.
+  A read-back that also fails leaves the outcome unknown (`setup-unknown`):
+  the dialog then offers only "Try again", with the same recovery key and
+  the same credential, and cannot be closed or discard the key. Only a
+  read-back that proves the write taken or absent (`SetupAttempts.proved`)
+  ends that state; a refused retry does not. Keys the server took count as
+  committed even when the load after them fails. One write runs at a time,
+  and the recovery and passkey secrets are erased only once it settles.
+- **Existing projects.** Default-on migration waits while the setup dialog
+  is open (`setupInProgress.ts`): existing projects are encrypted only from
+  the last screen's Done, never because the account became ready while the
+  dialog was still open. Once keys exist, that screen is left only through
+  Done, which records its choices and releases the hold.
+
+### Passkey-first unlock (D3)
+
+On a device that is not unlocked, Settings › Encryption offers "Unlock with
+passkey" first when the account's device list certifies a passkey and this
+browser supports WebAuthn. Approval from another device comes second and
+the recovery key third. Without a usable passkey, approval stays first.
+
+This accepts, for passkey unlock, the first-sight freshness limit that
+[Unlock and devices](#unlock-and-devices) states for the recovery key: a
+browser without a saved device-list pin cannot tell whether the server
+supplied the newest device list, so a consistently forked pre-removal list
+can have new wraps issued to a removed device. Pinned devices still reject
+the fork when they see it, but cannot undo that disclosure. The unlock
+panel says this in one line and suggests approval after a recent device
+removal. Approval needs a second unlocked device at hand and, since
+approval always certifies (amendment 2026-11-16), a passkey or the recovery
+key on it, so it costs more than a passkey touch on the common path. This
+supersedes the plan of 2026-11-16, which kept approval first for this
+reason.
+
+### Review
+
+Neither decision changes the cryptography, but both change what the
+review packet describes: setup's confirmation (section 3.1) and the
+recommended unlock path (section 6, enrollment without pins). The packet is updated to match.
 
 ## Amendment 2026-11-25: device last-used days
 

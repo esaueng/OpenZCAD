@@ -585,9 +585,10 @@ export async function refreshEncryption(settings: Locator): Promise<void> {
 }
 
 /**
- * Runs Settings › Encryption's setup dialog from its first step to the end
- * (L11 plan §4.2): the loss warning, the recovery key saved and typed back,
- * then the optional passkey and projects steps. Returns the recovery key.
+ * Runs Settings › Encryption's setup dialog on its recovery-key-only path
+ * (L11 plan 2026-11-25 §5): the loss warning, then the recovery key saved
+ * and its last group typed back, then the projects step where shown.
+ * Returns the recovery key.
  */
 export async function setUpEncryptionInSettings(
   settings: Locator,
@@ -596,15 +597,20 @@ export async function setUpEncryptionInSettings(
   await settings
     .getByRole('button', { name: 'Set up encryption', exact: true })
     .click();
-  await settings.getByRole('button', { name: 'Start', exact: true }).click();
+  const intro = settings.getByRole('dialog', { name: 'Turn on encryption' });
+  const recoveryOnly = intro
+    .getByRole('button', { name: 'Use a recovery key only', exact: true })
+    .or(intro.getByRole('button', { name: 'Continue', exact: true }));
+  await recoveryOnly.click();
   const recoveryKey = (await settings
     .getByLabel('Recovery key', { exact: true })
     .textContent())!;
   await settings
     .getByRole('checkbox', { name: /I saved my recovery key/ })
     .check();
-  await settings.getByRole('button', { name: 'Continue', exact: true }).click();
-  await settings.getByLabel('Confirm recovery key').fill(recoveryKey);
+  await settings
+    .getByLabel('Last group of your recovery key')
+    .fill(lastRecoveryGroup(recoveryKey));
   await settings
     .getByRole('button', { name: 'Turn on encryption', exact: true })
     .click();
@@ -612,7 +618,12 @@ export async function setUpEncryptionInSettings(
   return recoveryKey;
 }
 
-/** Skips the passkey step and answers the projects step, where shown. */
+/** The last group of four, which setup without a passkey asks for. */
+export function lastRecoveryGroup(recoveryKey: string): string {
+  return recoveryKey.slice(recoveryKey.lastIndexOf('-') + 1);
+}
+
+/** Answers the projects step, where shown, and waits for setup to close. */
 export async function finishSetupDialog(
   settings: Locator,
   { encryptNew = true }: { encryptNew?: boolean } = {}
@@ -621,23 +632,11 @@ export async function finishSetupDialog(
   await expect(
     settings.getByRole('button', { name: 'Turn on encryption', exact: true })
   ).toHaveCount(0, { timeout: 30_000 });
-  const skip = dialog.getByRole('button', { name: 'Skip', exact: true });
   const done = dialog.getByRole('button', { name: 'Done', exact: true });
   await expect(
-    skip
-      .or(done)
-      .or(settings.getByText('Unlocked', { exact: true }))
-      .first()
-  ).toBeVisible({
-    timeout: 30_000
-  });
-  if (await skip.isVisible()) await skip.click();
-  if (
-    await done
-      .waitFor({ state: 'visible', timeout: 2_000 })
-      .then(() => true)
-      .catch(() => false)
-  ) {
+    done.or(settings.getByText('Unlocked', { exact: true })).first()
+  ).toBeVisible({ timeout: 30_000 });
+  if (await done.isVisible()) {
     const choice = dialog.getByRole('checkbox', {
       name: /Encrypt new projects/
     });
