@@ -1,5 +1,6 @@
 import {
   commandSessionFor,
+  commitParksRefusal,
   escapeTarget,
   isOperationState,
   isStaleSelectionError,
@@ -154,13 +155,21 @@ function armedStep(
 }
 
 function draggingStep(state: InteractionState): string {
-  // A refused frame under the hand is the gesture's settled verdict: it
-  // stays until a value builds (`recoverPreviewInteraction`), and letting go
-  // on it parks the refusal instead of applying (`drag-release`). So the
-  // step stops promising an apply, and names why in the refusal card's own
-  // short words, without flipping while the next frame is still checking.
-  if (isOperationState(state) && state.error) {
-    return refusedDragStep(state.error, commandSessionFor(state)?.title);
+  // Once the drag has met a refusal, the step names it in the refusal
+  // card's own short words until a value builds: a refused frame still
+  // held, or one the hand has left for a value not yet checked. What it
+  // says of the release is what the release does (`commitParksRefusal`),
+  // so the step never flips to "Release to apply" and back while the next
+  // value is checked.
+  if (isOperationState(state)) {
+    const refusal = state.error ?? state.priorRefusal;
+    if (refusal) {
+      return refusedDragStep(
+        refusal,
+        commitParksRefusal(state),
+        commandSessionFor(state)?.title
+      );
+    }
   }
   if (state.mode === 'face') {
     return 'Release to apply · type to enter an exact value instead';
@@ -172,12 +181,15 @@ function draggingStep(state: InteractionState): string {
 }
 
 /**
- * The step while the frame under the hand was refused. "Drag back" is
- * offered only when another value could build, as `failedStep` offers
- * another value.
+ * The step while the drag has met a refusal. The release either parks the
+ * refusal ("won't apply") or asks the kernel about the value let go at
+ * ("checks this value"); never "apply", which only a built value earns.
+ * "Drag back" is offered only when another value could build, as
+ * `failedStep` offers another value.
  */
 function refusedDragStep(
   error: CommandDiagnostic,
+  releaseParks: boolean,
   operationTitle = 'Edit'
 ): string {
   const { headline } = refusalSummary(error, operationTitle);
@@ -185,7 +197,7 @@ function refusedDragStep(
     !isStaleSelectionError(error) && !refusalRulesOutSize(error);
   return [
     headline,
-    'Release won’t apply',
+    releaseParks ? 'Release won’t apply' : 'Release checks this value',
     sizeHelps ? 'drag back or type a value' : null
   ]
     .filter(Boolean)

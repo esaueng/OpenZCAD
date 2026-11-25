@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   IDLE,
+  commitParksRefusal,
   escapeTarget,
+  holdsRefusal,
+  interactionReducer,
+  type InteractionEvent,
   type InteractionState,
   type OperationPhase,
   type SketchToolId
@@ -420,12 +424,14 @@ describe('a drag whose frame under the hand was refused', () => {
     );
   });
 
-  it('names each direct edit by what it could not do', () => {
+  it('names each direct edit by what it could not do, and what release does', () => {
+    // A cylinder, fillet or chamfer release validates its value whatever the
+    // preview said (`commitParksRefusal`): it checks, it does not park.
     expect(
       commandPrompt(faceState('dragging', 'resize-cylinder-radius', limit))
         ?.step
     ).toMatch(
-      /^Can’t resize this (?:cylinder|hole) here · Release won’t apply/
+      /^Can’t resize this (?:cylinder|hole) here · Release checks this value · drag back/
     );
     const resize = faceState('dragging', 'offset-face', limit);
     if (resize.mode !== 'face') throw new Error('face state');
@@ -441,7 +447,7 @@ describe('a drag whose frame under the hand was refused', () => {
     expect(
       commandPrompt({ ...edge, error: { message: 'Radius too big.' } })?.step
     ).toBe(
-      'Can’t round this edge here · Release won’t apply · drag back or type a value'
+      'Can’t round this edge here · Release checks this value · drag back or type a value'
     );
   });
 
@@ -469,6 +475,135 @@ describe('a drag whose frame under the hand was refused', () => {
     );
     expect(commandPrompt(refused)?.step).toBe(
       'Can’t move this face here · Release won’t apply'
+    );
+  });
+});
+
+/** A face's drag through a sequence of machine events. */
+function drag(
+  start: InteractionState,
+  ...events: InteractionEvent[]
+): InteractionState {
+  return events.reduce(
+    interactionReducer,
+    interactionReducer(start, { type: 'drag-engage' })
+  );
+}
+
+describe('the release a refused drag promises is the one it makes', () => {
+  const refusal = { message: 'A neighbouring face would shrink to nothing.' };
+  const refused = (value: number): InteractionEvent => ({
+    type: 'preview-refused',
+    diagnostic: refusal,
+    value
+  });
+  function faceSet(): InteractionState {
+    const armed = faceState('armed');
+    if (armed.mode !== 'face') throw new Error('face state');
+    return {
+      ...armed,
+      target: {
+        ...armed.target,
+        offsetFaceSet: [{ topologyId: 'face-2' } as never]
+      }
+    };
+  }
+
+  // PR #2060 review: a chained set's coarse lane still held the refusal of
+  // -9 while the hand was back at a buildable -2; the prompt said "won't
+  // apply", yet the release validated -2 and applied it.
+  it('a chained face set parks only the value the refusal was for', () => {
+    const onRefused = drag(
+      faceSet(),
+      { type: 'drag-hand', value: -9 },
+      refused(-9)
+    );
+    expect(commitParksRefusal(onRefused)).toBe(true);
+    expect(commandPrompt(onRefused)?.step).toContain('Release won’t apply');
+
+    const movedBack = interactionReducer(onRefused, {
+      type: 'drag-hand',
+      value: -2
+    });
+    // The release and the prompt read one rule.
+    expect(commitParksRefusal(movedBack)).toBe(false);
+    expect(commitParksRefusal(movedBack, -2)).toBe(false);
+    expect(commitParksRefusal(movedBack, -9)).toBe(true);
+    const step = commandPrompt(movedBack)?.step;
+    expect(step).not.toContain('won’t apply');
+    expect(step).not.toContain('Release to apply');
+    expect(step).toBe(
+      'Offset Faces can’t be built here · Release checks this value · drag back or type a value'
+    );
+  });
+
+  it('a single face parks its refusal wherever the hand lets go', () => {
+    const state = drag(faceState('armed'), refused(-9));
+    expect(commitParksRefusal(state, -2)).toBe(true);
+    expect(commandPrompt(state)?.step).toContain('Release won’t apply');
+  });
+
+  it('a cylinder, fillet or chamfer release always validates', () => {
+    for (const start of [
+      faceState('armed', 'resize-cylinder-radius'),
+      edgeState('armed', 'fillet')
+    ]) {
+      const state = drag(start, refused(9));
+      expect(commitParksRefusal(state)).toBe(false);
+      expect(commandPrompt(state)?.step).toContain('Release checks this value');
+    }
+  });
+
+  // PR #2060 review: a hole resize cleared its refusal as soon as the hand
+  // left the refused radius, so crossing refused radii alternated "Release
+  // to apply" with the refusal while each new radius was checked.
+  it('keeps one step across refused and unchecked values until one builds', () => {
+    const start = faceState('armed', 'resize-cylinder-radius');
+    const steps: string[] = [];
+    let state = drag(start);
+    const plain = commandPrompt(state)!.step;
+    for (const event of [
+      refused(9),
+      { type: 'preview-left' } as const,
+      refused(9.5),
+      { type: 'preview-left' } as const,
+      refused(10)
+    ]) {
+      state = interactionReducer(state, event);
+      steps.push(commandPrompt(state)!.step);
+    }
+    expect(new Set(steps).size).toBe(1);
+    expect(steps[0]).not.toBe(plain);
+    // The refusal is no longer held between values: the chip and the
+    // release do not answer to it, exactly as before.
+    const left = interactionReducer(state, { type: 'preview-left' });
+    expect(holdsRefusal(left)).toBe(false);
+    // A value that builds is what earns "Release to apply" back.
+    const built = interactionReducer(left, { type: 'drag-engage' });
+    expect(commandPrompt(built)?.step).toBe(plain);
+  });
+
+  it('a face offset says the same across an unchecked projected frame', () => {
+    const state = drag(faceState('armed'), refused(-9));
+    const left = interactionReducer(state, { type: 'preview-left' });
+    // Left for an unchecked value, the release validates: no "won't apply",
+    // and never a plain "Release to apply" before a value builds.
+    expect(commandPrompt(left)?.step).toBe(
+      'Can’t move this face here · Release checks this value · drag back or type a value'
+    );
+  });
+
+  it('forgets the drag’s refusal once the drag ends', () => {
+    const state = interactionReducer(
+      drag(faceState('armed', 'resize-cylinder-radius'), refused(9)),
+      { type: 'preview-left' }
+    );
+    const released = interactionReducer(state, { type: 'drag-release' });
+    expect(released).toMatchObject({ phase: 'armed', error: null });
+    expect(released).not.toHaveProperty('priorRefusal');
+    const again = interactionReducer(released, { type: 'drag-engage' });
+    expect(commandPrompt(again)?.step).toBe(
+      'Release to apply · type to enter an exact value instead'
     );
   });
 });
