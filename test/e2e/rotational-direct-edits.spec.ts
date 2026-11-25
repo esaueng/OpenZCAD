@@ -153,7 +153,7 @@ test(
         await clickWorldPoint(page, [0, 0, 16.5]);
         // A face starts on Offset; this reads and types its Total.
         const tag = page.getByTestId('direct-manipulation-mode');
-        if (/^Offset/.test(await tag.innerText().catch(() => ''))) {
+        if (/^Offset ▾/.test(await tag.innerText().catch(() => ''))) {
           await tag.click().catch(() => undefined);
         }
         return chip.innerText().catch(() => '');

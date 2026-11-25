@@ -6,6 +6,7 @@ import {
   faceOffsetChipState,
   keptOffsetValue,
   laneLeavesRoom,
+  offsetChipTag,
   offsetChipText,
   offsetFaceCommitMessage,
   offsetLimitChipText,
@@ -857,5 +858,45 @@ describe('a pin chip pair', () => {
         stageWidth: 1280
       })
     ).toBe(522);
+  });
+});
+
+// Beta recording, 2026-11: one body's Front face read "Offset ▾ | +0 mm"
+// while its Right face, which has no flat face opposite it, read a bare
+// "+0 mm" in the same tool.
+describe('the offset chip tag', () => {
+  it('names Offset on a face with no span to read, without a switch', () => {
+    const tag = offsetChipTag('offset', false);
+    expect(tag.text).toBe('Offset');
+    expect(tag.switchable).toBe(false);
+    expect(tag.title).toMatch(
+      /^Offset: a typed value is how far the face moves/
+    );
+    // True whether the span is absent or still being measured: it states
+    // when Total is offered, not that this face has none.
+    expect(tag.title).toMatch(
+      /Total, the size the face sets, is offered only where a flat face lies opposite it$/
+    );
+    expect(tag.title).not.toMatch(/No flat face lies opposite this one/);
+  });
+
+  it('names the mode on every face, switchable only with a span', () => {
+    for (const spanKnown of [true, false]) {
+      expect(offsetChipTag('offset', spanKnown).text).toMatch(/^Offset/);
+    }
+    expect(offsetChipTag('offset', true)).toMatchObject({
+      text: 'Offset ▾',
+      switchable: true
+    });
+    expect(offsetChipTag('total', true)).toMatchObject({
+      text: 'Total ▾',
+      switchable: true
+    });
+  });
+
+  it('never reads Total where there is no span', () => {
+    // A re-armed face falls back to Offset when its span is gone
+    // (`rearmedChipMode`); the tag cannot claim Total meanwhile.
+    expect(offsetChipTag('total', false).text).toBe('Offset');
   });
 });

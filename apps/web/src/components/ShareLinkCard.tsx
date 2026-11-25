@@ -14,9 +14,9 @@ import {
 /**
  * The building blocks of the sharing dialog's Links tab, shared by plaintext
  * and end-to-end encrypted projects: one card per link (its name and a
- * one-line summary, opening onto its settings and actions), the card that
- * makes a new link, and a Copy button that can name the configuration the
- * copied link opens on (F06).
+ * one-line summary, opening onto its settings and actions), the Create link
+ * row with its options card, and a Copy button that can name the
+ * configuration the copied link opens on (F06).
  */
 
 export interface ShareLinkCardProps {
@@ -265,10 +265,33 @@ export interface ShareLinkDraft {
   name: string;
 }
 
+/**
+ * What Create link makes in one click (L11): view only, without history
+ * where history can be left out, no comments, and no name (its card names
+ * it after its access). The rest waits behind Options….
+ */
+export function quickShareLinkDraft(
+  canExcludeHistory: boolean
+): ShareLinkDraft {
+  return {
+    mode: 'view',
+    comments: false,
+    history: !canExcludeHistory,
+    name: ''
+  };
+}
+
 export interface ShareLinkComposerProps {
   /** L08: whether a link may leave the project's history out. */
   canExcludeHistory: boolean;
-  /** The access a new link starts with. */
+  /**
+   * The options card is open. Closed, the card is one Create link button,
+   * which makes `quickShareLinkDraft` at once, with Options… beside it.
+   */
+  expanded: boolean;
+  /** Opens the options (Options…) or closes them (Cancel). */
+  onExpandedChange(expanded: boolean): void;
+  /** The access a new link starts with in the options. */
   defaultMode?: ProjectShareLinkMode;
   /** Whether the link can be named here. */
   nameable: boolean;
@@ -285,12 +308,71 @@ export interface ShareLinkComposerProps {
    * waits on it unless history is left out.
    */
   historyBlocker?: ReactNode;
-  /** Shown when the card can be closed without making a link. */
-  onCancel?(): void;
   onCreate(draft: ShareLinkDraft): void;
 }
 
-export function ShareLinkComposer({
+export function ShareLinkComposer(props: ShareLinkComposerProps) {
+  return props.expanded ? (
+    <ShareLinkOptionsCard {...props} />
+  ) : (
+    <QuickShareLink {...props} />
+  );
+}
+
+/** Create link in one click, and Options… for any other link. */
+function QuickShareLink({
+  canExcludeHistory,
+  disabled = false,
+  createDisabled = false,
+  historyBlocker,
+  onExpandedChange,
+  onCreate
+}: ShareLinkComposerProps) {
+  const hintId = useId();
+  // The quick link keeps its history only where history cannot be left out.
+  const blocked = Boolean(historyBlocker) && !canExcludeHistory;
+  return (
+    <form
+      className="share-link-quick"
+      aria-label="New link"
+      {...(blocked ? {} : { 'aria-describedby': hintId })}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (disabled || createDisabled || blocked) return;
+        onCreate(quickShareLinkDraft(canExcludeHistory));
+      }}
+    >
+      {blocked ? (
+        historyBlocker
+      ) : (
+        <p id={hintId} className="sharing-hint">
+          {canExcludeHistory
+            ? 'View only, the model as it is now without its history.'
+            : 'View only.'}
+        </p>
+      )}
+      <button
+        type="button"
+        className="secondary"
+        aria-expanded={false}
+        disabled={disabled}
+        onClick={() => onExpandedChange(true)}
+      >
+        Options…
+      </button>
+      <button
+        type="submit"
+        className="primary"
+        disabled={disabled || createDisabled || blocked}
+      >
+        Create link
+      </button>
+    </form>
+  );
+}
+
+/** Name, access, history and comments of a new link, before it is made. */
+function ShareLinkOptionsCard({
   canExcludeHistory,
   defaultMode = 'view',
   nameable,
@@ -300,7 +382,7 @@ export function ShareLinkComposer({
   commentsHint,
   footnote,
   historyBlocker,
-  onCancel,
+  onExpandedChange,
   onCreate
 }: ShareLinkComposerProps) {
   // Tweak includes View.
@@ -390,16 +472,14 @@ export function ShareLinkComposer({
       {blocked ? historyBlocker : null}
       <div className="share-link-composer-actions">
         <p className="sharing-hint">{footnote}</p>
-        {onCancel ? (
-          <button
-            type="button"
-            className="secondary"
-            disabled={disabled}
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className="secondary"
+          disabled={disabled}
+          onClick={() => onExpandedChange(false)}
+        >
+          Cancel
+        </button>
         <button
           type="submit"
           className="primary"

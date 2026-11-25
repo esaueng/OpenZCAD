@@ -2522,11 +2522,21 @@
   font-weight: var(--fw-medium);
 }
 
-/* The card that makes a new link: name, access, options, Create link. */
-/* A secondary button, drawn as ghost in a dialog like the others. */
-.share-links-new {
-  justify-self: start;
+/* Create link in one click (L11), with Options… for any other link. */
+.share-link-quick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
 }
+
+.share-link-quick > .sharing-hint {
+  flex: 1 1 140px;
+  margin: 0;
+}
+
+/* The options card of a new link: name, access, options, Create link. */
 
 .share-link-composer {
   display: grid;
@@ -2847,6 +2857,24 @@
   border: 1px solid color-mix(in srgb, var(--color-warning) 35%, transparent);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--color-warning) 7%, transparent);
+}
+
+/* L11 (D4): the share delegation ends soon but still holds, and any action
+   that opens the identity key renews it. A quiet chip, which confirms. */
+.share-links-confirm-by {
+  justify-self: start;
+  min-height: 22px;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.share-links-confirm-by:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 .sharing-share-notice .sharing-tag,

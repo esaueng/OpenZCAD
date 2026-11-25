@@ -235,7 +235,9 @@ export function cylinderAnalyticSignature(
 export function unresolvedReferenceError(
   kind: 'edge' | 'face',
   hash: number,
-  candidateCount: number
+  candidateCount: number,
+  /** Why an upstream edit's carry of the pick was refused, when one was. */
+  carryRefusal?: string
 ): Error {
   if (Number.isInteger(hash) && hash >= 1 && hash <= candidateCount) {
     return new AdapterRefusal(
@@ -249,7 +251,9 @@ export function unresolvedReferenceError(
   // can bring the orphaned hash back — say what actually repairs it.
   return new AdapterRefusal(
     'reference_missing',
-    `A selected ${kind} no longer exists. Re-select the ${kind}${kind === 'edge' ? 's' : '(s)'} and re-create this feature.`
+    `A selected ${kind} no longer exists. Re-select the ${kind}${kind === 'edge' ? 's' : '(s)'} and re-create this feature.`,
+    undefined,
+    carryRefusal
   );
 }
 

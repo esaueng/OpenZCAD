@@ -179,10 +179,18 @@ export function firstManualSuppressionIndex(
  * stop resolving the moment the step is resumed or repaired. The legacy
  * selection stays as it was and is repaired on the first build with nothing
  * suppressed or failed before it.
+ *
+ * `keepCarries` keeps the feature's carried hashes (`edgeHashRepairs`) when
+ * the only interruption before it is a manual suppression. A carry is not a
+ * name: it moves a hash-only pick that was stored against this same model,
+ * suppression included, to where a dimension edit moved its edges, so it is
+ * as valid as the pick it replaces. A failure still withholds it, since the
+ * failed step's input stands in for a result the pick was never made on.
  */
 export function withholdReferenceRepairs(
   result: ExactBuildResult,
-  feature: FeatureNode
+  feature: FeatureNode,
+  { keepCarries = false }: { keepCarries?: boolean } = {}
 ): void {
   const own = (repair: { featureId: string }) =>
     repair.featureId === feature.featureId;
@@ -191,7 +199,7 @@ export function withholdReferenceRepairs(
       (repair) => !own(repair)
     );
   }
-  if (result.edgeHashRepairs?.some(own)) {
+  if (!keepCarries && result.edgeHashRepairs?.some(own)) {
     result.edgeHashRepairs = result.edgeHashRepairs.filter(
       (repair) => !own(repair)
     );
