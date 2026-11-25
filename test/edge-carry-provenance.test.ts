@@ -47,11 +47,14 @@ interface Part {
 
 function bossPart(): Part {
   let document = addPrimitiveFeature(
-    createProjectDocument('Carry provenance', user),
+    setParameter(createProjectDocument('Carry provenance', user), {
+      name: 'l',
+      expression: '18'
+    }),
     {
       name: 'Base',
       primitiveKind: 'box',
-      dimensions: { width: 30, depth: 5, height: 18 }
+      dimensions: { width: 30, depth: 5, height: 'l' }
     }
   );
   const baseId = document.bodyOrder[0]!;
@@ -253,6 +256,36 @@ describe(
       } finally {
         cold.dispose();
       }
+    });
+
+    it('does not carry onward from a swap the stored hash followed', async () => {
+      const part = bossPart();
+      const model = await chamfered(part, 30, 10);
+      // Swap the bosses at the same height and lengthen the plate: A's
+      // picked edge and B's new one sit at the same place, so the stored
+      // hash resolves directly to B's, while the plate's edges change the
+      // input's hash set.
+      const swapped = setParameter(
+        setParameter(
+          setParameter(model.document, { name: 'a', expression: '8' }),
+          { name: 'b', expression: '28' }
+        ),
+        { name: 'l', expression: '20' }
+      );
+      const first = await validate(swapped);
+      expect(first.edgeHashRepairs ?? []).toEqual([]);
+      // Raising the bosses must not carry the pick on, now from boss B.
+      const raised = setParameter(
+        { ...swapped, derived: first },
+        { name: 'h', expression: '10' }
+      );
+      const result = await validate(raised);
+      expect(result.edgeHashRepairs ?? []).toEqual([]);
+      expect(
+        result.featureWarnings?.find((entry) => entry.kind === 'build-failed')
+          ?.kernelRefusal
+      ).toMatchObject({ code: 'reference_missing', reason: 'carry_no_record' });
+      expect(carriedSelectionCommands(raised, result).commands).toEqual([]);
     });
 
     it('refuses when two edges play the picked edge’s role', async () => {

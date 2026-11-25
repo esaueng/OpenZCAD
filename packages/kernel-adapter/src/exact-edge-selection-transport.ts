@@ -209,6 +209,11 @@ export class EdgeSelectionMemory {
     return this.records.get(key)?.get(signature);
   }
 
+  /** Every layout recorded for one feature, oldest first. */
+  recordsFor(key: string): SelectionRecord[] {
+    return [...(this.records.get(key)?.values() ?? [])];
+  }
+
   latestRecord(key: string): SelectionRecord | undefined {
     const signature = this.latest.get(key);
     return signature === undefined
@@ -575,6 +580,24 @@ export function rememberEdgeSelection(
     for (const { storedHash, handle } of selected) {
       const recorded = previous.selected.get(storedHash);
       if (recorded !== undefined && recorded !== current.labels.get(handle)) {
+        memory.forget(key);
+        return;
+      }
+    }
+  }
+  // A stored hash names geometry, not a feature: when another feature's
+  // edge comes to sit exactly where the pick was (two bosses swapped at the
+  // same height), the hash resolves to it directly. Recording that would
+  // replace the pick's provenance with the other feature's and let a later
+  // edit carry onward from there, so a pick that reads as a different
+  // feature than any earlier record drops the records instead.
+  const earlier = memory.recordsFor(key);
+  for (const { storedHash, handle } of selected) {
+    const origin = edgeProvenance(current, handle, identity);
+    if (origin === null) continue;
+    for (const record of earlier) {
+      const recorded = record.provenance.get(storedHash);
+      if (recorded !== undefined && recorded !== origin) {
         memory.forget(key);
         return;
       }
