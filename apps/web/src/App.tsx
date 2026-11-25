@@ -1022,10 +1022,11 @@ import type {
 } from './lib/sketch/edits';
 import type { SketchEditValidation } from './lib/sketch/editing';
 import { useSketchFilletDraft } from './lib/sketch/useSketchFilletDraft';
+import { planFaceOffset } from './lib/interaction/faceOffsetPlan';
 import {
-  planFaceOffset,
-  withFaceTravelHint
-} from './lib/interaction/faceOffsetPlan';
+  withFaceSweepReading,
+  type FaceSweepReading
+} from './lib/refusalLanguage';
 import { extrudeCapAncestor } from './lib/interaction/extrudeCapAncestry';
 import { updateProfileSelection } from './lib/profileSelection';
 import {
@@ -2542,7 +2543,7 @@ interface OffsetEditPlan {
   successMessage: string;
   validationTargets?: AffectedFeatureTarget[];
   preflightRejection?: string;
-  travelHint?: () => string | undefined;
+  sweepReading?: () => FaceSweepReading | undefined;
 }
 
 interface OffsetPreviewCandidate {
@@ -2559,8 +2560,8 @@ interface OffsetPreviewCandidate {
   validationTargets?: AffectedFeatureTarget[];
   /** A refusal known before any rebuild; the preview reports it unbuilt. */
   preflightRejection?: string;
-  /** Mesh estimate used only after an exact collision refusal. */
-  travelHint?: () => string | undefined;
+  /** The display mesh's view of the path, read only after a collision refusal. */
+  sweepReading?: () => FaceSweepReading | undefined;
 }
 
 type RadiusPreviewCandidate = Omit<
@@ -4958,6 +4959,8 @@ export function App() {
     selectionMovedOn?: boolean;
     cancelReleasedDisplay?: () => void;
     restoreOffsetDisplay?: () => void;
+    /** Rewords the release's refusal as its preview would (a face move). */
+    rewordRefusal?: (diagnostic: CommandDiagnostic) => CommandDiagnostic;
   } | null>(null);
 
   /** Whether the selection is still the one a direct edit was checked for. */
@@ -6245,7 +6248,7 @@ export function App() {
               ...(plan.preflightRejection
                 ? { preflightRejection: plan.preflightRejection }
                 : {}),
-              ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
+              ...(plan.sweepReading ? { sweepReading: plan.sweepReading } : {})
             }
           : null;
       },
@@ -6278,23 +6281,10 @@ export function App() {
         if (rejection) {
           // The whole diagnostic crosses the async boundary — its category,
           // the kernel's words and any limit — not just its sentence. A
-          // travel estimate leads the detail, as it did when it rode the
-          // sentence.
-          const hinted = withFaceTravelHint(
-            rejection.message,
-            candidate.travelHint
-          );
-          const hint =
-            hinted === rejection.message
-              ? null
-              : hinted.slice(rejection.message.length + 1);
+          // collision the display mesh does not show is said as the kernel's
+          // doubt, not as an obstacle; a travel estimate leads the detail.
           throw new PreviewRefusalError(
-            hint
-              ? {
-                  ...rejection,
-                  detail: [hint, rejection.detail].filter(Boolean).join('\n')
-                }
-              : rejection
+            withFaceSweepReading(rejection, candidate.sweepReading)
           );
         }
         return derived;
@@ -6777,11 +6767,12 @@ export function App() {
         : null;
       dispatchInteraction({ type: 'validation-start', value });
     },
-    onValidationFailed: (diagnostic, value) => {
+    onValidationFailed: (refusal, value) => {
+      const pending = pendingDirectEditRef.current;
+      const diagnostic = pending?.rewordRefusal?.(refusal) ?? refusal;
       // What the status line and the top bar say: a face offset's limit
       // with its unit, as the card says it. The record keeps the adapter's.
       const shownMessage = shownOffsetLimit(diagnostic).message;
-      const pending = pendingDirectEditRef.current;
       pending?.cancelReleasedDisplay?.();
       pendingDirectEditRef.current = null;
       const current = managerRef.current?.document;
@@ -33501,7 +33492,7 @@ export function App() {
       bodyId,
       editedFeatureId: null,
       successMessage: documentOffsetMessage(base, offset),
-      ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
+      ...(plan.sweepReading ? { sweepReading: plan.sweepReading } : {})
     };
   }
 
@@ -33709,8 +33700,17 @@ export function App() {
       undefined,
       reuse ? reuse.validationTargets : plan.validationTargets
     );
+    // The release says a collision the mesh does not show as its preview
+    // does. Only the sentence: no travel estimate joins the recorded detail.
+    const sweepReading = reuse ? reuse.sweepReading : plan.sweepReading;
+    const release = pendingDirectEditRef.current;
+    if (sweepReading && release?.value === offset)
+      release.rewordRefusal = (diagnostic) =>
+        withFaceSweepReading(diagnostic, () => {
+          const reading = sweepReading();
+          return reading?.kind === 'clear' ? reading : undefined;
+        });
     if (releasedFrame) {
-      const release = pendingDirectEditRef.current;
       if (release) release.cancelReleasedDisplay = releasedFrame.cancel;
       else releasedFrame.cancel();
       const candidate = releasedFrame.document;

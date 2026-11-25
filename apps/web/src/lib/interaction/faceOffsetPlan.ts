@@ -26,7 +26,8 @@ import {
   primitiveCylinderCapAncestor
 } from './cylinderPrimitiveAncestry';
 import { extrudeCapAncestor } from './extrudeCapAncestry';
-import { planarFaceTravel } from './planarFaceTravel';
+import type { FaceSweepReading } from '../refusalLanguage';
+import { planarFaceSweepClear, planarFaceTravel } from './planarFaceTravel';
 import { gearCapAncestor } from './gearCapAncestry';
 
 /**
@@ -69,8 +70,11 @@ export type FaceOffsetPlan =
   | {
       kind: 'direct-edit';
       command: AnyCommand;
-      /** Mesh estimate shown only after the exact kernel refuses the move. */
-      travelHint?: () => string | undefined;
+      /**
+       * What the display mesh shows of the swept path, read only after the
+       * exact kernel refuses the move (`withFaceSweepReading`).
+       */
+      sweepReading?: () => FaceSweepReading | undefined;
     };
 
 /** What the handle's "Total" readout adds the drag to, and in which sense. */
@@ -230,15 +234,16 @@ function roundedLength(value: number): string {
 }
 
 /**
- * An approximate distance hint for a local face move. The display mesh
- * cannot decide whether the exact kernel will accept an offset.
+ * What the display mesh shows of a refused local face move's path. The mesh
+ * cannot decide whether the exact kernel will accept an offset; it can only
+ * say whether anything visible is in the way.
  */
-function faceTravelHint(
+function faceSweepReading(
   document: ProjectDocument,
   bodyId: BodyId,
   face: FaceTopology,
   offset: number
-): string | undefined {
+): FaceSweepReading | undefined {
   const representation = ownEntry(document.derived.bodyRepresentations, bodyId);
   // Measured on the body the plan edits, never on a stale copy of the face.
   const current = representation?.topology?.faces.find(
@@ -255,30 +260,32 @@ function faceTravelHint(
     travel.inward !== null &&
     -offset > travel.inward + travel.tolerance
   ) {
-    return `The display mesh suggests about ${roundedLength(travel.inward)} ${units} of material behind this face.`;
+    return {
+      kind: 'blocked',
+      estimate: `The display mesh suggests about ${roundedLength(travel.inward)} ${units} of material behind this face.`
+    };
   }
   if (
     offset > 0 &&
     travel.outward !== null &&
     offset > travel.outward + travel.tolerance
   ) {
-    return `The display mesh suggests another part of the body about ${roundedLength(travel.outward)} ${units} in front of this face.`;
+    return {
+      kind: 'blocked',
+      estimate: `The display mesh suggests another part of the body about ${roundedLength(travel.outward)} ${units} in front of this face.`
+    };
   }
-  return undefined;
-}
-
-/** Add the mesh estimate only to an exact nonadjacent-face refusal. */
-export function withFaceTravelHint(
-  message: string,
-  hint?: string | (() => string | undefined)
-): string {
-  if (
-    message !==
-    'The face would run into another part of the body before it got that far.'
-  )
-    return message;
-  const estimate = typeof hint === 'function' ? hint() : hint;
-  return estimate ? `${message}\n${estimate}` : message;
+  // The kernel's false refusals come from the loose bounds of curved faces;
+  // an all-planar body has none to blame, so its refusal stands as written.
+  const curved = representation.topology?.faces.some(
+    (candidate) =>
+      candidate.geometry !== undefined &&
+      candidate.geometry.surfaceType !== 'plane'
+  );
+  if (!curved) return undefined;
+  return planarFaceSweepClear(representation, current, offset) === true
+    ? { kind: 'clear' }
+    : undefined;
 }
 
 /** Pure. Null when the face is not an exact plane or the offset is a no-op. */
@@ -477,7 +484,7 @@ export function planFaceOffset(
 
   return {
     kind: 'direct-edit',
-    travelHint: () => faceTravelHint(document, bodyId, face, offset),
+    sweepReading: () => faceSweepReading(document, bodyId, face, offset),
     command: commandFactories.directEditBody({
       name: DIRECT_EDIT_NAME,
       targetBodyId: bodyId,

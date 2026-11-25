@@ -29,6 +29,54 @@ export interface PlainRefusal {
   code?: string;
 }
 
+/** A face move the kernel refused because the swept face meets another. */
+export const FACE_SWEEP_BLOCKED =
+  'The face would run into another part of the body before it got that far.';
+
+/**
+ * The same refusal where the display mesh shows the swept path empty. The
+ * kernel's sweep check compares bounding boxes, and the box of a curved or
+ * freeform face (a thread most of all) reaches far past the face itself, so
+ * it refuses moves with nothing in the way (a captured case cleared the
+ * thread that "blocked" it by about 22 mm). Saying the face would hit
+ * something sent people looking for a collision that is not there.
+ */
+export const FACE_SWEEP_UNPROVEN =
+  "The geometry kernel couldn't prove this move is clear of nearby curved faces (such as a thread). Try a smaller step, or make the change before adding the thread.";
+
+/**
+ * What the display mesh says about a refused face move's path: empty, or
+ * blocked, with a distance estimate when the mesh measured one.
+ */
+export type FaceSweepReading =
+  { kind: 'clear' } | { kind: 'blocked'; estimate?: string };
+
+/**
+ * Rewords a {@link FACE_SWEEP_BLOCKED} refusal by what the display mesh
+ * shows of the path; every other refusal, and an unread path, pass
+ * through. A clear path takes {@link FACE_SWEEP_UNPROVEN} and drops any
+ * limit, which would name an obstacle the mesh does not show; the kernel's
+ * words stay in the detail. A blocked path keeps the sentence, and its
+ * estimate leads the detail.
+ */
+export function withFaceSweepReading<
+  T extends { message: string; detail?: string; limit?: number }
+>(refusal: T, read?: () => FaceSweepReading | undefined): T {
+  if (refusal.message !== FACE_SWEEP_BLOCKED || !read) return refusal;
+  const reading = read();
+  if (reading?.kind === 'clear') {
+    const { limit: _limit, ...rest } = refusal;
+    return { ...rest, message: FACE_SWEEP_UNPROVEN } as T;
+  }
+  if (reading?.estimate) {
+    return {
+      ...refusal,
+      detail: [reading.estimate, refusal.detail].filter(Boolean).join('\n')
+    };
+  }
+  return refusal;
+}
+
 /**
  * A STEP parser refusal needs an action as well as the broken entity number.
  * Keep this at the import boundary: a generic kernel failure must not tell a
@@ -272,8 +320,7 @@ const TRANSLATIONS: readonly Translation[] = [
     // stretch; anything else in the path refuses the move.
     pattern:
       /swept face reaches nonadjacent face|sweep may contact a nonadjacent|crosses a nonadjacent source boundary/i,
-    sentence:
-      'The face would run into another part of the body before it got that far.'
+    sentence: FACE_SWEEP_BLOCKED
   },
   {
     // Draft, chamfer and split all re-trim the faces around the one they
