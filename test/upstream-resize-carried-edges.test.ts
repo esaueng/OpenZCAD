@@ -911,7 +911,9 @@ describe(
     }
 
     /** Every warning but a suppressed step's note and an advisory. */
-    function failures(derived: ProjectDocument['derived']) {
+    function failures(
+      derived: Pick<ProjectDocument['derived'], 'featureWarnings'>
+    ) {
       return (derived.featureWarnings ?? [])
         .filter(
           (warning) =>
