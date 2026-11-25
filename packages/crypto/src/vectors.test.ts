@@ -770,6 +770,50 @@ describe('project data vectors', () => {
 const CONTACTS_SIGNATURE =
   '0117f76fc521ccfa9d3d245522ac35b0b64a6bf5034d15adfac02b6f7b87ed5dc069f69665f5a4d0ac62d75b45a23009f3f5c3f6894395c953188593e165f0278e';
 
+describe('contacts entry v2 vector (trust on first use)', () => {
+  it('encodes a fixed trust entry as version 2, the v1 layout with action 5', async () => {
+    const signer = await importFixedPair(TEST_SIGNER_JWK, 'ECDSA');
+    const contactIdentity = await publicKeyHash(
+      await exportPublicKey(signer.publicKey)
+    );
+    const fields = {
+      userId: 'user_vector',
+      sequence: 2,
+      previousEntryHash: patternBytes(32, 0xa0),
+      issuedAt: 1_760_000_000_003,
+      action: 'trust' as const,
+      contactUserId: 'user_contact',
+      identityKeyHash: contactIdentity,
+      deviceListHead: {
+        sequence: 0,
+        entryHash: fromHex(
+          '204a3f11c0f7482a9b193bf696dbec5190b6c5820766dbd7ec21955df10b14e8'
+        )
+      }
+    };
+    const entry = encodeContactsEntry(fields);
+    // "OZK" | 2 | u32 2 | u8 32 + previous | u8 11 "user_vector" | u64
+    // issuedAt | u8 5 trust | u8 12 "user_contact" | identity key hash |
+    // u32 0 | device-list entry hash. Computed from the documented layout
+    // (Python `hashlib`), not from this code.
+    expect(toHex(entry)).toBe(
+      '4f5a4b020000000220a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf0b757365725f766563746f7200000199c82cc003050c757365725f636f6e746163747c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b00000000204a3f11c0f7482a9b193bf696dbec5190b6c5820766dbd7ec21955df10b14e8'
+    );
+    expect(toHex(await contactsEntryHash(entry))).toBe(
+      '1af8c3567f3717ccf61fae2af1fccd508eca41dee06229c3a831ad51f7e8ac22'
+    );
+    expect(decodeContactsEntry(entry)).toEqual(fields);
+    // A trust entry under version 1 is not canonical, and version 1 entries
+    // of the other actions are unchanged (the v1 vector below).
+    const asV1 = entry.slice();
+    asV1[3] = 1;
+    expect(() => decodeContactsEntry(asV1)).toThrow();
+    const asV3 = entry.slice();
+    asV3[3] = 3;
+    expect(() => decodeContactsEntry(asV3)).toThrow(/version 3/);
+  });
+});
+
 describe('contacts entry v1 vector', () => {
   it('encodes a fixed verification and checks a recorded signature with raw WebCrypto', async () => {
     const signer = await importFixedPair(TEST_SIGNER_JWK, 'ECDSA');

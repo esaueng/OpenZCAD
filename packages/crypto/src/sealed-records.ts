@@ -283,19 +283,3 @@ export const SHARE_LINK_NAMES_RECORD: SealedRecordKind = {
   maxPlaintextBytes: 90 * 1024,
   noun: 'share link names record'
 };
-
-/**
- * The identities an account's devices pinned for other people on first use
- * (ADR-024 amendment 2026-11-25): every owner device reads the same pins, so
- * an identity one device added is what the others compare against. Only the
- * account's own devices read it.
- */
-export const FIRST_USE_PINS_RECORD: SealedRecordKind = {
-  keyInfo: 'OpenZCAD E2EE v1 first-use pins key',
-  aadLabel: 'OpenZCAD E2EE v1 first-use pins\0',
-  // About 300 bytes per person (an identity hash or two, a stamp): 90 KiB
-  // holds a few hundred people and stays under the Worker's 128 KiB
-  // character cap once sealed and base64url-encoded.
-  maxPlaintextBytes: 90 * 1024,
-  noun: 'first-use pins record'
-};

@@ -1421,7 +1421,8 @@ describe('a shared project (slice 7-4)', () => {
         identityKeyHash: code.replace(/\D/g, ''),
         code,
         email,
-        verified: true
+        verified: true,
+        pinned: true
       }
     });
     const roster = [
@@ -1520,7 +1521,8 @@ describe('a shared project (slice 7-4)', () => {
         identityKeyHash: code.replace(/\D/g, ''),
         code,
         email,
-        verified: true
+        verified: true,
+        pinned: true
       }
     });
     const roster = [

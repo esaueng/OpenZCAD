@@ -239,6 +239,7 @@ export {
 export {
   CONTACT_ACTIONS,
   CONTACTS_ENTRY_VERSION_1,
+  CONTACTS_ENTRY_VERSION_2,
   CONTACTS_LIST_KEY_INFO,
   MAX_CONTACTS_ENTRIES,
   MAX_CONTACTS_ENTRY_BYTES,
@@ -370,7 +371,6 @@ export {
 } from './library-folders';
 export {
   ACCOUNT_SETTINGS_RECORD,
-  FIRST_USE_PINS_RECORD,
   openRecord,
   readSealedRecordHeader,
   sealRecord,

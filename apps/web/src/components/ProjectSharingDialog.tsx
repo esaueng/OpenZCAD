@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useId,
@@ -53,12 +55,20 @@ import {
   ShareLinkNameField
 } from './ShareLinkCard';
 import type { OwnerInvitation, PersonTrust } from '../lib/e2ee/invitations';
+import type { UnlockAuthorization } from '../lib/e2ee/accountKeys';
+import type { AuthorizeRequest } from './encryption/AuthorizeDialog';
 import { useEncryptionStatus } from '../lib/e2ee/encryptionStatus';
 import { describeFailure, type PlainFailure } from '../lib/plainFailure';
 import { FailureDetails } from './FailureDetails';
 import { PrivateEmailInput, usePersonalInfoVisible } from './PersonalInfo';
 
 const defaultClient = createProjectSharingClient();
+/** The passkey-or-recovery-key confirmation, loaded with its crypto. */
+const LazyAuthorizeDialog = lazy(() =>
+  import('./encryption/AuthorizeDialog').then((module) => ({
+    default: module.AuthorizeDialog
+  }))
+);
 const defaultShareLinkClient = createProjectShareLinkClient();
 
 /**
@@ -81,21 +91,32 @@ export interface EncryptedSharingClient {
   revoke(projectId: string, invitationId: string): Promise<void>;
   /**
    * The owner's explicit confirmation of the person who accepted
-   * (`confirm-add`, or `confirm-re-add` for someone removed before), by
-   * the identity the confirmation showed: never done in the background.
+   * (`confirm-new` for someone new to the account, `confirm-add`, or
+   * `confirm-re-add` for someone removed before), by the identity the
+   * confirmation showed: never done in the background. Someone new is
+   * trusted first, signed with `authorization` (a passkey touch or the
+   * recovery key), then added.
    */
   confirmAdd?(
     projectId: string,
     invitationId: string,
-    identityKeyHash: string
+    identityKeyHash: string,
+    authorization?: UnlockAuthorization
   ): Promise<void>;
   /** Where this browser stands with each person's keys; unknown ones left out. */
   peopleTrust?(userIds: readonly string[]): Promise<PersonTrust[]>;
   /**
    * The owner's explicit "Trust new keys" for someone whose identity
-   * changed, by the identity shown: never done in the background.
+   * changed, by the identity shown, signed with `authorization`: never done
+   * in the background.
    */
-  trustNewKeys?(userId: string, identityKeyHash: string): Promise<void>;
+  trustNewKeys?(
+    userId: string,
+    identityKeyHash: string,
+    authorization: UnlockAuthorization
+  ): Promise<void>;
+  /** Whether a passkey can sign here (the account has one, and PRF works). */
+  passkeyAvailable?(): Promise<boolean>;
   /**
    * The owner's role change of a member (slice 5-4): an MLS Commit the
    * Worker mirrors into the member list.
@@ -152,15 +173,28 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
     ]);
     return peopleTrust(await encryptedInvitations(), userIds);
   },
-  async trustNewKeys(userId, identityKeyHash) {
-    const [{ encryptedInvitations }, { trustInviteeKeys }] = await Promise.all([
+  async trustNewKeys(userId, identityKeyHash, authorization) {
+    const [{ encryptedInvitations }, { trustPerson }] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/invitations')
     ]);
-    await trustInviteeKeys(
+    await trustPerson(
       await encryptedInvitations(),
       userId,
-      identityKeyHash
+      identityKeyHash,
+      authorization
+    );
+  },
+  async passkeyAvailable() {
+    const [{ encryptedInvitations }, { passkeysAvailable }] = await Promise.all(
+      [import('../lib/e2ee/encryptedProjects'), import('../lib/e2ee/passkeys')]
+    );
+    const ctx = await encryptedInvitations();
+    return (
+      passkeysAvailable() &&
+      ctx.groups.account.list.unlockTargets.some(
+        (target) => target.kind === 'passkey'
+      )
     );
   },
   async revoke(projectId, invitationId) {
@@ -176,7 +210,7 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
       invitationId
     );
   },
-  async confirmAdd(projectId, invitationId, identityKeyHash) {
+  async confirmAdd(projectId, invitationId, identityKeyHash, authorization) {
     const [{ encryptedInvitations }, invitations] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/invitations')
@@ -193,6 +227,18 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
     ) {
       throw new Error(
         'This invitation changed since you reviewed it. Nothing was added; check it again.'
+      );
+    }
+    // Someone new to the account: the signed trust first, then the Add.
+    if (!invitation.acceptor.pinned) {
+      if (authorization === undefined) {
+        throw new Error('Confirm with your passkey or recovery key first.');
+      }
+      await invitations.trustPerson(
+        ctx,
+        invitation.acceptor.userId,
+        identityKeyHash,
+        authorization
       );
     }
     await invitations.addInvitedMember(ctx, invitation.record, {
@@ -220,6 +266,7 @@ const ENCRYPTED_STATE_LABELS: Record<OwnerInvitation['state'], string> = {
   'keys-changed': 'Encryption keys changed',
   'needs-acceptance': 'Waiting for them to accept again',
   'confirm-re-add': 'Removed before: confirm to add back',
+  'confirm-new': 'Accepted: confirm to add',
   'confirm-add': 'Accepted: confirm to add',
   'accepted-by-other': 'Accepted by someone you did not invite',
   ready: 'Adding',
@@ -234,6 +281,7 @@ const OPEN_ENCRYPTED_STATES = new Set<OwnerInvitation['state']>([
   'keys-changed',
   'needs-acceptance',
   'confirm-re-add',
+  'confirm-new',
   'confirm-add',
   'accepted-by-other',
   'ready'
@@ -241,6 +289,7 @@ const OPEN_ENCRYPTED_STATES = new Set<OwnerInvitation['state']>([
 
 /** Invitations the owner confirms (or declines) before anyone is added. */
 const CONFIRMABLE_STATES = new Set<OwnerInvitation['state']>([
+  'confirm-new',
   'confirm-add',
   'confirm-re-add'
 ]);
@@ -647,6 +696,37 @@ export function ProjectSharingDialog({
   const [memberTrust, setMemberTrust] = useState<
     ReadonlyMap<string, PersonTrust>
   >(new Map());
+  // The passkey-or-recovery-key confirmation of a signed trust: for someone
+  // new to the account, and for Trust new keys. Never in the background.
+  const [signature, setSignature] = useState<AuthorizeRequest | null>(null);
+  const [signing, setSigning] = useState(false);
+  const askSignature = async (
+    request: Omit<AuthorizeRequest, 'passkey' | 'work'> & {
+      work(authorization: UnlockAuthorization): Promise<void>;
+    }
+  ) => {
+    const passkey = await (
+      encryptedClient.passkeyAvailable?.() ?? Promise.resolve(false)
+    ).catch(() => false);
+    setSignature({ ...request, passkey });
+  };
+  const runSignature = async (
+    work: () => Promise<unknown>,
+    options?: { onError?(message: string): void }
+  ): Promise<boolean> => {
+    setSigning(true);
+    try {
+      await work();
+      return true;
+    } catch (caught) {
+      const failure = errorMessage(caught);
+      if (options?.onError) options.onError(failure.message);
+      else setError(failure);
+      return false;
+    } finally {
+      setSigning(false);
+    }
+  };
   const [invitationSentTo, setInvitationSentTo] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(role === 'owner');
   const [busy, setBusy] = useState<string | null>(null);
@@ -1305,16 +1385,19 @@ export function ProjectSharingDialog({
                             onTrust={
                               encryptedClient.trustNewKeys
                                 ? () =>
-                                    void mutate(
-                                      `trust:${member.userId}`,
-                                      async () => {
+                                    void askSignature({
+                                      title: `Trust ${name}'s new keys`,
+                                      body: 'This signs that you trust their new keys, on every device of yours. It does not verify them: compare codes for that.',
+                                      actionLabel: 'Trust new keys',
+                                      work: async (authorization) => {
                                         await encryptedClient.trustNewKeys!(
                                           member.userId,
-                                          trust.identityKeyHash
+                                          trust.identityKeyHash,
+                                          authorization
                                         );
                                         await refresh();
                                       }
-                                    )
+                                    })
                                 : undefined
                             }
                             onRemove={() => setConfirmingRemoval(member.userId)}
@@ -1501,16 +1584,19 @@ export function ProjectSharingDialog({
                                   onTrust={
                                     encryptedClient.trustNewKeys
                                       ? () =>
-                                          void mutate(
-                                            `trust:${id}`,
-                                            async () => {
+                                          void askSignature({
+                                            title: `Trust ${who}'s new keys`,
+                                            body: 'This signs that you trust their new keys, on every device of yours, and then adds them. It does not verify them: compare codes for that.',
+                                            actionLabel: 'Trust new keys',
+                                            work: async (authorization) => {
                                               await encryptedClient.trustNewKeys!(
                                                 acceptor.userId,
-                                                acceptor.identityKeyHash
+                                                acceptor.identityKeyHash,
+                                                authorization
                                               );
                                               await refresh();
                                             }
-                                          )
+                                          })
                                       : undefined
                                   }
                                   onDecline={() =>
@@ -1555,7 +1641,9 @@ export function ProjectSharingDialog({
                                   <p className="sharing-hint">
                                     {invitation.state === 'confirm-re-add'
                                       ? 'You removed them from this project before. '
-                                      : 'This browser has not seen every change to who is in this project. '}
+                                      : invitation.state === 'confirm-new'
+                                        ? 'They are new to you: confirming signs that you trust their keys, on every device of yours, then adds them. '
+                                        : 'This browser has not seen every change to who is in this project. '}
                                     Add them only if this is the person you
                                     invited. Their contact code:
                                   </p>
@@ -1602,20 +1690,37 @@ export function ProjectSharingDialog({
                                       className="primary"
                                       disabled={interactionBusy}
                                       onClick={() =>
-                                        void mutate(
-                                          `confirm-add:${id}`,
-                                          async () => {
-                                            await encryptedClient.confirmAdd!(
-                                              projectId,
-                                              id,
-                                              acceptor.identityKeyHash
-                                            );
-                                            await refresh();
-                                          }
-                                        )
+                                        acceptor.pinned
+                                          ? void mutate(
+                                              `confirm-add:${id}`,
+                                              async () => {
+                                                await encryptedClient.confirmAdd!(
+                                                  projectId,
+                                                  id,
+                                                  acceptor.identityKeyHash
+                                                );
+                                                await refresh();
+                                              }
+                                            )
+                                          : // New to the account: one signed
+                                            // confirmation, then the Add.
+                                            void askSignature({
+                                              title: `Confirm ${who}`,
+                                              body: `${who} accepted your invitation. Confirming signs that you trust their keys, on every device of yours, then adds them. It does not verify them: compare codes for that.`,
+                                              actionLabel: 'Confirm',
+                                              work: async (authorization) => {
+                                                await encryptedClient.confirmAdd!(
+                                                  projectId,
+                                                  id,
+                                                  acceptor.identityKeyHash,
+                                                  authorization
+                                                );
+                                                await refresh();
+                                              }
+                                            })
                                       }
                                     >
-                                      Add
+                                      {acceptor.pinned ? 'Add' : 'Confirm'}
                                     </button>
                                   </div>
                                 </div>
@@ -1932,6 +2037,16 @@ export function ProjectSharingDialog({
           </footer>
         ) : null}
       </div>
+      {signature ? (
+        <Suspense fallback={null}>
+          <LazyAuthorizeDialog
+            request={signature}
+            busy={signing}
+            run={runSignature}
+            onClose={() => setSignature(null)}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

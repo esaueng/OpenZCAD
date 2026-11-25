@@ -13,15 +13,16 @@
  *   statement version 3): only they are then added. An address alone never
  *   binds anyone.
  * - **Trust on first use (ADR-024 amendment 2026-11-25).** Neither side
- *   has to compare codes first. The invitee's browser accepts the owner
- *   identity whose device signed the statement it checks, and the owner's
- *   browser adds the identity whose device signed a valid acceptance; each
- *   identity becomes the pin for that person (the owner's project group,
- *   and this browser's contact pins). Comparing codes stays available and
- *   is shown as Verified or Not verified, but nothing waits on it. A
- *   person whose pinned identity changed (`InvitationPerson.keyChanged`) is
- *   never added or joined automatically: the owner reviews the change, or
- *   trusts the new keys explicitly (`trustNewKeys`).
+ *   has to compare codes. The identity-signed contacts list is the one
+ *   store of who is trusted, across the account's devices: someone it pins
+ *   (verified, or `trusted` on first use) is added, or joined, without
+ *   asking. A person new to the account takes one explicit confirmation,
+ *   which signs a `trust` entry for the identity whose device signed the
+ *   acceptance (or the statement), with one passkey touch or the recovery
+ *   key, and only then adds or joins (`trustPerson`). Nothing in the
+ *   background signs. A person whose pinned identity changed
+ *   (`InvitationPerson.keyChanged`) is never added or joined: the owner
+ *   reviews the change or trusts the new keys, both signed.
  * - **Invitee: accept, publish.** Accepting binds the account; the
  *   invitee's browser checks the statement against the owner's device list
  *   (checked against its pins) and each of its online certified devices
@@ -105,21 +106,15 @@ import {
   type E2eeInvitationsApi,
   type E2eeKeyPackageRecord
 } from '@openzcad/shared';
-import type { AccountView } from './accountKeys';
+import type { AccountView, UnlockAuthorization } from './accountKeys';
 import {
   inspectContact,
   loadContacts,
-  trustNewKeys,
+  trustContact,
   type ContactsContext
 } from './contacts';
 import { E2eeApiError } from './e2eeApi';
-import {
-  firstUseStanding,
-  FirstUsePinsUnavailable,
-  pinFirstUse,
-  trustFirstUse,
-  type FirstUsePinStore
-} from './firstUsePins';
+
 import {
   addInvitee,
   joinProjectByWelcome,
@@ -154,14 +149,12 @@ export interface InvitationPerson {
    */
   readonly keyChanged?: boolean;
   /**
-   * Where their identity stands in the account's first-use pins, which
-   * every device of the account shares (`firstUsePins.ts`): `new` (no
-   * device of the account pinned anyone for them yet, so adding them is a
-   * first use), `known` (pinned or trusted, or verified), or `unknown` (the
-   * record could not be read here: nothing is a first use, and the owner
-   * confirms each add). Absent reads as `known`.
+   * Whether the signed contacts list pins exactly this identity (verified,
+   * or trusted on first use) and it counts here: `known`; or `new`, a
+   * person new to the account, whom one signed confirmation trusts first.
+   * Absent reads as `known` (callers that look people up some other way).
    */
-  readonly firstUse?: 'new' | 'known' | 'unknown';
+  readonly firstUse?: 'new' | 'known';
 }
 
 export interface InvitationPeople {
@@ -174,19 +167,16 @@ export interface InvitationPeople {
    */
   verifiedContacts?(email: string): Promise<InvitationPerson[]>;
   /**
-   * The user's explicit "Trust new keys" for `userId`, whose identity
-   * changed: only when it is still the identity `identityKeyHash` (hex)
-   * names, which is what the user was shown.
+   * The user's explicit trust of `userId`'s identity `identityKeyHash`
+   * (hex), which is what they were shown: a signed `trust` entry in the
+   * contacts list (first use, or Trust new keys), with a passkey or the
+   * recovery key. Refused when the identity changed since.
    */
-  trustNewKeys?(userId: string, identityKeyHash: string): Promise<void>;
-  /**
-   * Pins `identityKeyHash` (hex) for `userId` in the account's first-use
-   * pins before an automatic add or join, so every device of the account
-   * compares against it. Throws `keys-changed` when the record holds
-   * another identity for them, and `FirstUsePinsUnavailable` when it cannot
-   * be read or written. Absent: nothing to pin (tests, older callers).
-   */
-  pin?(userId: string, identityKeyHash: string): Promise<void>;
+  trust?(
+    userId: string,
+    identityKeyHash: string,
+    authorization: UnlockAuthorization
+  ): Promise<void>;
 }
 
 export interface InvitationContext {
@@ -200,19 +190,14 @@ export interface InvitationContext {
 }
 
 /**
- * `InvitationPeople` from the contacts module, this browser's pins and the
- * account's first-use pins (`firstUse`, shared by the account's devices;
- * ADR-024 amendment 2026-11-25). An identity is a key change when this
- * browser pinned another one for the person (a seen or verified pin, which
- * the project groups they share also read), or when the account's pins
- * hold another one, or retired it after a trust. Only an explicit trust
- * recorded in the account's pins, or a verification of an identity no
- * trust superseded, counts against a change this browser noticed.
+ * `InvitationPeople` from the contacts module (slice 5-1): the identity
+ * signed contacts list, which pins who is trusted for every device of the
+ * account, and this browser's contact pins, which notice a changed
+ * identity before anything is signed (ADR-024 amendment 2026-11-25).
  */
 export function contactInvitationPeople(
   contacts: ContactsContext,
-  account: AccountView,
-  firstUse: FirstUsePinStore | undefined = contacts.firstUse
+  account: AccountView
 ): InvitationPeople {
   const inspect = async (
     book: Awaited<ReturnType<typeof loadContacts>>,
@@ -225,39 +210,18 @@ export function contactInvitationPeople(
       if (error instanceof E2eeApiError && error.status === 404) return null;
       throw error;
     }
-    let keyChanged = view.keyChanged && !view.keyChangeTrusted;
-    let verified = view.status === 'verified' && !view.keyChanged;
-    let standing: InvitationPerson['firstUse'] = 'known';
-    if (firstUse && view.list) {
-      const identity = toHex(view.list.identityKeyHash);
-      const pins = await firstUse.read().catch(() => null);
-      if (!pins) standing = 'unknown';
-      else {
-        const shared = firstUseStanding(pins, userId, identity);
-        const superseded =
-          pins.people[userId]?.retired.includes(identity) ?? false;
-        // A trust in the account's pins never clears an alarm this browser
-        // recorded: only Trust new keys or a verification here does (they
-        // clear the contact pin's), so a change another tab saw meanwhile
-        // still stops an Add in progress.
-        if (shared === 'changed' && !(verified && !superseded)) {
-          keyChanged = true;
-        } else if (shared === 'new' && !verified) standing = 'new';
-        if (superseded) verified = false;
-      }
-    }
-    if (keyChanged) verified = false;
     return {
       userId,
       email: view.email,
-      status: verified
-        ? 'verified'
-        : view.status === 'no-keys'
-          ? 'no-keys'
-          : 'seen',
+      status:
+        view.status === 'verified' && !view.keyChanged
+          ? 'verified'
+          : view.status === 'no-keys'
+            ? 'no-keys'
+            : 'seen',
       list: view.list,
-      keyChanged,
-      firstUse: standing
+      keyChanged: view.keyChanged,
+      firstUse: view.pinned !== null && !view.keyChanged ? 'known' : 'new'
     };
   };
   return {
@@ -280,7 +244,7 @@ export function contactInvitationPeople(
       }
       return out;
     },
-    async trustNewKeys(userId, identityKeyHash) {
+    async trust(userId, identityKeyHash, authorization) {
       const book = await loadContacts(contacts, account);
       const view = await inspectContact(contacts, book, userId);
       if (!view.list || toHex(view.list.identityKeyHash) !== identityKeyHash) {
@@ -289,34 +253,7 @@ export function contactInvitationPeople(
           'Their keys changed again since you reviewed them. Nothing was trusted; review them again.'
         );
       }
-      // The account's pins first: every device then counts this identity,
-      // and every other one known for them, the signed contacts list's
-      // verification included, never counts again.
-      if (firstUse) {
-        const verifiedIdentity = book.list?.contacts.get(userId);
-        await firstUse.change((pins, at) =>
-          trustFirstUse(
-            pins,
-            userId,
-            identityKeyHash,
-            at,
-            verifiedIdentity ? [toHex(verifiedIdentity.identityKeyHash)] : []
-          )
-        );
-      }
-      await trustNewKeys(contacts, view);
-    },
-    async pin(userId, identityKeyHash) {
-      if (!firstUse) return;
-      const stored = await firstUse.change((pins, at) =>
-        pinFirstUse(pins, userId, identityKeyHash, at)
-      );
-      if (!stored) {
-        throw new InvitationError(
-          'keys-changed',
-          'Their encryption keys are not the ones your account pinned for them. Nothing was shared; review the change.'
-        );
-      }
+      await trustContact(contacts, account, book, view, authorization);
     }
   };
 }
@@ -326,7 +263,7 @@ export interface PersonTrust {
   readonly userId: string;
   /** Compared codes, under their current identity: Verified. */
   readonly verified: boolean;
-  /** Their identity is not the one pinned here, and not trusted again. */
+  /** Their identity is not the one the signed list (or this browser) pins. */
   readonly keyChanged: boolean;
   /** Hex identity key hash now shown: what "Trust new keys" trusts. */
   readonly identityKeyHash: string;
@@ -356,23 +293,24 @@ export async function peopleTrust(
 }
 
 /**
- * The user's explicit "Trust new keys" for `userId`, whose identity changed,
- * by the identity they were shown (hex): a first use again, recorded in
- * this browser's pins. Nothing is added here; the next sweep adds an
- * invitee who is then ready.
+ * The user's explicit trust of `userId`'s identity, by the identity they
+ * were shown (hex): a signed `trust` entry in the contacts list, with
+ * `authorization` (one passkey touch, or the recovery key). For someone
+ * new to the account, and for Trust new keys. Nothing is added here.
  */
-export async function trustInviteeKeys(
+export async function trustPerson(
   ctx: Pick<InvitationContext, 'people'>,
   userId: string,
-  identityKeyHash: string
+  identityKeyHash: string,
+  authorization: UnlockAuthorization
 ): Promise<void> {
-  if (!ctx.people.trustNewKeys) {
+  if (!ctx.people.trust) {
     throw new InvitationError(
       'keys-changed',
-      'This browser cannot record trusted keys. Compare codes with them instead.'
+      'This browser cannot sign who you trust. Compare codes with them instead.'
     );
   }
-  await ctx.people.trustNewKeys(userId, identityKeyHash);
+  await ctx.people.trust(userId, identityKeyHash, authorization);
 }
 
 /**
@@ -394,11 +332,10 @@ export type InvitationErrorCode =
   /** Their keys cannot be looked up (none, or no relation any more). */
   | 'no-keys'
   /**
-   * The identity being added could not be saved to the account's first-use
-   * pins: nothing is added until it is, so the account's other devices
-   * compare against it.
+   * The person is new to this account: one signed confirmation trusts
+   * them first (`trustPerson`), then they are added or joined.
    */
-  | 'pins-unavailable'
+  | 'not-trusted'
   /** The statement does not verify, or is not this account's to complete. */
   | 'statement-invalid'
   /** A claimed KeyPackage is not the invitee's, or its leaf does not verify. */
@@ -946,6 +883,14 @@ export type OwnerInvitationState =
    */
   | 'confirm-re-add'
   /**
+   * Accepted by signature, with KeyPackages, by someone new to this
+   * account (the signed contacts list does not pin them): the owner's one
+   * confirmation signs a `trust` entry for them (`trustPerson`, a passkey
+   * touch or the recovery key), then adds them. Never done in the
+   * background.
+   */
+  | 'confirm-new'
+  /**
    * Accepted, with KeyPackages, but this browser has not seen every
    * removal from the project: the owner confirms the person shown
    * (`acceptor`) or declines.
@@ -986,6 +931,12 @@ export interface InvitationAcceptor {
    * condition for adding them.
    */
   readonly verified: boolean;
+  /**
+   * The signed contacts list pins their identity (trusted or verified):
+   * false for someone new to this account, whom the owner's one signed
+   * confirmation trusts before they are added.
+   */
+  readonly pinned: boolean;
 }
 
 export interface OwnerInvitation {
@@ -1010,6 +961,8 @@ function ownerState(
     readonly known: boolean;
     /** Their identity is not the one pinned here, and not trusted again. */
     readonly keyChanged: boolean;
+    /** The signed contacts list does not pin them yet: new to the account. */
+    readonly newPerson: boolean;
     readonly claimedHere: boolean;
     readonly accepted: boolean;
     readonly otherAccepted: boolean;
@@ -1027,11 +980,9 @@ function ownerState(
   if (standing.keyChanged) return 'keys-changed';
   if (!standing.accepted) return 'needs-acceptance';
   if (standing.otherAccepted) return 'accepted-by-other';
-  return standing.gate === 'removed'
-    ? 'confirm-re-add'
-    : standing.gate === 'confirm'
-      ? 'confirm-add'
-      : 'ready';
+  if (standing.gate === 'removed') return 'confirm-re-add';
+  if (standing.newPerson) return 'confirm-new';
+  return standing.gate === 'confirm' ? 'confirm-add' : 'ready';
 }
 
 /**
@@ -1069,7 +1020,8 @@ async function acceptedBy(
       identityKeyHash: toHex(person.list.identityKeyHash),
       code: await contactCodeOf(person.list),
       email: person.email,
-      verified: person.status === 'verified' && !person.keyChanged
+      verified: person.status === 'verified' && !person.keyChanged,
+      pinned: person.firstUse !== 'new' && !person.keyChanged
     }
   };
 }
@@ -1146,13 +1098,11 @@ async function describe(
       state: ownerState(record, at, {
         known: Boolean(person?.list),
         keyChanged: person?.keyChanged === true,
+        newPerson: person?.firstUse === 'new',
         claimedHere: claimed !== null,
         accepted: acceptor !== null,
         otherAccepted: named !== undefined && acceptor !== null && !bound,
-        gate:
-          person?.firstUse === 'unknown'
-            ? 'confirm'
-            : addGate(removed, record.projectId, record.acceptedByUserId ?? '')
+        gate: addGate(removed, record.projectId, record.acceptedByUserId ?? '')
       }),
       email: emails.get(record.invitationId) ?? person?.email ?? null,
       statement,
@@ -1338,9 +1288,9 @@ export async function addInvitedMember(
   }
   // Asked before claiming anything, and again on every attempt of the
   // Commit after catching up: a removal processed there stops the Add, and
-  // so does a key change another tab, device or lookup recorded meanwhile
-  // (the contact pins and the account's first-use pins are shared storage,
-  // read again here).
+  // so does a key change another tab or device recorded meanwhile (the
+  // signed contacts list and this browser's contact pins, read again here;
+  // the check never clears an alarm).
   const authorize = async () => {
     const current = await ctx.people.inspect(invitee).catch(() => null);
     if (
@@ -1353,13 +1303,15 @@ export async function addInvitedMember(
         'Their encryption keys changed while they were being added. Nothing was added; review the change.'
       );
     }
-    if (confirmed !== undefined) return;
-    if (current.firstUse === 'unknown') {
+    // Someone new to the account is added only once a signed confirmation
+    // pinned them (`trustPerson`), confirmed Add or not.
+    if (current.firstUse === 'new') {
       throw new InvitationError(
-        'needs-confirmation',
-        'The keys of the people you share with could not be checked on this device. Confirm adding this person in the project’s sharing settings.'
+        'not-trusted',
+        'Confirm adding this person first: it signs who you share with, so every device of yours knows them.'
       );
     }
+    if (confirmed !== undefined) return;
     const gate = addGate(
       await removedMembers(ctx),
       invitation.projectId,
@@ -1379,19 +1331,6 @@ export async function addInvitedMember(
     }
   };
   await authorize();
-  // Pinned for every device of the account before anything is shared, so a
-  // later invitation compares against this identity wherever it is added.
-  // A confirmed Add waits for it too: a pin left unsaved would let another
-  // device take a replacement identity for a first use.
-  try {
-    await ctx.people.pin?.(invitee, identity);
-  } catch (error) {
-    if (!(error instanceof FirstUsePinsUnavailable)) throw error;
-    throw new InvitationError(
-      'pins-unavailable',
-      'Couldn’t save who you added to your account. Nothing was added; try again.'
-    );
-  }
   let claimed = await ctx.store
     .claim(userId, invitation.invitationId)
     .catch(() => null);
@@ -1622,8 +1561,9 @@ export async function acceptEncryptedInvitation(
  * records exactly the statement hash that listing verified and showed.
  */
 export async function confirmEncryptedInvitation(
-  ctx: Pick<InvitationContext, 'groups' | 'store' | 'now'>,
-  reviewed: InviteeInvitation
+  ctx: Pick<InvitationContext, 'groups' | 'store' | 'now' | 'people'>,
+  reviewed: InviteeInvitation,
+  authorization?: UnlockAuthorization
 ): Promise<void> {
   if (
     reviewed.state !== 'confirm' ||
@@ -1635,11 +1575,49 @@ export async function confirmEncryptedInvitation(
       'Only a verified invitation waiting for your confirmation can be joined.'
     );
   }
+  // An owner new to this account is trusted in the same step, signed.
+  if (!reviewed.ownerPinned) {
+    await trustInvitationOwner(ctx, reviewed, authorization);
+  }
   await rememberIntent(
     ctx,
     reviewed.statement,
     reviewed.statementHash,
     'confirmed'
+  );
+}
+
+/**
+ * The person's one signed confirmation of an owner new to this account
+ * (ADR-024 amendment 2026-11-25): a `trust` entry in the contacts list for
+ * the identity whose device signed `reviewed`'s statement, with a passkey
+ * touch or the recovery key. Then this device signs its acceptance and
+ * publishes. Refused for an owner whose identity changed.
+ */
+export async function trustInvitationOwner(
+  ctx: Pick<InvitationContext, 'people'>,
+  reviewed: InviteeInvitation,
+  authorization?: UnlockAuthorization
+): Promise<void> {
+  const owner = await ctx.people.inspect(reviewed.record.inviterUserId);
+  if (!owner?.list || owner.keyChanged || !reviewed.statement) {
+    throw new InvitationError(
+      'keys-changed',
+      'The project owner’s encryption keys changed. Review the change before joining. Nothing was joined.'
+    );
+  }
+  if (owner.firstUse !== 'new') return;
+  if (authorization === undefined) {
+    throw new InvitationError(
+      'not-trusted',
+      'Confirm the project owner first: it signs who you share with, with your passkey or recovery key.'
+    );
+  }
+  await trustPerson(
+    ctx,
+    owner.userId,
+    toHex(owner.list.identityKeyHash),
+    authorization
   );
 }
 
@@ -1656,6 +1634,12 @@ export type InviteeInvitationState =
   | 'invalid'
   /** This device published its KeyPackage; the owner adds it next. */
   | 'waiting-for-owner'
+  /**
+   * Accepted here, but the owner is new to this account: one signed
+   * confirmation (`trustInvitationOwner`) pins them first. Never signed in
+   * the background.
+   */
+  | 'confirm-owner'
   /**
    * Listed for this account, but not accepted on this device and signed by
    * none of its devices: the person confirms it here first (inviter and
@@ -1692,6 +1676,12 @@ export interface InviteeInvitation {
   readonly ownerCode: string | null;
   /** The person compared codes with the owner: Verified, else Not verified. */
   readonly ownerVerified: boolean;
+  /**
+   * The signed contacts list pins the owner's identity (trusted or
+   * verified): nothing to confirm. False for an owner new to this account,
+   * whom a Join or Confirm trusts first, with one signature.
+   */
+  readonly ownerPinned: boolean;
 }
 
 /**
@@ -1819,7 +1809,8 @@ export async function acceptedInvitations(
         );
         verified = statement;
         // Trust on first use: the owner identity whose device signed the
-        // statement is accepted unverified, unless it replaced one pinned.
+        // statement is accepted unverified, unless it replaced one pinned;
+        // a new owner is pinned by one signed confirmation first.
         if (owner.keyChanged) state = 'owner-keys-changed';
         else if (!device) state = 'no-device';
         else {
@@ -1831,9 +1822,11 @@ export async function acceptedInvitations(
           state =
             !accepted && !(await intendedHere(intents, record, statement))
               ? 'confirm'
-              : published.has(record.invitationId) && accepted
-                ? 'waiting-for-owner'
-                : 'ready';
+              : owner.firstUse === 'new'
+                ? 'confirm-owner'
+                : published.has(record.invitationId) && accepted
+                  ? 'waiting-for-owner'
+                  : 'ready';
         }
       } catch {
         state = 'invalid';
@@ -1848,7 +1841,8 @@ export async function acceptedInvitations(
       statementHash: verified ? await statementHashOf(record) : null,
       ownerCode:
         verified && owner?.list ? await contactCodeOf(owner.list) : null,
-      ownerVerified: owner?.status === 'verified' && !owner.keyChanged
+      ownerVerified: owner?.status === 'verified' && !owner.keyChanged,
+      ownerPinned: owner?.firstUse !== 'new' && !owner?.keyChanged
     });
   }
   return out;
@@ -1897,12 +1891,9 @@ export async function publishInvitationKeyPackages(
         'The project owner’s encryption keys changed. Review the change before joining. Nothing was joined.'
       );
     }
-    if (owner.firstUse === 'unknown') {
-      throw new InvitationError(
-        'no-keys',
-        'The keys of the people you share with could not be checked on this device. Nothing was joined; try again.'
-      );
-    }
+    // A new owner waits for the person's signed confirmation: nothing is
+    // signed in the background.
+    if (owner.firstUse === 'new') continue;
     const statement = await verifiedStatement(record, owner.list, now(ctx), {
       inviteeEmail: ctx.email
     });
@@ -1915,21 +1906,6 @@ export async function publishInvitationKeyPackages(
     );
     if (!accepted && !(await intendedHere(intents, record, statement))) {
       continue;
-    }
-    // Pinned for every device of this account before anything is signed.
-    try {
-      await ctx.people.pin?.(
-        record.inviterUserId,
-        toHex(owner.list.identityKeyHash)
-      );
-    } catch (error) {
-      if (error instanceof FirstUsePinsUnavailable) {
-        throw new InvitationError(
-          'no-keys',
-          'The keys of the people you share with could not be saved to your account. Nothing was joined; try again.'
-        );
-      }
-      throw error;
     }
     await rememberExpectedProjectOwner(
       ctx.groups,

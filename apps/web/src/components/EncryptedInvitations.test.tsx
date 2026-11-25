@@ -1,6 +1,12 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ProjectInvitation } from '@openzcad/crypto';
+import { generateRecoveryKey, type ProjectInvitation } from '@openzcad/crypto';
 import type { E2eeInvitationRecord } from '@openzcad/shared';
 import type {
   InviteeInvitation,
@@ -18,6 +24,7 @@ import type {
  */
 
 const syncInvitations = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const trustInvitationOwner = vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const acceptEncryptedInvitation =
   vi.fn<(...args: unknown[]) => Promise<unknown>>();
 let pendingToken: string | null = null;
@@ -44,6 +51,7 @@ vi.mock('../lib/e2ee/encryptedProjects', () => ({
 }));
 vi.mock('../lib/e2ee/invitations', () => ({
   syncInvitations: (...args: unknown[]) => syncInvitations(...args),
+  trustInvitationOwner: (...args: unknown[]) => trustInvitationOwner(...args),
   acceptEncryptedInvitation: (...args: unknown[]) =>
     acceptEncryptedInvitation(...args),
   confirmEncryptedInvitation: (...args: unknown[]) =>
@@ -85,6 +93,7 @@ function listing(overrides: Partial<InviteeInvitation> = {}) {
     statementHash: 'ab'.repeat(32),
     ownerCode: '12345 67890 12345',
     ownerVerified: false,
+    ownerPinned: true,
     ...overrides
   };
   return {
@@ -98,6 +107,7 @@ function listing(overrides: Partial<InviteeInvitation> = {}) {
 
 beforeEach(() => {
   pendingToken = null;
+  trustInvitationOwner.mockReset();
   syncInvitations.mockReset();
   acceptEncryptedInvitation.mockReset();
   clearPendingEncryptedInvitation.mockClear();
@@ -176,7 +186,8 @@ describe('EncryptedInvitations', () => {
         identityKeyHash: 'cd'.repeat(32),
         code: '99999 88888 77777',
         email: 'carol@example.com',
-        verified: false
+        verified: false,
+        pinned: true
       }
     };
     syncInvitations.mockResolvedValue({
@@ -279,6 +290,34 @@ describe('EncryptedInvitations', () => {
       ['tok_first', 'tok_second']
     );
     await waitFor(() => expect(cleared).toEqual(['tok_second']));
+  });
+
+  it('confirms an owner new to this account with one signature, never in the background (ADR-024 amendment 2026-11-25)', async () => {
+    const shown = listing({ state: 'confirm-owner', ownerPinned: false });
+    syncInvitations.mockResolvedValue(shown);
+    // The dialog zeroes the key once used: keep what was passed.
+    let passed: unknown = null;
+    trustInvitationOwner.mockImplementation(async (...args: unknown[]) => {
+      passed = (args[2] as Uint8Array).slice();
+    });
+    const { formatted, secret } = await generateRecoveryKey();
+    render(<EncryptedInvitations ready />);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Confirm someone-else@example.com'
+      })
+    );
+    expect(trustInvitationOwner).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Confirm someone-else@example.com'
+    });
+    fireEvent.change(within(dialog).getByLabelText('Recovery key'), {
+      target: { value: formatted }
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(trustInvitationOwner).toHaveBeenCalledOnce());
+    expect(trustInvitationOwner.mock.calls[0]![1]).toBe(shown.incoming[0]);
+    expect(passed).toEqual(secret);
   });
 
   it('never joins an invitation whose owner keys changed: it offers a review instead', async () => {

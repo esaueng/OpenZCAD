@@ -22,7 +22,9 @@ import {
  * amendment: the owner invites someone to an end-to-end encrypted project
  * from the sharing dialog; the invitee, sent to set up encryption first,
  * has the opened link accepted with no further click; nobody compares
- * codes; the invitee's browser publishes its KeyPackage, the owner's adds
+ * codes. Each side is new to the other, so each confirms once, signing a
+ * trust entry into its contacts list (a passkey touch, or here the recovery
+ * key); the invitee's browser publishes its KeyPackage, the owner's adds
  * it by an MLS Commit with the role (shown Not verified), and the invitee
  * opens the project from the shelf and decrypts it. The real
  * `/api/e2ee/*` Worker routes run over SQLite; each browser runs the real
@@ -149,6 +151,23 @@ async function signIn(
   return page;
 }
 
+/**
+ * Signs in the confirmation dialog titled `title` with the recovery key
+ * (seeded devices have no passkey): one signature, as a passkey touch is.
+ */
+async function signWith(
+  page: Page,
+  title: string,
+  recoveryKey: string,
+  action: string
+) {
+  const dialog = page.getByRole('dialog', { name: title });
+  await expect(dialog).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await dialog.getByLabel('Recovery key').fill(recoveryKey);
+  await dialog.getByRole('button', { name: action }).click();
+  await expect(dialog).toHaveCount(0, { timeout: SYNC_BUDGET_MS });
+}
+
 /** Closes Settings (and any panel open in it). */
 async function closeSettings(page: Page) {
   const settings = page.getByRole('dialog', { name: 'Settings' });
@@ -179,7 +198,9 @@ test(
 
     // Alice encrypts new projects and makes one.
     await alice.goto('/');
-    await seedE2eeDevice(alice, server, { label: 'Alice browser' });
+    const aliceSeed = await seedE2eeDevice(alice, server, {
+      label: 'Alice browser'
+    });
     const aliceSettings = await openEncryptionSettings(alice);
     const toggle = aliceSettings.getByRole('checkbox', {
       name: 'Encrypt new projects'
@@ -265,18 +286,31 @@ test(
     expect(new URL(bob.url()).hash).toBe('');
 
     // Set up (seeded), he comes back: the link he opened is his acceptance,
-    // so there is no Accept click, and nobody compares codes.
-    await seedE2eeDevice(bob, server, { label: 'Bob browser', userId: BOB_ID });
+    // so there is no Accept click, and nobody compares codes. Alice is new
+    // to him: one signature pins her for his devices.
+    const bobSeed = await seedE2eeDevice(bob, server, {
+      label: 'Bob browser',
+      userId: BOB_ID
+    });
     await bob.reload();
     const bobEncryption = await openEncryptionSettings(bob);
+    await expect(
+      bobEncryption.getByRole('button', { name: 'Accept invitation' })
+    ).toHaveCount(0);
+    await bobEncryption
+      .getByRole('button', { name: `Confirm ${ALICE_EMAIL}` })
+      .click({ timeout: SYNC_BUDGET_MS });
+    await signWith(
+      bob,
+      `Confirm ${ALICE_EMAIL}`,
+      bobSeed.recoveryKey,
+      'Confirm'
+    );
     await expect(
       bobEncryption.getByText(
         'Your keys are ready. Waiting for them to add you.'
       )
     ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    await expect(
-      bobEncryption.getByRole('button', { name: 'Accept invitation' })
-    ).toHaveCount(0);
     expect(
       server.db
         .prepare('SELECT user_id, consumed_at FROM e2ee_key_packages')
@@ -284,9 +318,21 @@ test(
     ).toEqual([{ user_id: BOB_ID, consumed_at: null }]);
     await closeSettings(bob);
 
-    // Alice's sharing dialog adds Bob on first use by an MLS Commit with the
-    // role: no verification, no confirm-add card.
+    // Bob is new to Alice: one confirmation, signed, then her browser adds
+    // him by an MLS Commit with the role. Nobody compares codes.
     await alice.getByRole('button', { name: /Open project sharing/ }).click();
+    const confirm = dialog.getByRole('group', {
+      name: 'Confirm The person who accepted'
+    });
+    await confirm
+      .getByRole('button', { name: 'Confirm' })
+      .click({ timeout: ADD_BUDGET_MS });
+    await signWith(
+      alice,
+      'Confirm The person who accepted',
+      aliceSeed.recoveryKey,
+      'Confirm'
+    );
     await expect
       .poll(
         () =>
@@ -305,10 +351,17 @@ test(
         )
         .all(projectId)
     ).toHaveLength(1);
-    // Nobody signed a verification into a contacts list.
-    expect(
-      server.db.prepare('SELECT COUNT(*) AS n FROM e2ee_contact_entries').get()
-    ).toEqual({ n: 0 });
+    // Each signed one trust entry into their contacts list, no
+    // verification: they are pinned for every device of theirs.
+    for (const userId of [E2E_USER_ID, BOB_ID]) {
+      expect(
+        server.db
+          .prepare(
+            'SELECT COUNT(*) AS n FROM e2ee_contact_entries WHERE user_id = ?'
+          )
+          .get(userId)
+      ).toEqual({ n: 1 });
+    }
     await expect(dialog.getByRole('group', { name: /^Confirm / })).toHaveCount(
       0
     );
@@ -427,7 +480,9 @@ test(
       page.on('pageerror', (error) => errors.push(error.message));
     }
     await alice.goto('/');
-    await seedE2eeDevice(alice, server, { label: 'Alice browser' });
+    const aliceSeed = await seedE2eeDevice(alice, server, {
+      label: 'Alice browser'
+    });
     const aliceSettings = await openEncryptionSettings(alice);
     const toggle = aliceSettings.getByRole('checkbox', {
       name: 'Encrypt new projects'
@@ -464,9 +519,21 @@ test(
         .getByRole('dialog', { name: 'Settings' })
         .getByRole('button', { name: 'Set up encryption' })
     ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    await seedE2eeDevice(bob, server, { label: 'Bob browser', userId: BOB_ID });
+    const bobSeed = await seedE2eeDevice(bob, server, {
+      label: 'Bob browser',
+      userId: BOB_ID
+    });
     await bob.reload();
     const bobEncryption = await openEncryptionSettings(bob);
+    await bobEncryption
+      .getByRole('button', { name: `Confirm ${ALICE_EMAIL}` })
+      .click({ timeout: SYNC_BUDGET_MS });
+    await signWith(
+      bob,
+      `Confirm ${ALICE_EMAIL}`,
+      bobSeed.recoveryKey,
+      'Confirm'
+    );
     await expect(
       bobEncryption.getByText(
         'Your keys are ready. Waiting for them to add you.'
@@ -495,16 +562,22 @@ test(
         .get(projectId)
     ).toEqual({ n: 0 });
 
-    // Trusting the new keys is a first use again: he is added.
+    // Trusting the new keys is signed, one touch: then he is added.
     await changed.getByRole('button', { name: 'Trust new keys' }).click();
+    await signWith(
+      alice,
+      "Trust Invitation 1's new keys",
+      aliceSeed.recoveryKey,
+      'Trust new keys'
+    );
     await expect
       .poll(member, { timeout: ADD_BUDGET_MS })
       .toEqual({ role: 'viewer' });
-    // The trust is the account's: recorded in its sealed first-use pins.
+    // The trust is the account's: a signed entry in its contacts list.
     expect(
       server.db
         .prepare(
-          'SELECT COUNT(*) AS n FROM e2ee_first_use_pins WHERE user_id = ?'
+          'SELECT COUNT(*) AS n FROM e2ee_contact_entries WHERE user_id = ?'
         )
         .get(E2E_USER_ID)
     ).toEqual({ n: 1 });

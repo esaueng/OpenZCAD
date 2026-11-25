@@ -15,6 +15,7 @@ import {
 } from './e2ee-fixtures';
 import {
   ALICE_EMAIL,
+  signWith,
   BOB_EMAIL,
   BOB_ID,
   COMMIT_BUDGET_MS,
@@ -202,7 +203,7 @@ test('encrypts a shared project once its member is ready, and the member opens i
   const bob = await signIn(bobContext, server, BOB_ID, BOB_EMAIL);
   bob.on('pageerror', (error) => errors.push(error.message));
   await bob.goto('/');
-  await seedE2eeDevice(bob, server, {
+  const bobSeed = await seedE2eeDevice(bob, server, {
     label: 'Bob browser',
     userId: BOB_ID
   });
@@ -242,6 +243,13 @@ test('encrypts a shared project once its member is ready, and the member opens i
   });
   await expect(join).toBeVisible({ timeout: SYNC_BUDGET_MS });
   await join.click();
+  // Alice is new to Bob: the Join signs that he trusts her keys.
+  await signWith(
+    bob,
+    `Join ${ALICE_EMAIL}’s project`,
+    bobSeed.recoveryKey,
+    'Confirm'
+  );
   await expect
     .poll(
       () =>

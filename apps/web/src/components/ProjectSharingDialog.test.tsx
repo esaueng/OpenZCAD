@@ -1477,7 +1477,8 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
           identityKeyHash: 'dd'.repeat(32),
           code: '77777 88888',
           email: 'verify@example.com',
-          verified: false
+          verified: false,
+          pinned: true
         }
       },
       {
@@ -1494,7 +1495,8 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
           identityKeyHash: 'cc'.repeat(32),
           code: '12345 67890',
           email: 'carol@example.com',
-          verified: true
+          verified: true,
+          pinned: true
         }
       },
       {
@@ -1721,7 +1723,8 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
             identityKeyHash: 'ab'.repeat(32),
             code: '12121 21212',
             email: 'dana@example.com',
-            verified: false
+            verified: false,
+            pinned: true
           }
         }
       ]),
@@ -1743,7 +1746,8 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
               }
         )
       ),
-      trustNewKeys: vi.fn(async () => undefined)
+      trustNewKeys: vi.fn(async () => undefined),
+      passkeyAvailable: vi.fn(async () => true)
     };
     const onVerifyContact = vi.fn();
     const user = userEvent.setup();
@@ -1783,11 +1787,23 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     ).not.toBeInTheDocument();
     await user.click(within(changed).getByRole('button', { name: 'Review' }));
     expect(onVerifyContact).toHaveBeenCalledWith(invitee);
+    // Trust new keys is signed: one passkey touch (or the recovery key).
     await user.click(
       within(changed).getByRole('button', { name: 'Trust new keys' })
     );
+    const signMember = await screen.findByRole('dialog', {
+      name: "Trust changed@example.com's new keys"
+    });
+    expect(encrypted.trustNewKeys).not.toHaveBeenCalled();
+    await user.click(
+      within(signMember).getByRole('button', { name: 'Confirm with passkey' })
+    );
     await waitFor(() =>
-      expect(encrypted.trustNewKeys).toHaveBeenCalledWith(invitee, changedHash)
+      expect(encrypted.trustNewKeys).toHaveBeenCalledWith(
+        invitee,
+        changedHash,
+        'passkey'
+      )
     );
     await user.click(
       within(
@@ -1796,13 +1812,89 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
         })
       ).getByRole('button', { name: 'Trust new keys' })
     );
+    await user.click(
+      within(
+        await screen.findByRole('dialog', {
+          name: "Trust dana@example.com's new keys"
+        })
+      ).getByRole('button', { name: 'Confirm with passkey' })
+    );
     await waitFor(() =>
       expect(encrypted.trustNewKeys).toHaveBeenLastCalledWith(
         'user_dana',
-        'ab'.repeat(32)
+        'ab'.repeat(32),
+        'passkey'
       )
     );
     expect(encrypted.confirmAdd).not.toHaveBeenCalled();
+    setPersonalInfoVisible(false);
+  });
+
+  it('confirms someone new to the account with one signature before adding them (ADR-024 amendment 2026-11-25)', async () => {
+    setPersonalInfoVisible(true);
+    const encrypted: EncryptedSharingClient = {
+      ...encryptedClient([
+        {
+          record: encryptedRecord('inv_alex', {
+            acceptedByUserId: invitee,
+            role: 'viewer'
+          }),
+          state: 'confirm-new',
+          email: 'alex@example.com',
+          statement: {
+            projectId: 'proj_encrypted',
+            role: 'viewer'
+          } as OwnerInvitation['statement'],
+          acceptor: {
+            userId: invitee,
+            identityKeyHash: 'a1'.repeat(32),
+            code: '24680 13579',
+            email: 'alex@example.com',
+            verified: false,
+            pinned: false
+          }
+        }
+      ]),
+      confirmAdd: vi.fn(async () => undefined),
+      passkeyAvailable: vi.fn(async () => true)
+    };
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_encrypted"
+        projectName="Gearbox"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={shareLinkClient()}
+        encrypted
+        encryptedClient={encrypted}
+        encryptedShareLinkClient={encryptedShareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    const row = await screen.findByRole('group', {
+      name: 'Confirm alex@example.com'
+    });
+    expect(row).toHaveTextContent('They are new to you');
+    // Nothing is signed or added until the owner confirms, with a touch.
+    await user.click(within(row).getByRole('button', { name: 'Confirm' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Confirm alex@example.com'
+    });
+    expect(encrypted.confirmAdd).not.toHaveBeenCalled();
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Confirm with passkey' })
+    );
+    await waitFor(() =>
+      expect(encrypted.confirmAdd).toHaveBeenCalledWith(
+        'proj_encrypted',
+        'inv_alex',
+        'a1'.repeat(32),
+        'passkey'
+      )
+    );
     setPersonalInfoVisible(false);
   });
 
@@ -1817,7 +1909,8 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       identityKeyHash,
       code,
       email: 'carol@example.com',
-      verified: false
+      verified: false,
+      pinned: true
     });
     const encrypted = {
       ...encryptedClient([

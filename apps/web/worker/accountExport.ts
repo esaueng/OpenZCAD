@@ -69,13 +69,6 @@ export async function exportAccountData(
       [session.userId]
     ],
     [
-      // Sealed in the browser (ADR-024 amendment 2026-11-25): exported as
-      // stored, opaque here.
-      'e2ee_first_use_pins',
-      'SELECT revision, sequence, record, updated_at FROM e2ee_first_use_pins WHERE user_id = ?',
-      [session.userId]
-    ],
-    [
       'user_ai_credentials',
       'SELECT token_hint, updated_at, last_validated_at FROM user_ai_credentials WHERE user_id = ?',
       [session.userId]

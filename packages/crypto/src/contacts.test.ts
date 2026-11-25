@@ -94,9 +94,16 @@ describe('contacts entries', () => {
       decodeContactsEntry(concatBytes(bytes, Uint8Array.of(0)))
     ).toThrow(expect.objectContaining({ code: 'malformed' }));
     const unknownVersion = new Uint8Array(bytes);
-    unknownVersion[3] = 2;
+    unknownVersion[3] = 3;
     expect(() => decodeContactsEntry(unknownVersion)).toThrow(
       expect.objectContaining({ code: 'unsupported-version' })
+    );
+    // Version 2 is the trust entry's: a verification under it is not
+    // canonical.
+    const verifyAsV2 = new Uint8Array(bytes);
+    verifyAsV2[3] = 2;
+    expect(() => decodeContactsEntry(verifyAsV2)).toThrow(
+      expect.objectContaining({ code: 'malformed' })
     );
     expect(() => encodeContactsEntry({ ...entry, action: 'untrust' })).toThrow(
       expect.objectContaining({ code: 'invalid-argument' })
@@ -167,6 +174,86 @@ describe('contacts entries', () => {
     expect(list.pin.entryHash).toEqual(
       await contactsEntryHash(me.chain.at(-1)!.entry)
     );
+  });
+
+  it('pins an identity trusted on first use, replaces it by a later trust, and never trusts over a verification', async () => {
+    const o = await owner();
+    const first = patternBytes(32, 0x31);
+    const second = patternBytes(32, 0x32);
+    let list = await o.append({
+      action: 'trust',
+      contactUserId: BOB,
+      identityKeyHash: first,
+      deviceListHead: head(1)
+    });
+    expect(list.contacts.get(BOB)).toMatchObject({
+      status: 'trusted',
+      identityKeyHash: first,
+      deviceListHead: head(1),
+      verifiedAt: 0
+    });
+    // Trust new keys: a later trust replaces the pinned identity.
+    list = await o.append({
+      action: 'trust',
+      contactUserId: BOB,
+      identityKeyHash: second,
+      deviceListHead: head(2)
+    });
+    expect(list.contacts.get(BOB)).toMatchObject({
+      status: 'trusted',
+      identityKeyHash: second
+    });
+    // A verification upgrades it.
+    list = await o.append({
+      action: 'verify',
+      contactUserId: BOB,
+      identityKeyHash: second,
+      deviceListHead: head(3)
+    });
+    expect(list.contacts.get(BOB)?.status).toBe('verified');
+    // A verified identity is never trusted over: its key change first.
+    expect(() =>
+      nextContactsEntry(list, OWNER, {
+        issuedAt: 1,
+        action: 'trust',
+        contactUserId: BOB,
+        identityKeyHash: first,
+        deviceListHead: head(4)
+      })
+    ).toThrow(/trusts over a verified contact/);
+    list = await o.append({
+      action: 'key-changed',
+      contactUserId: BOB,
+      identityKeyHash: second
+    });
+    list = await o.append({
+      action: 'trust',
+      contactUserId: BOB,
+      identityKeyHash: first,
+      deviceListHead: head(5)
+    });
+    expect(list.contacts.get(BOB)).toMatchObject({
+      status: 'trusted',
+      identityKeyHash: first
+    });
+    // A trusted contact is not advanced, changed or untrusted by those
+    // entries: those are a verification's.
+    for (const action of ['advance', 'untrust', 'key-changed'] as const) {
+      expect(() =>
+        nextContactsEntry(list, OWNER, {
+          issuedAt: 1,
+          action,
+          contactUserId: BOB,
+          identityKeyHash: first,
+          ...(action === 'advance' ? { deviceListHead: head(6) } : {})
+        })
+      ).toThrow();
+    }
+    // Every entry round-trips; trust entries carry version 2.
+    for (const signed of o.chain) {
+      const decoded = decodeContactsEntry(signed.entry);
+      expect(signed.entry[3]).toBe(decoded.action === 'trust' ? 2 : 1);
+    }
   });
 
   it('refuses changes the list state does not allow', async () => {

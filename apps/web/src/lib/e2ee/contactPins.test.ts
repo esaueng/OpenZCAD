@@ -30,7 +30,7 @@ const seen = (overrides: Partial<ContactPin> = {}): ContactPin => ({
   keyChanged: false,
   seenAt: 100,
   verifiedHere: null,
-  trustedKeys: null,
+  trustedHere: null,
   ...overrides
 });
 
@@ -637,18 +637,18 @@ describe('contact pins', () => {
     }
   });
 
-  it('keep keys trusted here after a change until the identity changes again', async () => {
+  it('keep a trust signed here until the identity changes', async () => {
     for (const [name, pins] of await stores()) {
       await pins.advanceContact(
         'me',
-        seen({ keyChanged: false, trustedKeys: H('a') })
+        seen({ keyChanged: false, trustedHere: H('a') })
       );
       // Inspecting again keeps the trust, under the same identity only.
       await pins.advanceContact(
         'me',
         seen({ sequence: 3, entryHash: H('3'), keyChanged: true })
       );
-      expect((await pins.readContact('me', 'bob'))?.trustedKeys, name).toBe(
+      expect((await pins.readContact('me', 'bob'))?.trustedHere, name).toBe(
         H('a')
       );
       await pins.advanceContact(
@@ -657,7 +657,7 @@ describe('contact pins', () => {
         { replaceIdentity: true }
       );
       expect(
-        (await pins.readContact('me', 'bob'))?.trustedKeys,
+        (await pins.readContact('me', 'bob'))?.trustedHere,
         name
       ).toBeNull();
     }

@@ -56,6 +56,8 @@ import {
   sentInvitations,
   signInvitationStatement,
   syncInvitations,
+  trustInvitationOwner,
+  trustPerson,
   type InvitationContext,
   type InvitationPerson
 } from '../apps/web/src/lib/e2ee/invitations';
@@ -63,7 +65,6 @@ import {
   memoryInvitationStore,
   type InvitationStore
 } from '../apps/web/src/lib/e2ee/invitationStore';
-import { FirstUsePinsUnavailable } from '../apps/web/src/lib/e2ee/firstUsePins';
 import {
   catchUpProjectGroup,
   commitProjectGroup,
@@ -130,6 +131,10 @@ interface World {
   verified: Map<string, Set<string>>;
   /** Whose pinned identity each account sees changed, not trusted again. */
   changed: Map<string, Set<string>>;
+  /** Who is new to each account: its signed contacts list pins nobody. */
+  fresh: Map<string, Set<string>>;
+  /** Every signed trust entry, as `by:whom:identity` with its authorization. */
+  signed: { entry: string; authorization: unknown }[];
 }
 
 function world(): World {
@@ -142,7 +147,14 @@ function world(): World {
       .prepare('UPDATE users SET email = ? WHERE id = ?')
       .run(email, userId);
   }
-  return { srv, mail: [], verified: new Map(), changed: new Map() };
+  return {
+    srv,
+    mail: [],
+    verified: new Map(),
+    changed: new Map(),
+    fresh: new Map(),
+    signed: []
+  };
 }
 
 function host(w: World, userId: string): E2eeInvitationHost {
@@ -222,7 +234,16 @@ function invitationsOf(
           .map(([userId]) => personOf(w, d.account.userId, userId))
           .filter((person): person is InvitationPerson =>
             Boolean(person?.status === 'verified')
-          )
+          ),
+      // The signed trust entry: pins them for every device of the account.
+      trust: async (userId, identityKeyHash, authorization) => {
+        w.signed.push({
+          entry: `${d.account.userId}:${userId}:${identityKeyHash}`,
+          authorization
+        });
+        w.fresh.get(d.account.userId)?.delete(userId);
+        w.changed.get(d.account.userId)?.delete(userId);
+      }
     }
   };
 }
@@ -241,8 +262,16 @@ function personOf(
     status:
       w.verified.get(by)?.has(userId) && !keyChanged ? 'verified' : 'seen',
     list: account.list,
-    keyChanged
+    keyChanged,
+    firstUse: w.fresh.get(by)?.has(userId) ? 'new' : 'known'
   };
+}
+
+/** `whom` is new to `by`: the signed contacts list pins nobody for them. */
+function newTo(w: World, by: string, whom: string) {
+  const set = w.fresh.get(by) ?? new Set<string>();
+  set.add(whom);
+  w.fresh.set(by, set);
 }
 
 /** `by` sees `whom`'s pinned identity replaced (until `trust`). */
@@ -852,7 +881,7 @@ describe('trust on first use: a changed identity blocks (ADR-024 amendment 2026-
     ).toBe(invitation.invitationId);
   });
 
-  it('pins the identity it adds for the account first, and adds nobody the account’s pins refuse or cannot vouch for', async () => {
+  it('asks the owner to confirm someone new with one signature, then adds them; nothing in the background signs', async () => {
     const w = world();
     const { projectId, ownerCtx, invitation, inviteeCtx } = await invited(
       w,
@@ -860,59 +889,31 @@ describe('trust on first use: a changed identity blocks (ADR-024 amendment 2026-
       { bind: false }
     );
     await publishInvitationKeyPackages(inviteeCtx);
-    const pinned: string[] = [];
-    // Another device of the account pinned another identity for them.
-    const refused: InvitationContext = {
-      ...ownerCtx,
-      people: {
-        ...ownerCtx.people,
-        pin: async () => {
-          throw new InvitationError('keys-changed', 'another identity');
+    // The signed contacts list pins nobody for them yet.
+    newTo(w, OWNER, OTHER);
+    const sync = await syncInvitations(ownerCtx);
+    expect(sync.errors).toEqual([]);
+    expect(sync.added).toEqual([]);
+    expect(sync.outgoing).toMatchObject([
+      {
+        state: 'confirm-new',
+        acceptor: {
+          userId: OTHER,
+          identityKeyHash: otherIdentity(),
+          pinned: false
         }
       }
-    };
-    const [pending] = await projectInvitations(ownerCtx, projectId);
-    await expect(addInvitedMember(refused, pending!.record)).rejects.toSatisfy(
-      refusedWith('keys-changed')
-    );
-    // The account's pins cannot be read here: nobody is a first use, so the
-    // owner confirms, and a failed pin write stops an automatic add.
-    const unknown: InvitationContext = {
-      ...ownerCtx,
-      people: {
-        ...ownerCtx.people,
-        inspect: async (userId) => {
-          const person = await ownerCtx.people.inspect(userId);
-          return person && { ...person, firstUse: 'unknown' as const };
-        }
-      }
-    };
-    expect(await projectInvitations(unknown, projectId)).toMatchObject([
-      { state: 'confirm-add' }
     ]);
-    await expect(addInvitedMember(unknown, pending!.record)).rejects.toSatisfy(
-      refusedWith('needs-confirmation')
-    );
-    const unwritable: InvitationContext = {
-      ...ownerCtx,
-      people: {
-        ...ownerCtx.people,
-        pin: async () => {
-          throw new FirstUsePinsUnavailable();
-        }
-      }
-    };
+    expect(w.signed).toEqual([]);
+    // Not added unsigned, not even on a confirmation of the identity.
     await expect(
-      addInvitedMember(unwritable, pending!.record)
-    ).rejects.toSatisfy(refusedWith('pins-unavailable'));
-    // Not even the owner's confirmation adds anyone until the pin is saved:
-    // another device would take a replacement for a first use (PR 2057
-    // re-check).
+      addInvitedMember(ownerCtx, sync.outgoing[0]!.record)
+    ).rejects.toSatisfy(refusedWith('not-trusted'));
     await expect(
-      addInvitedMember(unwritable, pending!.record, {
+      addInvitedMember(ownerCtx, sync.outgoing[0]!.record, {
         confirmedIdentity: otherIdentity()
       })
-    ).rejects.toSatisfy(refusedWith('pins-unavailable'));
+    ).rejects.toSatisfy(refusedWith('not-trusted'));
     expect(
       rows<{ claimed_at: string | null }>(
         w.srv,
@@ -920,21 +921,49 @@ describe('trust on first use: a changed identity blocks (ADR-024 amendment 2026-
         projectId
       )
     ).toEqual([{ claimed_at: null }]);
-    expect(groupEpoch(w.srv, projectId)).toBe(1);
-    // With the pin written, it adds them.
-    const recording: InvitationContext = {
-      ...ownerCtx,
-      people: {
-        ...ownerCtx.people,
-        pin: async (userId, identity) => {
-          pinned.push(`${userId}:${identity}`);
-        }
+    // The owner's confirmation: a signed trust (one touch), then the Add.
+    await trustPerson(ownerCtx, OTHER, otherIdentity(), 'passkey');
+    expect(w.signed).toEqual([
+      {
+        entry: `${OWNER}:${OTHER}:${otherIdentity()}`,
+        authorization: 'passkey'
       }
-    };
-    await addInvitedMember(recording, pending!.record);
-    expect(pinned).toEqual([`${OTHER}:${otherIdentity()}`]);
+    ]);
+    await addInvitedMember(ownerCtx, sync.outgoing[0]!.record, {
+      confirmedIdentity: otherIdentity()
+    });
     expect(memberRole(w.srv, projectId, OTHER)).toBe('editor');
-    expect(invitation.invitationId).toBe(pending!.record.invitationId);
+    expect(invitation.invitationId).toBe(sync.outgoing[0]!.record.invitationId);
+  });
+
+  it('joins only once the invitee confirmed an owner new to them, signed; a known owner needs nothing', async () => {
+    const w = world();
+    const { invitation, inviteeCtx } = await invited(w, 'viewer', {
+      bind: false
+    });
+    newTo(w, OTHER, OWNER);
+    const [listed] = await acceptedInvitations(inviteeCtx);
+    // The opened link is the acceptance; the owner still needs a signature.
+    expect(listed).toMatchObject({
+      state: 'confirm-owner',
+      ownerPinned: false
+    });
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([]);
+    expect((await syncInvitations(inviteeCtx)).errors).toEqual([]);
+    expect(w.signed).toEqual([]);
+    await expect(trustInvitationOwner(inviteeCtx, listed!)).rejects.toSatisfy(
+      refusedWith('not-trusted')
+    );
+    await trustInvitationOwner(inviteeCtx, listed!, 'passkey');
+    expect(w.signed.map((entry) => entry.entry)).toEqual([
+      `${OTHER}:${OWNER}:${toHex(owner.list.identityKeyHash)}`
+    ]);
+    expect(await acceptedInvitations(inviteeCtx)).toMatchObject([
+      { state: 'ready', ownerPinned: true }
+    ]);
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([
+      invitation.invitationId
+    ]);
   });
 
   it('joins on first use without verifying the owner, and never once the owner’s pinned identity changed', async () => {

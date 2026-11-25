@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -22,8 +24,17 @@ import type {
   InviteeInvitation,
   OwnerInvitation
 } from '../lib/e2ee/invitations';
+import type { UnlockAuthorization } from '../lib/e2ee/accountKeys';
 import { desktopFetch } from '../lib/desktopBridge';
+import type { AuthorizeRequest } from './encryption/AuthorizeDialog';
 import { Group, Notice, SettingRow } from './settingsControls';
+
+/** The passkey-or-recovery-key confirmation, loaded with its crypto. */
+const LazyAuthorizeDialog = lazy(() =>
+  import('./encryption/AuthorizeDialog').then((module) => ({
+    default: module.AuthorizeDialog
+  }))
+);
 
 const ROLE: Record<E2eeInvitationRole, string> = {
   editor: 'an editor',
@@ -36,6 +47,8 @@ const INCOMING_HINTS: Record<InviteeInvitation['state'], string> = {
   invalid:
     'This invitation does not verify against the owner’s keys. Ask them to invite you again.',
   'waiting-for-owner': 'Your keys are ready. Waiting for them to add you.',
+  'confirm-owner':
+    'They are new to you. Confirm with your passkey or recovery key to join: it signs that you trust their keys, on every device of yours.',
   confirm:
     'Join only if you expected this invitation. Joining tells them this account accepted it.',
   ready: 'Preparing your keys for the project…',
@@ -45,6 +58,8 @@ const INCOMING_HINTS: Record<InviteeInvitation['state'], string> = {
 
 const OUTGOING_HINTS: Partial<Record<OwnerInvitation['state'], string>> = {
   'waiting-for-keys': 'Accepted. Waiting for their keys.',
+  'confirm-new':
+    'Accepted. They are new to you: confirm them in the project’s sharing settings to add them.',
   'keys-changed':
     'Their encryption keys changed. Review the change, or trust their new keys in the project’s sharing settings, before they are added.',
   'needs-acceptance':
@@ -193,20 +208,88 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
 
   // The person's own confirmation of an invitation this device did not
   // open by link: only then does it sign the acceptance.
-  const confirm = async (invitation: InviteeInvitation) => {
+  const confirm = async (
+    invitation: InviteeInvitation,
+    authorization?: UnlockAuthorization
+  ) => {
     setBusy(true);
     setError(null);
     try {
       const { confirmEncryptedInvitation } =
         await import('../lib/e2ee/invitations');
-      // Exactly the verified statement this row shows.
-      await confirmEncryptedInvitation(await pageInvitations(), invitation);
+      // Exactly the verified statement this row shows; an owner new to
+      // this account is trusted in the same step, signed.
+      await confirmEncryptedInvitation(
+        await pageInvitations(),
+        invitation,
+        authorization
+      );
     } catch (caught) {
       setError(messageFor(caught));
       setBusy(false);
       return;
     }
     setBusy(false);
+    await sync();
+  };
+
+  // One signature for an owner new to this account (ADR-024 amendment
+  // 2026-11-25): a passkey touch or the recovery key, never in the
+  // background.
+  const [signature, setSignature] = useState<AuthorizeRequest | null>(null);
+  const [signing, setSigning] = useState(false);
+  const askSignature = async (
+    title: string,
+    work: (authorization: UnlockAuthorization) => Promise<void>
+  ) => {
+    let passkey: boolean;
+    try {
+      const [ctx, { passkeysAvailable }] = await Promise.all([
+        pageInvitations(),
+        import('../lib/e2ee/passkeys')
+      ]);
+      passkey =
+        passkeysAvailable() &&
+        ctx.groups.account.list.unlockTargets.some(
+          (target) => target.kind === 'passkey'
+        );
+    } catch {
+      passkey = false;
+    }
+    setSignature({
+      title,
+      body: 'This signs that you trust the project owner’s keys, on every device of yours. It does not verify them: compare codes for that.',
+      actionLabel: 'Confirm',
+      passkey,
+      work
+    });
+  };
+  const runSignature = async (
+    work: () => Promise<unknown>,
+    options?: { onError?(message: string): void }
+  ): Promise<boolean> => {
+    setSigning(true);
+    try {
+      await work();
+      return true;
+    } catch (caught) {
+      if (options?.onError) options.onError(messageFor(caught));
+      else setError(messageFor(caught));
+      return false;
+    } finally {
+      setSigning(false);
+    }
+  };
+  const trustOwner = async (
+    invitation: InviteeInvitation,
+    authorization: UnlockAuthorization
+  ) => {
+    const { trustInvitationOwner } = await import('../lib/e2ee/invitations');
+    await trustInvitationOwner(
+      await pageInvitations(),
+      invitation,
+      authorization
+    );
     await sync();
   };
 
@@ -362,11 +445,32 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
                   type="button"
                   disabled={busy}
                   aria-label={`Join project ${statement.projectId} as ${ROLE[statement.role]}`}
-                  onClick={() => void confirm(invitation)}
+                  onClick={() =>
+                    invitation.ownerPinned
+                      ? void confirm(invitation)
+                      : void askSignature(`Join ${owner}’s project`, (auth) =>
+                          confirm(invitation, auth)
+                        )
+                  }
                 >
                   Join
                 </button>
               </>
+            ) : null}
+            {invitation.state === 'confirm-owner' ? (
+              <button
+                className="primary"
+                type="button"
+                disabled={busy}
+                aria-label={`Confirm ${owner}`}
+                onClick={() =>
+                  void askSignature(`Confirm ${owner}`, (auth) =>
+                    trustOwner(invitation, auth)
+                  )
+                }
+              >
+                Confirm
+              </button>
             ) : null}
           </SettingRow>
         );
@@ -451,6 +555,16 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
           </SettingRow>
         );
       })}
+      {signature ? (
+        <Suspense fallback={null}>
+          <LazyAuthorizeDialog
+            request={signature}
+            busy={signing}
+            run={runSignature}
+            onClose={() => setSignature(null)}
+          />
+        </Suspense>
+      ) : null}
     </Group>
   );
 }

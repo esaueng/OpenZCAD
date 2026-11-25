@@ -46,12 +46,6 @@ import {
 import { callE2eeRoute, type E2eeFetch } from './e2eeApi';
 import { unlockedAccount } from './unlockedKeys';
 import {
-  pageFirstUsePins,
-  retiredIdentities,
-  trustFirstUse,
-  type FirstUsePinStore
-} from './firstUsePins';
-import {
   EMPTY_CONTACTS_SEQUENCE,
   contactPins,
   type ContactPin,
@@ -150,26 +144,23 @@ export interface ContactsContext {
   readonly keys: E2eeContext;
   readonly api: ContactsApi;
   readonly pins: ContactPinStore;
-  /**
-   * The account's first-use pins, shared by its devices (ADR-024 amendment
-   * 2026-11-25): an identity they retired is never shown as verified here,
-   * and a verification made here becomes the identity they trust.
-   */
-  readonly firstUse?: FirstUsePinStore;
   readonly now?: () => number;
 }
 
 export function contactsContext(
   keys: E2eeContext,
   api: ContactsApi = createContactsApi(),
-  pins: ContactPinStore = keys.contactPins ?? contactPins(),
-  firstUse: FirstUsePinStore = pageFirstUsePins(keys.userId)
+  pins: ContactPinStore = keys.contactPins ?? contactPins()
 ): ContactsContext {
-  return { keys, api, pins, firstUse };
+  return { keys, api, pins };
 }
 
+/**
+ * `trusted`: pinned on first use in the signed list (ADR-024 amendment
+ * 2026-11-25), not verified.
+ */
 export type ContactStanding =
-  'verified' | 'key-changed' | 'untrusted' | 'seen' | 'not-checked';
+  'verified' | 'trusted' | 'key-changed' | 'untrusted' | 'seen' | 'not-checked';
 
 /** One row of the Contacts list, from the signed list and local pins. */
 export interface ContactSummary {
@@ -208,11 +199,12 @@ export interface ContactView {
   /** The signed list still verifies the replaced key: sign the change. */
   readonly keyChangeUnsigned: boolean;
   /**
-   * The user trusted this changed identity on this browser ("Trust new
-   * keys", `trustNewKeys`): invitations may treat it as the pinned identity
-   * again. It never makes the contact verified.
+   * Whether the signed list pins exactly this identity (and it counts on
+   * this browser): `verified` (codes compared), `trusted` (on first use or
+   * by Trust new keys, not verified), or null (a new person to this
+   * account, or a key change).
    */
-  readonly keyChangeTrusted: boolean;
+  readonly pinned: 'verified' | 'trusted' | null;
   readonly list: VerifiedDeviceList | null;
   /** What the contact reads out: 40 digits over identity and head. */
   readonly code: string | null;
@@ -432,22 +424,39 @@ function trustedHere(
   return confirmed || pin?.verifiedHere === identityKeyHash;
 }
 
+/**
+ * Whether a trusted (first-use) record counts on this browser: as a
+ * verification does, or once this browser signed a trust of that identity.
+ */
+function pinnedHere(
+  confirmed: boolean,
+  pin: ContactPin | null | undefined,
+  identityKeyHash: string
+): boolean {
+  return (
+    trustedHere(confirmed, pin, identityKeyHash) ||
+    pin?.trustedHere === identityKeyHash
+  );
+}
+
+/** The signed list pins an identity for this record: verified or trusted. */
+const pinsIdentity = (status: string | undefined) =>
+  status === 'verified' || status === 'trusted';
+
 function standingOf(
   list: VerifiedContactsList | null,
   confirmed: boolean,
   pin: ContactPin | undefined,
-  contactUserId: string,
-  retired: ReadonlySet<string> = new Set()
+  contactUserId: string
 ): ContactStanding {
   const record = list?.contacts.get(contactUserId);
-  if (record?.status === 'verified') {
+  if (record?.status === 'verified' || record?.status === 'trusted') {
     const identity = toHex(record.identityKeyHash);
-    // A verification the account's pins superseded never counts again.
-    if (
-      retired.has(identity) ||
-      (pin?.keyChanged && pin.identityKeyHash !== identity)
-    ) {
+    if (pin?.keyChanged && pin.identityKeyHash !== identity) {
       return 'key-changed';
+    }
+    if (record.status === 'trusted') {
+      return pinnedHere(confirmed, pin, identity) ? 'trusted' : 'seen';
     }
     return trustedHere(confirmed, pin, identity) ? 'verified' : 'seen';
   }
@@ -475,10 +484,6 @@ export async function loadContacts(
     ])
   );
   const emails = new Map(response.people.map((p) => [p.userId, p.email]));
-  const shared = ctx.firstUse
-    ? await ctx.firstUse.read().catch(() => null)
-    : null;
-  const retiredFor = (id: string) => new Set(shared?.people[id]?.retired ?? []);
   const ids = new Set<string>([
     ...response.people.map((p) => p.userId),
     ...(list?.contacts.keys() ?? []),
@@ -494,7 +499,7 @@ export async function loadContacts(
     contacts: [...ids].sort().map((id) => ({
       userId: id,
       email: emails.get(id) ?? null,
-      standing: standingOf(list, confirmed, seen.get(id), id, retiredFor(id))
+      standing: standingOf(list, confirmed, seen.get(id), id)
     }))
   };
   await requireCurrentBook(ctx, book);
@@ -557,7 +562,7 @@ export async function inspectContact(
       status: 'no-keys',
       keyChanged: record?.status === 'key-changed' || Boolean(pin?.keyChanged),
       keyChangeUnsigned: false,
-      keyChangeTrusted: false,
+      pinned: null,
       list: null,
       code: null,
       codeHash: null,
@@ -591,24 +596,21 @@ export async function inspectContact(
   const verifiedSame =
     record?.status === 'verified' &&
     toHex(record.identityKeyHash) === identityHash;
-  // A different identity was already seen for this contact: the verified
+  // The signed list pins this very identity: verified, or trusted on first
+  // use (ADR-024 amendment 2026-11-25).
+  const pinnedSame =
+    pinsIdentity(record?.status) &&
+    toHex(record.identityKeyHash) === identityHash;
+  // A different identity was already seen for this contact: the pinned
   // one coming back is a rollback, not a reason to trust it again. Only a
-  // signed key change or a new verification moves on from there.
-  // The same holds once the user trusted the replacement ("Trust new keys",
-  // which clears the pin's `keyChanged`): a verification signed for the
-  // identity it superseded never counts again.
-  if (
-    verifiedSame &&
-    pin &&
-    pin.identityKeyHash !== identityHash &&
-    (pin.keyChanged || pin.trustedKeys === pin.identityKeyHash)
-  ) {
+  // signed key change, a new verification or a signed trust moves on.
+  if (pinnedSame && pin?.keyChanged && pin.identityKeyHash !== identityHash) {
     staleAnswer('device list');
   }
-  // Fork consistency: the list must extend the signed verification and
-  // whatever newer head this browser accepted for the same identity.
+  // Fork consistency: the list must extend the signed verification or
+  // trust and whatever newer head this browser accepted for the identity.
   const pins: DeviceListPin[] = [];
-  if (verifiedSame) pins.push(contactDeviceListPin(record));
+  if (pinnedSame) pins.push(contactDeviceListPin(record));
   if (pin && pin.identityKeyHash === identityHash) {
     pins.push({
       identityKeyHash: list.identityKeyHash,
@@ -628,19 +630,13 @@ export async function inspectContact(
     }
   }
   const replacedVerified = record?.status === 'verified' && !verifiedSame;
-  // An identity the account's pins retired (a trust or verification on any
-  // of its devices superseded it) is a key change, whatever this browser's
-  // own pins say.
-  const retired = (await retiredIdentities(ctx.firstUse, contactUserId)).has(
-    identityHash
-  );
+  const replacedPinned = pinsIdentity(record?.status) && !pinnedSame;
   const keyChanged =
-    retired ||
-    (!verifiedSame &&
-      (replacedVerified ||
-        record?.status === 'key-changed' ||
-        Boolean(pin?.keyChanged) ||
-        (pin !== null && pin.identityKeyHash !== identityHash)));
+    !pinnedSame &&
+    (replacedPinned ||
+      record?.status === 'key-changed' ||
+      Boolean(pin?.keyChanged) ||
+      (pin !== null && pin.identityKeyHash !== identityHash));
   const checkedList = await requireCurrentBook(ctx, book);
   requireActive(ctx);
   const advanced = await ctx.pins.advanceContact(
@@ -661,11 +657,17 @@ export async function inspectContact(
     identityKey,
     list.headHash
   );
-  // An unconfirmed list's verification counts only once compared here.
+  // An unconfirmed list's verification counts only once compared here,
+  // and its first-use trust only once signed or compared here.
   const trusted =
-    !retired &&
-    verifiedSame &&
-    trustedHere(book.listConfirmed, pin, identityHash);
+    verifiedSame && trustedHere(book.listConfirmed, pin, identityHash);
+  const pinned: ContactView['pinned'] = trusted
+    ? 'verified'
+    : pinnedSame &&
+        record.status === 'trusted' &&
+        pinnedHere(book.listConfirmed, pin, identityHash)
+      ? 'trusted'
+      : null;
   const fingerprint = (await identityFingerprint(identityKey)).code;
   await requireCurrentBook(ctx, book);
   return {
@@ -674,10 +676,7 @@ export async function inspectContact(
     status: trusted ? 'verified' : 'seen',
     keyChanged,
     keyChangeUnsigned: replacedVerified,
-    keyChangeTrusted:
-      keyChanged &&
-      pin?.identityKeyHash === identityHash &&
-      pin.trustedKeys === identityHash,
+    pinned,
     // The chain does not carry its identity generation; the lookup does,
     // unsigned, so the server could relabel it. Checks that read it
     // (`verifyMlsAuthorityReset`) still need the identity key's signature
@@ -919,54 +918,75 @@ export async function verifyContact(
     { replaceIdentity: true }
   );
   if (!recorded) staleAnswer('device list');
-  // Every device of the account now counts this identity, and none counts
-  // any other it knew for them (ADR-024 amendment 2026-11-25).
-  if (ctx.firstUse) {
-    const also = record ? [toHex(record.identityKeyHash)] : [];
-    try {
-      await ctx.firstUse.change((pins, at) =>
-        trustFirstUse(pins, view.userId, toHex(identityKeyHash), at, also, true)
-      );
-    } catch {
-      throw new ContactsError(
-        'invalid',
-        'Verified, but your other devices could not be told. Verify again to retry.'
-      );
-    }
-  }
   // Read again after the pin: the comparison made here counts now.
   return loadContacts(ctx, account);
 }
 
 /**
- * The user's explicit "Trust new keys" for a contact whose identity changed
- * (ADR-024 amendment 2026-11-25, trust on first use): this browser records
- * the identity `view` showed as trusted again, so invitations add them
- * again. Nothing is signed and the contact stays unverified: comparing
- * codes (`verifyContact`) is still what verifies. Refused when the identity
- * changed again since `view` was inspected.
+ * Signs that this account trusts `view`'s identity, with its device-list
+ * head, on first use, without comparing codes (ADR-024 amendment
+ * 2026-11-25): a `trust` entry in the contacts list, which pins it on every
+ * device of the account. It is also "Trust new keys" for someone whose
+ * identity changed: a verified identity's key change is signed first. Asks
+ * for a passkey or the recovery key (one touch). The contact stays
+ * unverified.
  */
-export async function trustNewKeys(
+export async function trustContact(
   ctx: ContactsContext,
-  view: ContactView
-): Promise<void> {
+  account: AccountView,
+  book: ContactsBook,
+  view: ContactView,
+  authorization: UnlockAuthorization
+): Promise<ContactsBook> {
   if (!view.list || view.userId === ctx.keys.userId) {
     throw new ContactsError('not-verifiable', 'This contact has no keys.');
   }
-  requireActive(ctx);
-  const identity = toHex(view.list.identityKeyHash);
-  const recorded = await ctx.pins.advanceContact(ctx.keys.userId, {
-    contactUserId: view.userId,
-    identityKeyHash: identity,
+  const record = book.list?.contacts.get(view.userId);
+  const identityKeyHash = view.list.identityKeyHash;
+  const identity = toHex(identityKeyHash);
+  if (
+    record?.status === 'verified' &&
+    toHex(record.identityKeyHash) === identity
+  ) {
+    // Already verified: nothing to trust.
+    return loadContacts(ctx, account);
+  }
+  const head = {
     sequence: view.list.pin.sequence,
-    entryHash: toHex(view.list.headHash),
-    keyChanged: false,
-    seenAt: now(ctx),
-    trustedKeys: identity
+    entryHash: view.list.headHash
+  };
+  const changes: Omit<ContactsChange, 'issuedAt'>[] = [];
+  if (record?.status === 'verified') {
+    changes.push({
+      action: 'key-changed',
+      contactUserId: view.userId,
+      identityKeyHash: record.identityKeyHash
+    });
+  }
+  changes.push({
+    action: 'trust',
+    contactUserId: view.userId,
+    identityKeyHash,
+    deviceListHead: head
   });
-  // Refused when another tab moved the pin to yet another identity: that
-  // one was not what the user trusted.
+  await signEntries(ctx, account, book, changes, authorization);
+  // Signed here: it counts here even while this browser's list pin is
+  // unconfirmed, and the downgrade it answers is cleared.
+  const recorded = await ctx.pins.advanceContact(
+    ctx.keys.userId,
+    {
+      contactUserId: view.userId,
+      identityKeyHash: identity,
+      sequence: head.sequence,
+      entryHash: toHex(head.entryHash),
+      keyChanged: false,
+      seenAt: now(ctx),
+      trustedHere: identity
+    },
+    { replaceIdentity: true }
+  );
   if (!recorded) staleAnswer('device list');
+  return loadContacts(ctx, account);
 }
 
 /** Signs that a verified contact's key was replaced; they become unverified. */
