@@ -147,10 +147,10 @@ test('enrolls, unlocks and revokes with a real WebAuthn PRF virtual authenticato
   expect(errors).toEqual([]);
 });
 
-// L11 plan 2026-11-25 §5 (D2, D3): setup makes the passkey first, with one
-// touch, saves the recovery key without typing it, and a fresh browser then
-// unlocks with that passkey as its first choice.
-test('sets up with one passkey touch, no retype, and unlocks a fresh browser passkey-first', { tag: '@ci-smoke' }, async ({
+// L11 plan 2026-11-25 §5 (D2, D3): setup makes the passkey first (create,
+// plus an assertion where PRF needs one), saves the recovery key without
+// typing it, and a fresh browser then unlocks with that passkey first.
+test('sets up with a passkey first, no retype, and unlocks a fresh browser passkey-first', { tag: '@ci-smoke' }, async ({
   page,
   context,
   baseURL

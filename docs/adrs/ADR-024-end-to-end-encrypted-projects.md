@@ -1976,7 +1976,9 @@ the order of the screens and how its saving is confirmed
 (`apps/web/src/components/encryption/SetupDialog.tsx`):
 
 - **With a passkey.** "Continue with passkey" creates the credential first,
-  inside the click, so the person touches their authenticator once. Then
+  inside the click, so nothing is typed. The person confirms once, or twice
+  where the browser evaluates PRF only on a follow-up assertion (Safari),
+  and the first screen says the browser may ask twice. Then
   `setUpEncryption` commits the identity, the recovery target and this
   device, and `addPasskey` certifies the passkey with the recovery secret
   already in memory and the credential just created. The person then saves

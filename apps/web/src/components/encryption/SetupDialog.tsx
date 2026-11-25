@@ -272,8 +272,9 @@ function LastGroupField({
 
 /**
  * Hands `addPasskey` the credential setup already created, so the person
- * touches their authenticator once, while the click still counts as a user
- * gesture, before any key or network work.
+ * confirms once for creation (twice where the browser evaluates PRF only on
+ * a follow-up assertion, as Safari does), while the click still counts as a
+ * user gesture, before any key or network work.
  */
 function createdPasskey(created: PasskeySecret): PasskeyPrf {
   let taken = false;
@@ -318,7 +319,7 @@ interface ExistingProjects {
  * 2026-11-25 §5, decision D2):
  *
  * 1. Turn on encryption. The recovery key already exists in memory.
- *    "Continue with passkey" creates the passkey first (one touch), then
+ *    "Continue with passkey" creates the passkey first (no typing), then
  *    sets up the keys and enrolls that passkey with the in-memory recovery
  *    secret. "Use a recovery key only" commits nothing yet.
  * 2. Save your recovery key, ticking "I saved it". With a passkey made in
@@ -456,7 +457,7 @@ export function SetupDialog({
   };
 
   /**
-   * Screen 1's one touch. The passkey is created first, inside the click,
+   * Screen 1's passkey step. The passkey is created first, inside the click,
    * so nothing is committed if it is cancelled; then the keys are set up
    * and the passkey enrolled with the recovery secret in memory.
    */
@@ -614,7 +615,7 @@ export function SetupDialog({
               Only your devices will be able to read your cloud projects.
             </strong>{' '}
             {offerPasskey
-              ? 'A passkey unlocks your other devices with one touch, and a recovery key is your backup.'
+              ? 'A passkey unlocks your other devices without typing, and a recovery key is your backup. Your browser may ask you to confirm twice.'
               : 'A recovery key unlocks your other devices and is your backup.'}
           </p>
           <p className="encryption-dialog-warning">{LOSS_SENTENCE}</p>
