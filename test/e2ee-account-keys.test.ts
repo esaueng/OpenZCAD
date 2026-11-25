@@ -60,7 +60,10 @@ import {
   requestApproval,
   setUpEncryption,
   unlockedEncryptionKey,
+  withIdentityKey,
+  AFTER_IDENTITY_KEY_TIMEOUT_MS,
   type AccountView,
+  type IdentityKeyFollowUp,
   type E2eeContext,
   type EncryptionState
 } from '../apps/web/src/lib/e2ee/accountKeys';
@@ -7046,5 +7049,217 @@ describe('approval always certifies', () => {
       await enrollWithPasskey(fresh.ctx, fresh.account, 'Tablet')
     );
     expect(enrolled.deviceStatus).toBe('certified');
+  });
+});
+
+describe('what follows an identity-authorized action (L11 D4)', () => {
+  /** Records each `afterIdentityKey` call: the devices it saw, and the key. */
+  function following(fail = false) {
+    const calls: { devices: string[]; key: CryptoKey }[] = [];
+    return {
+      calls,
+      afterIdentityKey: async (step: IdentityKeyFollowUp) => {
+        calls.push({
+          devices: step.account.list.devices.map((d) => d.label).sort(),
+          key: await step.useIdentityKey(async (key) => key)
+        });
+        if (fail) throw new Error('Share delegation unavailable');
+      }
+    };
+  }
+
+  it('follows a new device unlocking with the recovery key, naming it', async () => {
+    const srv = server();
+    const { recovery } = await setUp(srv);
+    const follow = following();
+    const phone = { ...device(srv), afterIdentityKey: follow.afterIdentityKey };
+    const account = ready(
+      await enrollWithRecoveryKey(
+        phone,
+        ready(await loadEncryption(phone)),
+        recovery.secret,
+        'Phone'
+      )
+    );
+    expect(account.deviceStatus).toBe('certified');
+    expect(follow.calls.map((call) => call.devices)).toEqual([
+      ['Laptop', 'Phone']
+    ]);
+    expect(follow.calls[0]!.key.type).toBe('private');
+  });
+
+  it('follows a removal with the surviving devices only', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const follow = following();
+    const after = ready(
+      await removeDevice(
+        { ...laptop, afterIdentityKey: follow.afterIdentityKey },
+        ready(await loadEncryption(laptop)),
+        phone.account.device!.deviceId,
+        recovery.secret
+      )
+    );
+    expect(after.list.devices.map((d) => d.label)).toEqual(['Laptop']);
+    expect(follow.calls.map((call) => call.devices)).toEqual([['Laptop']]);
+  });
+
+  it('follows an approval, naming the approved device', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const phone = device(srv);
+    const request = await requestApproval(
+      phone,
+      ready(await loadEncryption(phone)),
+      'Phone'
+    );
+    if (request.step !== 'waiting') throw new Error('expected a request');
+    const follow = following();
+    const [pending] = (await laptop.api.listApprovals()).approvals;
+    ready(
+      await approveDevice(
+        { ...laptop, afterIdentityKey: follow.afterIdentityKey },
+        ready(await loadEncryption(laptop)),
+        pending!,
+        { kind: 'scan', code: request.scanCode },
+        recovery.secret
+      )
+    );
+    expect(follow.calls.map((call) => call.devices)).toEqual([
+      ['Laptop', 'Phone']
+    ]);
+  });
+
+  it('never fails the action it follows', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    const follow = following(true);
+    const phone = { ...device(srv), afterIdentityKey: follow.afterIdentityKey };
+    const account = ready(
+      await enrollWithRecoveryKey(
+        phone,
+        ready(await loadEncryption(phone)),
+        recovery.secret,
+        'Phone'
+      )
+    );
+    expect(account.deviceStatus).toBe('certified');
+    expect(follow.calls).toHaveLength(1);
+    // A signature it follows still comes back.
+    await expect(
+      withIdentityKey(
+        { ...laptop, afterIdentityKey: follow.afterIdentityKey },
+        ready(await loadEncryption(laptop)),
+        recovery.secret,
+        async () => 'signed'
+      )
+    ).resolves.toBe('signed');
+    expect(follow.calls).toHaveLength(2);
+  });
+
+  it('does not run when the action fails', async () => {
+    const srv = server();
+    await setUp(srv);
+    const follow = following();
+    const phone = { ...device(srv), afterIdentityKey: follow.afterIdentityKey };
+    await flowRefusal(
+      enrollWithRecoveryKey(
+        phone,
+        ready(await loadEncryption(phone)),
+        generateSymmetricKey(),
+        'Phone'
+      ),
+      'wrong-recovery-key'
+    );
+    expect(follow.calls).toEqual([]);
+  });
+
+  /**
+   * A follow-up that waits on `read` (a slow delegation read) and then
+   * signs, as the share delegation renewal does.
+   */
+  function slowFollowUp(read: Promise<void>) {
+    let finish!: () => void;
+    const seen = {
+      entered: false,
+      signed: false,
+      refused: null as unknown,
+      done: new Promise<void>((resolve) => (finish = resolve))
+    };
+    return {
+      seen,
+      afterIdentityKey: async (step: IdentityKeyFollowUp) => {
+        seen.entered = true;
+        try {
+          await read;
+          await step.useIdentityKey(async () => {
+            seen.signed = true;
+          });
+        } catch (error) {
+          seen.refused = error;
+        } finally {
+          finish();
+        }
+      }
+    };
+  }
+
+  it(
+    'never hands the key over once the action has returned after the wait',
+    { timeout: AFTER_IDENTITY_KEY_TIMEOUT_MS + 20_000 },
+    async () => {
+      const srv = server();
+      const { recovery, laptop } = await setUp(srv);
+      let release!: () => void;
+      const follow = slowFollowUp(
+        new Promise<void>((resolve) => (release = resolve))
+      );
+      const started = Date.now();
+      await expect(
+        withIdentityKey(
+          { ...laptop, afterIdentityKey: follow.afterIdentityKey },
+          ready(await loadEncryption(laptop)),
+          recovery.secret,
+          async () => 'signed'
+        )
+      ).resolves.toBe('signed');
+      expect(Date.now() - started).toBeGreaterThanOrEqual(
+        AFTER_IDENTITY_KEY_TIMEOUT_MS - 50
+      );
+      // The read answers only now: the key is refused, nothing is signed.
+      release();
+      await follow.seen.done;
+      expect(follow.seen.signed).toBe(false);
+      expect(follow.seen.refused).toBeInstanceOf(DOMException);
+    }
+  );
+
+  it('never hands the key over once the session ended during the wait', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    let live = true;
+    let release!: () => void;
+    const follow = slowFollowUp(
+      new Promise<void>((resolve) => (release = resolve))
+    );
+    const action = withIdentityKey(
+      {
+        ...laptop,
+        isCurrent: () => live,
+        afterIdentityKey: follow.afterIdentityKey
+      },
+      ready(await loadEncryption(laptop)),
+      recovery.secret,
+      async () => 'signed'
+    );
+    // Signed out while the follow-up waits on its read.
+    await vi.waitFor(() => expect(follow.seen.entered).toBe(true));
+    live = false;
+    release();
+    await follow.seen.done;
+    await expect(action).resolves.toBe('signed');
+    expect(follow.seen.signed).toBe(false);
+    expect(follow.seen.refused).toBeInstanceOf(EncryptionFlowError);
   });
 });
