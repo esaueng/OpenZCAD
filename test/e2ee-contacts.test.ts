@@ -940,6 +940,47 @@ describe('verifying contacts in the browser', () => {
     ).toEqual(['verify']);
   });
 
+  it('keeps an alarm another tab records while the signed confirmation is open, and confirms nothing (PR 2057 re-check)', async () => {
+    const { alice } = await pair();
+    const verifiedBook = await loadContacts(alice.contacts, alice.account);
+    await verifyContact(
+      alice.contacts,
+      alice.account,
+      verifiedBook,
+      await inspectContact(alice.contacts, verifiedBook, BOB),
+      alice.recovery.secret
+    );
+    const pins = memoryContactPins();
+    const unconfirmed: ContactsContext = { ...alice.contacts, pins };
+    const book = await loadContacts(unconfirmed, alice.account);
+    const view = await inspectContact(unconfirmed, book, BOB);
+    expect(view.pinned).toBeNull();
+    // While the passkey prompt is open, another tab records a replacement.
+    const racing: ContactsContext = {
+      ...unconfirmed,
+      pins: {
+        ...pins,
+        advanceContact: async (userId, next, options) => {
+          const stored = (await pins.readContact(ALICE, BOB))!;
+          await pins.advanceContact(
+            ALICE,
+            { ...stored, identityKeyHash: 'cd'.repeat(32), keyChanged: true },
+            { replaceIdentity: true }
+          );
+          return pins.advanceContact(userId, next, options);
+        }
+      }
+    };
+    await expect(
+      trustContact(racing, alice.account, book, view, alice.recovery.secret)
+    ).rejects.toMatchObject({ code: 'fork' });
+    expect(await pins.readContact(ALICE, BOB)).toMatchObject({
+      identityKeyHash: 'cd'.repeat(32),
+      keyChanged: true,
+      trustedHere: null
+    });
+  });
+
   it('records a verified contact’s key change before trusting the new identity, which stays unverified', async () => {
     const { alice, bob } = await pair();
     let book = await loadContacts(alice.contacts, alice.account);

@@ -980,6 +980,17 @@ export async function trustContact(
     // authorization (it opens the identity key) is this device's
     // confirmation: the pin records it for this identity and head, and the
     // list needs no new entry (PR 2057 review).
+    // What this confirmation reviewed, captured before the prompt: a key
+    // change another tab records meanwhile is never overwritten.
+    const reviewed = await ctx.pins.readContact(ctx.keys.userId, view.userId);
+    if (
+      !reviewed ||
+      reviewed.identityKeyHash !== identity ||
+      reviewed.keyChanged
+    ) {
+      staleAnswer('device list');
+    }
+    const checkedList = await requireCurrentBook(ctx, book);
     await withIdentityKey(ctx.keys, account, authorization, async () => {});
     const confirmed = await ctx.pins.advanceContact(
       ctx.keys.userId,
@@ -992,7 +1003,7 @@ export async function trustContact(
         seenAt: now(ctx),
         trustedHere: identity
       },
-      { replaceIdentity: true, clearAlarm: true }
+      { clearAlarm: true, expected: reviewed, checkedList }
     );
     if (!confirmed) staleAnswer('device list');
     return loadContacts(ctx, account);

@@ -31,7 +31,15 @@ const requestContactVerification = vi.fn<(userId: string) => void>();
 let passListener: ((result: InvitationPassResult) => void) | null = null;
 
 vi.mock('../lib/e2ee/accountKeys', () => ({
-  loadEncryption: (...args: unknown[]) => loadEncryption(...args)
+  loadEncryption: (...args: unknown[]) => loadEncryption(...args),
+  EncryptionFlowError: class EncryptionFlowError extends Error {
+    constructor(
+      readonly code: string,
+      message: string
+    ) {
+      super(message);
+    }
+  }
 }));
 vi.mock('../lib/e2ee/e2eeApi', () => ({ createE2eeApi: () => ({}) }));
 vi.mock('../lib/e2ee/keychainDeviceKeys', () => ({
@@ -226,13 +234,14 @@ describe('SharedWithYouDialog', () => {
     expect(passed).toEqual(secret);
   });
 
-  it('signs for exactly the listing confirmed, even when a later pass lists another (PR 2057 review)', async () => {
+  it('refuses to sign when the listing changes while the confirmation is open (PR 2057 review)', async () => {
     loadEncryption.mockResolvedValue(ready);
     acceptEncryptedInvitation.mockResolvedValue({ invitation, linked: true });
     const entry = {
       record: invitation,
       state: 'confirm-owner',
       ownerPinned: false,
+      statementHash: '11'.repeat(32),
       ownerIdentityKeyHash: 'aa'.repeat(32)
     } as unknown as InvitationPassResult['incoming'][number];
     syncInvitationsNow.mockResolvedValue(pass({ incoming: [entry] }));
@@ -243,13 +252,15 @@ describe('SharedWithYouDialog', () => {
     const dialog = await screen.findByRole('dialog', {
       name: 'Confirm the project owner'
     });
-    // A replacement under the same id arrives while the dialog is open.
+    // A replacement statement, under another owner identity and the same
+    // invitation id and state, is listed while the dialog is open.
     act(() =>
       passListener?.(
         pass({
           incoming: [
             {
               ...entry,
+              statementHash: '22'.repeat(32),
               ownerIdentityKeyHash: 'bb'.repeat(32)
             }
           ]
@@ -260,8 +271,10 @@ describe('SharedWithYouDialog', () => {
       target: { value: formatted }
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
-    await waitFor(() => expect(trustInvitationOwner).toHaveBeenCalledOnce());
-    expect(trustInvitationOwner.mock.calls[0]![1]).toBe(entry);
+    expect((await within(dialog).findByRole('alert')).textContent).toMatch(
+      /changed since you reviewed it/
+    );
+    expect(trustInvitationOwner).not.toHaveBeenCalled();
   });
 
   it('leads to the code comparison when the owner’s keys changed', async () => {

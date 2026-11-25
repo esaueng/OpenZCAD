@@ -11,6 +11,7 @@ import {
   deviceKeyStore
 } from '../lib/e2ee/keychainDeviceKeys';
 import {
+  EncryptionFlowError,
   loadEncryption,
   type E2eeContext,
   type EncryptionState
@@ -238,7 +239,11 @@ export function SharedWithYouDialog({
         void refresh();
         return;
       }
-      if (listed.state !== current.state) {
+      if (
+        listed.state !== current.state ||
+        listed.statementHash !== current.listing?.statementHash ||
+        listed.ownerIdentityKeyHash !== current.listing?.ownerIdentityKeyHash
+      ) {
         show({ ...current, state: listed.state, listing: listed });
       }
     },
@@ -432,6 +437,19 @@ export function SharedWithYouDialog({
           actionLabel: 'Confirm',
           passkey: confirmingOwner.passkey,
           work: async (authorization) => {
+            // The listing still shown must be the one confirmed.
+            const shownNow = phaseRef.current;
+            if (
+              shownNow.kind !== 'waiting' ||
+              shownNow.listing?.statementHash !== listing.statementHash ||
+              shownNow.listing?.ownerIdentityKeyHash !==
+                listing.ownerIdentityKeyHash
+            ) {
+              throw new EncryptionFlowError(
+                'invalid-request',
+                'This invitation changed since you reviewed it. Nothing was trusted; review it again.'
+              );
+            }
             await trustInvitationOwner(
               await encryptedInvitations(),
               listing,
