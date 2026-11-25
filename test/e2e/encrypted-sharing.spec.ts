@@ -20,13 +20,14 @@ import {
 /**
  * ADR-024 Phase 5, slice 5-3b, with the 2026-11-25 trust-on-first-use
  * amendment: the owner invites someone to an end-to-end encrypted project
- * from the sharing dialog; the invitee, sent to set up encryption first,
- * has the opened link accepted with no further click; nobody compares
- * codes. Each side is new to the other, so each confirms once, signing a
- * trust entry into its contacts list (a passkey touch, or here the recovery
- * key); the invitee's browser publishes its KeyPackage, the owner's adds
- * it by an MLS Commit with the role (shown Not verified), and the invitee
- * opens the project from the shelf and decrypts it. The real
+ * from the sharing dialog; the invitee's emailed link opens "Shared with
+ * you" (L11 plan of 2026-11-25, §3.2), which turns encryption on and
+ * accepts the link by itself. Nobody compares codes: each side is new to
+ * the other, so each confirms once, signing a trust entry into its
+ * contacts list (a passkey touch, or here the recovery key). The invitee's
+ * browser publishes its KeyPackage, the owner's adds it by an MLS Commit
+ * with the role (shown Not verified), and the invitee's landing joins by
+ * the Welcome and opens the project. The real
  * `/api/e2ee/*` Worker routes run over SQLite; each browser runs the real
  * MLS Worker.
  */
@@ -151,6 +152,15 @@ async function signIn(
   return page;
 }
 
+/** Closes Settings (and any panel open in it). */
+async function closeSettings(page: Page) {
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  for (let attempt = 0; attempt < 3 && (await settings.count()); attempt++) {
+    await page.keyboard.press('Escape');
+  }
+  await expect(settings).toHaveCount(0);
+}
+
 /**
  * Signs in the confirmation dialog titled `title` with the recovery key
  * (seeded devices have no passkey): one signature, as a passkey touch is.
@@ -168,18 +178,11 @@ async function signWith(
   await expect(dialog).toHaveCount(0, { timeout: SYNC_BUDGET_MS });
 }
 
-/** Closes Settings (and any panel open in it). */
-async function closeSettings(page: Page) {
-  const settings = page.getByRole('dialog', { name: 'Settings' });
-  for (let attempt = 0; attempt < 3 && (await settings.count()); attempt++) {
-    await page.keyboard.press('Escape');
-  }
-  await expect(settings).toHaveCount(0);
-}
-
 test(
   'invites to an encrypted project, adds the invitee on first use with no code comparison, and opens it as them',
-  { tag: '@ci-smoke' },
+  {
+    tag: '@ci-smoke'
+  },
   async ({ browser }) => {
     test.setTimeout(240_000);
     const server = createE2eeServer({ projectsEnabled: true });
@@ -272,59 +275,66 @@ test(
     ).not.toContain(BOB_EMAIL);
     await dialog.getByRole('button', { name: 'Close sharing' }).click();
 
-    // Bob opens the emailed link without keys: he is sent to set them up.
+    // Bob opens the emailed link without keys: "Shared with you" (L11 plan
+    // of 2026-11-25, §3.2) offers to turn encryption on, right there.
     await bob.goto(`/#encrypted-invite=${server.mailbox[0]!.token}`);
-    const bobSettings = bob.getByRole('dialog', { name: 'Settings' });
-    await expect(
-      bobSettings.getByText(
-        'You were invited to an end-to-end encrypted project. Set up encryption on this device first: the invitation is then accepted here.'
-      )
-    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    await expect(
-      bobSettings.getByRole('button', { name: 'Set up encryption' })
-    ).toBeVisible();
+    const landing = bob.getByRole('dialog', { name: 'Shared with you' });
+    const turnOn = landing.getByRole('button', {
+      name: 'Turn on encryption to open it'
+    });
+    await expect(turnOn).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await expect(bob.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
     expect(new URL(bob.url()).hash).toBe('');
 
-    // Set up (seeded), he comes back: the link he opened is his acceptance,
-    // so there is no Accept click, and nobody compares codes. Alice is new
-    // to him: one signature pins her for his devices.
-    const bobSeed = await seedE2eeDevice(bob, server, {
-      label: 'Bob browser',
-      userId: BOB_ID
+    // He sets encryption up in the setup dialog and comes back to it.
+    await turnOn.click();
+    const bobBody = bob.locator('body');
+    await bobBody.getByRole('button', { name: 'Start', exact: true }).click();
+    const bobRecoveryKey = (await bobBody
+      .getByLabel('Recovery key', { exact: true })
+      .textContent())!;
+    await bobBody
+      .getByRole('checkbox', { name: /I saved my recovery key/ })
+      .check();
+    await bobBody
+      .getByRole('button', { name: 'Continue', exact: true })
+      .click();
+    await bobBody.getByLabel('Confirm recovery key').fill(bobRecoveryKey);
+    await bobBody
+      .getByRole('button', { name: 'Turn on encryption', exact: true })
+      .click();
+    // The optional passkey and projects steps (`finishSetupDialog`, which
+    // expects no encryption dialog after: the landing is one).
+    const skip = bobBody.getByRole('button', { name: 'Skip', exact: true });
+    const done = bobBody.getByRole('button', { name: 'Done', exact: true });
+    await expect(skip.or(done).first()).toBeVisible({
+      timeout: SYNC_BUDGET_MS
     });
-    await bob.reload();
-    const bobEncryption = await openEncryptionSettings(bob);
-    await expect(
-      bobEncryption.getByRole('button', { name: 'Accept invitation' })
-    ).toHaveCount(0);
-    await bobEncryption
-      .getByRole('button', { name: `Confirm ${ALICE_EMAIL}` })
+    if (await skip.isVisible()) await skip.click();
+    await done.click({ timeout: SYNC_BUDGET_MS });
+
+    // Unlocked, the landing accepts the link by itself: no Accept click, and
+    // nobody compares codes. Alice is new to him: one signature pins her,
+    // then his browser publishes its KeyPackage.
+    await landing
+      .getByRole('button', { name: 'Confirm' })
       .click({ timeout: SYNC_BUDGET_MS });
-    await signWith(
-      bob,
-      `Confirm ${ALICE_EMAIL}`,
-      bobSeed.recoveryKey,
-      'Confirm'
+    await signWith(bob, 'Confirm the project owner', bobRecoveryKey, 'Confirm');
+    await expect(landing.getByRole('status')).toContainText(
+      'device to add you…',
+      { timeout: SYNC_BUDGET_MS }
     );
-    await expect(
-      bobEncryption.getByText(
-        'Your keys are ready. Waiting for them to add you.'
-      )
-    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
     expect(
       server.db
         .prepare('SELECT user_id, consumed_at FROM e2ee_key_packages')
         .all()
     ).toEqual([{ user_id: BOB_ID, consumed_at: null }]);
-    await closeSettings(bob);
 
     // Bob is new to Alice: one confirmation, signed, then her browser adds
-    // him by an MLS Commit with the role. Nobody compares codes.
+    // him by an MLS Commit with the role.
     await alice.getByRole('button', { name: /Open project sharing/ }).click();
-    const confirm = dialog.getByRole('group', {
-      name: 'Confirm The person who accepted'
-    });
-    await confirm
+    await dialog
+      .getByRole('group', { name: 'Confirm The person who accepted' })
       .getByRole('button', { name: 'Confirm' })
       .click({ timeout: ADD_BUDGET_MS });
     await signWith(
@@ -362,9 +372,6 @@ test(
           .get(userId)
       ).toEqual({ n: 1 });
     }
-    await expect(dialog.getByRole('group', { name: /^Confirm / })).toHaveCount(
-      0
-    );
     await dialog.getByRole('button', { name: 'Close sharing' }).click();
     await alice.getByRole('button', { name: /Open project sharing/ }).click();
     await expect(dialog.getByText(BOB_EMAIL)).toHaveCount(0);
@@ -381,23 +388,12 @@ test(
     await expect(dialog.getByText(/Waiting for/)).toHaveCount(0);
     await dialog.getByRole('button', { name: 'Close sharing' }).click();
 
-    // Bob's shelf decrypts the shared project's name; he opens and reads it.
-    await bob.reload();
-    await expect(
-      bob
-        .getByRole('dialog', { name: 'Settings' })
-        .or(bob.getByRole('button', { name: 'Open settings' }))
-        .first()
-    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    await closeSettings(bob);
-    const card = bob.locator('.start-tile-project', {
-      hasText: 'Secret bracket'
-    });
-    await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    await card.locator('.start-tile-open').click();
+    // Bob did nothing more: his landing picked up the Welcome and opens the
+    // project, whose name his browser can read now.
     await expect(bob.locator('.breadcrumb')).toContainText('Secret bracket', {
-      timeout: SYNC_BUDGET_MS
+      timeout: ADD_BUDGET_MS
     });
+    await expect(landing).toHaveCount(0);
     await expect(bob.getByText('Box 1').first()).toBeVisible({
       timeout: SYNC_BUDGET_MS
     });
@@ -512,34 +508,31 @@ test(
     });
     await dialog.getByRole('button', { name: 'Close sharing' }).click();
 
-    // Bob sets up and his opened link is accepted; his keys are published.
+    // Bob sets up; his landing accepts the opened link, he confirms Alice
+    // once, and his keys are published.
     await bob.goto(`/#encrypted-invite=${server.mailbox[0]!.token}`);
+    const landing = bob.getByRole('dialog', { name: 'Shared with you' });
     await expect(
-      bob
-        .getByRole('dialog', { name: 'Settings' })
-        .getByRole('button', { name: 'Set up encryption' })
+      landing.getByRole('button', { name: 'Turn on encryption to open it' })
     ).toBeVisible({ timeout: SYNC_BUDGET_MS });
     const bobSeed = await seedE2eeDevice(bob, server, {
       label: 'Bob browser',
       userId: BOB_ID
     });
     await bob.reload();
-    const bobEncryption = await openEncryptionSettings(bob);
-    await bobEncryption
-      .getByRole('button', { name: `Confirm ${ALICE_EMAIL}` })
+    await landing
+      .getByRole('button', { name: 'Confirm' })
       .click({ timeout: SYNC_BUDGET_MS });
     await signWith(
       bob,
-      `Confirm ${ALICE_EMAIL}`,
+      'Confirm the project owner',
       bobSeed.recoveryKey,
       'Confirm'
     );
-    await expect(
-      bobEncryption.getByText(
-        'Your keys are ready. Waiting for them to add you.'
-      )
-    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    await closeSettings(bob);
+    await expect(landing.getByRole('status')).toContainText(
+      'device to add you…',
+      { timeout: SYNC_BUDGET_MS }
+    );
 
     // Alice's dialog does not add him: his keys are not the ones her
     // browser pinned. Review and Trust new keys are offered.

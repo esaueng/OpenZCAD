@@ -376,6 +376,7 @@ export {
   sealRecord,
   SEALED_RECORD_VERSION_1,
   SHARE_LINK_NAMES_RECORD,
+  INVITATION_TOMBSTONES_RECORD,
   type SealedRecordHeader,
   type SealedRecordKind
 } from './sealed-records';
@@ -464,6 +465,9 @@ export {
   PROJECT_INVITATION_VERSION_1,
   PROJECT_INVITATION_VERSION_2,
   PROJECT_INVITATION_VERSION_3,
+  PROJECT_INVITATION_VERSION_4,
+  MAX_PROJECT_INVITATION_CHAIN_MS,
+  invitationChainIssuedAt,
   ProjectInvitationError,
   decodeInvitationAcceptance,
   decodeProjectInvitation,

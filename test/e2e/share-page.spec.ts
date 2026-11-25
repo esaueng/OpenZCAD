@@ -114,7 +114,8 @@ for (const pending of [false, true]) {
       await page.evaluate((value) => {
         window.location.hash = `encrypted-invite=${value}`;
       }, invitation);
-      const settings = page.getByRole('dialog', { name: 'Settings' });
+      // The invitation's landing (L11 plan of 2026-11-25, §3.2).
+      const settings = page.getByRole('dialog', { name: 'Shared with you' });
       await expect(settings).toBeVisible();
       await expect(
         page.getByRole('main', { name: 'Shared model' })

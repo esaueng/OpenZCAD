@@ -49,15 +49,21 @@ vi.mock('../lib/desktopBridge', () => ({
 vi.mock('../lib/e2ee/encryptedProjects', () => ({
   encryptedInvitations: async () => ({})
 }));
+// The panel's pass is the app's invitation runner's (`invitationRunner.ts`).
+vi.mock('../lib/e2ee/invitationRunner', () => ({
+  syncInvitationsNow: (...args: unknown[]) => syncInvitations(...args),
+  subscribeInvitationPasses: () => () => undefined
+}));
 vi.mock('../lib/e2ee/invitations', () => ({
-  syncInvitations: (...args: unknown[]) => syncInvitations(...args),
   trustInvitationOwner: (...args: unknown[]) => trustInvitationOwner(...args),
   acceptEncryptedInvitation: (...args: unknown[]) =>
     acceptEncryptedInvitation(...args),
   confirmEncryptedInvitation: (...args: unknown[]) =>
     confirmEncryptedInvitation(...args),
-  addInvitedMember: (...args: unknown[]) => addInvitedMember(...args),
-  declineInvitation: (...args: unknown[]) => declineInvitation(...args)
+  addInvitedMember: (...args: unknown[]) => addInvitedMember(...args)
+}));
+vi.mock('../lib/e2ee/invitationTombstones', () => ({
+  cancelInvitation: (...args: unknown[]) => declineInvitation(...args)
 }));
 vi.mock('../lib/e2ee/contactFocus', () => ({
   notifyContactsChanged: () => undefined,

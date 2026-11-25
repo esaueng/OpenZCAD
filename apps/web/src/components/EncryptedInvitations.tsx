@@ -25,6 +25,11 @@ import type {
   OwnerInvitation
 } from '../lib/e2ee/invitations';
 import type { UnlockAuthorization } from '../lib/e2ee/accountKeys';
+import {
+  subscribeInvitationPasses,
+  syncInvitationsNow,
+  type InvitationPassResult
+} from '../lib/e2ee/invitationRunner';
 import { desktopFetch } from '../lib/desktopBridge';
 import type { AuthorizeRequest } from './encryption/AuthorizeDialog';
 import { Group, Notice, SettingRow } from './settingsControls';
@@ -127,7 +132,8 @@ function messageFor(error: unknown): string {
  * added; verifying the owner is optional, ADR-024 amendment 2026-11-25),
  * and the people this account invited who are waiting for keys. Each pass
  * publishes this device's KeyPackages, joins welcomed projects and adds
- * invitees who accepted (`syncInvitations`).
+ * invitees who accepted; the app's invitation runner makes it
+ * (`invitationRunner.ts`), and this panel shows every pass it makes.
  */
 export function EncryptedInvitations({ ready }: { ready: boolean }) {
   const token = useSyncExternalStore(
@@ -142,6 +148,16 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [available, setAvailable] = useState(false);
 
+  // The pass a request returns is also announced to every subscriber.
+  const shownPass = useRef<InvitationPassResult | null>(null);
+  const show = useCallback((result: InvitationPassResult) => {
+    if (shownPass.current === result) return;
+    shownPass.current = result;
+    setIncoming([...result.incoming]);
+    setOutgoing([...result.outgoing]);
+    setJoined((count) => count + result.joined.length);
+  }, []);
+
   const sync = useCallback(async () => {
     setError(null);
     const open = await invitationsAvailable();
@@ -149,19 +165,23 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
     if (!ready || !open) return;
     setBusy(true);
     try {
-      const { syncInvitations } = await import('../lib/e2ee/invitations');
-      const result = await syncInvitations(await pageInvitations());
-      setIncoming(result.incoming);
-      setOutgoing(result.outgoing);
-      setJoined((count) => count + result.joined.length);
-      const shown = result.errors.find((caught) => !unavailable(caught));
+      // The app's invitation runner does the pass (single-flight with its
+      // own background passes); its result is shown through `show`.
+      const result = await syncInvitationsNow();
+      if (result) show(result);
+      const shown = result?.errors.find((caught) => !unavailable(caught));
       if (shown) setError(messageFor(shown));
     } catch (caught) {
       if (!unavailable(caught)) setError(messageFor(caught));
     } finally {
       setBusy(false);
     }
-  }, [ready]);
+  }, [ready, show]);
+
+  useEffect(() => {
+    if (!ready) return;
+    return subscribeInvitationPasses(show);
+  }, [ready, show]);
 
   useEffect(() => {
     void sync();
@@ -307,7 +327,10 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
           confirmedIdentity: invitation.acceptor.identityKeyHash
         });
       } else {
-        await invitations.declineInvitation(ctx, projectId, invitationId);
+        // Recorded in the account's sealed tombstones first, then revoked.
+        const { cancelInvitation } =
+          await import('../lib/e2ee/invitationTombstones');
+        await cancelInvitation(ctx, projectId, invitationId);
       }
     } catch (caught) {
       setError(messageFor(caught));

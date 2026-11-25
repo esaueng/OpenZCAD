@@ -108,7 +108,12 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
   '/api/e2ee/identity': [['/api/e2ee/identity', 'none']],
   '/api/e2ee/invitations': [['/api/e2ee/invitations', 'none']],
   '/api/e2ee/invitations/accept': [['/api/e2ee/invitations/accept', 'none']],
+  '/api/e2ee/invitations/pending': [['/api/e2ee/invitations/pending', 'read']],
   '/api/e2ee/invitations/sent': [['/api/e2ee/invitations/sent', 'read']],
+  // Sealed under the account key in the browser: no project's content.
+  '/api/e2ee/invitations/tombstones': [
+    ['/api/e2ee/invitations/tombstones', 'none', ['PUT']]
+  ],
   '/api/e2ee/project-preferences': [['/api/e2ee/project-preferences', 'none']],
   // Encrypted creates, copies and adoptions: the new project's encrypted
   // content, declared for the id the page chose (encryptedDocumentsApi.ts).

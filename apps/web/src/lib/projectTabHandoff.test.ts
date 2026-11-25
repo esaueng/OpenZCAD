@@ -59,7 +59,11 @@ interface Tab {
 function openTab(
   bus: FakeBus,
   id: string,
-  options: { timeoutMs?: number; transport?: ProjectHandoffTransport } = {}
+  options: {
+    timeoutMs?: number;
+    transport?: ProjectHandoffTransport;
+    now?: () => number;
+  } = {}
 ): Tab {
   const prepare = { answer: () => Promise.resolve(true) };
   const handlers = {
@@ -73,7 +77,8 @@ function openTab(
   const tracker = trackProjectEditing('project_a', handlers, {
     tabId: id,
     transport: options.transport ?? bus.transport(),
-    timeoutMs: options.timeoutMs ?? 1_000
+    timeoutMs: options.timeoutMs ?? 1_000,
+    ...(options.now ? { now: options.now } : {})
   });
   return { id, tracker, handlers, prepare };
 }
@@ -218,8 +223,11 @@ describe('project tab handoff', () => {
   it('times out on an owner that does not answer, and never takes the project by force', async () => {
     withLockManager();
     const bus = new FakeBus();
-    const a = openTab(bus, 'a');
-    const b = openTab(bus, 'b', { timeoutMs: 50 });
+    // Both tabs read the clock the test controls below (the default is
+    // the real `Date.now`, taken when the tab opens).
+    const clock = () => Date.now();
+    const a = openTab(bus, 'a', { now: clock });
+    const b = openTab(bus, 'b', { timeoutMs: 50, now: clock });
     await answered(a);
     await answered(b);
     let ready: (ok: boolean) => void = () => undefined;
@@ -228,14 +236,28 @@ describe('project tab handoff', () => {
         ready = resolve;
       });
 
-    await expect(b.tracker.requestEditing()).resolves.toBe('timeout');
+    // The clock is the test's, so the owner always receives the request
+    // before its deadline. On the real clock a busy runner could deliver
+    // it after the 50 ms deadline, and the owner rightly ignored it
+    // without ever starting to prepare, so nothing was left to cancel.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const asked = b.tracker.requestEditing();
+    // The request is posted once the handoff ticket is granted, a few
+    // promise turns away; the bus then delivers it on the next timer.
+    await vi.waitUntil(() => bus.sent.some((m) => m.type === 'request'), {
+      interval: 0
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(a.handlers.prepareYield).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(50);
+    await expect(asked).resolves.toBe('timeout');
     expect(b.tracker.ownership.owned).toBe(false);
 
     // The frozen owner wakes after the deadline: it keeps editing.
     ready(true);
-    await vi.waitFor(() =>
-      expect(a.handlers.cancelYield).toHaveBeenCalledTimes(1)
-    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(a.handlers.cancelYield).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
     expect(a.tracker.ownership.owned).toBe(true);
     expect(b.tracker.ownership.owned).toBe(false);
 

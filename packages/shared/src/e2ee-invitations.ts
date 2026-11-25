@@ -30,6 +30,13 @@
  * Slice 5-3b adds the owner's view of each invitation's KeyPackages
  * (`keyPackages`, `claimedKeyPackages`), the group epoch an invitee's
  * leaf is certified from (`groupEpoch`) and `GET /api/e2ee/invitations/sent`.
+ *
+ * The L11 invitation runner (2026-11-25 plan, §3.4) adds the owner's
+ * pending list (`GET /api/e2ee/invitations/pending`) and the renewal of a
+ * pending statement (`PUT …/invitations/:invitationId`): before a statement
+ * nobody accepted expires, an owner device signs a fresh one for the same
+ * invitation, email hash, role, link and identity, so the emailed link
+ * keeps working while the owner keeps the invitation open.
  */
 import type { E2eeProjectLeafInput } from './e2ee-project-groups';
 
@@ -97,6 +104,31 @@ export interface E2eeInvitationResponse {
 
 export interface E2eeInvitationsResponse {
   invitations: E2eeInvitationRecord[];
+}
+
+/**
+ * `PUT /api/e2ee/projects/:id/invitations/:invitationId` (owner): a fresh
+ * statement for an invitation nobody accepted yet, base64url. It must name
+ * everything the stored one names except its validity and signing device.
+ */
+export interface E2eeRenewInvitationRequest {
+  statement: string;
+  signature: string;
+}
+
+/**
+ * `GET`/`PUT /api/e2ee/invitations/tombstones`: the invitations an account
+ * cancelled, one record sealed under its account key (ADR-024 amendment
+ * 2026-11-25), opaque to the server.
+ */
+export interface E2eeInvitationTombstonesSnapshot {
+  /** 0 while the account never stored one. */
+  revision: number;
+  /** The sealed record's sequence; 0 with none. */
+  sequence: number;
+  /** base64url; null with none. */
+  record: string | null;
+  updatedAt: string | null;
 }
 
 /** `POST /api/e2ee/invitations/accept`: the token from the emailed link. */
@@ -215,6 +247,28 @@ export interface E2eeInvitationsApi {
    * session completes.
    */
   sent(): Promise<E2eeInvitationsResponse>;
+  /**
+   * Invitations this account sent, across its projects, that nobody
+   * accepted and that are neither revoked, completed nor expired: what its
+   * devices renew before they lapse.
+   */
+  pending(): Promise<E2eeInvitationsResponse>;
+  /** Replaces a pending invitation's statement with a renewed one. */
+  renew(
+    projectId: string,
+    invitationId: string,
+    request: E2eeRenewInvitationRequest
+  ): Promise<E2eeInvitationResponse>;
+  /** The account's sealed record of the invitations it cancelled. */
+  tombstones(): Promise<E2eeInvitationTombstonesSnapshot>;
+  /**
+   * Stores it at `expectedRevision` (0: none yet); a newer copy answers
+   * 409 `E2EE_INVITATION_TOMBSTONES_CONFLICT`.
+   */
+  saveTombstones(request: {
+    expectedRevision: number;
+    record: string;
+  }): Promise<E2eeInvitationTombstonesSnapshot>;
   /** The invitee's device posts its signed acceptance. */
   publishAcceptance(
     projectId: string,
@@ -277,6 +331,16 @@ export function createE2eeInvitationsApi(fetcher: Fetch): E2eeInvitationsApi {
     accept: (request) => call('/api/e2ee/invitations/accept', 'POST', request),
     accepted: () => call('/api/e2ee/invitations'),
     sent: () => call('/api/e2ee/invitations/sent'),
+    pending: () => call('/api/e2ee/invitations/pending'),
+    tombstones: () => call('/api/e2ee/invitations/tombstones'),
+    saveTombstones: (request) =>
+      call('/api/e2ee/invitations/tombstones', 'PUT', request),
+    renew: (projectId, invitationId, request) =>
+      call(
+        `${project(projectId)}/invitations/${encodeURIComponent(invitationId)}`,
+        'PUT',
+        request
+      ),
     publishAcceptance: (projectId, invitationId, request) =>
       call(
         `${project(projectId)}/invitations/${encodeURIComponent(invitationId)}/acceptance`,

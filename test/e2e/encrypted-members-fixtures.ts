@@ -334,33 +334,34 @@ export async function addSharedMember(
   await expect.poll(() => server.mailbox.length).toBe(invitations + 1);
   await dialog.getByRole('button', { name: 'Close sharing' }).click();
 
-  // The member opens the link, is sent to set up encryption, and accepts.
+  // The member opens the link: "Shared with you" asks it to turn
+  // encryption on. Set up (seeded), the landing accepts the link by itself.
   await page.goto(`/#encrypted-invite=${server.mailbox.at(-1)!.token}`);
+  const landing = page.getByRole('dialog', { name: 'Shared with you' });
   await expect(
-    page
-      .getByRole('dialog', { name: 'Settings' })
-      .getByRole('button', { name: 'Set up encryption' })
+    landing.getByRole('button', { name: 'Turn on encryption to open it' })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
   const seed = await seedE2eeDevice(page, server, {
     label: member.label,
     userId: member.userId
   });
   await page.reload();
-  // The opened link is the acceptance: no Accept click, no comparison.
-  // Alice is new to the member: one signature pins her.
-  const encryption = await openEncryptionSettings(page);
-  await expect(
-    encryption.getByText(
-      `${ALICE_EMAIL} invited you as ${role === 'editor' ? 'an editor' : 'a viewer'}`
-    )
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await encryption
-    .getByRole('button', { name: `Confirm ${ALICE_EMAIL}` })
+  // The landing accepts the opened link itself: no Accept click, no code
+  // comparison. Alice is new to the member: one signature pins her.
+  await landing
+    .getByRole('button', { name: 'Confirm' })
     .click({ timeout: SYNC_BUDGET_MS });
-  await signWith(page, `Confirm ${ALICE_EMAIL}`, seed.recoveryKey, 'Confirm');
-  await expect(
-    encryption.getByText('Your keys are ready. Waiting for them to add you.')
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await signWith(
+    page,
+    'Confirm the project owner',
+    seed.recoveryKey,
+    'Confirm'
+  );
+  // Back on the landing, which waits for Alice's device.
+  await expect(landing.getByRole('status')).toContainText(
+    'device to add you…',
+    { timeout: SYNC_BUDGET_MS }
+  );
 
   // The member is new to Alice: one confirmation, signed, then her
   // browser adds them by an MLS Commit.
@@ -388,16 +389,11 @@ export async function addSharedMember(
     .toEqual({ role });
   await dialog.getByRole('button', { name: 'Close sharing' }).click();
 
-  // The member opens the project from its shelf.
-  await page.reload();
-  await expect(
-    page
-      .getByRole('dialog', { name: 'Settings' })
-      .or(page.getByRole('button', { name: 'Open settings' }))
-      .first()
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await closeSettings(page);
-  await openFromShelf(page);
+  // The member's landing joins by its Welcome and opens the project.
+  await expect(page.locator('.breadcrumb')).toContainText(PROJECT_NAME, {
+    timeout: COMMIT_BUDGET_MS
+  });
+  await expect(landing).toHaveCount(0);
   await expect(page.getByText('Box 1').first()).toBeVisible({
     timeout: SYNC_BUDGET_MS
   });
