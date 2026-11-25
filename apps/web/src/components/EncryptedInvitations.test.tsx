@@ -100,6 +100,7 @@ function listing(overrides: Partial<InviteeInvitation> = {}) {
     ownerCode: '12345 67890 12345',
     ownerVerified: false,
     ownerPinned: true,
+    ownerIdentityKeyHash: 'ee'.repeat(32),
     ...overrides
   };
   return {

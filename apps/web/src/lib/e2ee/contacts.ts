@@ -544,6 +544,29 @@ export async function inspectContact(
   book: ContactsBook,
   contactUserId: string
 ): Promise<ContactView> {
+  // The pin is written by compare-and-set against the one this inspection
+  // read: another tab that moved it meanwhile (an alarm it recorded, say)
+  // is read again, never overwritten.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await inspectContactOnce(ctx, book, contactUserId);
+    } catch (error) {
+      if (!(error instanceof PinMoved) || attempt >= 2) {
+        if (error instanceof PinMoved) staleAnswer('device list');
+        throw error;
+      }
+    }
+  }
+}
+
+/** The contact pin moved since this inspection read it. */
+class PinMoved extends Error {}
+
+async function inspectContactOnce(
+  ctx: ContactsContext,
+  book: ContactsBook,
+  contactUserId: string
+): Promise<ContactView> {
   requireActive(ctx);
   const userId = ctx.keys.userId;
   const email =
@@ -650,9 +673,9 @@ export async function inspectContact(
       seenAt: now(ctx)
     },
     // A replaced identity is surfaced as `keyChanged` before it is pinned.
-    { replaceIdentity: true, checkedList }
+    { replaceIdentity: true, checkedList, expected: pin }
   );
-  if (!advanced) staleAnswer('device list');
+  if (!advanced) throw new PinMoved();
   const { hash, code } = await contactVerificationCode(
     identityKey,
     list.headHash
@@ -661,11 +684,11 @@ export async function inspectContact(
   // and its first-use trust only once signed or compared here.
   const trusted =
     verifiedSame && trustedHere(book.listConfirmed, pin, identityHash);
+  // A verification this browser confirmed only by signing (an unconfirmed
+  // list pin) pins the identity for sharing without showing it verified.
   const pinned: ContactView['pinned'] = trusted
     ? 'verified'
-    : pinnedSame &&
-        record.status === 'trusted' &&
-        pinnedHere(book.listConfirmed, pin, identityHash)
+    : pinnedSame && pinnedHere(book.listConfirmed, pin, identityHash)
       ? 'trusted'
       : null;
   const fingerprint = (await identityFingerprint(identityKey)).code;
@@ -915,7 +938,7 @@ export async function verifyContact(
       seenAt: now(ctx),
       verifiedHere: toHex(identityKeyHash)
     },
-    { replaceIdentity: true }
+    { replaceIdentity: true, clearAlarm: true }
   );
   if (!recorded) staleAnswer('device list');
   // Read again after the pin: the comparison made here counts now.
@@ -944,17 +967,36 @@ export async function trustContact(
   const record = book.list?.contacts.get(view.userId);
   const identityKeyHash = view.list.identityKeyHash;
   const identity = toHex(identityKeyHash);
-  if (
-    record?.status === 'verified' &&
-    toHex(record.identityKeyHash) === identity
-  ) {
-    // Already verified: nothing to trust.
-    return loadContacts(ctx, account);
-  }
   const head = {
     sequence: view.list.pin.sequence,
     entryHash: view.list.headHash
   };
+  if (
+    record?.status === 'verified' &&
+    toHex(record.identityKeyHash) === identity
+  ) {
+    // The signed list already verifies this identity, but this browser's
+    // list pin is unconfirmed, so it did not count here. The user's own
+    // authorization (it opens the identity key) is this device's
+    // confirmation: the pin records it for this identity and head, and the
+    // list needs no new entry (PR 2057 review).
+    await withIdentityKey(ctx.keys, account, authorization, async () => {});
+    const confirmed = await ctx.pins.advanceContact(
+      ctx.keys.userId,
+      {
+        contactUserId: view.userId,
+        identityKeyHash: identity,
+        sequence: head.sequence,
+        entryHash: toHex(head.entryHash),
+        keyChanged: false,
+        seenAt: now(ctx),
+        trustedHere: identity
+      },
+      { replaceIdentity: true, clearAlarm: true }
+    );
+    if (!confirmed) staleAnswer('device list');
+    return loadContacts(ctx, account);
+  }
   const changes: Omit<ContactsChange, 'issuedAt'>[] = [];
   if (record?.status === 'verified') {
     changes.push({
@@ -983,7 +1025,7 @@ export async function trustContact(
       seenAt: now(ctx),
       trustedHere: identity
     },
-    { replaceIdentity: true }
+    { replaceIdentity: true, clearAlarm: true }
   );
   if (!recorded) staleAnswer('device list');
   return loadContacts(ctx, account);

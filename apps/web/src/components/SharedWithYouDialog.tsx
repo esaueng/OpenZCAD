@@ -366,8 +366,17 @@ export function SharedWithYouDialog({
   }, [follow, refresh, show, shown, userId, waitingFor]);
 
   // Whether the owner's confirmation is open, and with a passkey offered.
-  const [confirmingOwner, setConfirmingOwner] = useState<boolean | null>(null);
+  // The exact listing the person confirms (its statement and the owner
+  // identity it was shown with), captured at the click: a later pass that
+  // lists another statement under the same id never gets signed for.
+  const [confirmingOwner, setConfirmingOwner] = useState<{
+    passkey: boolean;
+    listing: InviteeInvitation;
+  } | null>(null);
   const askOwnerConfirmation = async () => {
+    const current = phaseRef.current;
+    const listing = current.kind === 'waiting' ? current.listing : undefined;
+    if (!listing) return;
     let passkey: boolean;
     try {
       const state = ctx ? await loadEncryption(ctx) : null;
@@ -380,7 +389,7 @@ export function SharedWithYouDialog({
     } catch {
       passkey = false;
     }
-    setConfirmingOwner(passkey);
+    setConfirmingOwner({ passkey, listing });
   };
 
   const run = useCallback(
@@ -413,15 +422,15 @@ export function SharedWithYouDialog({
   if (!shown) return null;
   // An owner new to this account: one signature (a passkey touch, or the
   // recovery key) trusts them, then this device joins. Never automatic.
-  if (confirmingOwner !== null && phase.kind === 'waiting' && phase.listing) {
-    const listing = phase.listing;
+  if (confirmingOwner !== null) {
+    const { listing } = confirmingOwner;
     return (
       <AuthorizeDialog
         request={{
           title: 'Confirm the project owner',
           body: 'This signs that you trust their keys, on every device of yours, so you can join. It does not verify them: compare codes for that.',
           actionLabel: 'Confirm',
-          passkey: confirmingOwner,
+          passkey: confirmingOwner.passkey,
           work: async (authorization) => {
             await trustInvitationOwner(
               await encryptedInvitations(),

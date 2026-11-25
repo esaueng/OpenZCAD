@@ -954,6 +954,23 @@ describe('trust on first use: a changed identity blocks (ADR-024 amendment 2026-
     await expect(trustInvitationOwner(inviteeCtx, listed!)).rejects.toSatisfy(
       refusedWith('not-trusted')
     );
+    // Bound to the listing reviewed: another owner identity, or another
+    // statement under the same id, is never trusted (PR 2057 review).
+    await expect(
+      trustInvitationOwner(
+        inviteeCtx,
+        { ...listed!, ownerIdentityKeyHash: 'ab'.repeat(32) },
+        'passkey'
+      )
+    ).rejects.toSatisfy(refusedWith('keys-changed'));
+    await expect(
+      trustInvitationOwner(
+        inviteeCtx,
+        { ...listed!, statementHash: '00'.repeat(32) },
+        'passkey'
+      )
+    ).rejects.toSatisfy(refusedWith('statement-invalid'));
+    expect(w.signed).toEqual([]);
     await trustInvitationOwner(inviteeCtx, listed!, 'passkey');
     expect(w.signed.map((entry) => entry.entry)).toEqual([
       `${OTHER}:${OWNER}:${toHex(owner.list.identityKeyHash)}`

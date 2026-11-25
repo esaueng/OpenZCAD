@@ -226,6 +226,44 @@ describe('SharedWithYouDialog', () => {
     expect(passed).toEqual(secret);
   });
 
+  it('signs for exactly the listing confirmed, even when a later pass lists another (PR 2057 review)', async () => {
+    loadEncryption.mockResolvedValue(ready);
+    acceptEncryptedInvitation.mockResolvedValue({ invitation, linked: true });
+    const entry = {
+      record: invitation,
+      state: 'confirm-owner',
+      ownerPinned: false,
+      ownerIdentityKeyHash: 'aa'.repeat(32)
+    } as unknown as InvitationPassResult['incoming'][number];
+    syncInvitationsNow.mockResolvedValue(pass({ incoming: [entry] }));
+    trustInvitationOwner.mockResolvedValue(undefined);
+    const { formatted } = await generateRecoveryKey();
+    landing();
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Confirm the project owner'
+    });
+    // A replacement under the same id arrives while the dialog is open.
+    act(() =>
+      passListener?.(
+        pass({
+          incoming: [
+            {
+              ...entry,
+              ownerIdentityKeyHash: 'bb'.repeat(32)
+            }
+          ]
+        })
+      )
+    );
+    fireEvent.change(within(dialog).getByLabelText('Recovery key'), {
+      target: { value: formatted }
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(trustInvitationOwner).toHaveBeenCalledOnce());
+    expect(trustInvitationOwner.mock.calls[0]![1]).toBe(entry);
+  });
+
   it('leads to the code comparison when the owner’s keys changed', async () => {
     loadEncryption.mockResolvedValue(ready);
     acceptEncryptedInvitation.mockResolvedValue({ invitation, linked: true });

@@ -904,6 +904,42 @@ describe('verifying contacts in the browser', () => {
     expect(first).not.toBe(second);
   });
 
+  it('lets a device whose list pin is unconfirmed confirm a verified contact by signing, so the invitation can go ahead (PR 2057 review)', async () => {
+    const { alice, bob } = await pair();
+    const book = await loadContacts(alice.contacts, alice.account);
+    await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, BOB),
+      alice.recovery.secret
+    );
+    // A browser enrolled with only the recovery key: its list pin is
+    // unconfirmed, so the verification does not count there.
+    const unconfirmed: ContactsContext = {
+      ...alice.contacts,
+      pins: memoryContactPins()
+    };
+    const people = contactInvitationPeople(unconfirmed, alice.account);
+    expect(await people.inspect(BOB)).toMatchObject({ firstUse: 'new' });
+    // Its Confirm, signed, establishes this device's standing: no new list
+    // entry, and the next lookup counts Bob as known.
+    await people.trust!(
+      BOB,
+      toHex(bob.account.list.identityKeyHash),
+      alice.recovery.secret
+    );
+    expect(await people.inspect(BOB)).toMatchObject({
+      firstUse: 'known',
+      keyChanged: false
+    });
+    expect(
+      (await loadContacts(unconfirmed, alice.account)).list?.entries.map(
+        (e) => e.entry.action
+      )
+    ).toEqual(['verify']);
+  });
+
   it('records a verified contact’s key change before trusting the new identity, which stays unverified', async () => {
     const { alice, bob } = await pair();
     let book = await loadContacts(alice.contacts, alice.account);

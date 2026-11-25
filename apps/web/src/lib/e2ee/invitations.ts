@@ -1585,7 +1585,7 @@ export async function acceptEncryptedInvitation(
  * records exactly the statement hash that listing verified and showed.
  */
 export async function confirmEncryptedInvitation(
-  ctx: Pick<InvitationContext, 'groups' | 'store' | 'now' | 'people'>,
+  ctx: Pick<InvitationContext, 'groups' | 'store' | 'now' | 'people' | 'api'>,
   reviewed: InviteeInvitation,
   authorization?: UnlockAuthorization
 ): Promise<void> {
@@ -1619,15 +1619,33 @@ export async function confirmEncryptedInvitation(
  * publishes. Refused for an owner whose identity changed.
  */
 export async function trustInvitationOwner(
-  ctx: Pick<InvitationContext, 'people'>,
+  ctx: Pick<InvitationContext, 'people' | 'api'>,
   reviewed: InviteeInvitation,
   authorization?: UnlockAuthorization
 ): Promise<void> {
   const owner = await ctx.people.inspect(reviewed.record.inviterUserId);
-  if (!owner?.list || owner.keyChanged || !reviewed.statement) {
+  if (
+    !owner?.list ||
+    owner.keyChanged ||
+    !reviewed.statement ||
+    !reviewed.statementHash ||
+    toHex(owner.list.identityKeyHash) !== reviewed.ownerIdentityKeyHash
+  ) {
     throw new InvitationError(
       'keys-changed',
-      'The project owner’s encryption keys changed. Review the change before joining. Nothing was joined.'
+      'The project owner’s encryption keys changed since you reviewed this invitation. Nothing was trusted or joined; review it again.'
+    );
+  }
+  // Bound to exactly the listing the person confirmed: the same signed
+  // statement, still listed, under the owner identity it was shown with.
+  const { invitations } = await ctx.api.accepted();
+  const current = invitations.find(
+    (record) => record.invitationId === reviewed.record.invitationId
+  );
+  if (!current || (await statementHashOf(current)) !== reviewed.statementHash) {
+    throw new InvitationError(
+      'statement-invalid',
+      'This invitation changed since you reviewed it. Nothing was trusted or joined; review it again.'
     );
   }
   if (owner.firstUse !== 'new') return;
@@ -1640,7 +1658,7 @@ export async function trustInvitationOwner(
   await trustPerson(
     ctx,
     owner.userId,
-    toHex(owner.list.identityKeyHash),
+    reviewed.ownerIdentityKeyHash,
     authorization
   );
 }
@@ -1706,6 +1724,12 @@ export interface InviteeInvitation {
    * whom a Join or Confirm trusts first, with one signature.
    */
   readonly ownerPinned: boolean;
+  /**
+   * Hex identity key hash of the owner whose device signed `statement`, as
+   * this listing checked it: what the person's Confirm trusts, and only
+   * that (`trustInvitationOwner` refuses a listing that moved since).
+   */
+  readonly ownerIdentityKeyHash: string | null;
 }
 
 /**
@@ -1866,7 +1890,9 @@ export async function acceptedInvitations(
       ownerCode:
         verified && owner?.list ? await contactCodeOf(owner.list) : null,
       ownerVerified: owner?.status === 'verified' && !owner.keyChanged,
-      ownerPinned: owner?.firstUse !== 'new' && !owner?.keyChanged
+      ownerPinned: owner?.firstUse !== 'new' && !owner?.keyChanged,
+      ownerIdentityKeyHash:
+        verified && owner?.list ? toHex(owner.list.identityKeyHash) : null
     });
   }
   return out;
