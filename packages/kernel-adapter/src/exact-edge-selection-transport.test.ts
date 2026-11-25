@@ -3,7 +3,9 @@ import type { EdgeWitnessV1 } from '@openzcad/shared';
 import {
   direction,
   edgeHeading,
-  EdgeSelectionMemory
+  edgeProvenance,
+  EdgeSelectionMemory,
+  type EdgeTopologyLayout
 } from './exact-edge-selection-transport';
 
 describe('edge selection transport labels', () => {
@@ -50,10 +52,72 @@ describe('edge selection transport labels', () => {
   });
 });
 
+describe('edge provenance', () => {
+  /**
+   * Faces 1–4 around a boss: cap 1 meets sides 2, 3 and 4 along edges
+   * 12, 13 and 14; edge 23 joins sides 2 and 3.
+   */
+  function layout(): EdgeTopologyLayout {
+    const facesOfEdge = new Map<number, number[]>([
+      [12, [1, 2]],
+      [13, [1, 3]],
+      [14, [1, 4]],
+      [23, [2, 3]]
+    ]);
+    const edgesOfFace = new Map<number, number[]>();
+    for (const [edge, faces] of facesOfEdge) {
+      for (const face of faces) {
+        edgesOfFace.set(face, [...(edgesOfFace.get(face) ?? []), edge]);
+      }
+    }
+    return {
+      signature: '',
+      labels: new Map(),
+      counts: new Map(),
+      faceLabels: new Map(),
+      faceCounts: new Map(),
+      facesOfEdge,
+      edgesOfFace,
+      planes: new Map()
+    };
+  }
+  const named =
+    (names: Record<number, string>) =>
+    (face: number): string | undefined =>
+      names[face];
+
+  it('reads an unnamed face through the named faces that border it', () => {
+    // The cap and side 2 are unnamed; side 3 is boss A's own side.
+    const fromA = edgeProvenance(layout(), 12, named({ 3: 'A.side', 4: 'Base' }));
+    const fromB = edgeProvenance(layout(), 12, named({ 3: 'B.side', 4: 'Base' }));
+    expect(fromA).not.toBeNull();
+    expect(fromB).not.toBeNull();
+    // Another boss in the same role reads differently.
+    expect(fromA).not.toBe(fromB);
+    // A named face reads as itself, whatever borders it.
+    expect(edgeProvenance(layout(), 13, named({ 1: 'cap', 3: 'A.side' }))).toBe(
+      edgeProvenance(layout(), 13, named({ 1: 'cap', 3: 'A.side', 2: 'x' }))
+    );
+  });
+
+  it('is no evidence when an adjacent face has no named face around it', () => {
+    expect(edgeProvenance(layout(), 23, named({}))).toBeNull();
+    // Unnamed side 3 reads through named side 2, which it borders.
+    expect(edgeProvenance(layout(), 23, named({ 2: 'A.side' }))).not.toBeNull();
+    // The cap borders the named base, but unnamed side 2 borders only
+    // unnamed faces (the cap and side 3).
+    expect(edgeProvenance(layout(), 12, named({ 4: 'Base' }))).toBeNull();
+    // An edge with no faces at all proves nothing.
+    expect(edgeProvenance(layout(), 99, named({ 1: 'cap' }))).toBeNull();
+  });
+});
+
 describe('edge selection memory', () => {
   const record = (selection: string) => ({
     edgeLabels: new Map<number, string>(),
     selected: new Map<number, string>(),
+    provenance: new Map<number, string>(),
+    faceIdentities: new Map<string, string>(),
     planes: new Map<string, string>(),
     hashSet: '',
     selection,

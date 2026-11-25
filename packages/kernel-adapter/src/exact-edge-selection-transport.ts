@@ -40,10 +40,25 @@
  *    exactly like a moved one. Only the edit tells them apart.
  * 5. Each carried edge's own hash names it alone, so storing that hash
  *    rebuilds the same edge.
+ * 6. The carried edge comes from the same upstream features as the edge
+ *    that was picked. 1–5 establish which edge plays the same ROLE in the
+ *    finished solid, but two upstream features can trade that role: two
+ *    bosses whose positions a parameter swaps leave the same layout, the
+ *    same fixed anchors and the same plane offsets, and the role-matching
+ *    edge is on the other boss. So each selected edge also records its
+ *    provenance (see {@link edgeProvenance}): the identity the body's
+ *    lineage publishes for each adjacent face, or, for an adjacent face it
+ *    publishes none for, the identities of the named faces bordering it.
+ *    The target must read exactly the same, and every face whose role is
+ *    unique and named on both builds must keep its producer. An adjacent
+ *    face with neither its own name nor a named neighbour is no evidence,
+ *    and refuses.
  *
  * Anything else — no record for this input, a changed structure, a stored
  * hash that resolves to an edge whose label disagrees with the record —
- * refuses exactly as before.
+ * refuses exactly as before. Every refusal names its
+ * {@link CarryRefusalReason}, which travels as the `reference_missing`
+ * refusal's `reason`.
  *
  * A carry is a proposal, never a silent build input. Only a build that asks
  * for one (`proposeCarry`: an edit's preview or validation) may carry, and
@@ -79,6 +94,47 @@ export interface LayoutEdge {
   hash: number;
 }
 
+/**
+ * Why a carry was refused. Each is a `reason` of the `reference_missing`
+ * refusal the build raises, so the card and analytics can branch on it.
+ *
+ * - `carry_no_record`: no earlier build of this input structure (or of the
+ *   features before it) was recorded, so there is nothing to carry from.
+ * - `carry_not_dimension_edit`: the edit was not a pure dimension edit.
+ * - `carry_label_changed`: a selected edge that still resolves by its own
+ *   hash now plays a different role.
+ * - `carry_ambiguous`: the picked edge's role is shared by several edges,
+ *   before or after the edit, so no one edge can be named.
+ * - `carry_hash_not_unique`: the target's own hash names more than it.
+ * - `carry_frame_moved`: no fixed anchor, or an anchor changed role.
+ * - `carry_multi_axis`: planes moved along more than one line.
+ * - `carry_provenance_unavailable`: the lineage gives no evidence of which
+ *   upstream feature the picked or target edge comes from.
+ * - `carry_provenance_changed`: the edge in the picked edge's role comes
+ *   from a different upstream feature than the one picked, or a named face
+ *   changed producer.
+ */
+export type CarryRefusalReason =
+  | 'carry_no_record'
+  | 'carry_not_dimension_edit'
+  | 'carry_label_changed'
+  | 'carry_ambiguous'
+  | 'carry_hash_not_unique'
+  | 'carry_frame_moved'
+  | 'carry_multi_axis'
+  | 'carry_provenance_unavailable'
+  | 'carry_provenance_changed';
+
+export type CarryResult =
+  | { carried: Map<number, number>; refused?: undefined }
+  | { carried?: undefined; refused: CarryRefusalReason };
+
+/**
+ * The published lineage identity of a face (producing feature and lineage
+ * name), or undefined when the body names none for it.
+ */
+export type FaceIdentity = (face: number) => string | undefined;
+
 /** The input solid's structure, independent of where anything sits. */
 export interface EdgeTopologyLayout {
   signature: string;
@@ -86,6 +142,13 @@ export interface EdgeTopologyLayout {
   labels: Map<number, string>;
   /** How many edges carry each label. */
   counts: Map<string, number>;
+  /** Final structural label per face handle. */
+  faceLabels: Map<number, string>;
+  /** How many faces carry each label. */
+  faceCounts: Map<string, number>;
+  /** Faces bounded by each edge, and edges bounding each face. */
+  facesOfEdge: Map<number, number[]>;
+  edgesOfFace: Map<number, number[]>;
   /** Oriented plane normal → sorted, quantised plane offsets. */
   planes: Map<string, string>;
 }
@@ -95,6 +158,13 @@ export interface SelectionRecord {
   edgeLabels: Map<number, string>;
   /** Stored selection hash → label, for selected edges with unique labels. */
   selected: Map<number, string>;
+  /**
+   * Stored selection hash → {@link edgeProvenance}, for selected edges whose
+   * adjacent faces the lineage gives evidence for.
+   */
+  provenance: Map<number, string>;
+  /** Face label → published identity, for named faces with unique labels. */
+  faceIdentities: Map<string, string>;
   planes: Map<string, string>;
   /** Cheap identity of the input: its sorted edge witness hashes. */
   hashSet: string;
@@ -365,6 +435,10 @@ export function edgeTopologyLayout(
   for (const label of edgeLabels.values()) {
     counts.set(label, (counts.get(label) ?? 0) + 1);
   }
+  const faceCounts = new Map<string, number>();
+  for (const label of faceLabels.values()) {
+    faceCounts.set(label, (faceCounts.get(label) ?? 0) + 1);
+  }
   return {
     signature: digest(
       `${[...faceLabels.values()].sort().join(',')}|${[...edgeLabels.values()]
@@ -373,6 +447,10 @@ export function edgeTopologyLayout(
     ),
     labels: edgeLabels,
     counts,
+    faceLabels,
+    faceCounts,
+    facesOfEdge,
+    edgesOfFace,
     planes: new Map(
       [...planeOffsets].map(([normal, offsets]) => [
         normal,
@@ -380,6 +458,57 @@ export function edgeTopologyLayout(
       ])
     )
   };
+}
+
+/**
+ * Which upstream features an edge comes from, as far as the body's lineage
+ * says: one token per adjacent face, sorted. A named face reads as its own
+ * identity. A face the lineage names nothing for (a fused or trimmed face,
+ * a side the publisher could not tell apart) reads as the identities of the
+ * named faces it shares an edge with: a boss's unnamed cap reads as the
+ * boss's named sides, which another boss's cap in the same role does not.
+ * Null when an adjacent face has neither, so there is no evidence to compare.
+ */
+export function edgeProvenance(
+  layout: EdgeTopologyLayout,
+  edge: number,
+  identity: FaceIdentity
+): string | null {
+  const faces = [...new Set(layout.facesOfEdge.get(edge) ?? [])];
+  if (faces.length === 0) return null;
+  const tokens: string[] = [];
+  for (const face of faces) {
+    const own = identity(face);
+    if (own !== undefined) {
+      tokens.push(`=${own}`);
+      continue;
+    }
+    const around = new Set<string>();
+    for (const bounding of layout.edgesOfFace.get(face) ?? []) {
+      for (const neighbour of layout.facesOfEdge.get(bounding) ?? []) {
+        if (neighbour === face) continue;
+        const named = identity(neighbour);
+        if (named !== undefined) around.add(named);
+      }
+    }
+    if (around.size === 0) return null;
+    tokens.push(`~${[...around].sort().join('\u0002')}`);
+  }
+  return tokens.sort().join('\u0001');
+}
+
+/** Face label → identity, for the named faces whose label is unique. */
+function uniqueFaceIdentities(
+  layout: EdgeTopologyLayout,
+  identity: FaceIdentity
+): Map<string, string> {
+  const identities = new Map<string, string>();
+  for (const [face, label] of layout.faceLabels) {
+    if (layout.faceCounts.get(label) !== 1) continue;
+    const named = identity(face);
+    if (named !== undefined) identities.set(label, named);
+  }
+  return identities;
 }
 
 function hashSetOf(edges: readonly LayoutEdge[]): string {
@@ -426,6 +555,7 @@ export function rememberEdgeSelection(
   edges: readonly LayoutEdge[],
   selected: readonly { storedHash: number; handle: number }[],
   upstream: () => UpstreamSnapshot | null,
+  identity: FaceIdentity,
   layout?: EdgeTopologyLayout
 ): void {
   const hashSet = hashSetOf(edges);
@@ -455,11 +585,14 @@ export function rememberEdgeSelection(
     edgeLabels.set(hash, current.labels.get(handle)!);
   }
   const selectedLabels = new Map<number, string>();
+  const provenance = new Map<number, string>();
   for (const { storedHash, handle } of selected) {
     const label = current.labels.get(handle);
     // A label two edges share cannot name one of them later.
     if (label === undefined || current.counts.get(label) !== 1) continue;
     selectedLabels.set(storedHash, label);
+    const origin = edgeProvenance(current, handle, identity);
+    if (origin !== null) provenance.set(storedHash, origin);
   }
   const snapshot = upstream();
   if (!snapshot) {
@@ -469,6 +602,8 @@ export function rememberEdgeSelection(
   memory.store(key, current.signature, {
     edgeLabels,
     selected: selectedLabels,
+    provenance,
+    faceIdentities: uniqueFaceIdentities(current, identity),
     planes: current.planes,
     hashSet,
     selection,
@@ -478,7 +613,8 @@ export function rememberEdgeSelection(
 
 /**
  * The edges stored hashes named on an earlier build of this same input
- * structure, or null when anything fails to prove each one in a fixed frame.
+ * structure, or the reason the carry is refused when anything fails to prove
+ * each one in a fixed frame and from the same upstream features.
  *
  * `direct` holds the selected hashes that still resolve by themselves; each
  * must keep its recorded label. `missing` are the hashes to carry.
@@ -490,30 +626,38 @@ export function carryEdgeSelection(
   edges: readonly LayoutEdge[],
   direct: readonly { storedHash: number; handle: number }[],
   missing: readonly number[],
-  upstream: UpstreamSnapshot | null
-): Map<number, number> | null {
+  upstream: UpstreamSnapshot | null,
+  identity: FaceIdentity
+): CarryResult {
+  const refuse = (reason: CarryRefusalReason): CarryResult => ({
+    refused: reason
+  });
   const record = memory.lookup(key, layout.signature);
-  if (!record || !upstream) return null;
+  if (!record || !upstream) return refuse('carry_no_record');
   // Only a dimension edit may be carried across: a turn or a mirror can
   // leave a solid no comparison tells from a resize (`exact-carry-edit-gate`).
-  if (!onlyDimensionEdits(record.upstream, upstream)) return null;
+  if (!onlyDimensionEdits(record.upstream, upstream)) {
+    return refuse('carry_not_dimension_edit');
+  }
 
   for (const { storedHash, handle } of direct) {
     const recorded = record.selected.get(storedHash);
     if (recorded !== undefined && recorded !== layout.labels.get(handle)) {
-      return null;
+      return refuse('carry_label_changed');
     }
   }
 
   const carried = new Map<number, number>();
   for (const hash of missing) {
     const label = record.selected.get(hash);
-    if (label === undefined || layout.counts.get(label) !== 1) return null;
+    if (label === undefined || layout.counts.get(label) !== 1) {
+      return refuse('carry_ambiguous');
+    }
     let target: number | null = null;
     for (const [handle, candidate] of layout.labels) {
       if (candidate === label) target = handle;
     }
-    if (target === null) return null;
+    if (target === null) return refuse('carry_ambiguous');
     carried.set(hash, target);
   }
   const targets = new Set(carried.values());
@@ -522,7 +666,9 @@ export function carryEdgeSelection(
   const unique = uniqueHashes(edges);
   const ownHash = new Map(edges.map((edge) => [edge.handle, edge.hash]));
   for (const target of targets) {
-    if (unique.get(ownHash.get(target)!) !== target) return null;
+    if (unique.get(ownHash.get(target)!) !== target) {
+      return refuse('carry_hash_not_unique');
+    }
   }
 
   // A fixed frame: an edge that kept its own hash keeps its label, and at
@@ -531,10 +677,12 @@ export function carryEdgeSelection(
   for (const [hash, handle] of unique) {
     const recorded = record.edgeLabels.get(hash);
     if (recorded === undefined) continue;
-    if (recorded !== layout.labels.get(handle)) return null;
+    if (recorded !== layout.labels.get(handle)) {
+      return refuse('carry_frame_moved');
+    }
     if (!targets.has(handle)) anchors += 1;
   }
-  if (anchors === 0) return null;
+  if (anchors === 0) return refuse('carry_frame_moved');
 
   // A stretch along one line: the planes that moved all face one way or
   // its opposite.
@@ -545,10 +693,27 @@ export function carryEdgeSelection(
   ])) {
     if (record.planes.get(normal) === layout.planes.get(normal)) continue;
     const line = direction(normal.split(',').map(Number), false);
-    if (line === null) return null;
+    if (line === null) return refuse('carry_multi_axis');
     moved.add(line);
   }
-  if (moved.size > 1) return null;
+  if (moved.size > 1) return refuse('carry_multi_axis');
 
-  return carried;
+  // The same upstream features: no named face in a unique role changed
+  // producer, and each target reads as its picked edge did.
+  for (const [label, named] of uniqueFaceIdentities(layout, identity)) {
+    const recorded = record.faceIdentities.get(label);
+    if (recorded !== undefined && recorded !== named) {
+      return refuse('carry_provenance_changed');
+    }
+  }
+  for (const [hash, target] of carried) {
+    const recorded = record.provenance.get(hash);
+    const current = edgeProvenance(layout, target, identity);
+    if (recorded === undefined || current === null) {
+      return refuse('carry_provenance_unavailable');
+    }
+    if (recorded !== current) return refuse('carry_provenance_changed');
+  }
+
+  return { carried };
 }
