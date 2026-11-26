@@ -7,6 +7,7 @@ import {
   editControlState,
   keypadClampPosition,
   keypadInPlacePosition,
+  radialSizeError,
   typedUnitValue
 } from './keypad';
 
@@ -493,4 +494,27 @@ describe('typed unit suffixes from stored expressions', () => {
       expect(typedUnitValue(raw)).toBeUndefined();
     }
   );
+});
+
+// U01: a bore's Diameter of −12 was shown as Ready and dropped at Enter.
+describe('radialSizeError', () => {
+  it('refuses a Diameter or Radius of zero or less, in the field’s unit', () => {
+    expect(radialSizeError(-6, 'diameter', 'mm')).toBe(
+      'Diameter must be more than 0 mm.'
+    );
+    expect(radialSizeError(-6, 'radius', 'mm')).toBe(
+      'Radius must be more than 0 mm.'
+    );
+    expect(radialSizeError(0, 'diameter', 'in')).toBe(
+      'Diameter must be more than 0 in.'
+    );
+    expect(radialSizeError(-0, 'radius', '')).toBe(
+      'Radius must be more than 0.'
+    );
+  });
+
+  it('takes any size more than zero', () => {
+    expect(radialSizeError(6, 'diameter', 'mm')).toBeNull();
+    expect(radialSizeError(1e-6, 'radius', 'mm')).toBeNull();
+  });
 });
