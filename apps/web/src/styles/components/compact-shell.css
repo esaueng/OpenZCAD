@@ -1709,3 +1709,25 @@
   animation: none;
   transition: none;
 }
+
+/* A refused edit's line in the sheet (U12): the reason the regular stage's
+   guidance line gives, which the compact stage leaves out. Its explanation
+   opens in the sheet's flow, and its remedies take a finger. */
+.compact-command-row .edit-refusal {
+  font-size: 15px;
+}
+
+.compact-command-row .edit-refusal-card {
+  max-width: none;
+  max-height: none;
+}
+
+.compact-command-row :is(.edit-refusal-action, .edit-refusal-why) {
+  min-height: var(--compact-target);
+  padding: 0 12px;
+}
+
+.compact-command-row .edit-refusal-close {
+  width: var(--compact-target);
+  height: var(--compact-target);
+}

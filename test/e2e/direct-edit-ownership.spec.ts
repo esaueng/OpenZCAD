@@ -522,6 +522,7 @@ test('the compact workspace reopens a set-aside refusal from History and its hea
   test.setTimeout(150_000);
   const canvas = await refusedGearDrag(page);
   const notice = page.getByRole('button', { name: 'Edit not applied' });
+  const sheet = page.locator('.compact-sheet');
   const park = async () => {
     const box = (await canvas.boundingBox())!;
     await page.mouse.click(box.x + box.width / 2, box.y + 110);
@@ -533,6 +534,19 @@ test('the compact workspace reopens a set-aside refusal from History and its hea
     await expect(page.getByTestId('direct-manipulation-value')).toContainText(
       '⚠'
     );
+    // Why it was refused: the regular stage's guidance line carries it, and
+    // the compact stage has none, so it stands in the sheet with the edit,
+    // the same refusal line and explanation.
+    const reason = sheet.locator('.compact-command-row .edit-refusal');
+    await expect(reason).toBeVisible();
+    await expect(reason).toBeInViewport();
+    await expect(reason.locator('.edit-refusal-line')).toContainText(
+      /Not built.*Can’t \w+ this \w+ here/
+    );
+    const explanation = reason.locator('.edit-refusal-card');
+    await expect(explanation).toBeVisible();
+    await expect(explanation).toContainText('Injected exact refusal.');
+    await expect(explanation).toContainText('The solid is unchanged.');
   };
   await park();
   await expect(notice).toBeVisible();
@@ -566,15 +580,13 @@ test('the compact workspace reopens a set-aside refusal from History and its hea
     .getByRole('option', { name: /^History/ })
     .first()
     .click();
-  const sheet = page.locator('.compact-sheet');
   const reopen = sheet.getByRole('button', {
     name: /(edit not applied|not built)\. Reopen it$/
   });
   await expect(reopen).toBeVisible();
   await reopen.click();
-  // The panel gives way to the refused edit: its pick, its handle and the
-  // value tried, marked refused. (The compact stage leaves out the guidance
-  // line the refusal's words sit in on the regular stage.)
+  // The panel gives way to the refused edit: its pick, its handle, the
+  // value tried, marked refused, and why.
   await expect(sheet.locator('[data-page]')).toHaveCount(0);
   await expectReopened();
 

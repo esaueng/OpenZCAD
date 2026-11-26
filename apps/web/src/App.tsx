@@ -43196,6 +43196,11 @@ export function App() {
             // A refusal with no editor open (a refused drag) is explained in
             // the guidance row: the same line, remedies and Why? the control
             // shows, where the eye returns when the model has nothing to say.
+            // The compact workspace has no guidance row: it is in the sheet.
+            noticeInSheet={
+              !savePreviewActive &&
+              Boolean(!keypad && calloutWithOperation?.operation?.error)
+            }
             notice={
               savePreviewActive ? (
                 <SaveStatePreviewNotice
@@ -43239,7 +43244,9 @@ export function App() {
               ) : !keypad && calloutWithOperation?.operation?.error ? (
                 <EditRefusal
                   operation={calloutWithOperation.operation}
-                  variant="bar"
+                  // The compact sheet has the width for the whole line, and
+                  // its explanation opens in the sheet's flow (U12).
+                  variant={compactShell ? 'control' : 'bar'}
                   revealRequest={
                     refusalReveal?.interaction === interaction
                       ? refusalReveal.count
