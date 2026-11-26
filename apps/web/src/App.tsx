@@ -1113,6 +1113,7 @@ import {
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
+import type { CompactProjectSheet } from './components/compact/compactSlots';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { useWorkspaceShell } from './hooks/useWorkspaceShell';
 import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
@@ -1573,6 +1574,12 @@ const ignoreFailure = () => undefined;
 const LazyPinResetDialog = lazyWithStaleChunkNotice(() =>
   import('./components/EncryptedPinReset').then((module) => ({
     default: module.PinResetDialog
+  }))
+);
+// The project sheet's Properties (U12 slice 10), as the library tile's.
+const LazyProjectPropertiesDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ProjectPropertiesDialog').then((module) => ({
+    default: module.ProjectPropertiesDialog
   }))
 );
 // The first-model tour shows once per device; nobody else pays for it.
@@ -3715,6 +3722,8 @@ export function App() {
   const [namingSave, setNamingSave] = useState(false);
   /** L08: the review comments panel, and what it holds for which project. */
   const [commentsOpen, setCommentsOpen] = useState(false);
+  // The open project's Properties, from the compact project sheet.
+  const [projectPropertiesOpen, setProjectPropertiesOpen] = useState(false);
   const [projectComments, setProjectComments] = useState<{
     projectId: string;
     comments: ProjectComment[];
@@ -9346,6 +9355,9 @@ export function App() {
     setPendingSuppression(null);
     setPendingResume(null);
     setPendingToolSwitch(null);
+    // The compact project sheet's Properties belong to the project they
+    // were opened for.
+    setProjectPropertiesOpen(false);
   }, [doc?.projectId]);
 
   useEffect(() => {
@@ -37214,6 +37226,18 @@ export function App() {
   // row both run this entry. Normal to face is not here: its key turns only
   // to a settled face pick, which the keyboard map checks first.
   const openShortcutReference = () => setShortcutsOpen(true);
+  // The modeling guide asked for again (Help's tour button, and the compact
+  // header's More › Modeling guide): from the start, not where it was left.
+  const reopenModelingGuide = () => {
+    if (!doc) return;
+    setTourProjectId(doc.projectId);
+    setPanelState((current) => ({
+      ...current,
+      workspaceTourDismissed: false,
+      workspaceTourMinimized: false,
+      workspaceTourStep: 0
+    }));
+  };
   const actionHandlers = {
     'view-front': () => requestView('front'),
     'view-top': () => requestView('top'),
@@ -38369,6 +38393,7 @@ export function App() {
       {!settingsShown && settingsOpenedAtBoot && <SettingsPlaceholder />}
       {settingsShown && (
         <SettingsPage
+          compact={compactShell}
           settings={appSettings}
           cloudFunctionsEnabled={cloudFunctionsEnabled}
           accountState={accountSettings}
@@ -38425,6 +38450,7 @@ export function App() {
     return (
       <>
         <StartScreen
+          compact={compactShell}
           onImportProject={(file) => void handleImportProject(file)}
           onImportFiles={(files, units) =>
             void handleStartScreenFiles(files, units)
@@ -40398,6 +40424,91 @@ export function App() {
     phoneStage && (commandCardKey || inspectorKey || inPlaceKey)
       ? `${commandCardKey}|${inspectorKey}|${inPlaceKey}`
       : null;
+  // The open project as the library lists it, for its Properties.
+  const compactPropertiesSummary = (current: ProjectDocument) =>
+    projects.find((summary) => summary.projectId === current.projectId) ??
+    summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION);
+  // Why IGES, which shares the File menu's STEP row, cannot export now.
+  const compactExportReason =
+    exportBodyIds.length === 0
+      ? emptyExportReason
+      : parameterEditPending || parameterDraftActive
+        ? 'Finish the parameter edit first'
+        : null;
+  // The project sheet (U12 slice 10): what the top bar's name field, its
+  // File menu and the library tile's Properties hold, for the compact
+  // header's project name.
+  const compactProjectSheet: CompactProjectSheet | null =
+    compactShell && doc
+      ? {
+          renameDisabledReason: shareSession
+            ? 'A shared link cannot rename the project'
+            : projectRenameDisabledReason,
+          onRename: (name) =>
+            executeCommand(
+              commandFactories.renameNode({ nodeId: doc.rootNodeId, name }),
+              undefined,
+              'rename'
+            ),
+          onProperties: shareSession
+            ? null
+            : () => setProjectPropertiesOpen(true),
+          share:
+            cloudFunctionsEnabled && projectSharingPreferenceEnabled
+              ? session
+                ? { label: 'Share', run: () => setSharingOpen(true) }
+                : {
+                    label: 'Sign in to share',
+                    run: () => openSettingsAt('account')
+                  }
+              : null,
+          onComments:
+            !shareSession || shareSession.comments ? openComments : null,
+          displayUnits: {
+            shown: documentDisplayUnits(doc),
+            stored: doc.units,
+            onChange: (units) => void handleSetDisplayUnits(units),
+            disabledReason: projectRenameDisabledReason,
+            onConvertStored: () => setConvertUnitsStored(doc.units),
+            convertDisabledReason:
+              doc.units === 'm'
+                ? 'Projects stored in meters cannot be converted yet'
+                : editDisabledReason
+          },
+          exportIges: {
+            disabledReason: compactExportReason,
+            run: () => void handleExportIges()
+          },
+          archiveLocalSources: {
+            count: localOnlySources.length,
+            disabledReason: session ? null : 'Sign in to archive imports',
+            run: () => void handleArchiveLocalSources()
+          },
+          storedFiles: storedFiles.map((artifact) => ({
+            id: artifact.artifactId,
+            name: artifact.name,
+            detail:
+              artifact.bytes === undefined
+                ? artifact.kind
+                : `${artifact.kind} · ${Math.max(1, Math.round(artifact.bytes / 1024))} KB`,
+            download: () => void handleDownloadProjectArtifact(artifact)
+          })),
+          ...(session?.userId === doc.ownerUserId && activeProjectIsCloud
+            ? {
+                meshCleanup: {
+                  document: doc,
+                  getDocument: () => managerRef.current?.document ?? null,
+                  transport: api,
+                  onRemove: setArtifacts
+                }
+              }
+            : {}),
+          onStorage:
+            session && cloudFunctionsEnabled
+              ? () => openSettingsAt('account')
+              : null
+        }
+      : null;
   const workspace = (
     <WorkspaceAppShell
       covered={sharePage !== null}
@@ -40427,12 +40538,16 @@ export function App() {
               onSearch: actionHandlers['command-palette'],
               onSettings: actionHandlers['app-settings'],
               onHelp: actionHandlers['app-help'],
+              ...(modelingLocked ? {} : { onGuide: reopenModelingGuide }),
+              searchOpen: paletteOpen,
+              onCloseSearch: () => setPaletteOpen(false),
               // Rename opens the top bar's name field, which the compact
-              // header does not draw; the project sheet (slice 10) has it.
+              // header does not draw; the project sheet has its own.
               fileCommands: paletteCommands.filter(
                 (command) =>
                   command.group === 'File' && command.id !== 'project-rename'
               ),
+              project: compactProjectSheet,
               selectionLabel:
                 selectedFeature && featureSelectionSource !== 'inferred'
                   ? selectedFeature.name
@@ -41951,7 +42066,11 @@ export function App() {
                 // Folded at first on a phone too short for the open card
                 // between its two-column rails (#1957), until folded or
                 // opened by hand.
-                minimized={panelState.workspaceTourMinimized ?? shortPhoneStage}
+                // The compact stage starts it folded to its step chip.
+                minimized={
+                  panelState.workspaceTourMinimized ??
+                  (shortPhoneStage || compactShell)
+                }
                 // On a phone the guide and a command card share the right
                 // lane's foot; expanded, it left the card a 13 px sliver
                 // (#1945). It folds to its header while one is up.
@@ -43302,14 +43421,7 @@ export function App() {
               onClose={() => setShortcutsOpen(false)}
               onTour={() => {
                 setShortcutsOpen(false);
-                setTourProjectId(doc.projectId);
-                setPanelState((current) => ({
-                  ...current,
-                  workspaceTourDismissed: false,
-                  workspaceTourMinimized: false,
-                  // Asked for again: from the start, not where it was left.
-                  workspaceTourStep: 0
-                }));
+                reopenModelingGuide();
               }}
             />
           )}
@@ -43418,6 +43530,44 @@ export function App() {
                 setCommentDraft(null);
               }}
             />
+          ) : null}
+          {projectPropertiesOpen && compactShell && doc ? (
+            <Suspense fallback={null}>
+              <LazyProjectPropertiesDialog
+                project={compactPropertiesSummary(doc)}
+                loadProperties={loadProperties}
+                accountStatus={
+                  !session
+                    ? 'Sign in to check'
+                    : cloudProjectIds.has(doc.projectId)
+                      ? 'Saved to my account'
+                      : accountProjectListReached
+                        ? 'This device only'
+                        : 'Unknown — account listing unavailable'
+                }
+                encryptionFacts={{
+                  storageFormat: compactPropertiesSummary(doc).storageFormat,
+                  inAccount: cloudProjectIds.has(doc.projectId)
+                }}
+                {...(canRenameProject && !shareSession
+                  ? {
+                      onRename: (name: string) => {
+                        executeCommand(
+                          commandFactories.renameNode({
+                            nodeId: doc.rootNodeId,
+                            name
+                          }),
+                          undefined,
+                          'rename'
+                        );
+                        return Promise.resolve(true);
+                      },
+                      projects
+                    }
+                  : {})}
+                onClose={() => setProjectPropertiesOpen(false)}
+              />
+            </Suspense>
           ) : null}
           {sharingOpen &&
             cloudFunctionsEnabled &&

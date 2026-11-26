@@ -5,14 +5,18 @@ import {
   Ellipsis,
   FileText,
   FolderOpen,
+  Map as MapIcon,
   Redo2,
   Search,
   Settings,
-  Undo2
+  SquarePen,
+  Undo2,
+  X
 } from 'lucide-react';
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   type ReactNode
@@ -24,6 +28,7 @@ import { OWN_ENTER_ATTRIBUTE } from '../../lib/exactEntryShortcut';
 import type { PaletteCommand } from '../CommandBar';
 import { BottomSheet, SHEET_OVERLAY_ATTRIBUTE, useSheet } from './BottomSheet';
 import type { CompactChromeProps } from './compactSlots';
+import { ProjectSheet } from './ProjectSheet';
 
 /** The save dot's tone: settled, under way, or worth a look. */
 function saveTone(state: WorkspaceSaveState): 'ok' | 'busy' | 'local' | 'warn' {
@@ -128,7 +133,7 @@ export interface CompactWorkspaceProps extends CompactChromeProps {
 const OWN_ENTER = { [OWN_ENTER_ATTRIBUTE]: '' };
 
 /** The pages the compact chrome pushes onto the sheet, by id. */
-type CompactPage = 'more' | 'file' | 'selection';
+type CompactPage = 'more' | 'file' | 'project' | 'selection';
 
 /**
  * The compact workspace's chrome (U12 slice 2): a header, the mode tabs, the
@@ -152,6 +157,10 @@ export default function CompactWorkspace({
   onSearch,
   onSettings,
   onHelp,
+  onGuide,
+  searchOpen = false,
+  onCloseSearch,
+  project = null,
   fileCommands,
   selectionLabel,
   onClearSelection,
@@ -163,6 +172,7 @@ export default function CompactWorkspace({
   onOverlayHost
 }: CompactWorkspaceProps) {
   const chromeRef = useRef<HTMLDivElement | null>(null);
+  const projectNameHintId = useId();
   const headerRef = useRef<HTMLElement | null>(null);
   const tabsRef = useRef<HTMLElement | null>(null);
   const floatRef = useRef<HTMLDivElement | null>(null);
@@ -235,6 +245,7 @@ export default function CompactWorkspace({
   const push = (key: CompactPage) => dispatch({ type: 'push', page: { key } });
   const closePages = () => dispatch({ type: 'close' });
   const moreOpen = state.stack.some((page) => page.key === 'more');
+  const projectOpen = state.stack.some((page) => page.key === 'project');
 
   // Each page is drawn from the workspace's state as it is now, so a row
   // disabled while the model was updating comes back when it finishes.
@@ -242,6 +253,18 @@ export default function CompactWorkspace({
     key: string
   ): { title: string; content: ReactNode } | null => {
     switch (key as CompactPage) {
+      case 'project':
+        return {
+          title: 'Project',
+          content: (
+            <ProjectSheet
+              projectName={projectName}
+              fileCommands={fileCommands}
+              project={project}
+              done={closePages}
+            />
+          )
+        };
       case 'file':
         return {
           title: 'File',
@@ -273,6 +296,26 @@ export default function CompactWorkspace({
                     closePages();
                     onHelp();
                   }
+                },
+                ...(onGuide
+                  ? [
+                      {
+                        id: 'guide',
+                        label: 'Modeling guide',
+                        icon: <MapIcon size={18} />,
+                        run: () => {
+                          closePages();
+                          onGuide();
+                        }
+                      }
+                    ]
+                  : []),
+                {
+                  id: 'project',
+                  label: 'Project',
+                  icon: <SquarePen size={18} />,
+                  drillIn: true,
+                  run: () => push('project')
                 },
                 {
                   id: 'file',
@@ -351,7 +394,22 @@ export default function CompactWorkspace({
           <ChevronLeft size={24} aria-hidden="true" />
         </button>
         <div className="compact-title">
-          <h1 className="compact-project-name">{projectName}</h1>
+          <h1 className="compact-project-name">
+            {/* The name opens the project sheet: rename, properties,
+                sharing, revisions, export and import, units, storage. */}
+            <button
+              type="button"
+              className="compact-project-button"
+              aria-expanded={projectOpen}
+              aria-describedby={projectNameHintId}
+              onClick={() => (projectOpen ? closePages() : push('project'))}
+            >
+              {projectName}
+            </button>
+          </h1>
+          <span id={projectNameHintId} className="visually-hidden">
+            Opens the project sheet
+          </span>
           <span
             className={`compact-save-dot is-${saveTone(saveState)}`}
             role="img"
@@ -359,14 +417,28 @@ export default function CompactWorkspace({
             title={presentation.title}
           />
         </div>
-        <button
-          type="button"
-          className="compact-icon-button"
-          aria-label="Open the command bar"
-          onClick={onSearch}
-        >
-          <Search size={22} aria-hidden="true" />
-        </button>
+        {searchOpen && onCloseSearch ? (
+          // The full-screen search covers the stage and the tabs: its way
+          // out by touch stands where it was opened.
+          <button
+            type="button"
+            className="compact-icon-button"
+            aria-label="Close the command bar"
+            aria-expanded="true"
+            onClick={onCloseSearch}
+          >
+            <X size={22} aria-hidden="true" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="compact-icon-button"
+            aria-label="Open the command bar"
+            onClick={onSearch}
+          >
+            <Search size={22} aria-hidden="true" />
+          </button>
+        )}
         <button
           type="button"
           className="compact-icon-button"

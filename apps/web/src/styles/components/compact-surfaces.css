@@ -1,0 +1,866 @@
+/* ── The compact library, project sheet, Settings and search (U12 slice 10)
+   The compact layout's pages beyond the stage: the library, the project
+   sheet in the workspace's one bottom sheet, Settings as a pushed list, the
+   command search and the assistant full-screen, and the modeling guide kept
+   on screen. Every rule is scoped to [data-shell='compact'] or to a class
+   only the compact code draws, so the regular pages do not move. Targets
+   are at least 44px; headers are sentence case. */
+
+/* ── Library ── */
+
+.start-screen[data-shell='compact'] {
+  --compact-target: 44px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(max-content, 1fr) auto auto;
+  grid-template-areas:
+    'head'
+    'launch'
+    'library'
+    'body'
+    'learn'
+    'account';
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.start-screen[data-shell='compact']::before,
+.start-screen[data-shell='compact'] > .start-brand,
+.start-screen[data-shell='compact'] > .corner-slot,
+.start-screen[data-shell='compact'] .start-shelf-tabs,
+.start-screen[data-shell='compact'] .start-library > .start-eyebrow,
+.start-screen[data-shell='compact'] .start-toolbar .start-search,
+.start-screen[data-shell='compact'] .start-toolbar .start-layout,
+.start-screen[data-shell='compact'] .start-launch-hint {
+  display: none;
+}
+
+.compact-library-head {
+  grid-area: head;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  box-sizing: border-box;
+  display: grid;
+  gap: var(--sp-2);
+  padding: calc(env(safe-area-inset-top) + var(--sp-1))
+    max(var(--sp-3), env(safe-area-inset-right)) var(--sp-2)
+    max(var(--sp-3), env(safe-area-inset-left));
+  background: var(--color-bg);
+}
+
+.compact-library-head.is-pending {
+  min-height: 156px;
+}
+
+.compact-library-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: var(--compact-target);
+}
+
+.compact-library-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 22px;
+  font-weight: var(--fw-semibold);
+  color: var(--color-text);
+}
+
+.compact-library-layout {
+  display: flex;
+}
+
+.compact-library-layout .compact-icon-button[aria-pressed='true'] {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+
+.compact-library-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--compact-target);
+  padding-inline: var(--sp-3) var(--sp-1);
+  color: var(--color-text-subtle);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+}
+
+.compact-library-search:focus-within {
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.compact-library-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--compact-target);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-text);
+}
+
+.compact-library-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.compact-library-clear {
+  display: grid;
+  place-items: center;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+/* The shelves: one segmented control, one word each. */
+.compact-segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+}
+
+.compact-segment {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: var(--compact-target);
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: calc(var(--radius-md) - 2px);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 15px;
+}
+
+.compact-segment[aria-pressed='true'] {
+  color: var(--color-text);
+  background: var(--color-accent-dim);
+  font-weight: var(--fw-semibold);
+}
+
+.compact-segment-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-segment-count {
+  color: var(--color-text-subtle);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.compact-segment:focus-visible,
+.compact-library-clear:focus-visible,
+.compact-swipe-action:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* New project, its name and Import keep their row, at touch size. */
+.start-screen[data-shell='compact'] .start-launch {
+  padding: var(--sp-2) max(var(--sp-3), env(safe-area-inset-right)) 0
+    max(var(--sp-3), env(safe-area-inset-left));
+}
+
+.start-screen[data-shell='compact'] .start-launch :is(button, input, select) {
+  min-height: var(--compact-target);
+}
+
+/* Folders: a row of chips under the launch, when there are any. */
+.start-screen[data-shell='compact'] .start-library {
+  padding: var(--sp-2) max(var(--sp-3), env(safe-area-inset-right)) 0
+    max(var(--sp-3), env(safe-area-inset-left));
+}
+
+.start-screen[data-shell='compact'] .start-folders-head {
+  min-height: var(--compact-target);
+}
+
+.start-screen[data-shell='compact'] .start-folders-new,
+.start-screen[data-shell='compact'] .start-folder-link,
+.start-screen[data-shell='compact'] .start-crumb {
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+}
+
+.start-screen[data-shell='compact'] .start-folders-list {
+  display: flex;
+  gap: var(--sp-1);
+  overflow-x: auto;
+}
+
+.start-screen[data-shell='compact'] .start-stage {
+  padding: var(--sp-2) max(var(--sp-3), env(safe-area-inset-right)) var(--sp-3)
+    max(var(--sp-3), env(safe-area-inset-left));
+}
+
+.start-screen[data-shell='compact'] .start-section {
+  grid-template-rows: auto auto;
+  /* No container: its layout containment would hold the tile's action
+     sheet (position: fixed) inside the shelf instead of the screen. */
+  container: none;
+}
+
+.start-screen[data-shell='compact'] .start-body {
+  margin-left: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+.start-screen[data-shell='compact'] .start-toolbar {
+  padding-right: 0;
+}
+
+.start-screen[data-shell='compact'] .start-toolbar-tools {
+  margin-left: 0;
+}
+
+.start-screen[data-shell='compact'] .start-filters {
+  flex-basis: 100%;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+
+.start-screen[data-shell='compact'] :is(.start-filter, .start-sort select) {
+  min-height: var(--compact-target);
+}
+
+/* Two columns of thumbnails. */
+.start-screen[data-shell='compact'] .start-tile-grid:not(.is-list) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+/* A touch screen has no hover: the row's pin and ⋯ stay in sight, and at a
+   finger's size. */
+.start-screen[data-shell='compact'] .start-tile-action {
+  opacity: 1;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  border-radius: 999px;
+}
+
+.start-screen[data-shell='compact'] .start-tile-menu-button {
+  margin: 0 4px 4px 0;
+}
+
+.start-screen[data-shell='compact'] .start-tile-pin {
+  margin: 4px 4px 0 0;
+}
+
+.start-screen[data-shell='compact'] .start-tile-grid.is-list .start-tile-open {
+  min-height: 64px;
+  padding-right: calc(var(--compact-target) * 2 + var(--sp-3));
+}
+
+.start-screen[data-shell='compact']
+  .start-tile-grid.is-list
+  .start-tile-actions {
+  top: 50%;
+  align-items: center;
+}
+
+.start-screen[data-shell='compact']
+  .start-tile-grid.is-list
+  .start-tile-action {
+  margin: 0;
+}
+
+/* A row slides under the finger (pan-y leaves the page's scroll to the
+   browser) and reveals its shelf actions behind it. */
+.start-screen[data-shell='compact'] .start-tile-project {
+  touch-action: pan-y;
+  /* Clip, not hidden: a hidden overflow is a scroller, which focus on the
+     row's ⋯ scrolled out of line. */
+  overflow: clip;
+}
+
+/* No lift under a finger: a touch leaves :hover standing, and the lift's
+   transform would hold the row's fixed action sheet inside the row. */
+.start-screen[data-shell='compact']
+  .start-tile.start-tile-project:is(:hover, :active) {
+  transform: none;
+  box-shadow: none;
+}
+
+/* Its menu stands at the screen's foot, unclipped by the row. */
+.start-screen[data-shell='compact']
+  .start-tile-project:has(> .start-tile-menu) {
+  overflow: visible;
+}
+
+.start-screen[data-shell='compact']
+  .start-tile-project
+  > :not(.compact-swipe-actions, .start-tile-menu) {
+  transform: translateX(var(--swipe-x, 0px));
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.start-screen[data-shell='compact']
+  .start-tile-project.is-swiping
+  > :not(.compact-swipe-actions, .start-tile-menu) {
+  transition: none;
+}
+
+.compact-swipe-actions {
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: 0;
+  display: flex;
+}
+
+.compact-swipe-action {
+  width: 84px;
+  min-height: var(--compact-target);
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: 0;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+}
+
+.compact-swipe-action.is-danger {
+  background: var(--color-error);
+  color: var(--color-on-accent, #fff);
+}
+
+/* The tile's ⋯ menu stands as an action sheet at the screen's foot. */
+.start-screen[data-shell='compact'] .start-tile-menu {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 30;
+  box-sizing: border-box;
+  max-height: 70dvh;
+  min-width: 0;
+  padding: var(--sp-2) max(var(--sp-2), env(safe-area-inset-right))
+    calc(var(--sp-2) + env(safe-area-inset-bottom))
+    max(var(--sp-2), env(safe-area-inset-left));
+  border: 0;
+  border-radius: var(--radius-xl, 24px) var(--radius-xl, 24px) 0 0;
+  box-shadow: var(--shadow-popover);
+}
+
+.start-screen[data-shell='compact'] .start-tile-menu > button {
+  min-height: 48px;
+  font-size: 17px;
+}
+
+/* A status toast steps aside while the action sheet holds the screen's
+   foot: it stood over the sheet's last row (Move to trash). It comes back
+   when the sheet closes. */
+.start-screen[data-shell='compact']:has(.start-tile-menu) ~ .toast {
+  visibility: hidden;
+}
+
+/* The selection bar is the screen's bottom toolbar. */
+.start-screen[data-shell='compact'] .start-selection-bar {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  transform: none;
+  justify-content: center;
+  padding: var(--sp-2) max(var(--sp-2), env(safe-area-inset-right))
+    calc(var(--sp-2) + env(safe-area-inset-bottom))
+    max(var(--sp-2), env(safe-area-inset-left));
+  border: 0;
+  border-top: var(--border-thin);
+  border-radius: 0;
+}
+
+.start-screen[data-shell='compact'] .start-selection-bar button {
+  min-height: var(--compact-target);
+  min-width: var(--compact-target);
+}
+
+.start-screen[data-shell='compact'].is-selecting {
+  padding-bottom: calc(120px + env(safe-area-inset-bottom));
+}
+
+.start-screen[data-shell='compact'] .start-learn {
+  gap: var(--sp-3);
+  min-height: auto;
+  padding: 0 max(var(--sp-3), env(safe-area-inset-right)) var(--sp-3)
+    max(var(--sp-3), env(safe-area-inset-left));
+  overflow: visible;
+}
+
+.start-screen[data-shell='compact'] :is(.start-learn-toggle, .demo-action) {
+  min-height: var(--compact-target);
+  min-width: var(--compact-target);
+}
+
+.start-screen[data-shell='compact'] .start-column-foot {
+  padding: 0 max(var(--sp-3), env(safe-area-inset-right)) var(--sp-3)
+    max(var(--sp-3), env(safe-area-inset-left));
+}
+
+.start-screen[data-shell='compact']
+  :is(.start-account-open, .start-account-action) {
+  min-height: var(--compact-target);
+}
+
+/* ── Header: the project name opens the project sheet ── */
+
+.compact-project-button {
+  display: block;
+  max-width: 100%;
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+  padding: 0 var(--sp-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.compact-project-button:hover,
+.compact-project-button[aria-expanded='true'] {
+  background: var(--color-surface-hover);
+}
+
+.compact-project-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ── Project sheet ── */
+
+.compact-project-sheet {
+  display: grid;
+  gap: var(--sp-3);
+  padding-bottom: var(--sp-3);
+}
+
+.compact-rename {
+  display: flex;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2);
+}
+
+.compact-rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--compact-target);
+}
+
+.compact-rename-save {
+  min-height: var(--compact-target);
+  padding: 0 var(--sp-3);
+}
+
+.compact-sheet-group {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.compact-sheet-group-title {
+  margin: 0;
+  padding: 0 var(--sp-3);
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+}
+
+.compact-menu-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-subtle);
+  font-size: 13px;
+}
+
+.compact-sheet-empty {
+  margin: 0;
+  padding: 0 var(--sp-3);
+  color: var(--color-text-subtle);
+  font-size: 15px;
+}
+
+/* The File menu's Units row, at touch size. */
+.compact-units {
+  display: grid;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+}
+
+.compact-units .topbar-menu-sep,
+.compact-units .topbar-menu-label {
+  display: none;
+}
+
+.compact-units .topbar-units {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+
+.compact-units .topbar-units button,
+.compact-units .topbar-menu-item {
+  min-height: var(--compact-target);
+}
+
+/* ── Settings as a pushed list ── */
+
+.settings-page[data-shell='compact'] {
+  --compact-target: 44px;
+}
+
+.settings-page[data-shell='compact'] .settings-layout {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.settings-page[data-shell='compact'] .settings-head {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: calc(env(safe-area-inset-top) + var(--sp-2))
+    max(var(--sp-3), env(safe-area-inset-right)) var(--sp-2)
+    max(var(--sp-3), env(safe-area-inset-left));
+}
+
+.settings-page[data-shell='compact'] .settings-head-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 22px;
+  font-weight: var(--fw-semibold);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.settings-page[data-shell='compact'] .settings-save-message {
+  display: none;
+}
+
+.settings-page[data-shell='compact'] .settings-search {
+  order: 3;
+  flex: 1 0 100%;
+  min-height: var(--compact-target);
+}
+
+.settings-page[data-shell='compact'] .settings-search input {
+  min-height: var(--compact-target);
+}
+
+.settings-page[data-shell='compact'] .settings-head .corner-slot {
+  position: static;
+  order: 2;
+}
+
+.settings-page[data-shell='compact'] .settings-close {
+  min-width: var(--compact-target, 44px);
+  min-height: var(--compact-target, 44px);
+  justify-content: center;
+}
+
+.settings-compact-back {
+  display: grid;
+  place-items: center;
+  width: var(--compact-target, 44px);
+  height: var(--compact-target, 44px);
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text);
+}
+
+.settings-compact-back:focus-visible,
+.settings-compact-result:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* The list: every section a full-width row, its content one tap away. */
+.settings-page[data-shell='compact'] .settings-nav {
+  grid-column: 1;
+  grid-row: 2;
+  margin: 0;
+  padding: 0 max(var(--sp-2), env(safe-area-inset-right))
+    env(safe-area-inset-bottom) max(var(--sp-2), env(safe-area-inset-left));
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.settings-page[data-shell='compact'] .settings-nav-head {
+  display: none;
+}
+
+.settings-page[data-shell='compact'] .settings-nav nav button {
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  place-items: center start;
+  gap: var(--sp-3);
+  min-height: 48px;
+  padding: 0 var(--sp-3);
+  text-align: left;
+}
+
+.settings-page[data-shell='compact'] .settings-nav nav button > span {
+  max-width: none;
+  font-size: 17px;
+  line-height: 1.3;
+  white-space: nowrap;
+  hyphens: manual;
+}
+
+.settings-page[data-shell='compact'] .settings-nav-group {
+  display: block;
+  padding-inline: var(--sp-3);
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.settings-compact-chevron {
+  flex: 0 0 auto;
+  justify-self: end;
+  margin-left: auto;
+  color: var(--color-text-subtle);
+}
+
+.settings-page[data-shell='compact'] .settings-content {
+  grid-column: 1;
+  grid-row: 2;
+  padding: var(--sp-2) max(var(--sp-3), env(safe-area-inset-right))
+    calc(var(--sp-5) + env(safe-area-inset-bottom))
+    max(var(--sp-3), env(safe-area-inset-left));
+  scrollbar-gutter: auto;
+}
+
+.settings-page.is-compact-list .settings-content,
+.settings-page.is-compact-section .settings-nav,
+.settings-page.is-compact-section .settings-search,
+.settings-page.is-compact-search .settings-nav {
+  display: none;
+}
+
+/* A section's own heading repeats the pushed page's title. */
+.settings-page.is-compact-section .settings-section > header h2 {
+  display: none;
+}
+
+.settings-page[data-shell='compact'] .setting-row {
+  min-height: 48px;
+}
+
+.settings-page[data-shell='compact']
+  .setting-control
+  :is(button, select, input:not([type='checkbox']):not([type='radio'])) {
+  min-height: var(--compact-target);
+}
+
+.settings-compact-results {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 var(--sp-4);
+  padding: 0;
+  list-style: none;
+}
+
+.settings-compact-result {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 48px;
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-align: left;
+}
+
+.settings-compact-result-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 17px;
+}
+
+.settings-compact-result-section {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-subtle);
+  font-size: 13px;
+}
+
+/* ── Command search and the assistant, full-screen ── */
+
+/* Open, the search takes everything under the header: its field on top and
+   its rows below, at a finger's height. */
+.app-shell[data-shell='compact'] .command-bar-lane:has(.command-bar.open) {
+  position: fixed;
+  inset: calc(var(--compact-header-h) + env(safe-area-inset-top)) 0 0;
+  z-index: calc(var(--z-panel-float) + 4);
+  box-sizing: border-box;
+  max-width: none;
+  margin: 0;
+  padding: var(--sp-2) max(var(--sp-2), env(safe-area-inset-right))
+    env(safe-area-inset-bottom) max(var(--sp-2), env(safe-area-inset-left));
+  background: var(--color-bg);
+  transform: none;
+}
+
+.app-shell[data-shell='compact'] .command-bar-lane .command-bar-row {
+  max-width: none;
+  width: 100%;
+}
+
+.app-shell[data-shell='compact'] .command-bar.open {
+  position: relative;
+  width: 100%;
+  max-width: none;
+}
+
+.app-shell[data-shell='compact'] .command-bar.open .command-bar-float {
+  position: fixed;
+  inset: calc(
+      var(--compact-header-h) + env(safe-area-inset-top) + var(--sp-2) +
+        var(--command-bar-h, 44px) + var(--sp-2)
+    )
+    max(var(--sp-2), env(safe-area-inset-right)) env(safe-area-inset-bottom)
+    max(var(--sp-2), env(safe-area-inset-left));
+  max-height: none;
+  width: auto;
+  margin: 0;
+  overflow-y: auto;
+  border-radius: var(--radius-lg);
+  transform: none;
+}
+
+.app-shell[data-shell='compact'] .command-bar .palette-list {
+  max-height: none;
+}
+
+.app-shell[data-shell='compact'] .command-bar .palette-row {
+  min-height: 48px;
+  font-size: 17px;
+}
+
+.app-shell[data-shell='compact'] .command-bar-input {
+  min-height: var(--compact-target);
+}
+
+/* The assistant: the stage's whole height under the header, standing on the
+   prompt line, which stays at the foot while the conversation is up. */
+.app-shell[data-shell='compact'] .workspace.with-assistant .command-bar-lane {
+  display: block;
+}
+
+.app-shell[data-shell='compact']
+  .workspace.with-assistant
+  .command-bar-lane:not(:has(.command-bar.open)) {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: calc(var(--z-panel-float) + 4);
+  padding: var(--sp-2) max(var(--sp-2), env(safe-area-inset-right))
+    calc(var(--sp-2) + env(safe-area-inset-bottom))
+    max(var(--sp-2), env(safe-area-inset-left));
+  background: var(--color-bg);
+}
+
+.app-shell[data-shell='compact'] .workspace.with-assistant .assistant-panel {
+  position: fixed;
+  inset: calc(var(--compact-header-h) + env(safe-area-inset-top)) 0
+    calc(
+      var(--command-bar-h, 44px) + var(--sp-2) * 2 + env(safe-area-inset-bottom)
+    );
+  z-index: calc(var(--z-panel-float) + 4);
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  clip-path: none;
+}
+
+.app-shell[data-shell='compact']
+  .workspace.with-assistant:has(.command-bar.open.listing)
+  .assistant-panel {
+  display: none;
+}
+
+.app-shell[data-shell='compact'] .assistant-panel :is(button, select) {
+  min-height: var(--compact-target);
+  min-width: var(--compact-target);
+}
+
+/* ── Modeling guide ── */
+
+/* Over the stage's foot, above the undo pair and the sheet, the screen's
+   width less a margin and never taller than the stage left above them: it
+   cannot run off-screen (I12). Folded, it is one chip with its step. */
+.app-shell[data-shell='compact'] .workspace-tour {
+  --compact-guide-bottom: calc(
+    var(--compact-tabs-h) + env(safe-area-inset-bottom) +
+      var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2
+  );
+  position: fixed;
+  inset: auto max(var(--sp-2), env(safe-area-inset-right))
+    var(--compact-guide-bottom) max(var(--sp-2), env(safe-area-inset-left));
+  z-index: calc(var(--z-panel-float) + 1);
+  box-sizing: border-box;
+  width: auto;
+  max-width: none;
+  max-height: calc(
+    100dvh - var(--compact-header-h) - env(safe-area-inset-top) -
+      var(--compact-guide-bottom) - var(--sp-2) * 2
+  );
+  margin: 0;
+  overflow-y: auto;
+  transform: none;
+}
+
+/* While the sheet stands above peek it has the screen. */
+.app-shell[data-shell='compact']:has(
+    .compact-sheet[data-detent='half'],
+    .compact-sheet[data-detent='full']
+  )
+  .workspace-tour {
+  display: none;
+}
+
+.app-shell[data-shell='compact'] .workspace-tour :is(button, a) {
+  min-height: var(--compact-target);
+  min-width: var(--compact-target);
+}

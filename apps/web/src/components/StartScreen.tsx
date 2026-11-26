@@ -60,6 +60,7 @@ import {
   lazyWithStaleChunkNotice,
   STALE_CHUNK_MESSAGE
 } from '../lib/staleChunk';
+import { useCompactDocument } from '../lib/compactDocument';
 import { preloadableSlot } from './PreloadableSlot';
 import { prefersSavingData } from '../lib/saveData';
 import {
@@ -146,6 +147,11 @@ const FolderCoverDialog = lazyWithStaleChunkNotice(async () => ({
  * chunk arrives, and a chunk that cannot load leaves the library standing
  * with the bar's own "did not load" line in its place.
  */
+// The compact library's head and row gestures (U12 slice 10): loaded only
+// where the compact layout is in force.
+const CompactLibrary = lazyWithStaleChunkNotice(
+  () => import('./compact/CompactLibrary')
+);
 export const LibrarySelectionBar = preloadableSlot(
   'Selection actions',
   async () => ({
@@ -293,6 +299,12 @@ interface StartScreenProps {
   loadStorageUsage?(): Promise<AccountStorageUsage>;
   /** Settings at its Account section, where storage is managed. */
   onOpenAccountSettings?(): void;
+  /**
+   * The compact library (U12 slice 10): where this device's layout
+   * preference puts the compact workspace in force, the same library drawn
+   * for a phone, with a head of its own and swipe actions on its rows.
+   */
+  compact?: boolean;
 }
 
 const LOADING_PROJECT_TILES = 10;
@@ -813,7 +825,8 @@ export function StartScreen({
   thumbnailAccountId,
   publishThumbnail,
   loadStorageUsage,
-  onOpenAccountSettings
+  onOpenAccountSettings,
+  compact = false
 }: StartScreenProps) {
   const projects = scopePending ? NO_PROJECTS : discoveredProjects;
   const settingsKey = useKeymap().label('app-settings');
@@ -951,6 +964,7 @@ export function StartScreen({
   const departure = useRef<ShelfDeparture | null>(null);
   const partsTitleRef = useRef<HTMLHeadingElement | null>(null);
   const screenRef = useRef<HTMLDivElement | null>(null);
+  useCompactDocument(compact);
   // Opening a project crossfades into the workspace instead of cutting to it.
   useDissolveOnUnmount(screenRef, START_SCREEN_DISSOLVE_MS);
   // A reload, or a trip to a project and back, returns to the same place in the
@@ -1045,7 +1059,8 @@ export function StartScreen({
   // including after a resize or scroll, before moving focus into an item.
   useLayoutEffect(() => {
     const screen = screenRef.current;
-    if (!screen || (!openMenu && !folderMenu)) return;
+    // The compact library's menu is an action sheet at the screen's foot.
+    if (!screen || compact || (!openMenu && !folderMenu)) return;
     const menus = [...screen.querySelectorAll<HTMLElement>('.start-tile-menu')];
     const place = () => {
       for (const menu of menus) {
@@ -1079,7 +1094,7 @@ export function StartScreen({
       window.removeEventListener('resize', place);
       screen.removeEventListener('scroll', place, { capture: true });
     };
-  }, [openMenu, folderMenu, layout]);
+  }, [openMenu, folderMenu, layout, compact]);
 
   // A tile menu is a transient overlay: any click that is not inside it, and
   // Escape from anywhere, dismisses it. It takes focus as it opens, so the
@@ -2346,6 +2361,54 @@ export function StartScreen({
     );
   }
 
+  /** A swiped row's actions in the compact library; each is in its ⋯ sheet. */
+  function compactSwipeActions(projectId: string) {
+    const project = shelfById.get(projectId);
+    if (!project) return [];
+    const leave = (status: ProjectStatus) => () =>
+      leaveShelf(project, () => onMoveToShelf(project, status));
+    return shelf === 'deleted'
+      ? [
+          {
+            key: 'restore',
+            text: 'Restore',
+            label: `Restore ${project.name}`,
+            disabled: busy,
+            run: leave('active')
+          },
+          {
+            key: 'delete',
+            text: 'Delete',
+            label: `Delete ${project.name} forever`,
+            tone: 'danger' as const,
+            disabled: busy,
+            run: () => leaveShelf(project, () => onDeleteForever(project))
+          }
+        ]
+      : [
+          shelf === 'active'
+            ? {
+                key: 'archive',
+                text: 'Archive',
+                label: `Archive ${project.name}`,
+                run: leave('archived')
+              }
+            : {
+                key: 'unarchive',
+                text: 'Restore',
+                label: `Move ${project.name} to projects`,
+                run: leave('active')
+              },
+          {
+            key: 'trash',
+            text: 'Trash',
+            label: `Move ${project.name} to trash`,
+            tone: 'danger' as const,
+            run: leave('deleted')
+          }
+        ];
+  }
+
   function selectLayout(next: ShelfLayout) {
     setLayout(next);
     writeShelfLayout(next);
@@ -3506,7 +3569,47 @@ export function StartScreen({
       ]
         .filter(Boolean)
         .join(' ')}
+      data-shell={compact ? 'compact' : undefined}
     >
+      {compact && (
+        <Suspense
+          fallback={<div className="compact-library-head is-pending" />}
+        >
+          <CompactLibrary
+            rootRef={screenRef}
+            shelf={
+              shelf === 'active' && activeFilter === 'shared' ? 'shared' : shelf
+            }
+            counts={
+              loading
+                ? null
+                : {
+                    active: shelfCount('active'),
+                    archived: shelfCount('archived'),
+                    deleted: shelfCount('deleted'),
+                    shared: shelves.active.filter(filterMatches.shared).length
+                  }
+            }
+            onShelf={(next) => {
+              selectShelf(next === 'shared' ? 'active' : next);
+              // Shared is the Projects shelf's filter: any other segment
+              // leaves it, so Projects comes back showing everything.
+              if (next === 'shared') setFilter('shared');
+              else if (filter === 'shared') setFilter('all');
+            }}
+            query={query}
+            onQuery={setQuery}
+            layout={layout}
+            onLayout={selectLayout}
+            onOpenSettings={onOpenSettings}
+            swipeActions={compactSwipeActions}
+            onHold={(projectId) => {
+              selectionAnchor.current = projectId;
+              toggleSelected(projectId);
+            }}
+          />
+        </Suspense>
+      )}
       {/* The column is the page's frame: the product at its head, on the
           pixels the workspace's logo takes, and where the projects are kept at
           its foot. No bar across the top: the library and Settings are

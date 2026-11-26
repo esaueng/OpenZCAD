@@ -94,7 +94,7 @@ const UnusedMeshPayloads = createLazyPanel<UnusedMeshPayloadsProps>(
  * how far it has got beyond that, and never implies work is at risk when it is
  * not.
  */
-interface TopBarProps {
+export interface TopBarProps {
   projectName: string | null;
   units: UnitSystem | null;
   canExport: boolean;

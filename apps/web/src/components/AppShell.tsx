@@ -14,6 +14,7 @@ import {
   type ParameterDefinition
 } from './forms/parameterDefinition';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
+import { markDocumentCompact } from '../lib/compactDocument';
 import {
   CompactCommandRowContext,
   COMPACT_OVERLAY_HOST_PENDING,
@@ -254,20 +255,6 @@ export function AppShell({
       parameterDefinition={parameterDefinition}
     />
   );
-}
-
-/** How many compact frames are mounted: the document is marked while any is. */
-let compactShellsMounted = 0;
-
-/** Marks the document compact; the returned release unmarks it after the last. */
-function markDocumentCompact(): () => void {
-  const root = document.documentElement;
-  compactShellsMounted += 1;
-  root.dataset.shell = 'compact';
-  return () => {
-    compactShellsMounted = Math.max(0, compactShellsMounted - 1);
-    if (compactShellsMounted === 0) delete root.dataset.shell;
-  };
 }
 
 /**
