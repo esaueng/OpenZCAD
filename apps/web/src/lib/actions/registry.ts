@@ -88,7 +88,33 @@ export type CompactSurface =
 /** Each action's compact entry point; an action not listed is pending. */
 export const COMPACT_ENTRIES: Readonly<
   Partial<Record<string, CompactSurface>>
-> = {};
+> = {
+  // Slice 2, the compact frame: the floating pair on the stage, the mode
+  // tabs, the header's back and search buttons, and its overflow menu with
+  // Settings, Help and the File menu's actions.
+  'edit-undo': 'floating-controls',
+  'edit-redo': 'floating-controls',
+  'workspace-mode-view': 'mode-tabs',
+  'workspace-mode-tweak': 'mode-tabs',
+  'workspace-mode-build': 'mode-tabs',
+  'workspace-mode-assemble': 'mode-tabs',
+  'workspace-mode-drawing': 'mode-tabs',
+  'file-home': 'header',
+  'command-palette': 'command-search',
+  'app-settings': 'overflow-menu',
+  'app-help': 'overflow-menu',
+  'shortcut-reference': 'overflow-menu',
+  'file-save': 'overflow-menu',
+  'file-save-named': 'overflow-menu',
+  'file-import': 'overflow-menu',
+  'file-import-project': 'overflow-menu',
+  'file-insert-project': 'overflow-menu',
+  'file-export-project': 'overflow-menu',
+  'file-export-step': 'overflow-menu',
+  'file-export-mesh': 'overflow-menu',
+  'file-export-image': 'overflow-menu',
+  'file-export-cnc-layout': 'overflow-menu'
+};
 
 // ── Sources ────────────────────────────────────────────────────────────
 

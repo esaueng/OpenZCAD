@@ -1,7 +1,9 @@
 import {
   Suspense,
   useLayoutEffect,
+  useMemo,
   useRef,
+  useState,
   type CSSProperties,
   type ReactNode,
   type Ref
@@ -12,6 +14,16 @@ import {
   type ParameterDefinition
 } from './forms/parameterDefinition';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
+import {
+  CompactCommandRowContext,
+  type CompactChromeProps
+} from './compact/compactSlots';
+
+// The compact workspace's chrome (U12 slice 2) loads only where it is in
+// force, so the regular workspace's entry chunk does not carry it.
+const LazyCompactWorkspace = lazyWithStaleChunkNotice(
+  () => import('./compact/CompactWorkspace')
+);
 
 // Off the entry chunk, which has no room left; it mounts long before anyone
 // could have started dragging a file toward the window. Offline, its load
@@ -146,6 +158,14 @@ interface AppShellProps {
    * names before one exists. Absent, a field only reports the unknown name.
    */
   parameterDefinition?: ParameterDefinition | null;
+  /**
+   * The compact workspace (U12 slice 2): present, the shell draws a header,
+   * mode tabs, the stage's floating controls and one bottom sheet instead of
+   * the regular chrome, and the command card, the inspector, the in-place
+   * command bar and the phone lane's panel go into that sheet. Every slot is
+   * filled exactly as for the regular workspace.
+   */
+  compact?: (CompactChromeProps & { sheetKey: string }) | null;
 }
 
 /**
@@ -176,8 +196,202 @@ export function AppShell({
   overlays,
   onDropFiles,
   onRefuseDroppedFiles,
-  parameterDefinition = null
+  parameterDefinition = null,
+  compact = null
 }: AppShellProps) {
+  if (compact) {
+    return (
+      <CompactAppShell
+        compact={compact}
+        topBar={topBar}
+        toolBar={toolBar}
+        sidebar={sidebar}
+        viewer={viewer}
+        command={command}
+        inspector={inspector}
+        panels={panels}
+        panelLane={panelLane}
+        assistant={assistant}
+        assistantHidden={assistantHidden}
+        assistantCollapsed={assistantCollapsed}
+        sidebarWidth={sidebarWidth}
+        assistantWidth={assistantWidth}
+        workspaceRef={workspaceRef}
+        readout={readout}
+        stage={stage}
+        overlays={overlays}
+        onDropFiles={onDropFiles}
+        onRefuseDroppedFiles={onRefuseDroppedFiles}
+        parameterDefinition={parameterDefinition}
+      />
+    );
+  }
+  return (
+    <RegularAppShell
+      topBar={topBar}
+      toolBar={toolBar}
+      sidebar={sidebar}
+      viewer={viewer}
+      command={command}
+      inspectorOwnsLane={inspectorOwnsLane}
+      inspector={inspector}
+      panels={panels}
+      panelLane={panelLane}
+      assistant={assistant}
+      assistantHidden={assistantHidden}
+      assistantCollapsed={assistantCollapsed}
+      sidebarWidth={sidebarWidth}
+      assistantWidth={assistantWidth}
+      workspaceRef={workspaceRef}
+      sidebarResizer={sidebarResizer}
+      readout={readout}
+      stage={stage}
+      overlays={overlays}
+      onDropFiles={onDropFiles}
+      onRefuseDroppedFiles={onRefuseDroppedFiles}
+      parameterDefinition={parameterDefinition}
+    />
+  );
+}
+
+/**
+ * The compact frame: the same stage and slots under a header, over mode
+ * tabs, with one bottom sheet. The rails, the Tools drawer and the docks are
+ * hidden by `compact-shell.css`; the right lane's cards and the phone lane's
+ * panel are the sheet's content rather than islands.
+ */
+function CompactAppShell({
+  compact,
+  topBar,
+  toolBar,
+  sidebar,
+  viewer,
+  command = null,
+  inspector,
+  panels = null,
+  panelLane = null,
+  assistant,
+  assistantHidden = false,
+  assistantCollapsed = false,
+  sidebarWidth,
+  assistantWidth,
+  workspaceRef,
+  readout,
+  stage = null,
+  overlays,
+  onDropFiles,
+  onRefuseDroppedFiles,
+  parameterDefinition = null
+}: AppShellProps & {
+  compact: NonNullable<AppShellProps['compact']>;
+}) {
+  const [commandRowHost, setCommandRowHost] = useState<HTMLElement | null>(
+    null
+  );
+  const [commandRowPresent, setCommandRowPresent] = useState(false);
+  const commandRowSlot = useMemo(
+    () => ({ host: commandRowHost, report: setCommandRowPresent }),
+    [commandRowHost]
+  );
+  const { sheetKey, ...chrome } = compact;
+  const assistantDocked = Boolean(
+    assistant && !assistantHidden && !assistantCollapsed
+  );
+  const widths = {
+    '--sidebar-w': `${sidebarWidth}px`,
+    '--assistant-w': `${assistantWidth}px`
+  } as CSSProperties;
+  const hasSheetContent = Boolean(
+    command || inspector || panelLane || commandRowPresent
+  );
+  return (
+    <ParameterDefinitionProvider value={parameterDefinition}>
+      <CompactCommandRowContext.Provider value={commandRowSlot}>
+        <div className="app-shell column-layout" data-shell="compact">
+          {/* Kept mounted for what it owns (its menus' file inputs, the
+              rename field), and hidden: the compact header stands in. */}
+          {topBar}
+          <main
+            ref={workspaceRef}
+            className={`workspace no-sidebar column-layout${
+              assistantDocked ? ' with-assistant' : ''
+            }${sidebar ? ' has-column' : ''}`}
+            style={widths}
+          >
+            <div className="viewer-area">
+              {sidebar && (
+                <div className="workspace-column-float">{sidebar}</div>
+              )}
+              {viewer}
+              {stage && <div className="stage-takeover">{stage}</div>}
+              {toolBar && <div className="palette-float">{toolBar}</div>}
+              {panels}
+              {readout}
+              {onDropFiles && (
+                <Suspense fallback={null}>
+                  <LazyFileDropTarget
+                    onDrop={onDropFiles}
+                    onRefuse={onRefuseDroppedFiles}
+                  />
+                </Suspense>
+              )}
+            </div>
+            {assistant}
+          </main>
+          <Suspense fallback={null}>
+            <LazyCompactWorkspace
+              {...chrome}
+              sheetKey={`${sheetKey}|${commandRowPresent ? 'row' : ''}`}
+              hasSheetContent={hasSheetContent}
+              onCommandRowHost={setCommandRowHost}
+              sheetContent={
+                hasSheetContent ? (
+                  <>
+                    {command && (
+                      <div className="compact-sheet-card">{command}</div>
+                    )}
+                    {inspector && (
+                      <div className="compact-sheet-card">{inspector}</div>
+                    )}
+                    {panelLane && (
+                      <div className="compact-sheet-card">{panelLane}</div>
+                    )}
+                  </>
+                ) : null
+              }
+            />
+          </Suspense>
+          {overlays}
+        </div>
+      </CompactCommandRowContext.Provider>
+    </ParameterDefinitionProvider>
+  );
+}
+
+function RegularAppShell({
+  topBar,
+  toolBar,
+  sidebar,
+  viewer,
+  command = null,
+  inspectorOwnsLane = false,
+  inspector,
+  panels = null,
+  panelLane = null,
+  assistant,
+  assistantHidden = false,
+  assistantCollapsed = false,
+  sidebarWidth,
+  assistantWidth,
+  workspaceRef,
+  sidebarResizer,
+  readout,
+  stage = null,
+  overlays,
+  onDropFiles,
+  onRefuseDroppedFiles,
+  parameterDefinition = null
+}: Omit<AppShellProps, 'compact'>) {
   // The inspector fades out rather than vanishing. `has-inspector` still
   // follows the live prop, so the lane is released on the frame it closes.
   const inspectorExit = useDelayedUnmount(inspector || null, OVERLAY_EXIT_MS);

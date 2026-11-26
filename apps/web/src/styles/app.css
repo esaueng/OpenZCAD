@@ -65,5 +65,9 @@
 /* Every control at 44 px under a coarse pointer, after every rule that
    sizes one for the desktop (I1). */
 @import './components/touch-targets.css';
+/* U12: the compact workspace's frame, scoped to [data-shell='compact'].
+   After every sizing rule, so it can re-place the stage's islands inside
+   that frame; touch.css sizes nothing and stays last. */
+@import './components/compact-shell.css';
 /* Touch-only browser behaviour; it sizes nothing. */
 @import './components/touch.css';

@@ -385,8 +385,11 @@ shipping. The iOS work runs alongside the shell slices:
      shell today, and declares its compact entry (initially `pending`).
    - Desktop behaviour and every existing spec stay unchanged.
 2. **Compact frame behind a setting.**
-   - The size-class hook and Settings › Appearance › Layout (a new
-     app-settings field carried by the Worker, like slice 6 of L02).
+   - The size-class hook and Settings › Appearance › Layout. The choice is
+     per device, kept in this browser's `localStorage`
+     (`openzcad.layout:v1`) and never synced: a phone and a desktop signed
+     in to one account each keep their own frame. (Decided while building
+     slice 2; this replaces an app-settings field carried by the Worker.)
    - A lazy `CompactWorkspaceShell` rendered into `AppShell`'s slots.
    - Header, mode tabs, full-bleed stage, floating undo/redo, cube and
      selection chip, and safe areas.

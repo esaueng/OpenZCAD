@@ -1,0 +1,569 @@
+/* ── The compact workspace (U12 slice 2) ──────────────────────
+   A second frame for the same workspace, in force where this device's
+   layout preference puts it (Settings › Appearance › Layout). A header over
+   a full-bleed stage, the mode tabs under it and one bottom sheet. Every
+   rule is scoped to [data-shell='compact'], so the regular workspace is
+   untouched; this file comes last so its few overrides of the stage's
+   islands win without !important. The softer tokens are slice 3's. */
+
+.app-shell[data-shell='compact'] {
+  --compact-header-h: 52px;
+  --compact-tabs-h: 58px;
+  --compact-target: 44px;
+  --compact-sheet-radius: 16px;
+  /* The stage starts under the header, so its islands start at the top. */
+  --stage-top: var(--island-gap);
+  grid-template-rows:
+    calc(var(--compact-header-h) + env(safe-area-inset-top))
+    minmax(0, 1fr)
+    calc(var(--compact-tabs-h) + env(safe-area-inset-bottom));
+}
+
+.app-shell[data-shell='compact']:has(
+    > .compact-chrome > .compact-tabs.is-empty
+  ) {
+  grid-template-rows:
+    calc(var(--compact-header-h) + env(safe-area-inset-top))
+    minmax(0, 1fr)
+    env(safe-area-inset-bottom);
+}
+
+.app-shell[data-shell='compact'] > .workspace {
+  grid-row: 2;
+}
+
+/* The chrome's parts are the shell's own grid rows. */
+.compact-chrome {
+  display: contents;
+}
+
+/* ── What the compact frame does not draw ── */
+
+.app-shell[data-shell='compact'] > .topbar,
+.app-shell[data-shell='compact'] .instrument-rail,
+.app-shell[data-shell='compact']
+  .workspace-column-float:has(> .workspace-column),
+.app-shell[data-shell='compact'] .panel-resizer,
+.app-shell[data-shell='compact'] .panels-hidden-pill {
+  display: none;
+}
+
+/* The command bar shows only while it is open (the header's search opens
+   it), standing over the sheet. Its guidance line is the stage's text,
+   which the compact stage leaves out. */
+.app-shell[data-shell='compact'] .command-bar-lane {
+  left: var(--sp-2);
+  right: var(--sp-2);
+  bottom: calc(var(--compact-sheet-h, 0px) + var(--sp-2));
+  z-index: calc(var(--z-panel-float) + 3);
+}
+
+.app-shell[data-shell='compact']
+  .command-bar-lane:not(:has(.command-bar.open)) {
+  display: none;
+}
+
+.app-shell[data-shell='compact'] .command-bar-lane > .workspace-hint,
+.app-shell[data-shell='compact'] .command-bar-lane > .workspace-hint-help {
+  display: none;
+}
+
+/* The view cube: the stage's top-right corner. */
+.app-shell[data-shell='compact'] .workspace.column-layout .viewer-rail-stack {
+  top: var(--sp-2);
+  right: max(var(--sp-2), env(safe-area-inset-right));
+  bottom: auto;
+  left: auto;
+  visibility: visible;
+}
+
+/* The scale bar stands over the undo pair in the stage's bottom-left
+   corner, placed here rather than measured (`--viewport-scale-pinned`), and
+   steps out while the sheet is above peek. */
+.app-shell[data-shell='compact'] .workspace.column-layout .viewport-scale-indicator {
+  --viewport-scale-pinned: 1;
+  top: auto;
+  right: auto;
+  left: max(var(--sp-2), env(safe-area-inset-left));
+  bottom: calc(
+    var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2
+  );
+}
+
+.app-shell[data-shell='compact']:has(
+    .compact-sheet[data-detent='half'],
+    .compact-sheet[data-detent='full']
+  )
+  .viewport-scale-indicator {
+  visibility: hidden;
+}
+
+/* ── Header ── */
+
+.compact-header {
+  grid-row: 1;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: env(safe-area-inset-top) max(var(--sp-1), env(safe-area-inset-right))
+    0 max(var(--sp-1), env(safe-area-inset-left));
+  background: var(--color-surface);
+  border-bottom: var(--border-thin);
+  z-index: calc(var(--z-panel-float) + 2);
+}
+
+.compact-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.compact-project-name {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 17px;
+  font-weight: var(--fw-semibold);
+  color: var(--color-text);
+}
+
+.compact-save-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-text-dim);
+}
+
+.compact-save-dot.is-ok {
+  background: var(--color-success);
+}
+
+.compact-save-dot.is-busy {
+  background: var(--color-accent);
+}
+
+.compact-save-dot.is-local {
+  background: var(--color-text-muted);
+}
+
+.compact-save-dot.is-warn {
+  background: var(--color-warning);
+}
+
+.compact-icon-button {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.compact-icon-button:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-icon-button:focus-visible,
+.compact-tab:focus-visible,
+.compact-float-button:focus-visible,
+.compact-selection-chip:focus-visible,
+.compact-menu-row:focus-visible,
+.compact-sheet-grabber:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.compact-icon-button[aria-expanded='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+/* ── Mode tabs ── */
+
+.compact-tabs {
+  grid-row: 3;
+  box-sizing: border-box;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-around;
+  padding: 0 max(var(--sp-1), env(safe-area-inset-right))
+    env(safe-area-inset-bottom) max(var(--sp-1), env(safe-area-inset-left));
+  background: var(--color-surface);
+  border-top: var(--border-thin);
+  z-index: calc(var(--z-panel-float) + 2);
+}
+
+.compact-tabs.is-empty {
+  padding: 0;
+  border: 0;
+}
+
+.compact-tab {
+  flex: 1 1 0;
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: var(--sp-1) 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.compact-tab.active {
+  color: var(--color-accent);
+}
+
+.compact-tab.active svg {
+  fill: var(--color-accent-dim);
+}
+
+.compact-tab:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+
+.compact-tab-label {
+  font-size: 11px;
+  font-weight: var(--fw-semibold);
+  line-height: 1.1;
+}
+
+/* ── The stage layer: floating controls and the sheet ── */
+
+.compact-stage-layer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--compact-header-h) + env(safe-area-inset-top));
+  bottom: calc(var(--compact-tabs-h) + env(safe-area-inset-bottom));
+  z-index: calc(var(--z-panel-float) + 1);
+  pointer-events: none;
+}
+
+.app-shell[data-shell='compact']:has(> .compact-chrome > .compact-tabs.is-empty)
+  .compact-stage-layer {
+  bottom: env(safe-area-inset-bottom);
+}
+
+.compact-stage-controls {
+  position: absolute;
+  left: max(var(--sp-2), env(safe-area-inset-left));
+  right: max(var(--sp-2), env(safe-area-inset-right));
+  bottom: calc(var(--compact-sheet-h, 0px) + var(--sp-2));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  pointer-events: none;
+  transition: bottom var(--dur-base) var(--ease-out);
+}
+
+.compact-history {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.compact-float-button,
+.compact-selection-chip {
+  pointer-events: auto;
+  box-sizing: border-box;
+  min-height: var(--compact-target);
+  border: 0;
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-2);
+  cursor: pointer;
+}
+
+.compact-float-button {
+  width: var(--compact-target);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.compact-float-button:disabled {
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+.compact-selection-chip {
+  min-width: 0;
+  max-width: 60%;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  border-radius: 999px;
+  font-size: 15px;
+}
+
+.compact-selection-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-accent);
+}
+
+.compact-selection-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── The bottom sheet ── */
+
+.compact-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  height: 88px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  background: var(--color-surface);
+  border-radius: var(--compact-sheet-radius) var(--compact-sheet-radius) 0 0;
+  box-shadow: var(--shadow-3);
+  pointer-events: auto;
+  overflow: hidden;
+  /* A short spring between heights. */
+  transition: height 320ms cubic-bezier(0.32, 1.25, 0.5, 1);
+}
+
+.compact-sheet[hidden] {
+  display: none;
+}
+
+.compact-sheet[data-detent='half'] {
+  height: 50%;
+}
+
+.compact-sheet[data-detent='full'] {
+  height: 100%;
+  border-radius: 0;
+}
+
+.compact-sheet.is-dragging {
+  transition: none;
+}
+
+/* Reduced motion: the height changes at once and the sheet cross-fades. */
+.compact-sheet.is-reduced-motion {
+  transition: none;
+}
+
+.compact-sheet.is-reduced-motion.fade-a {
+  animation: compact-sheet-fade-a var(--dur-base) ease-out;
+}
+
+.compact-sheet.is-reduced-motion.fade-b {
+  animation: compact-sheet-fade-b var(--dur-base) ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compact-sheet {
+    transition: none;
+  }
+
+  .compact-sheet.fade-a {
+    animation: compact-sheet-fade-a var(--dur-base) ease-out;
+  }
+
+  .compact-sheet.fade-b {
+    animation: compact-sheet-fade-b var(--dur-base) ease-out;
+  }
+
+  .compact-stage-controls {
+    transition: none;
+  }
+}
+
+@keyframes compact-sheet-fade-a {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes compact-sheet-fade-b {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.compact-sheet-head {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: var(--compact-target) minmax(0, 1fr) var(
+      --compact-target
+    );
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-1) 0;
+}
+
+.compact-sheet-head-spacer {
+  width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+.compact-sheet-grabber {
+  min-width: 0;
+  min-height: var(--compact-target);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: 12px;
+  cursor: grab;
+  /* A drag on the grabber moves the sheet, not the page. */
+  touch-action: none;
+  user-select: none;
+}
+
+.compact-sheet.is-dragging .compact-sheet-grabber {
+  cursor: grabbing;
+}
+
+.compact-sheet-grip {
+  width: 36px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+}
+
+.compact-sheet-title {
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+  color: var(--color-text);
+}
+
+.compact-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2) var(--sp-3);
+}
+
+.compact-sheet-body[hidden] {
+  display: none;
+}
+
+/* The workspace's cards and panels, which float as islands on the regular
+   stage, sit in the sheet's flow here: their absolute placement and their
+   island frames are reset. */
+.compact-sheet-card,
+.compact-command-row {
+  position: relative;
+  min-width: 0;
+}
+
+.compact-command-row:empty {
+  display: none;
+}
+
+.compact-sheet-card > *,
+.compact-command-row > * {
+  position: static;
+  inset: auto;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  transform: none;
+  box-shadow: none;
+}
+
+/* ── Menus in the sheet ── */
+
+.compact-menu {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.compact-menu-row {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 17px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.compact-menu-row:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-menu-row:disabled {
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+.compact-menu-icon {
+  flex: 0 0 auto;
+  width: 24px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-muted);
+}
+
+.compact-menu-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.compact-menu-chevron {
+  flex: 0 0 auto;
+  color: var(--color-text-dim);
+}
