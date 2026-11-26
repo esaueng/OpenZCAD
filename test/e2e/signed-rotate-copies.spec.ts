@@ -217,6 +217,50 @@ function boxes(project: StoredProject): (Box | null)[] {
   });
 }
 
+/**
+ * Each body's box as the live workspace draws it, in the given order: the
+ * reopened session's own geometry, not the record it was saved from.
+ */
+async function liveBoxes(page: Page, order: string[]): Promise<(Box | null)[]> {
+  const drawn = await page.locator('.viewer-host canvas').evaluate(
+    (element) =>
+      new Promise<Record<string, number[]>>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-render-policy', {
+            detail: {
+              includeBodies: true,
+              resolve: ({
+                bodies
+              }: {
+                bodies: {
+                  bodyId: string;
+                  consumed?: boolean;
+                  bbox: {
+                    min: { x: number; y: number; z: number };
+                    max: { x: number; y: number; z: number };
+                  };
+                }[];
+              }) =>
+                resolve(
+                  Object.fromEntries(
+                    bodies
+                      .filter((body) => !body.consumed)
+                      .map(({ bodyId, bbox: { min, max } }) => [
+                        bodyId,
+                        [min.x, min.y, min.z, max.x, max.y, max.z]
+                      ])
+                  )
+                )
+            }
+          })
+        );
+      })
+  );
+  return order.map((bodyId) =>
+    drawn[bodyId] ? (drawn[bodyId].map(round) as Box) : null
+  );
+}
+
 /** The transforms' targets, copy flags and angles, in History order. */
 function turns(project: StoredProject) {
   return features(project)
@@ -360,8 +404,26 @@ test('Rotate about axis puts a +θ and a −θ copy about one picked edge', asyn
   );
   expect(turns(undone)).toEqual(turns(both).slice(0, 1));
   expect(boxes(undone)).toEqual([source, expectedBox(THETA)]);
+  // A second Undo takes the first copy and its Axis 1 together: the pick
+  // and the copy are one undo step in the UI, not two.
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expectBodyCount(page, 1);
+  const bare = await savedWhen(
+    page,
+    (project) => project.bodyOrder.length === 1
+  );
+  expect(bare.bodyOrder).toEqual([sourceId]);
+  expect(turns(bare)).toEqual([]);
+  expect(features(bare).map((feature) => feature.name)).not.toContain('Axis 1');
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await expectBodyCount(page, 2);
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
   await expectBodyCount(page, 3);
+  const redone = await savedWhen(
+    page,
+    (project) => project.bodyOrder.length === 3
+  );
+  expect(turns(redone)).toEqual(turns(both));
 
   // 4. The first copy's angle edited in History: it alone moves.
   await revealModelPanel(page, 'History');
@@ -404,5 +466,10 @@ test('Rotate about axis puts a +θ and a −θ copy about one picked edge', asyn
     expectedBox(EDITED),
     expectedBox(-THETA)
   ]);
+  await expect
+    .poll(() => liveBoxes(page, reopened.bodyOrder), {
+      timeout: 30_000
+    })
+    .toEqual([source, expectedBox(EDITED), expectedBox(-THETA)]);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
