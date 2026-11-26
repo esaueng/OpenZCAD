@@ -163,6 +163,17 @@ function bodyUses(feature: FeatureNode): BodyUse[] {
 }
 
 /**
+ * The bodies a feature node takes out of the live set, as the build would at
+ * its history position (see {@link bodyUses}): one it consumes, not one it
+ * edits in place under its own id or only reads and leaves live.
+ */
+export function featureConsumedBodyIds(feature: FeatureNode): BodyId[] {
+  return bodyUses(feature)
+    .filter((entry) => entry.use === 'consume')
+    .map((entry) => entry.bodyId);
+}
+
+/**
  * One branch in the feature history: `featureId` builds on, or edits in
  * place, `bodyId` after the earlier feature `consumerFeatureId` already
  * replaced it. Both run, so both results are on screen: the history has

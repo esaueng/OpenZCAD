@@ -283,6 +283,59 @@ describe('ModelPanel', () => {
       screen.getByRole('button', { name: 'Original' })
     ).toBeInTheDocument();
   });
+  /**
+   * U11: a Boolean's edit lists its consumed inputs as rows to pick back.
+   * The committed model has them consumed, so a row action (a visibility
+   * parameter's hide, isolate, rename, colour, drag) must not reach them:
+   * hiding one wrote its toggle parameter, undoably, past Escape.
+   */
+  it('offers only the pick on rows a command lists to pick from', async () => {
+    const block = {
+      bodyId: 'body-block',
+      name: 'Block',
+      consumed: false
+    } as unknown as BodyRepresentation;
+    const spare = {
+      bodyId: 'body-spare',
+      name: 'Spare',
+      consumed: false
+    } as unknown as BodyRepresentation;
+    const { props } = renderPanels(['bodies'], {
+      representations: { [block.bodyId]: block, [spare.bodyId]: spare },
+      onIsolateBody: vi.fn(),
+      onRenameBody: vi.fn(),
+      onPreviewBodyAppearance: vi.fn(),
+      onCommitBodyAppearance: vi.fn(),
+      pickOnlyBodyIds: new Set([block.bodyId])
+    });
+    const list = within(screen.getByRole('list', { name: 'Objects' }));
+    const row = (name: string) =>
+      within(
+        list
+          .getAllByRole('listitem')
+          .find((item) => within(item).queryByRole('button', { name }))!
+      );
+    expect(row('Block').getAllByRole('button')).toHaveLength(1);
+    expect(row('Block').queryByRole('button', { name: /Hide body/ })).toBeNull();
+    expect(row('Block').getByRole('button', { name: 'Block' })).not.toHaveAttribute(
+      'aria-keyshortcuts'
+    );
+    // A live row keeps its actions.
+    expect(
+      row('Spare').getByRole('button', { name: 'Hide body Spare' })
+    ).toBeVisible();
+    expect(
+      row('Spare').getByRole('button', { name: 'Isolate body Spare' })
+    ).toBeVisible();
+    // The pick still goes through.
+    await userEvent.click(row('Block').getByRole('button', { name: 'Block' }));
+    expect(props.onSelectBody).toHaveBeenCalledExactlyOnceWith(
+      block.bodyId,
+      false
+    );
+    expect(props.onToggleBodyVisibility).not.toHaveBeenCalled();
+  });
+
   it('says Objects details are preparing in its header, not above its rows (#1598)', () => {
     const { container, rerender } = renderPanels(['bodies'], {
       geometryPending: true,

@@ -155,6 +155,16 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
     previewed: InPlacePreviewedFrame | null
   ): Promise<boolean> | void;
   publishPreview(preview: ProjectDocument | null): void;
+  /**
+   * U11: what an edit shows while its picks build nothing (a Boolean with
+   * an operand taken out): the model as it stood before the feature, so
+   * the inputs the feature consumed are on screen to be picked again.
+   * Null for an edit that shows the model as it is.
+   */
+  editRestDocument?(
+    base: ProjectDocument,
+    edit: InPlaceEditSeed
+  ): ProjectDocument | null;
   onStatus(message: string): void;
 }
 
@@ -883,6 +893,17 @@ export function useInPlaceCommand(
     >()
   ).current;
   /**
+   * U11: an edit's rest frames (see `editRestDocument`), by the request
+   * generation and base each was built for. A rest frame is never a
+   * request's verdict: it enables no Done and shows no refusal.
+   */
+  const restFrames = useRef(
+    new WeakMap<
+      ProjectDocument,
+      { generation: number; base: number | null | undefined }
+    >()
+  ).current;
+  /**
    * The last request that built in this session, and the base it built on:
    * what a refusal is measured against, and, for a tool that names the
    * refused input, the frame left on screen under it. Only the frame of
@@ -951,6 +972,20 @@ export function useInPlaceCommand(
         const base = optionsRef.current.baseDocument();
         const title =
           specRef.current?.featureName ?? specRef.current?.title ?? 'Preview';
+        if (!current && base && editRef.current) {
+          const rest = optionsRef.current.editRestDocument?.(
+            base,
+            editRef.current
+          );
+          if (!rest) return null;
+          // Its own object, so the frame is told apart from the model's.
+          const frame = { ...rest };
+          restFrames.set(frame, {
+            generation: requested,
+            base: optionsRef.current.baseVersion
+          });
+          return frame;
+        }
         if (!current || !base) return null;
         const command = optionsRef.current.buildCommand(
           current,
@@ -972,6 +1007,24 @@ export function useInPlaceCommand(
       },
       derive: (document, signal) => optionsRef.current.derive(document, signal),
       publish: (result) => {
+        const rest = result ? restFrames.get(result.document) : undefined;
+        if (rest) {
+          // Shown only while it is still what the edit rests on: no request
+          // since, and the model it was built from.
+          if (
+            rest.generation !== generation.current ||
+            requestKeyRef.current !== null ||
+            rest.base !== optionsRef.current.baseVersion
+          ) {
+            return;
+          }
+          shownKey.current = null;
+          optionsRef.current.publishPreview({
+            ...result!.document,
+            derived: result!.derived
+          });
+          return;
+        }
         const built = result ? builtFrames.get(result.document) : undefined;
         // A frame built on a base the model has since moved past (an undo,
         // a collaborator's edit landing mid-build) is not what Done would
@@ -1133,6 +1186,12 @@ export function useInPlaceCommand(
         }
       },
       onFailure: ({ error }) => {
+        // A rest frame that did not build is no refusal of anything picked:
+        // the model is shown as it is.
+        if (requestKeyRef.current === null) {
+          optionsRef.current.publishPreview(null);
+          return;
+        }
         // LivePreview reports only the current request's failure.
         shownKey.current = requestKeyRef.current;
         refusalShown.current = true;
@@ -1168,6 +1227,11 @@ export function useInPlaceCommand(
       lastBuilt.current = null;
       shownKey.current = null;
       optionsRef.current.publishPreview(null);
+      // U11: an edit whose picks build nothing shows what it rests on.
+      if (!instant && editIdentity && optionsRef.current.editRestDocument) {
+        generation.current += 1;
+        preview.request(generation.current);
+      }
       return;
     }
     // A new request is not shown yet: Done waits for its own frame, never
