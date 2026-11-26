@@ -245,16 +245,18 @@ test.describe('the compact workspace frame', () => {
       await field.fill('Box');
       await page.getByRole('option', { name: /^Box/ }).first().click();
 
-      // The in-place bar comes up in the one sheet, at half height.
+      // The in-place bar comes up in the one sheet as its tray, at peek
+      // (U12 slice 4): the model stays in view to pick on.
       const sheet = page.locator('.compact-sheet');
-      await expect(sheet).toHaveAttribute('data-detent', 'half');
+      await expect(sheet).toHaveAttribute('data-detent', 'peek');
       const bar = sheet.getByRole('group', { name: 'Box command' });
       const done = bar.getByRole('button', { name: /Done/ });
       await expect(done).toBeEnabled({ timeout: 30_000 });
       await expect(done).toBeInViewport();
       await done.click();
       await expect(bar).toHaveCount(0);
-      await expect(sheet).toHaveAttribute('data-detent', 'closed');
+      // Back to Build's tray at rest.
+      await expect(sheet).toHaveAttribute('data-detent', 'peek');
 
       await expect(undo).toBeEnabled();
       await undo.click();
@@ -275,8 +277,10 @@ test.describe('the compact workspace frame', () => {
       await openCompactProject(page, 'Compact options');
       const bar = await startCommand(page, 'Box');
       const sheet = page.locator('.compact-sheet');
-      await expect(sheet).toHaveAttribute('data-detent', 'half');
+      await expect(sheet).toHaveAttribute('data-detent', 'peek');
       await bar.getByLabel('Box options').click();
+      // Options raise the sheet to half, in its flow (U12 slice 4).
+      await expect(sheet).toHaveAttribute('data-detent', 'half');
       await expect(
         bar.locator('details.in-place-command-options')
       ).toHaveAttribute('open', '');
@@ -430,7 +434,8 @@ test.describe('the compact workspace frame', () => {
       page.evaluate(() =>
         (document.activeElement as HTMLElement | null)?.blur()
       );
-    // S arms the fit spline; three points are placed on open canvas.
+    // S arms the fit spline; three points are placed on open canvas. The
+    // curve types stand in the sketch rail, not over these points.
     await blur();
     await page.keyboard.press('s');
     const bounds = (await page.locator('.viewer-host canvas').boundingBox())!;
@@ -498,9 +503,8 @@ test.describe('the compact workspace frame', () => {
     await page.getByTestId('direct-manipulation-value').click();
     const keypad = page.getByRole('dialog', { name: 'Radius value' });
     await expect(keypad).toBeVisible();
-    await expect(
-      page.locator('.compact-overlay-host .numeric-keypad')
-    ).toHaveCount(1);
+    // The keypad is the sheet's content (U12 slice 4).
+    await expect(page.locator('.compact-sheet .numeric-keypad')).toHaveCount(1);
     // The keypad carries the switch; the stage's own tag steps aside, so
     // exactly one is seen and reached by Tab.
     const carried = keypad.getByRole('button', { name: /Fillet/ });

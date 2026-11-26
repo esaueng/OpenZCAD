@@ -137,6 +137,33 @@ export const COMPACT_ENTRIES: Readonly<
   // The selection chip's sheet: the double-click picks and the filter.
   'selection-whole-body': 'selection-sheet',
   'selection-filter': 'selection-sheet',
+  // Slice 4, Build: every tool from the All tools sheet, and a pick's own
+  // verbs from the tray at rest, as the verb rail offers them. A running
+  // tool's tray row (its Options, Cancel and Done) is each command's own
+  // chrome, not a registry action, so no entry names `tool-tray`.
+  ...Object.fromEntries(
+    TOOL_GROUPS.flatMap((group) => group.tools).map((tool) => [
+      toolCommandId(tool),
+      'all-tools' as const
+    ])
+  ),
+  'selection-resize-body': 'context-tray',
+  'selection-offset-face': 'context-tray',
+  'selection-resize-radial-face': 'context-tray',
+  'selection-edit-fillet': 'context-tray',
+  'selection-remove-fillet': 'context-tray',
+  'selection-remove-all-fillets': 'context-tray',
+  'selection-remove-face-feature': 'context-tray',
+  'selection-sketch-on-face': 'context-tray',
+  'selection-fillet': 'context-tray',
+  'selection-chamfer': 'context-tray',
+  'selection-chamfer-chain': 'context-tray',
+  'selection-fillet-face-edges': 'context-tray',
+  'selection-chamfer-face-edges': 'context-tray',
+  'selection-extrude-region': 'context-tray',
+  'selection-text-on-face': 'context-tray',
+  'selection-edit-face': 'context-tray',
+  'selection-offset-faces': 'context-tray',
   // Slice 7, View's tray: Measure, and the Section, Display, Views and
   // Parts pages it opens (Fit, grid, projection and orbit on Display; a
   // body's visibility, Show only and Show all on Parts). Tweak's sheet

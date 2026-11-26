@@ -257,6 +257,10 @@ function layoutReport(page: Page): Promise<LayoutReport> {
 }
 
 async function expectTidy(page: Page) {
+  // Read at rest: held landscape, the sheet stands at the stage's side at
+  // half (U12 slice 4) and glides down to peek while the cube, no longer
+  // beside it, is already back in its corner.
+  await waitForSurfacesToSettle(page, ['.compact-sheet']);
   const report = await layoutReport(page);
   expect(report.overCube).toEqual([]);
   expect(report.smallTargets).toEqual([]);

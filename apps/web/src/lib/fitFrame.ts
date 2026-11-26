@@ -187,13 +187,19 @@ export function measureClearStage(
     bottom = nextBottom;
   }
   // The compact sheet across the foot takes its band, above the same
-  // minimum the guide keeps: there is no side to frame beside it.
+  // minimum the guide keeps: there is no side to frame beside it. A phone
+  // held landscape stands the sheet at the stage's side instead (U12 slice
+  // 4), clear of its middle: the model is framed beside it.
   for (const sheet of panelsOver(
     canvas,
     COMPACT_SHEET,
     throughCover,
     '.app-shell'
   )) {
+    if (Math.max(sheet.left, bounds.left) >= middle - 1) {
+      sides.push(sheet);
+      continue;
+    }
     const nextBottom = Math.max(sheet.top, bounds.top) - STAGE_FRAME_GAP_PX;
     if (nextBottom < bottom && nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX) {
       bottom = nextBottom;

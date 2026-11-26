@@ -30,7 +30,7 @@ export function TrayRow({
   page: string | null;
 }) {
   return (
-    <div className="compact-tray" role="toolbar" aria-label={label}>
+    <div className="compact-tray is-mode" role="toolbar" aria-label={label}>
       {items.map((item) => (
         <button
           key={item.key}

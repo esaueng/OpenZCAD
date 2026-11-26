@@ -441,8 +441,7 @@ export function SelectionReadout({
   detail?: string | undefined;
   /** When `detail` is a diameter: a radius drag rewrites it in place. */
   detailDiameter?:
-    | { diameter: number; units: string; scale?: number }
-    | undefined;
+    { diameter: number; units: string; scale?: number } | undefined;
 }) {
   const nameRef = useRef<HTMLSpanElement>(null);
   // The name ends in an ellipsis only when it and the measurement fill the
