@@ -193,6 +193,12 @@
   --lh-loose: 1.7;
 
   --ls-eyebrow: 0.14em;
+  /* Eyebrows and small section headers are set in capitals. The compact
+     workspace sets them in sentence case with no tracking, so the case is a
+     token, and headers tracked tighter than --ls-eyebrow multiply their own
+     spacing by the scale (1 here, 0 there). */
+  --tt-eyebrow: uppercase;
+  --ls-eyebrow-scale: 1;
 
   /* ── Spacing scale (4-based) ──────────────────────────── */
   --sp-1: 4px;
@@ -208,6 +214,9 @@
   --radius-sm: 2px;
   --radius-md: 3px;
   --radius-lg: 4px;
+  /* Sheet top corners and dialogs. The same as --radius-lg here; the
+     compact workspace rounds it further. */
+  --radius-xl: 4px;
 
   /* ── Borders (composed) ───────────────────────────────── */
   --border-thin: 1px solid var(--color-border);
@@ -419,6 +428,157 @@
     --color-cube-seam: #8e8e93;
     --color-cube-label: #1d1d1f;
     --color-datum: #5d6a80;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Compact workspace (U12).
+
+   The phone layout sets `data-shell="compact"` on the workspace shell, and
+   these blocks repaint it softer: rounder shapes, warm near-neutral
+   surfaces separated by tone and soft shadow rather than hairlines, a
+   tinted fill (not an outline) for whatever is selected, and larger
+   sentence-case type. Nothing outside `[data-shell='compact']` changes;
+   theme/compactTokens.test.ts checks.
+
+   The custom properties are re-declared on the shell element, so anything
+   on :root that reads another token (the composed borders, the popover
+   shadow, the surface aliases) is re-declared here too: a var() resolves
+   where it is declared, and the :root copies would keep the regular values.
+
+   The model, edge, stage and environment colours belong to viewport lookdev
+   (U10) and are not touched, nor is construction magenta. Every colour here
+   is measured in theme/contrast.test.ts.
+   ───────────────────────────────────────────────────────────── */
+
+[data-shell='compact'] {
+  /* Shape: chips and keys 8px, controls 12px, cards 16px, sheets 24px.
+     Pills stay 999px and dots stay round. */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  /* Type: body 17px (iOS's default, over the 16px no-zoom floor),
+     secondary 15px, caption 13px. Two weights only. */
+  --fs-mini: 13px;
+  --fs-xs: 13px;
+  --fs-sm: 15px;
+  --fs-base: 17px;
+  --fs-md: 17px;
+  --fs-lg: 20px;
+  --fs-xl: 24px;
+  --fw-medium: 600;
+  --fw-bold: 600;
+  /* No all-caps or letter-spaced eyebrows: "History" with a count badge,
+     not HISTORY 17. */
+  --ls-eyebrow: 0;
+  --ls-eyebrow-scale: 0;
+  --tt-eyebrow: none;
+
+  /* Dark palette (the light blocks below re-declare every colour and
+     shadow set here). Neutrals lose the steel tint for a near-neutral. */
+  --color-bg: #18191c;
+  --color-surface: #232428;
+  --color-surface-2: #2d2e33;
+  --color-surface-hover: #34353b;
+  /* Surfaces separate by tone and shadow; the hairline is left only to
+     part two surfaces of the same tone. */
+  --color-border: rgba(255, 255, 255, 0.06);
+  --color-border-strong: #45464d;
+  --color-text: #f2f2f4;
+  --color-text-muted: #a5a5ac;
+  --color-text-subtle: #a5a5ac;
+  --color-text-dim: #7f7f87;
+  --color-accent: #8db0ff;
+  --color-accent-hi: #a6c1ff;
+  --color-accent-dim: rgba(141, 176, 255, 0.16);
+  /* The selected edge melts into the selected fill, so a selection reads
+     as a tint and not as a box. */
+  --color-accent-border: rgba(141, 176, 255, 0.16);
+  --color-selected-fill: rgba(141, 176, 255, 0.18);
+  --color-selected-text: #c6d6ff;
+  --color-on-accent: #0f1a33;
+  --color-warning: #f0ac4a;
+  --color-success: #5fd3a0;
+  --color-cut: #ff7b6e;
+  --shadow-1: 0 6px 20px rgba(0, 0, 0, 0.32), 0 1px 3px rgba(0, 0, 0, 0.28);
+  --shadow-2: 0 12px 32px rgba(0, 0, 0, 0.42), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-3: 0 24px 56px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.35);
+
+  /* Tokens composed from others, re-resolved against the values above. */
+  --color-surface-1: var(--color-surface);
+  --color-surface-raised: var(--color-surface-hover);
+  --border-thin: 1px solid var(--color-border);
+  --border-strong: 1px solid var(--color-border-strong);
+  --shadow-popover: var(--shadow-2);
+
+  /* Inherited from <body>, which resolved them with the regular tokens. */
+  accent-color: var(--color-accent);
+  color: var(--color-text);
+  font-size: var(--fs-base);
+}
+
+/* Light, the owner-approved mockup's palette with the text hues deepened
+   just enough to hold 4.5:1 on every surface. The two blocks must stay
+   identical, as the regular light ones do. */
+:root[data-theme='light'] [data-shell='compact'] {
+  --color-bg: #f3f2ef;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1f0ed;
+  --color-surface-hover: #e9e8e4;
+  --color-border: rgba(30, 30, 40, 0.08);
+  --color-border-strong: #c9c8c4;
+  --color-text: #1d1d1f;
+  --color-text-muted: #626167;
+  --color-text-subtle: #626167;
+  --color-text-dim: #838288;
+  --color-accent: #2860d0;
+  --color-accent-hi: #2154bd;
+  --color-accent-dim: rgba(47, 107, 228, 0.12);
+  --color-accent-border: rgba(47, 107, 228, 0.12);
+  --color-selected-fill: rgba(47, 107, 228, 0.14);
+  --color-selected-text: #2152b8;
+  --color-on-accent: #ffffff;
+  --color-warning: #955600;
+  --color-success: #17774b;
+  --color-cut: #d9473b;
+  --shadow-1:
+    0 6px 20px rgba(30, 30, 40, 0.08), 0 1px 3px rgba(30, 30, 40, 0.06);
+  --shadow-2:
+    0 12px 32px rgba(30, 30, 40, 0.12), 0 2px 6px rgba(30, 30, 40, 0.08);
+  --shadow-3:
+    0 24px 56px rgba(30, 30, 40, 0.18), 0 4px 12px rgba(30, 30, 40, 0.1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme='system'] [data-shell='compact'] {
+    --color-bg: #f3f2ef;
+    --color-surface: #ffffff;
+    --color-surface-2: #f1f0ed;
+    --color-surface-hover: #e9e8e4;
+    --color-border: rgba(30, 30, 40, 0.08);
+    --color-border-strong: #c9c8c4;
+    --color-text: #1d1d1f;
+    --color-text-muted: #626167;
+    --color-text-subtle: #626167;
+    --color-text-dim: #838288;
+    --color-accent: #2860d0;
+    --color-accent-hi: #2154bd;
+    --color-accent-dim: rgba(47, 107, 228, 0.12);
+    --color-accent-border: rgba(47, 107, 228, 0.12);
+    --color-selected-fill: rgba(47, 107, 228, 0.14);
+    --color-selected-text: #2152b8;
+    --color-on-accent: #ffffff;
+    --color-warning: #955600;
+    --color-success: #17774b;
+    --color-cut: #d9473b;
+    --shadow-1:
+      0 6px 20px rgba(30, 30, 40, 0.08), 0 1px 3px rgba(30, 30, 40, 0.06);
+    --shadow-2:
+      0 12px 32px rgba(30, 30, 40, 0.12), 0 2px 6px rgba(30, 30, 40, 0.08);
+    --shadow-3:
+      0 24px 56px rgba(30, 30, 40, 0.18), 0 4px 12px rgba(30, 30, 40, 0.1);
   }
 }
 

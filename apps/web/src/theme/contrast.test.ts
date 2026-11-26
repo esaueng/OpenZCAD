@@ -248,3 +248,138 @@ describe('destructive confirm', () => {
     );
   });
 });
+
+/**
+ * The compact workspace (U12) repaints the shell under
+ * `[data-shell='compact']`. Its tokens are declared on the shell element and
+ * cascade over the theme's own, so each palette is the theme's :root tokens
+ * with the compact blocks laid over them in the order the cascade applies
+ * them: anything compact leaves alone (the error text, say) keeps its theme
+ * value and is measured against the compact surfaces too.
+ */
+const COMPACT = "[data-shell='compact'] {";
+const COMPACT_LIGHT = ":root[data-theme='light'] [data-shell='compact'] {";
+
+function rgbaTokens(selector: string): Record<string, number[]> {
+  const start = tokens.indexOf(selector);
+  const open = tokens.indexOf('{', start);
+  const block = tokens.slice(open + 1, tokens.indexOf('}', open));
+  return Object.fromEntries(
+    [
+      ...block.matchAll(
+        /(--[\w-]+):\s*rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/g
+      )
+    ].map((m) => [m[1]!, m.slice(2, 6).map(Number)])
+  );
+}
+
+/** An `rgba()` fill laid over an opaque ground. */
+function over(fill: number[], ground: string): string {
+  const [r, g, b, alpha] = fill as [number, number, number, number];
+  return `#${[r, g, b]
+    .map((value, index) => {
+      const base = Number.parseInt(
+        ground.slice(1 + index * 2, 3 + index * 2),
+        16
+      );
+      return Math.round(value * alpha + base * (1 - alpha))
+        .toString(16)
+        .padStart(2, '0');
+    })
+    .join('')}`;
+}
+
+describe.each([
+  ['dark', [':root {', COMPACT]],
+  ['light', [':root {', ":root[data-theme='light'] {", COMPACT, COMPACT_LIGHT]]
+])('compact %s contrast', (_name, selectors) => {
+  // Later blocks win, as they do in the cascade.
+  const palette = Object.fromEntries(
+    selectors.flatMap((selector) => Object.entries(tokenBlock(selector)))
+  );
+  const fills = Object.fromEntries(
+    selectors.flatMap((selector) => Object.entries(rgbaTokens(selector)))
+  );
+  const compact = {
+    ...tokenBlock(COMPACT),
+    ...(selectors.includes(COMPACT_LIGHT) ? tokenBlock(COMPACT_LIGHT) : {})
+  };
+
+  it('repaints every surface and text token it is measured on', () => {
+    // Otherwise the compact checks would quietly measure the regular theme.
+    for (const name of [
+      ...SURFACES,
+      ...FOREGROUNDS.filter((token) => token !== '--color-error-text'),
+      '--color-text-dim',
+      '--color-on-accent',
+      '--color-selected-text',
+      '--color-cut'
+    ]) {
+      expect(compact[name], `${name} not re-declared`).toMatch(
+        /^#[0-9a-f]{6}$/
+      );
+    }
+  });
+
+  it('clears WCAG AA for text on every surface', () => {
+    const failures: string[] = [];
+    for (const fg of FOREGROUNDS) {
+      for (const bg of SURFACES) {
+        const ratio = contrastRatio(palette[fg]!, palette[bg]!);
+        if (ratio < 4.5) failures.push(`${fg} on ${bg}: ${ratio.toFixed(2)}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it('clears 3:1 for the focus ring, dim marks and the cut hue on every surface', () => {
+    const failures: string[] = [];
+    for (const fg of ['--color-accent', '--color-text-dim', '--color-cut']) {
+      for (const bg of SURFACES) {
+        const ratio = contrastRatio(palette[fg]!, palette[bg]!);
+        if (ratio < 3) failures.push(`${fg} on ${bg}: ${ratio.toFixed(2)}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it('labels the primary action and the tinted selection at WCAG AA', () => {
+    expect(
+      contrastRatio(palette['--color-on-accent']!, palette['--color-accent']!)
+    ).toBeGreaterThanOrEqual(4.5);
+    const fill = fills['--color-selected-fill'];
+    expect(fill).toBeDefined();
+    for (const surface of SURFACES) {
+      expect(
+        contrastRatio(
+          palette['--color-selected-text']!,
+          over(fill!, palette[surface]!)
+        ),
+        surface
+      ).toBeGreaterThanOrEqual(4.5);
+      // Primary text stays readable on a selected row too.
+      expect(
+        contrastRatio(palette['--color-text']!, over(fill!, palette[surface]!)),
+        surface
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('keeps the History repair chip and the first-failure row legible on their warning tints', () => {
+    for (const [fg, weight] of [
+      ['--color-warning', 0.13],
+      ['--color-text', 0.09],
+      ['--color-text-muted', 0.09]
+    ] as const) {
+      const tint = mix(
+        palette['--color-warning']!,
+        palette['--color-surface']!,
+        weight
+      );
+      expect(
+        contrastRatio(palette[fg]!, tint),
+        `${fg} on ${weight * 100}% warning`
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

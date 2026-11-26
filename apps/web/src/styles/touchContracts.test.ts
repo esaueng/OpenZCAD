@@ -50,21 +50,42 @@ function leafRules(css: string): Array<[string, string]> {
   ]);
 }
 
-/** Every px value a custom property is given anywhere in the stylesheets. */
-function customPropertyPx(name: string, seen = new Set<string>()): number[] {
+type Sheet = { path: string; css: string };
+
+/**
+ * The stylesheets as the regular workspace sees them: rules scoped to the
+ * compact shell (U12, `[data-shell='compact']`) never apply there.
+ */
+const regularStylesheets = stylesheets.map(({ path, css }) => ({
+  path,
+  css: css.replace(/[^{}]*\[data-shell=(['"])compact\1\][^{}]*\{[^{}]*\}/g, '')
+}));
+
+/** Every px value a custom property is given anywhere in `sheets`. */
+function customPropertyPx(
+  name: string,
+  sheets: Sheet[],
+  seen = new Set<string>()
+): number[] {
   if (seen.has(name)) return [];
   seen.add(name);
   const pattern = new RegExp(`${name}:\\s*([^;]+);`, 'g');
-  return stylesheets.flatMap(({ css }) =>
-    [...css.matchAll(pattern)].flatMap((match) => fontSizePx(match[1]!, seen))
+  return sheets.flatMap(({ css }) =>
+    [...css.matchAll(pattern)].flatMap((match) =>
+      fontSizePx(match[1]!, sheets, seen)
+    )
   );
 }
 
-function fontSizePx(value: string, seen = new Set<string>()): number[] {
+function fontSizePx(
+  value: string,
+  sheets: Sheet[],
+  seen = new Set<string>()
+): number[] {
   const px = /^(\d+(?:\.\d+)?)px$/.exec(value.trim());
   if (px) return [Number(px[1])];
   const variable = /^var\((--[\w-]+)\)$/.exec(value.trim());
-  return variable ? customPropertyPx(variable[1]!, seen) : [];
+  return variable ? customPropertyPx(variable[1]!, sheets, seen) : [];
 }
 
 /** Class names given to a text field in the components. */
@@ -175,23 +196,35 @@ describe('touch browser behaviour', () => {
     );
   });
 
-  it('only ever raises a field: no field rule is drawn above 16 px', () => {
-    const fieldClasses = [...fieldClassNames()];
-    const fieldRule = (selector: string) =>
-      /(?:^|[\s,>+~(])(?:input|select|textarea)\b/.test(selector) ||
-      fieldClasses.some((name) =>
-        new RegExp(`\\.${name}(?![\\w-])`).test(selector)
-      );
-    const larger = stylesheets.flatMap(({ path, css }) =>
+  const fieldClasses = [...fieldClassNames()];
+  const fieldRule = (selector: string) =>
+    /(?:^|[\s,>+~(])(?:input|select|textarea)\b/.test(selector) ||
+    fieldClasses.some((name) =>
+      new RegExp(`\\.${name}(?![\\w-])`).test(selector)
+    );
+  /** Field rules in `sheets` drawn larger than `floor` px. */
+  const fieldsAbove = (sheets: Sheet[], floor: number) =>
+    sheets.flatMap(({ path, css }) =>
       leafRules(css).flatMap(([selector, declarations]) => {
         const size = /font-size:\s*([^;!]+)/.exec(declarations)?.[1];
         if (!size || !fieldRule(selector)) return [];
-        return fontSizePx(size).some((px) => px > 16)
+        return fontSizePx(size, sheets).some((px) => px > floor)
           ? [`${path}: ${selector} (${size.trim()})`]
           : [];
       })
     );
+
+  it('only ever raises a field: no field rule is drawn above 16 px', () => {
     expect(fieldClasses.length).toBeGreaterThan(0);
-    expect(larger).toEqual([]);
+    expect(fieldsAbove(regularStylesheets, 16)).toEqual([]);
+  });
+
+  it('draws compact touch fields at the compact body size, and only raises them too', () => {
+    // The compact shell's body type is 17 px (U12), so its touch fields are
+    // drawn at 17 px rather than lowered to the regular 16 px floor.
+    expect(coarse).toMatch(
+      /\[data-shell='compact'\]\s+input:not\([^)]*\),\s*\[data-shell='compact'\]\s+select,\s*\[data-shell='compact'\]\s+textarea\s*\{\s*font-size:\s*17px !important;/
+    );
+    expect(fieldsAbove(stylesheets, 17)).toEqual([]);
   });
 });

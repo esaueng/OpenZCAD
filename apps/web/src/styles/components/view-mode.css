@@ -406,7 +406,7 @@
   font-size: var(--fs-mini);
   font-weight: var(--fw-medium);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .view-mode-rail-count {
@@ -581,7 +581,7 @@
   font-size: var(--fs-mini);
   font-weight: var(--fw-medium);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .measurement-dock-clear {
@@ -849,7 +849,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .measurement-dock-instruction {
