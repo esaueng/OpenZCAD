@@ -10,9 +10,10 @@ and sync use a native AuthenticationServices bridge, and the bundled offline
 `zcad-ipad://app` origin stays. It extends
 [ADR-012](ADR-012-email-code-identity.md) (sign-in) and
 [ADR-024](ADR-024-end-to-end-encrypted-projects.md) (passkey unlock). It
-changes neither one's model. The App Store identity, the domains and
-every deployment remain owner decisions; see
-[Owner decisions and authorizations](#owner-decisions-and-authorizations).
+changes neither one's model. The owner's decisions of 2026-11-26 (one app
+on `zcad.app`, its bundle ID, distribution, policy) are recorded in
+[Owner decisions and authorizations](#owner-decisions-and-authorizations);
+only the team ID is still open.
 
 ## Context
 
@@ -284,9 +285,10 @@ RP ID it uses:
 </array>
 ```
 
-A beta or TestFlight build uses `webcredentials:beta.zcad.app` instead.
-Development builds may add `?mode=developer` while a device is in developer
-mode. Only `webcredentials:` is declared. There is no `applinks:` and no
+There is no beta iPhone app (owner decision, 2026-11-26): TestFlight and
+App Store builds are the one stable app on `zcad.app`. Development builds
+may add `?mode=developer` while a device is in developer mode, against
+`zcad.app`. Only `webcredentials:` is declared. There is no `applinks:` and no
 `appclips:`. The app claims no web URLs and receives no universal links.
 
 #### RP IDs per realm
@@ -298,7 +300,7 @@ unlocks both Safari and the app:
 | Realm  | Web host        | Native RP ID / API host | Notes                                                                                                                                                                                            |
 | ------ | --------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | stable | `zcad.app`      | `zcad.app`              | Same host as the desktop API (`DESKTOP_API_HOSTNAME` in `apps/web/src/lib/deploymentRealm.ts`). Passkeys made on `stable.zcad.app` have that RP ID and do not work here (ADR-024, host binding). |
-| beta   | `beta.zcad.app` | `beta.zcad.app`         | A separate build configuration with its own bundle ID.                                                                                                                                           |
+| beta   | `beta.zcad.app` | none                    | No beta iPhone app (owner decision, 2026-11-26). The beta Worker does not serve the AASA.                                                                                                        |
 
 #### The `apple-app-site-association` file
 
@@ -317,9 +319,8 @@ The Worker serves `GET /.well-known/apple-app-site-association` with status
   checked against `^[A-Z0-9]{10}\.[A-Za-z0-9.-]+$`. When the variable is
   unset, the route answers 404.
 - **Exact hosts only.** The file is served only on the hosts the
-  entitlement names: `zcad.app` for stable and `beta.zcad.app` for beta.
-  The stable Worker also answers `stable.zcad.app`, and there the route
-  answers 404.
+  entitlement names: `zcad.app` only. The stable Worker also answers
+  `stable.zcad.app`, and there the route answers 404.
 - **No secrets.** The file holds no secret. Apple fetches it through its
   own CDN when the app is installed and periodically after that, so a
   change takes effect with a delay (unverified for how long; Apple's
@@ -327,13 +328,15 @@ The Worker serves `GET /.well-known/apple-app-site-association` with status
 
 | Environment                                   | AASA                                                                                                                                                                                                                                |
 | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| beta (`wrangler.jsonc`)                       | The beta app ID, once the owner provides it and authorizes the deploy.                                                                                                                                                              |
-| stable (`wrangler.stable.jsonc`)              | The release app ID, once the owner provides it and authorizes the deploy.                                                                                                                                                           |
+| beta (`wrangler.jsonc`)                       | Off: there is no beta iPhone app.                                                                                                                                                                                                   |
+| stable (`wrangler.stable.jsonc`)              | `<team ID>.app.esau.openzcad.ios` on `zcad.app`, deploy authorized (owner, 2026-11-26) once the team ID is supplied.                                                                                                                |
 | self-host (`wrangler.selfhost.example.jsonc`) | Off: the variable is unset. An App Store build's entitlement lists fixed domains, so it cannot use a self-hosted domain. A self-hoster with their own Apple team can build the app with their own entitlement and set the variable. |
-| local dev                                     | Off. Device testing uses a developer-mode entitlement against beta.                                                                                                                                                                 |
+| local dev                                     | Off. Device testing uses a developer-mode entitlement against `zcad.app`.                                                                                                                                                           |
 
-**Owner decisions:** the Apple Developer team ID, the bundle IDs (release
-and beta), and the realm-to-domain mapping above.
+**Owner decisions (2026-11-26):** one app, `app.esau.openzcad.ios`, on
+`zcad.app` only; `beta.zcad.app`, `stable.zcad.app` and preview hosts never
+serve the AASA. The team ID is still to be supplied; the Worker reads the
+app ID from `APPLE_WEBCREDENTIALS_APP_IDS`, so it is never hard-coded.
 
 ### 3. Session
 
@@ -374,8 +377,8 @@ The app reuses the desktop PKCE authorization unchanged in shape:
   an email code each time they sign the app in. That costs one code per
   app sign-in, which happens rarely because the refresh lasts 30 days. In
   return, a Safari session someone left signed in on a shared device
-  cannot approve the app silently. **Owner decision:** whether to accept
-  that cost, or allow the shared Safari session for one-tap approval.
+  cannot approve the app silently. **Owner decision (2026-11-26):** keep
+  the private sheet.
 
 #### How the session reaches requests
 
@@ -629,8 +632,9 @@ expired access token must not both refresh:
   registration input; to be confirmed against the SDK when implemented).
   The app's deployment target is 17.0. On iOS 17, `capabilities` reports
   `passkeys: 'unsupported'` and Settings offers the other methods, as on
-  the desktop. **Owner decision:** whether to raise the minimum to iOS 18
-  instead.
+  the desktop. **Owner decision (2026-11-26):** raise the app's minimum to
+  iOS 18, so every install supports passkey unlock and the no-passkey
+  branch is not needed.
 - **Gating device test.** A credential created in Safari on the RP ID must
   yield the same PRF output in the app, and the reverse. Native PRF must
   apply WebAuthn's salt transform, `SHA-256("WebAuthn PRF" ‖ 0x00 ‖ input)`,
@@ -745,26 +749,37 @@ size (plan, slice 13):
 
 ### Owner decisions and authorizations
 
-Needed before the PRs that depend on them:
+Decided by the owner on 2026-11-26:
 
-1. **Apple Developer team ID and bundle IDs** for the release and beta
-   builds, replacing `app.esau.openzcad.ipad.prototype`. Needed for the
-   entitlement and the AASA (PRs 2–4).
-2. **Domains:** confirm stable → `zcad.app` and beta → `beta.zcad.app` as RP
-   IDs and API hosts, and that `stable.zcad.app` is excluded.
-3. **Worker deploys:** authorization to set `APPLE_WEBCREDENTIALS_APP_IDS`
-   and deploy the AASA route to beta, then to stable. Self-host stays off.
-4. **App Store and TestFlight:** the submission itself, the export-compliance
-   answer (the app performs end-to-end encryption), and a sign-in path for
-   App Review. Email codes need a reviewer-reachable mailbox; ADR-012's QA
-   capability is beta-only. Whether guideline 4.8 (Sign in with Apple)
-   applies to first-party email-code sign-in is unverified and the owner's
-   call.
-5. **Policy choices made in this ADR:** an ephemeral sign-in sheet versus
-   the shared Safari session, and iOS 18 as the minimum for passkeys versus
-   gating passkeys by version.
-6. **Whether passkey sign-in is wanted later.** That is a separate ADR
-   amending ADR-012, not part of slice 13.
+1. **Bundle ID and name.** One app, `app.esau.openzcad.ios`, named
+   OpenZCAD, separate from the macOS `app.esau.openzcad`. It replaces
+   `app.esau.openzcad.ipad.prototype` for release.
+2. **Domains.** `zcad.app` only. There is no beta iPhone app, and
+   `beta.zcad.app`, `stable.zcad.app` and preview hosts never serve the AASA.
+3. **Worker deploy.** Authorized: set `APPLE_WEBCREDENTIALS_APP_IDS` and
+   serve the AASA on `zcad.app` once the Worker PR merges, so the
+   real-device passkey test can run against a development build. The file
+   lists only the iPhone app's ID, so it changes nothing for web users.
+   Self-host stays off.
+4. **Distribution.** Internal TestFlight for the owner's devices and the
+   device QA, then App Store submission.
+   - App Review can use the app fully offline. Sign-in is optional, and the
+     owner provides a review account whose email they control for the cloud
+     features.
+   - Guideline 4.8 (Sign in with Apple) covers third-party and social
+     login. First-party email codes are taken to fall outside it; the owner
+     confirms this at submission.
+   - **Export compliance:** the app uses only standard encryption (HTTPS,
+     and WebCrypto AES and ECDH for end-to-end encryption), declared as
+     exempt. The build sets `ITSAppUsesNonExemptEncryption` to false. This
+     is the owner's declaration to confirm with their own counsel; it is not
+     legal advice.
+5. **Policy.** A private sign-in sheet; iOS 18 as the app's minimum.
+6. **Passkey sign-in.** Not wanted. Passkeys stay for unlocking encryption
+   only, and sign-in stays on email codes (ADR-012).
+
+Still open: the Apple Developer **team ID**. It is needed only for the
+entitlement and the AASA value, from the Worker PR on.
 
 ## Consequences
 
