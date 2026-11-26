@@ -50,7 +50,8 @@ import {
   Settings,
   Trash2,
   TriangleAlert,
-  Users,
+  Share2,
+  UserRound,
   X,
   type LucideIcon
 } from 'lucide-react';
@@ -338,6 +339,8 @@ interface SharingTag {
   label: string;
   /** The card's word for it, kept to one short line. */
   short: string;
+  /** What the card's accessible name says of it, detail included. */
+  spoken: string;
   /** Its tooltip: with whom, or with what access. */
   detail: string;
 }
@@ -349,14 +352,13 @@ function countOf(n: number, one: string, many: string): string {
 /** The tag a shared project's card wears. */
 function sharingTagOf(sharing: ProjectSummarySharing): SharingTag {
   if (sharing.role !== 'owner') {
+    const access = sharing.role === 'editor' ? 'edit' : 'view';
     return {
       kind: 'with-you',
       label: 'Shared with you',
       short: 'With you',
-      detail:
-        sharing.role === 'editor'
-          ? 'Shared with you. You can edit it.'
-          : 'Shared with you. You can view it.'
+      spoken: `shared with you, you can ${access} it`,
+      detail: `Shared with you. You can ${access} it.`
     };
   }
   const reach = [
@@ -371,6 +373,7 @@ function sharingTagOf(sharing: ProjectSummarySharing): SharingTag {
     kind: 'by-you',
     label: 'Shared',
     short: 'Shared',
+    spoken: `shared by you ${reach.join(' and ')}`,
     detail: `You shared it ${reach.join(' and ')}.`
   };
 }
@@ -2411,7 +2414,13 @@ export function StartScreen({
               aria-label={sharingTag.label}
               title={sharingTag.detail}
             >
-              <Users size={11} aria-hidden="true" />
+              {/* Its own icon each way, so the list's icon-only tag (and
+                  a reader who cannot tell the hues apart) still says which. */}
+              {sharingTag.kind === 'with-you' ? (
+                <UserRound size={11} aria-hidden="true" />
+              ) : (
+                <Share2 size={11} aria-hidden="true" />
+              )}
               <span className="start-tile-share-tag-text" aria-hidden="true">
                 {sharingTag.short}
               </span>
@@ -2611,7 +2620,7 @@ export function StartScreen({
             ? NOT_ENCRYPTED_LABEL.toLowerCase()
             : null,
       recoveryOf !== null && !trashed ? `recovery copy of ${recoveryOf}` : null,
-      sharingTag ? sharingTag.label.toLowerCase() : null,
+      sharingTag ? sharingTag.spoken : null,
       localOnly && !trashed && !syncEntry && !conflicted
         ? 'on this device only'
         : null,

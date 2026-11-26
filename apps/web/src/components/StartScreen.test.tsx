@@ -1615,6 +1615,17 @@ describe('StartScreen shelf filters, order and layout', () => {
       'title',
       'You shared it with 2 people and by 1 live link.'
     );
+    // The card's own name carries the detail the tooltip shows.
+    expect(
+      document.querySelector('[data-tile-id="project_b"] .start-tile-open')
+    ).toHaveAccessibleName(
+      expect.stringContaining('shared with you, you can edit it')
+    );
+    expect(
+      document.querySelector('[data-tile-id="project_a"] .start-tile-open')
+    ).toHaveAccessibleName(
+      expect.stringContaining('shared by you with 2 people and by 1 live link')
+    );
   });
 
   it('offers no Shared tab when nothing is shared', () => {

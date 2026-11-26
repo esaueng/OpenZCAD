@@ -1619,14 +1619,15 @@
   color: var(--color-accent);
 }
 
-/* A shared project says so over its preview's top-left corner, the one the
-   flags leave free: one short word on one line, "With you" in the accent
-   (shared with you), "Shared" quieter (yours, with members or a live link).
-   The tooltip and accessible name carry the rest. The list's small preview
-   keeps only the icon. */
+/* A shared project says so over its preview's bottom-left corner, clear of
+   the flags (top right) and the select box (top left): one short word on
+   one line, "With you" in the accent
+   (shared with you), "Shared" quieter (yours, with members or a live link),
+   each with its own icon. The tooltip and accessible name carry the rest.
+   The list's small preview keeps only the icon. */
 .start-tile-share-tag {
   position: absolute;
-  top: 6px;
+  bottom: 6px;
   left: 6px;
   z-index: 1;
   display: inline-flex;
@@ -1642,7 +1643,8 @@
   font-size: 11px;
   line-height: 14px;
   white-space: nowrap;
-  pointer-events: none;
+  /* Hit-testable so its tooltip shows; a click still opens the card. */
+  cursor: inherit;
 }
 
 .start-tile-share-tag.is-with-you {
@@ -1664,7 +1666,7 @@
 }
 
 .start-tile-grid.is-list .start-tile-share-tag {
-  top: 2px;
+  bottom: 2px;
   left: 2px;
   padding: 2px;
 }
