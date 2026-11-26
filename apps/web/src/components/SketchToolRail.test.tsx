@@ -141,6 +141,37 @@ describe('SketchToolRail', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('keeps a constraint’s shown geometry when the palette closes and opens', async () => {
+    const user = userEvent.setup();
+    const name = 'Show geometry for constraint: Horizontal · Line 1';
+    const { props, rerender } = renderRail({
+      paletteOpen: true,
+      constraints: [
+        {
+          constraintId: 'scon_1',
+          label: 'Horizontal · Line 1',
+          editable: false,
+          targets: [{ objectId: 'ent_1', label: 'Line 1' }]
+        }
+      ]
+    });
+    await user.click(screen.getByRole('button', { name }));
+    expect(screen.getByRole('button', { name })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+    rerender(<SketchToolRail {...props} paletteOpen={false} />);
+    expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    rerender(<SketchToolRail {...props} paletteOpen />);
+    expect(screen.getByRole('button', { name })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Select geometry: Line 1' })
+    ).toBeVisible();
+  });
+
   it('explains unavailable geometry instead of offering a stale target', async () => {
     const user = userEvent.setup();
     renderRail({

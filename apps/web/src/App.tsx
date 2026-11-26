@@ -40090,11 +40090,10 @@ export function App() {
       />
     ) : null;
   // The compact selection chip names a sketch's pick: the entity, or how
-  // many are picked.
-  const compactSketchSelectedIds =
-    interaction.mode === 'sketch'
-      ? sketchSelectedObjectIds(interaction.session)
-      : [];
+  // many are picked. Only live entities count, as Copy reads them: an undo
+  // can take picked entities away (a paste undone) while the session still
+  // names them.
+  const compactSketchSelectedIds = sketchModeState?.selectedObjectIds ?? [];
   const compactSketchSelectionLabel =
     compactSketchSelectedIds.length > 1
       ? `${compactSketchSelectedIds.length} entities`
@@ -40127,9 +40126,7 @@ export function App() {
           {...(interaction.session.modifyOptions
             ? { modifyOptions: interaction.session.modifyOptions }
             : {})}
-          selectedObjectCount={
-            sketchSelectedObjectIds(interaction.session).length
-          }
+          selectedObjectCount={compactSketchSelectedIds.length}
           relationSelection={relationSelection}
           splineInProgress={
             interaction.session.drawing && interaction.session.tool === 'spline'

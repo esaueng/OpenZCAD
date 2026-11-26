@@ -821,6 +821,11 @@ export function SketchToolRail({
   const modifyTriggerRef = useRef<HTMLButtonElement>(null);
   const modifyGroupId = useId();
   const reviewRequested = useRef(false);
+  // The constraint whose geometry is shown: held here, not in the palette's
+  // body, so it survives the palette closing and opening again.
+  const [inspectedConstraintId, setInspectedConstraintId] = useState<
+    string | null
+  >(null);
   const focusConstraints = () => {
     constraintGroupRef.current?.focus();
     constraintGroupRef.current?.scrollIntoView?.({ block: 'nearest' });
@@ -1606,6 +1611,8 @@ export function SketchToolRail({
           solving={solving}
           referenceDimensions={referenceDimensions}
           constraintGroupRef={constraintGroupRef}
+          inspectedConstraintId={inspectedConstraintId}
+          onInspectConstraint={setInspectedConstraintId}
           onSettings={onSettings}
           onEditConstraint={onEditConstraint}
           onDeleteConstraint={onDeleteConstraint}
@@ -1700,6 +1707,13 @@ export interface SketchPaletteContentProps {
   /** The constraint group, which Review constraints focuses. */
   constraintGroupRef?: Ref<HTMLFieldSetElement>;
   /**
+   * The constraint whose geometry is shown, held by the owner so it
+   * outlives the body (the rail's palette closing, the sheet's page
+   * popping). Without it the body holds its own, lost when it unmounts.
+   */
+  inspectedConstraintId?: string | null;
+  onInspectConstraint?(constraintId: string | null): void;
+  /**
    * The keyboard's snapping keys under the palette; off where no keyboard
    * is assumed (the compact sheet).
    */
@@ -1729,6 +1743,8 @@ export function SketchPaletteContent({
   solving,
   referenceDimensions,
   constraintGroupRef,
+  inspectedConstraintId: inspectedConstraintIdProp,
+  onInspectConstraint,
   keyboardHelp = true,
   onSettings,
   onEditConstraint,
@@ -1736,9 +1752,18 @@ export function SketchPaletteContent({
   onSelectConstraintObject,
   onSelectFreeEntity
 }: SketchPaletteContentProps) {
-  const [inspectedConstraintId, setInspectedConstraintId] = useState<
+  const [inspectedConstraintIdState, setInspectedConstraintIdState] = useState<
     string | null
   >(null);
+  const controlled = inspectedConstraintIdProp !== undefined;
+  const inspectedConstraintId = controlled
+    ? inspectedConstraintIdProp
+    : inspectedConstraintIdState;
+  const toggleInspected = (constraintId: string) => {
+    const next = inspectedConstraintId === constraintId ? null : constraintId;
+    if (!controlled) setInspectedConstraintIdState(next);
+    onInspectConstraint?.(next);
+  };
   const freeEntities =
     solveStatus?.definedState === 'under-defined'
       ? solveStatus.freeEntities
@@ -1950,11 +1975,7 @@ export function SketchPaletteContent({
                       aria-label={`Show geometry for constraint: ${label}`}
                       aria-expanded={inspectedConstraintId === constraintId}
                       disabled={solving}
-                      onClick={() =>
-                        setInspectedConstraintId((current) =>
-                          current === constraintId ? null : constraintId
-                        )
-                      }
+                      onClick={() => toggleInspected(constraintId)}
                     >
                       <ScanSearch size={14} aria-hidden="true" />
                     </button>

@@ -45,6 +45,7 @@ import {
   sketchPatternSetHint
 } from '../../lib/sketch/edits';
 import { DEFAULT_SKETCH_OFFSET_OPTIONS } from '../../lib/sketch/offset';
+import { OWN_ENTER_ATTRIBUTE } from '../../lib/exactEntryShortcut';
 import { CONSTRAINT_ICONS } from '../constraintIcons';
 import {
   CIRCLE_MODES,
@@ -63,6 +64,15 @@ import {
 } from '../SketchToolRail';
 import { SKETCH_SELECTION_PAGE, useCompactTray } from './compactSlots';
 import { TrayPage, useTrayPagesLeaveWithTray } from './CompactTray';
+
+/**
+ * Marks a tray control whose Enter is its own: the viewer leaves Enter on
+ * it to the control rather than finishing a spline in progress. The draw
+ * tools do not carry it: Enter on the tool just tapped finishes the work in
+ * progress, as on the rail (U01). The sheet's pages and the stage's chips
+ * already own their Enter through the containers they land in.
+ */
+const OWN_ENTER = { [OWN_ENTER_ATTRIBUTE]: '' };
 
 /** The sketch tray's pages, by key. */
 const TOOLS_PAGE = 'sketch-tools';
@@ -256,6 +266,7 @@ function TypeChooser<T extends string>({
         type="button"
         className="compact-tray-button"
         aria-label="Back to the sketch tools"
+        {...OWN_ENTER}
         onClick={onClose}
       >
         <ChevronLeft aria-hidden="true" />
@@ -265,6 +276,7 @@ function TypeChooser<T extends string>({
         className="compact-sketch-tools compact-sketch-types"
         role="radiogroup"
         aria-label={label}
+        {...OWN_ENTER}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -418,6 +430,18 @@ export function CompactSketchTray(props: CompactSketchTrayProps) {
     else if (!textShown && was && tray?.page === TEXT_PAGE) tray.closePage();
   }, [textShown, tray]);
 
+  // Text, tapped again while a draft is composed, brings its card back: the
+  // sheet may have been closed over it, and the draft waits on it.
+  const openText = () => {
+    if (page !== TEXT_PAGE) tray?.openPage(TEXT_PAGE, 'Text');
+  };
+
+  // The constraint whose geometry the palette shows, held here so the page
+  // closing and opening again keeps it, as the rail's palette does.
+  const [inspectedConstraintId, setInspectedConstraintId] = useState<
+    string | null
+  >(null);
+
   const openTools = () =>
     page === TOOLS_PAGE
       ? tray?.closePage()
@@ -463,7 +487,9 @@ export function CompactSketchTray(props: CompactSketchTrayProps) {
       // An armed modify tool picks through Select, which the rail does not
       // light as a second live tool.
       active={tool === id && !(id === 'select' && pendingEdit)}
-      onPress={() => props.onTool(id)}
+      onPress={() =>
+        id === 'text' && textShown ? openText() : props.onTool(id)
+      }
     />
   );
 
@@ -650,6 +676,7 @@ export function CompactSketchTray(props: CompactSketchTrayProps) {
             className="compact-tray-button is-confirm"
             aria-label="Finish spline"
             title="Finish the spline through the points placed"
+            {...OWN_ENTER}
             onClick={props.onFinishSpline}
           >
             <Check aria-hidden="true" />
@@ -664,6 +691,7 @@ export function CompactSketchTray(props: CompactSketchTrayProps) {
           aria-label="All sketch tools"
           aria-expanded={page === TOOLS_PAGE}
           data-tray-item={TOOLS_PAGE}
+          {...OWN_ENTER}
           onClick={openTools}
         >
           <LayoutGrid aria-hidden="true" />
@@ -672,7 +700,15 @@ export function CompactSketchTray(props: CompactSketchTrayProps) {
       {relationRow}
       <TrayPage page={TOOLS_PAGE} onStageCovered={onStageCovered}>
         <div className="compact-sketch-page">
-          <SketchToolsPage {...props} onDone={backToCanvas} />
+          <SketchToolsPage
+            {...props}
+            palette={{
+              ...props.palette,
+              inspectedConstraintId,
+              onInspectConstraint: setInspectedConstraintId
+            }}
+            onDone={backToCanvas}
+          />
         </div>
       </TrayPage>
       <TrayPage page={SKETCH_SELECTION_PAGE} onStageCovered={onStageCovered}>
@@ -696,20 +732,39 @@ export function CompactSketchTray(props: CompactSketchTrayProps) {
   );
 }
 
-/** Select all, Copy and Paste: the keyboard's Ctrl+A, C and V by touch. */
-function ClipboardRows({
-  selectedObjectCount,
+/**
+ * Why Select all is unavailable, or null. Ctrl+A is ignored while a modify
+ * tool or a relation collects its picks, which a selection would not feed;
+ * the row says so rather than doing nothing.
+ */
+export function sketchSelectAllReason({
   canConstrain,
-  onSelectAll,
-  onCopy,
-  onPaste
-}: CompactSketchTrayProps) {
+  pendingEdit,
+  pendingConstraint
+}: Pick<
+  CompactSketchTrayProps,
+  'canConstrain' | 'pendingEdit' | 'pendingConstraint'
+>): string | null {
+  if (!canConstrain) return 'Draw an entity first.';
+  const pending = pendingEdit
+    ? SKETCH_EDIT_TOOL_SPECS.find(({ kind }) => kind === pendingEdit.kind)
+    : pendingConstraint
+      ? CONSTRAINT_TOOL_SPECS.find(
+          ({ kind }) => kind === pendingConstraint.kind
+        )
+      : undefined;
+  return pending ? `Finish or cancel ${pending.label} first.` : null;
+}
+
+/** Select all, Copy and Paste: the keyboard's Ctrl+A, C and V by touch. */
+function ClipboardRows(props: CompactSketchTrayProps) {
+  const { selectedObjectCount, onSelectAll, onCopy, onPaste } = props;
   return (
     <>
       <ActionRow
         label="Select all"
         icon={<SquareMousePointer size={18} />}
-        disabledReason={canConstrain ? null : 'Draw an entity first.'}
+        disabledReason={sketchSelectAllReason(props)}
         onPress={onSelectAll}
       />
       <ActionRow

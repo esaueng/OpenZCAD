@@ -12,7 +12,12 @@ import { AppShell } from '../AppShell';
 import CompactModeTray, {
   type CompactSketchTrayProps
 } from './CompactModeTray';
-import { contextualRelations, SKETCH_LONG_PRESS_MS } from './CompactSketchTray';
+import { controlOwnsEnter } from '../../lib/exactEntryShortcut';
+import {
+  contextualRelations,
+  SKETCH_LONG_PRESS_MS,
+  sketchSelectAllReason
+} from './CompactSketchTray';
 import type { CompactChromeProps, CompactSketchChrome } from './compactSlots';
 
 function chrome(
@@ -448,5 +453,160 @@ describe('the compact sketch', () => {
       shell(<CompactModeTray mode="sketch" {...props({ tool: 'select' })} />)
     );
     await waitFor(() => expect(detent()).toBe('peek'));
+  });
+
+  it('keeps Enter on its own controls while a spline is placed', async () => {
+    const p = props({
+      tool: 'spline',
+      splineInProgress: true,
+      relationSelection: { kind: 'line', fitting: ['horizontal'] }
+    });
+    render(shell(<CompactModeTray mode="sketch" {...p} />));
+    const row = await tools();
+    // The viewer finishes a spline on Enter unless the focused control owns
+    // it: All sketch tools opened nothing and finished the spline instead.
+    const all = within(row).getByRole('button', { name: 'All sketch tools' });
+    expect(controlOwnsEnter(all)).toBe(true);
+    expect(
+      controlOwnsEnter(
+        within(row).getByRole('button', { name: 'Finish spline' })
+      )
+    ).toBe(true);
+    const relations = await screen.findByRole('toolbar', { name: 'Relations' });
+    expect(
+      controlOwnsEnter(
+        within(relations).getByRole('button', { name: 'Horizontal' })
+      )
+    ).toBe(true);
+    // A draw tool leaves Enter to the work in progress, as the rail does.
+    expect(
+      controlOwnsEnter(within(row).getByRole('button', { name: 'Line' }))
+    ).toBe(false);
+    // A type chooser's row is navigation of its own.
+    fireEvent.click(within(row).getByRole('button', { name: /^Curve:/ }));
+    const types = within(row).getByRole('radiogroup', { name: 'Curve type' });
+    for (const radio of within(types).getAllByRole('radio')) {
+      expect(controlOwnsEnter(radio)).toBe(true);
+    }
+    expect(
+      controlOwnsEnter(
+        within(row).getByRole('button', { name: 'Back to the sketch tools' })
+      )
+    ).toBe(true);
+    fireEvent.click(
+      within(row).getByRole('button', { name: 'Back to the sketch tools' })
+    );
+    await openAllSketchTools();
+    const page = within(sheet() as HTMLElement);
+    for (const name of ['Construction', 'Select all', 'Trim', 'Horizontal']) {
+      expect(controlOwnsEnter(page.getByRole('button', { name })), name).toBe(
+        true
+      );
+    }
+  });
+
+  it('brings a composed text’s card back when Text is tapped again', async () => {
+    const p = props({
+      tool: 'text',
+      textCard: <form aria-label="Sketch text" />
+    });
+    render(shell(<CompactModeTray mode="sketch" {...p} />));
+    expect(
+      await screen.findByRole('form', { name: 'Sketch text' })
+    ).toBeVisible();
+    await waitFor(() => expect(detent()).toBe('half'));
+    // Closed over the draft: the draft stays, and so must a way back to it.
+    fireEvent.click(screen.getByRole('button', { name: 'Close sheet' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('form', { name: 'Sketch text' })).toBeNull()
+    );
+    fireEvent.click(
+      within(await tools()).getByRole('button', { name: 'Text' })
+    );
+    expect(
+      await screen.findByRole('form', { name: 'Sketch text' })
+    ).toBeVisible();
+    await waitFor(() => expect(detent()).toBe('half'));
+    // The tool is not re-armed: that keeps the draft, but says nothing.
+    expect(p.onTool).not.toHaveBeenCalled();
+    // Back, then Text: the same.
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('form', { name: 'Sketch text' })).toBeNull()
+    );
+    fireEvent.click(
+      within(await tools()).getByRole('button', { name: 'Text' })
+    );
+    expect(
+      await screen.findByRole('form', { name: 'Sketch text' })
+    ).toBeVisible();
+  });
+
+  it('holds Select all while a modify tool or relation collects its picks', async () => {
+    const p = props({ pendingEdit: { kind: 'offset', picks: [] } });
+    const { rerender } = render(
+      shell(<CompactModeTray mode="sketch" {...p} />)
+    );
+    await openAllSketchTools();
+    const selectAll = screen.getByRole('button', { name: 'Select all' });
+    // Ctrl+A does nothing here; the row says why rather than doing nothing.
+    expect(selectAll).toBeDisabled();
+    expect(selectAll).toHaveAttribute(
+      'title',
+      'Finish or cancel Offset first.'
+    );
+    rerender(
+      shell(
+        <CompactModeTray
+          mode="sketch"
+          {...props({
+            pendingConstraint: { kind: 'parallel', picks: [] } as never
+          })}
+        />
+      )
+    );
+    expect(screen.getByRole('button', { name: 'Select all' })).toBeDisabled();
+    rerender(shell(<CompactModeTray mode="sketch" {...props()} />));
+    expect(screen.getByRole('button', { name: 'Select all' })).toBeEnabled();
+    expect(
+      sketchSelectAllReason({
+        canConstrain: false,
+        pendingEdit: null,
+        pendingConstraint: null
+      })
+    ).toBe('Draw an entity first.');
+  });
+
+  it('keeps a constraint’s shown geometry when its page closes and opens', async () => {
+    const p = props({
+      palette: {
+        ...props().palette,
+        constraints: [
+          {
+            constraintId: 'c1',
+            label: 'Horizontal · Line 1',
+            editable: false,
+            targets: [{ objectId: 'e1', label: 'Line 1' }]
+          }
+        ]
+      }
+    });
+    render(shell(<CompactModeTray mode="sketch" {...p} />));
+    await openAllSketchTools();
+    const name = 'Show geometry for constraint: Horizontal · Line 1';
+    fireEvent.click(screen.getByRole('button', { name }));
+    expect(screen.getByRole('button', { name })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Close sheet' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name })).toBeNull()
+    );
+    await openAllSketchTools();
+    expect(screen.getByRole('button', { name })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
   });
 });

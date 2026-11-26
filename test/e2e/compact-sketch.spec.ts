@@ -595,4 +595,79 @@ test.describe('the compact sketch', () => {
       }
     }
   );
+
+  test('keeps Enter, a text draft and the pick true to what is on the sketch', async ({
+    page
+  }) => {
+    test.setTimeout(180_000);
+    await openCompact(page, SIZES[0], 'Compact sketch keys');
+    await sketchOnTop(page);
+    await tapTool(page, 'Rectangle');
+    await tapPlane(page, [
+      [-10, -6],
+      [10, 6]
+    ]);
+    await tapTool(page, 'Select');
+    const drawn = await expectMoreThan(page, 0);
+
+    // A paste undone takes its entities, and so the pick, away: the chip
+    // and Copy read the live pick, not the ids the session still names.
+    await openAllSketchTools(page);
+    await (await pageControl(page, 'Select all')).tap();
+    await (await pageControl(page, 'Copy')).tap();
+    await (await pageControl(page, 'Paste')).tap();
+    await expectEntities(page, drawn * 2);
+    const chip = page.getByRole('button', { name: /^Selection: / });
+    await expect(chip).toHaveAccessibleName(`Selection: ${drawn} entities`);
+    await sheet(page).getByRole('button', { name: 'Back', exact: true }).tap();
+    await page.getByRole('button', { name: 'Undo', exact: true }).tap();
+    await expectEntities(page, drawn);
+    await expect(chip).toHaveCount(0);
+    await openAllSketchTools(page);
+    await expect(await pageControl(page, 'Copy')).toBeDisabled();
+    await sheet(page).getByRole('button', { name: 'Back', exact: true }).tap();
+
+    // Enter on All sketch tools opens its page; it does not finish the
+    // spline being placed.
+    const curve = await tapTool(page, /^Curve:/);
+    await curve.tap();
+    await sketchTools(page)
+      .getByRole('radiogroup', { name: 'Curve type' })
+      .getByRole('radio', { name: 'Fit spline' })
+      .tap();
+    await tapPlane(page, [
+      [-22, 24],
+      [-12, 30],
+      [-2, 24]
+    ]);
+    const finishSpline = sketchTools(page).getByRole('button', {
+      name: 'Finish spline'
+    });
+    await expect(finishSpline).toBeVisible();
+    await sketchTools(page)
+      .getByRole('button', { name: 'All sketch tools' })
+      .focus();
+    await page.keyboard.press('Enter');
+    await expect(
+      sheet(page).getByRole('heading', { name: 'Sketch', exact: true })
+    ).toBeVisible();
+    expect(await entityCount(page)).toBe(drawn);
+    await sheet(page).getByRole('button', { name: 'Back', exact: true }).tap();
+    await expect(finishSpline).toBeVisible();
+    await finishSpline.tap();
+    await expectEntities(page, drawn + 1);
+
+    // A text draft outlives its card closing, and Text brings it back.
+    await tapTool(page, 'Text');
+    const card = page.getByRole('form', { name: 'Place text' });
+    await expect(card).toBeVisible();
+    await card.getByLabel('Text', { exact: true }).fill('AB');
+    await sheet(page)
+      .getByRole('button', { name: 'Close sheet', exact: true })
+      .tap();
+    await expect(card).toBeHidden();
+    await tapTool(page, 'Text');
+    await expect(card).toBeVisible();
+    await expect(card.getByLabel('Text', { exact: true })).toHaveValue('AB');
+  });
 });
