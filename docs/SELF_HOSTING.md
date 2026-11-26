@@ -326,8 +326,9 @@ delete` as part of an update.
 
 OpenZCAD can encrypt project data in the browser before it reaches your
 Worker ([ADR-024](adrs/ADR-024-end-to-end-encrypted-projects.md)). Every
-encryption flag ships closed, in the official deployment and in
-`wrangler.selfhost.example.jsonc`. Read this section before turning any of
+encryption flag ships closed in `wrangler.selfhost.example.jsonc`. (The
+official beta and stable deployments enable keys, encrypted projects and
+migration, but not `E2EE_DEFAULT_ON`.) Read this section before turning any of
 them on: you cannot recover encrypted content from server storage for a user
 who loses every unlock method. Solo projects are then lost apart from local
 copies; a shared project's remaining members can still open and export it

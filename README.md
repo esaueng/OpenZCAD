@@ -1,33 +1,37 @@
 # OpenZCAD
 
-OpenZCAD is a browser-first parametric CAD workspace: exact B-rep solid modeling, a replayable feature history, and direct on-model manipulation, with no desktop install. The canonical project document stores named parameters, sketches, and an ordered command history, and a WebAssembly solid kernel rebuilds exact geometry in a background worker. Projects live on your device first; an optional account adds cloud projects, sharing, and live collaboration.
+OpenZCAD is a browser-first parametric CAD workspace: exact B-rep solid modeling, a replayable feature history, and direct on-model manipulation, with no install. The canonical project document stores named parameters, sketches, and an ordered command history, and a WebAssembly solid kernel rebuilds exact geometry in a background worker. Projects live on your device first; an optional account adds cloud projects, sharing, live collaboration, and end-to-end encryption.
 
-Use the hosted beta at [zcad.app](https://zcad.app/).
+Use it at [zcad.app](https://zcad.app/) (stable), or try the newest changes at [beta.zcad.app](https://beta.zcad.app/).
 
 > [!WARNING]
 > OpenZCAD is under active development and should be used at your own risk.
-> Features and behavior may change without notice. Do not rely on the hosted
-> beta as the only copy of important work: cloud projects and account data may
-> be reset, migrated, or not carried forward to a future production release.
-> Keep independent local or exported backups of anything important.
+> Features and behavior may change without notice. Do not rely on a hosted
+> channel as the only copy of important work: cloud projects and account data
+> may be reset, migrated, or not carried forward to a future release. Keep
+> independent local or exported backups of anything important.
 
 ![OpenZCAD Build workspace with the Mounting Bracket demo, the Objects panel docked left and the Parameters panel docked right](docs/design/readme-mounting-bracket.png)
 
-_Current Build workspace in the default Essentials panel layout, captured 20 October 2026 from the built-in demos running locally._
+_Build workspace in the default Essentials panel layout, captured 20 October 2026 from the built-in demos running locally._
 
 ## Highlights
 
-**Exact parametric modeling.** Primitives, multi-profile sketch/extrude, revolve, loft, sweep, booleans, transforms, mirror-copy, shell, solid offset, fillet, chamfer, and linear/circular patterns, built on the [Remus](https://github.com/esaueng/remus) exact kernel. Sketches carry lines, arcs, circles, rectangles, polygons, and text set in bundled font files. New face-attached sketches re-resolve an exact lineage reference at their history position instead of freezing a viewport plane. Reusable offset planes and parallel midplanes support sketches, Split, and Mirror. Parametric expressions, ordered feature history with editing, suppression and rollback, deterministic replay, transactions, and undo/redo.
+**Exact parametric modeling.** Primitives, multi-profile sketch/extrude (including through-all cuts), revolve, loft, sweep and helical sweep, ribs, booleans, transforms, mirror, shell, solid offset, draft, thicken, fillet, chamfer, holes, linear/circular patterns, wrap/emboss onto cylinders and cones, and modeled screw threads, built on the [Remus](https://github.com/esaueng/remus) exact kernel. Standard parts generate parametric ISO and ANSI screws, nuts, washers, inserts, dowel pins and bearings. Datum planes, axes, points and coordinate systems support sketches, Split and Mirror. Sketches carry lines, arcs, circles, rectangles, polygons, and text, with a full constraint set, optional auto-constraining while drawing, driving and reference dimensions, and truthful degree-of-freedom status. Parametric expressions, configurations (a variant table over parameters, suppression and visibility), ordered history with editing, suppression and rollback, deterministic replay, and undo/redo.
 
-**Direct manipulation.** Model directly on the geometry: drag a face to offset it, drag a sketch region into a solid, drag an edge to grow a fillet or chamfer, move/rotate bodies with a snapping gizmo — every drag pairs with exact numeric entry. In-viewport sketching includes snapping, live dimensions, direct tools for every schema-backed constraint kind, and placed driving distance/angle dimensions whose values accept named-parameter expressions. Box select, selection filters, a right-click menu, and an Esc ladder round out the interaction model.
+**Direct manipulation.** Model on the geometry: drag a face to offset it, drag a sketch region into a solid, drag an edge to grow a fillet or chamfer, move/rotate bodies with a snapping gizmo — every drag pairs with exact numeric entry. Every Build tool runs as picks in the model with an exact preview. Box select, selection filters, a right-click menu, measurement, clearance and interference checks, and an Esc ladder round out the interaction model.
 
-**A viewport-first workspace.** Floating controls leave the model at the centre: a compact tool rail on the left, view and inspection instruments on the right, and command search along the bottom. **Objects**, **History**, **Parameters**, **Revisions**, and **Diagnostics** are independent model panels with buttons on the right-hand rail. A rail press opens a panel unpinned beside the rail; **Pin** docks it and **Close** remembers where it was. Drag a panel's header, or its rail icon, to stack it in a column at either screen edge, start a new column, or float it as a movable, resizable window over the model — a slot preview shows where it will land — and its **Move** menu does the same from the keyboard. **Panel layout** on the rail picks a layout preset (**Essentials**, the default, docks Objects left and Parameters right) and holds **Hide all panels** (`Ctrl/Cmd+\`), **Lock layout**, **Compact rows**, and the panel width. The layout is remembered per device; on a stage 720 px wide or less, panels open one at a time instead of docking. Objects lists bodies and sketches with selection and visibility controls. **Build** exposes the full modeling tools, **Tweak** focuses on parameters and export, and **View** presents the model for inspection. `Ctrl/Cmd+K` opens command search; `Ctrl/Cmd+,` opens Settings over the workspace. The optional [AI assistant](#ai-assistant-experimental) shares the bottom prompt and proposes changes for review before you apply them.
+**A viewport-first workspace.** Five modes share one document: **View** to inspect, **Tweak** to adjust exposed parameters and export, **Build** for the full modeling tools, **Assemble** for components and joints, and **Draw** for drawing sheets. Floating controls keep the model at the centre. **Objects**, **History**, **Parameters**, **Revisions**, and **Diagnostics** are independent panels that dock in columns at either edge or float as windows, with layout presets remembered per device. `Ctrl/Cmd+K` opens command search; `Ctrl/Cmd+,` opens Settings over the workspace. Phones, iPad Safari (touch and Apple Pencil) and 3Dconnexion SpaceMouse navigation (Chrome and Edge) are supported in part.
 
-**One kernel, one topology language.** Remus builds every document, imported STEP included. Remus publishes exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md), [ADR-020](docs/adrs/ADR-020-remus-browser-kernel.md)). Verified primitive, sweep, transform, boolean, blend, and pattern lineage can survive upstream edits within supported subsets. Where complete evolution is not proved, references remain hash-only; ambiguous or unsupported resolution fails closed.
+**Assemblies and drawings.** Assemble grounds, joins and moves bodies with typed joints, animates them between limits, plays keyframed motion studies, and produces a deterministic bill of materials, exploded views, and pairwise interference. Draw places associative views, sections and details, dimensions, hole callouts, notes, title blocks, geometric tolerancing (ASME Y14.5 and ISO GPS symbols), and one-click auto-dimensioning, with PDF and DXF output.
 
-**Import and export.** Editable STEP import is stored in replayable document history and rebuilt exactly, honouring the file's own declared length and plane-angle units. Selecting an exact imported face shows its surface type and area; the shipped direct-edit subset includes validated through-hole and cylindrical-face edits. A bounded exact recognizer includes blind-hole, counterbore, countersink, boss, pocket, and taper detectors; the live imported-body pass publishes non-overlapping revolution proofs, including counterbores with a conical entry chamfer. Auto-parameterize coordinates the three hole families; the other proof families remain read-only. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL, 3MF, OBJ, glTF binary and PLY imports become mesh bodies. A migration path imports a [Shapr3D project paired with its STEP export](docs/shapr-import.md), with explicit limits on recovered history. All geometry and exports run in browser workers.
+**Import and export.** Editable STEP and IGES import is stored in replayable history and rebuilt exactly, honouring the file's declared units; STEP keeps names, colours and assembly structure. Imported faces support a validated direct-edit subset, and a bounded recognizer finds holes, counterbores, countersinks, bosses, pockets and tapers. STL, 3MF, OBJ, glTF binary and PLY import as mesh bodies. Export STEP, IGES, STL, 3MF, PLY, sketch DXF and SVG; send a print straight to a slicer, or lay parts flat for a CNC cut layout. **File › Units** converts a whole document's stored units. A migration path imports a [Shapr3D project paired with its STEP export](docs/shapr-import.md). All geometry and exports run in browser workers.
 
-**Local-first, optionally cloud.** IndexedDB autosave works with no account, and **File → Export project** writes a complete `.openzcad` backup at any time (see [Project backups](#project-backups)). When local and cloud copies diverge, OpenZCAD preserves both and asks which one to keep instead of guessing from versions or timestamps. Optional passwordless profiles unlock cloud projects, synced settings, project shelves that pin, reorder, archive, and recycle across devices, and live per-project collaboration with owner/editor/viewer roles and per-browser edit leases shared by one editing account. Owners can mint revocable share links that let anyone open the model, adjust its parameters, and export without an account. Conflict recovery always writes a local recovery project before choosing the room version, keeping the leased local version, or saving the local version as a copy. Account settings show storage in use and can erase account data on request. The checked-in beta configuration enables sharing and lease enforcement for authenticated accounts; the local development configuration keeps them off.
+**Local-first, optionally cloud, optionally encrypted.** IndexedDB autosave works with no account, and **File → Export project** writes a complete `.openzcad` backup at any time (see [Project backups](#project-backups)). Optional passwordless accounts add cloud projects, named save states with previews, synced settings and project shelves, live collaboration with owner/editor/viewer roles and comments pinned to the model, and share links that let anyone view or tweak a model, or download its drawings, without an account. Projects can be [end-to-end encrypted](docs/adrs/ADR-024-end-to-end-encrypted-projects.md): the browser encrypts documents, revisions, sources, names, thumbnails and exports, unlocked by a passkey or recovery key, so the server stores only ciphertext and the metadata it needs to route it. When local and cloud copies diverge, OpenZCAD preserves both and asks which to keep.
+
+**Automation.** The optional [AI assistant](docs/ai-assistant.md) turns plain-language requests into reviewable patches you preview before applying. The local [agent API](apps/agent-bridge/README.md) lets an agent of your choice edit a project file over the Model Context Protocol, and [history text and scripts](docs/scripting.md) print the feature history as editable text and run custom features. All three go through the same validation and exact preflight as a manual edit.
+
+**One kernel, one topology language.** Remus builds every document, imported STEP included, and publishes exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md), [ADR-020](docs/adrs/ADR-020-remus-browser-kernel.md)). Verified lineage survives upstream edits within supported subsets; where it is not proved, references remain hash-only, and ambiguous or unsupported resolution fails closed.
 
 <p align="center">
   <img src="docs/design/readme-pipe-flange.png" width="49%" alt="Pipe Flange in Tweak mode — exposed dimensions beside a revolved flange and bolt circle" />
@@ -43,16 +47,18 @@ _Pipe Flange in Tweak mode (left) and Heat Sink in View mode (right)._
 
 _Model panels: History and Revisions stacked in a floating window (left), and the Panel layout menu (right)._
 
-## Roadmap
+## Release channels
 
-See the [master roadmap](ROADMAP.md) for delivered capabilities, the ordered
-work queue, completion criteria and links to detailed specifications.
+| Channel | Address                                 | Deploys from                       |
+| ------- | --------------------------------------- | ---------------------------------- |
+| Stable  | [zcad.app](https://zcad.app/)           | the `stable` branch, when promoted |
+| Beta    | [beta.zcad.app](https://beta.zcad.app/) | `main`, on every merge             |
+
+The channels share code but not accounts, projects, or sessions; the word beside the wordmark names the one you are on. See [Release channels](docs/release-channels.md). The app version (`YYYY.RELEASE.PATCH`) and the pinned kernel version are shown under **Settings → Advanced → About this build** ([App versioning](docs/versioning.md)).
 
 ## Quick start
 
-See [Contributing](CONTRIBUTING.md) for development and pull request guidance, and [Security](SECURITY.md) for vulnerability reporting.
-
-Requires Node.js 20.19+ on the 20.x line, or Node.js 22.12+, and pnpm 10.
+Requires Node.js 20.19+ on the 20.x line, or Node.js 22.12+, and pnpm 10. The install needs network access: the lockfile pins a GitHub-hosted Remus kernel tarball.
 
 ```bash
 pnpm install --frozen-lockfile
@@ -62,14 +68,12 @@ pnpm dev:web
 
 Open the URL Vite prints. The start screen offers three built-in demos: **Mounting Bracket**, **Pipe Flange**, and **Heat Sink**. Each includes revisions A → C so you can inspect how the model was built.
 
-To explore the workspace:
-
 1. Open **Mounting Bracket**: on a new device the **Parameters** panel is docked on the right with its named dimensions, and **Objects** on the left to select and hide bodies or sketches.
 2. Use the right-hand rail's **History** and **Revisions** buttons to inspect features and revisions, and **Pin** a panel to keep it docked.
-3. Switch to **Tweak** to adjust exposed parameters, or **View** to inspect the result.
+3. Switch to **Tweak** to adjust exposed parameters, **View** to inspect the result, or **Draw** to make a drawing.
 4. Use **File → Export project** for an editable backup, or export STEP/STL for downstream use.
 
-Settings are available from the start screen, the workspace gear, the command palette, or `Ctrl/Cmd+,` — the Settings page overlays the workspace, so the open tool, panel state, and committed work survive it, keypad drafts included; a not-yet-opened exact-entry queue does not.
+Local development uses `AUTH_MODE=development` and an isolated development identity; the worker refuses to start if development authentication is combined with a guarded or non-development environment. See [Contributing](CONTRIBUTING.md) for development and pull request guidance, and [Security](SECURITY.md) for vulnerability reporting.
 
 ## Project backups
 
@@ -77,7 +81,9 @@ Use **File → Export project** to download an `.openzcad` backup of the entire
 open project, independently of the selected body. The backup contains the
 editable model, parameters, sketches, feature and command history, checkpoint
 records, retained restorable save states, STEP source blobs, measurements, and
-archived files. Display meshes rebuild from the model when it opens.
+archived files. Display meshes rebuild from the model when it opens. An
+encrypted project is decrypted in your browser for the export, so treat the
+file as plaintext.
 
 Use **Import project…** on the project screen or in the File menu to create a
 separate local project. Its original remains unchanged. Sources, save states,
@@ -98,17 +104,18 @@ viewport preferences, and the transient undo/redo stack are not transferred.
 React workspace (apps/web)
   ├─ canonical ProjectDocument + CommandManager   (source of truth)
   ├─ IndexedDB autosave
+  ├─ end-to-end encryption (packages/crypto, packages/mls)
   ├─ Three.js viewport                            (disposable projection)
   └─ geometry Web Worker
-       └─ remus-wasm  — the exact B-rep kernel, for every document
+       ├─ remus-wasm     — the exact B-rep kernel, for every document
        └─ remus-wasm-io  — its file-format translators, loaded only around import/export
-                           including STEP imports
 
-Cloudflare Worker (beta orchestration only)
+Cloudflare Worker (orchestration only)
   ├─ D1 project metadata, documents, sessions, settings
-  ├─ R2 artifact coordination
-  ├─ Email-code identity + owner authorization (optional)
+  ├─ R2 artifact and project-object storage
+  ├─ Email-code identity + owner authorization
   ├─ Durable Object live project rooms
+  ├─ Encrypted-project key and ciphertext relay
   └─ AI assistant proposal stream (optional, experimental)
 ```
 
@@ -116,274 +123,89 @@ Boundaries that hold everywhere:
 
 - The browser document/history model is the source of truth; meshes are disposable projections.
 - Geometry and exports run in the browser worker, never in the Cloudflare Worker.
-- Topology fingerprints are content-addressed and stable across rebuilds — checked in `test/kernel-seam.test.ts`, and against recorded baselines in bulk by the geometry corpus — and resolution is fail-closed at every call site. Documents saved by the pre-fingerprint OpenCascade scheme are rejected with a re-select diagnostic rather than reinterpreted.
-- Schema-v1 through schema-v19 documents migrate to schema v20 on load. Schema v14 preserves bounded undo/redo history; schema v15 adds on/off parameters that control body visibility and export inclusion. Schema v16 marks the orientation of newly authored Front sketches; saved unmarked sketches retain their original basis. Schema v17 supports mesh payload references; embedded meshes stay embedded on load, and older clients must update before opening v17 documents. Schema v18 adds the symmetric, point-on-curve and lock sketch relations; older clients must update before opening v18 documents. Schema v19 adds offset and mid datum planes, which sketches, Split and Mirror can reference; older clients must update before opening v19 documents. Schema v20 adds the through-all extrude cut; older clients must update before opening v20 documents.
+- Topology fingerprints are content-addressed and stable across rebuilds — checked in `test/kernel-seam.test.ts`, and against recorded baselines in bulk by the geometry corpus — and resolution is fail-closed at every call site.
+- Documents carry a schema version (`PROJECT_DOCUMENT_SCHEMA_VERSION` in [`packages/shared/src/index.ts`](packages/shared/src/index.ts), which also records each version's change). Older documents migrate on load; a client refuses a document newer than it understands rather than guess, so update the app before opening one.
 
 See [architecture.md](architecture.md) and the decision records in [docs/adrs](docs/adrs).
-The current implementation status and explicitly unshipped gaps are tracked in
-[the capability matrix](docs/capability-matrix.md).
 
-The monorepo is a pnpm workspace: `apps/web`, `apps/desktop` (a Tauri 2 macOS shell, see below), plus focused packages — `document-core` (canonical model), `command-system` (undo/redo, transactions), `geometry` (sketch regions, plane math), `kernel-adapter` (the Remus exact adapter), `viewport` (React-free three.js scene framework), `io-step`/`io-stl`, `ai-contracts`, `cloudflare-adapters`, `persistence`, and `shared`.
+### Repository layout
+
+A pnpm workspace:
+
+| Path                                                    | Contents                                                                                |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `apps/web`                                              | The React workspace, its Cloudflare Worker, and the geometry worker                     |
+| `apps/desktop`                                          | Tauri 2 shell for Apple Silicon macOS ([docs/macos](docs/macos/README.md))              |
+| `apps/ipad`                                             | Offline native iPad prototype around the same workspace ([README](apps/ipad/README.md)) |
+| `apps/agent-bridge`                                     | `openzcad-mcp`, the local agent API server ([README](apps/agent-bridge/README.md))      |
+| `packages/document-core`                                | Canonical project model and expressions                                                 |
+| `packages/command-system`                               | Commands, transactions, undo/redo                                                       |
+| `packages/geometry`                                     | Sketch regions and plane math                                                           |
+| `packages/kernel-adapter`                               | The Remus exact adapter and its pinned kernel packages                                  |
+| `packages/viewport`                                     | React-free three.js scene framework                                                     |
+| `packages/io-step`, `io-stl`, `io-dxf`, `io-shapr`      | File-format readers and writers                                                         |
+| `packages/crypto`, `packages/mls`                       | End-to-end encryption formats and the MLS group-key layer                               |
+| `packages/ai-contracts`, `agent-api`, `scripting`       | Patch schemas, the agent API, history text and scripts                                  |
+| `packages/persistence`, `cloudflare-adapters`, `shared` | Storage, Worker adapters, shared types                                                  |
 
 ## Development
 
 ```bash
-pnpm dev:web          # Vite + local Cloudflare Worker
-pnpm typecheck        # TypeScript
-pnpm lint             # ESLint
-pnpm test             # unit and integration tests (Vitest)
-pnpm test:web         # web app tests
-pnpm test:parity-corpus  # serial Remus corpus against recorded baselines and analytic expectations
-pnpm test:e2e         # Playwright end-to-end suite
-pnpm test:coverage    # unit tests with coverage
-pnpm build            # production web/worker bundle + bundle-size check
-pnpm deploy:beta      # official deployment; maintainers only
+pnpm dev:web             # Vite + local Cloudflare Worker
+pnpm typecheck           # TypeScript
+pnpm lint                # ESLint
+pnpm test                # root and web Vitest projects
+pnpm test:parity-corpus  # serial Remus corpus against recorded baselines
+pnpm test:e2e            # Playwright end-to-end suite (builds and serves the app)
+pnpm build               # production web/worker bundle + bundle-size check
 ```
 
-Local development uses `AUTH_MODE=development` and the isolated `user_beta_dev` identity. Never deploy `apps/web/wrangler.jsonc`: it is a development-only config and deliberately binds a placeholder dev database ID so it cannot write to beta data (create a real dev D1 and replace the ID for local use). The worker refuses to start if development authentication is combined with a guarded or non-development environment. When R2/Durable Object bindings are absent, the affected routes return a clean `FEATURE_DISABLED` 501 before touching persistence.
+These are the gates pull requests must pass. `pnpm test:full` forces the complete Vitest suites even where CI selects affected tests; see [Unit test suites](docs/unit-test-suites.md) and [Browser test suites](docs/browser-test-suites.md).
 
-The checked-in root `wrangler.jsonc` is the canonical configuration for the
-official deployment. Its D1 ID, bucket name, Worker name, public site key, and
-domains are non-secret identifiers; they do not grant access. To deploy an
-independent instance, use the separate example and instructions in
-[Self-hosting OpenZCAD](docs/SELF_HOSTING.md). Never copy the official resource
-identifiers into a self-hosting configuration.
+Never deploy `apps/web/wrangler.jsonc`: it is a development-only config that binds a placeholder database ID so it cannot write to hosted data. When R2 or Durable Object bindings are absent, the affected routes return a clean `FEATURE_DISABLED` 501.
 
 ### macOS desktop (Tauri)
 
-`apps/desktop` is a Tauri 2 shell for Apple Silicon that bundles the same web
-workspace; geometry still runs in the browser workers, and the Rust host stays
-narrow — native menus, user-picked CAD files, exports, and window-state
-restoration. The desktop app signs in through the browser: it starts a
-short-lived sign-in attempt, the browser approves it, and the app exchanges it
-for refreshable access tokens, so no password or session cookie ever passes
-through the native shell. It needs macOS 14+, Xcode Command Line Tools, and
-current stable Rust with the `aarch64-apple-darwin` target. The desktop crate
-declares Rust 1.85 as its minimum; the current locked dependencies require
-Rust 1.88 or newer:
+`apps/desktop` bundles the same web workspace for Apple Silicon; geometry still runs in the browser workers, and the Rust host stays narrow — native menus, user-picked CAD files, exports, and window-state restoration. The app signs in through the browser, so no password or session cookie passes through the native shell. It needs macOS 14+, Xcode Command Line Tools, and current stable Rust with the `aarch64-apple-darwin` target (the locked dependencies require Rust 1.88 or newer):
 
 ```bash
 pnpm dev:desktop      # tauri dev against the local workspace
 pnpm build:desktop    # .app and DMG for aarch64-apple-darwin (ad-hoc signed)
 ```
 
-See [docs/macos/README.md](docs/macos/README.md) for the full setup, the
-WKWebView smoke test (`pnpm --filter @openzcad/desktop test:e2e`), and the
-manual `macos-desktop` CI workflow.
+See [docs/macos/README.md](docs/macos/README.md) for setup, the WKWebView smoke test, and the manual desktop CI workflow. The iPad prototype builds with `pnpm dev:ipad` on macOS with Xcode ([apps/ipad](apps/ipad/README.md)).
 
 ### Performance
 
-Interaction and startup performance are measured, not guessed — see [docs/performance-baseline.md](docs/performance-baseline.md) for the committed baselines and history. Rendering is on demand: hover picking is coalesced to one raycast per frame and skipped during camera drags, and the shadow map only re-renders when geometry changes. Reproduce the interaction numbers with:
+Interaction and startup performance are measured, not guessed — see [docs/performance-baseline.md](docs/performance-baseline.md) for the committed baselines and history. Rendering is on demand, and the exact adapter and Remus WASM load lazily inside the geometry worker on the first non-empty rebuild or export. Canonical rebuild results use a bounded worker-local LRU ([ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md)). Reproduce the interaction numbers with:
 
 ```bash
 OZ_PERF=1 pnpm exec playwright test interaction-probe
 ```
 
-The exact adapter and Remus WASM load lazily inside the geometry worker on the first non-empty rebuild or export. The kernel-adapter manifest pins the Remus WASM packages to immutable source commits, and `pnpm-lock.yaml` records their resolved dependencies for reproducible installs. The Remus update workflow proposes pin updates through pull requests. All geometry workflows use Remus. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
+## Deploying and self-hosting
 
-## Deploying to Cloudflare
+OpenZCAD runs on Cloudflare Workers, D1, R2 and Durable Objects. The browser application still works offline without them.
 
-Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a real beta login:
+- [Self-hosting OpenZCAD](docs/SELF_HOSTING.md) — deploy an independent instance in your own Cloudflare account with `pnpm deploy:selfhost`, including the end-to-end encryption requirements.
+- [Operating OpenZCAD](docs/operations.md) — the official deployment, sign-in security, health and liveness checks, and the API surface.
+- [Release channels](docs/release-channels.md) and the [cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md).
 
-- onboard the `beta.zcad.app` and `zcad.app` sending domains and keep each channel's `EMAIL` binding restricted to its own sender (`noreply@beta.zcad.app` for beta, `noreply@zcad.app` for stable) for sign-in and project invitations;
-- create a managed Turnstile widget allowlisting `zcad.app`, `zcad.esau.app`, `dev.zcad.app` (Worker Previews), `localhost`, and `127.0.0.1`, then bind its site key as `TURNSTILE_SITE_KEY`;
-- review the pending remote D1 migrations before deploying with `pnpm deploy:beta`; that guarded command applies them before publishing the Worker and then verifies the live commit and every required readiness gate;
-- follow the [project cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md) for the migration gate and authenticated two-device canary;
-- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM` and `PROJECT_INVITATION_EMAIL_FROM` to that channel's sender, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
-- provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), and `AI_IDENTITY_PEPPER`. The deployment preflight lists these required secret names without reading their values; verify the remote Worker secret list before deploying;
-- funding AI from the deployment's own provider key needs the provider secret. The built-in free OpenRouter model admits every verified account with `AI_DEPLOYMENT_FREE_ENABLED`; paid or private models require Premium membership or `AI_DEPLOYMENT_ALLOWED_EMAILS`. Without the provider key, users supply their own tokens instead.
-
-Login codes are single-use and expire after ten minutes. Requests are rate limited per IP, per email and IP, and per email; a throttled request sends no email and answers with the requester's own pending challenge, and a new code never voids an earlier one (a successful sign-in voids them all). Profile or account deletion clears that email's requester limits as well as its pending codes, while preserving the shared IP limit and other emails' limits. After 20 wrong codes for an email in 24 hours, each of its codes allows one try instead of five. Failure counts conservatively remain active until 24 hours after each code expires (at most ten extra minutes), so guesses near expiry cannot age out early. Sessions use a `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the opaque token is stored. Turnstile responses must carry the `email-code` action, and every non-development verification pins the response hostname to the request hostname. `AUTH_LEGACY_OWNER_EMAIL` maps historical `user_beta_dev` projects to their owner's verified email without rewriting documents.
-
-Project invitations are delivered from the channel's sender (`noreply@beta.zcad.app` or `noreply@zcad.app`) as seven-day,
-single-use links. The opaque token is carried in the URL fragment, scrubbed
-from the address bar on arrival, and kept only in tab-scoped session storage
-while email-code sign-in completes. A failed email send revokes the invitation
-before the API reports failure. The legacy response still includes the one-time
-token for existing clients, but the web UI never displays or asks users to
-paste it.
-
-The checked-in beta configuration enables project sharing, owner-room sync,
-and edit leases for every authenticated account. Project ownership and
-membership still authorize room and document access, and editor writes require
-a persisted lease for that browser. The local development configuration remains
-closed by default. `PROJECT_COLLABORATION_CANARY_EMAILS` remains available only
-as a scoped fallback if the global beta flags are closed again. Changing these
-flags or deploying them remains a separate rollout action, not part of a normal
-application build.
-
-## Self-hosting and operations
-
-OpenZCAD is self-hostable on Cloudflare Workers. The browser application still
-works offline without cloud services; the Worker adds accounts, cloud projects,
-artifact storage, collaboration, and optional server-side AI.
-
-1. Fork or clone the repository and install the supported Node.js and pnpm
-   versions from [Quick start](#quick-start).
-2. In a Cloudflare account you control, create a D1 database and private R2
-   bucket. Copy [`wrangler.selfhost.example.jsonc`](wrangler.selfhost.example.jsonc)
-   to a git-ignored `wrangler.selfhost.jsonc` and fill in your own resource
-   names and IDs, sending domain, Turnstile site key, public app origin, and
-   authentication settings. `pnpm selfhost:check` validates the result and
-   refuses the official beta identifiers.
-3. Configure the required secrets with `wrangler secret put`; do not put them
-   in `wrangler.jsonc`, `.dev.vars`, source code, or CI logs. The required
-   values are listed in the deployment section above. AI provider credentials
-   are optional when users supply their own credentials.
-4. Review every pending migration and take a D1 recovery bookmark, then run
-   `pnpm deploy:selfhost` — it validates the configuration, builds, applies the
-   migrations to your database, and deploys the Worker with your
-   `wrangler.selfhost.jsonc`. Do not use `pnpm deploy:beta` or the
-   development-only `apps/web/wrangler.jsonc` for a self-hosted deployment.
-5. Follow the [cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md)
-   for the authenticated two-device canary. It covers the D1/R2 pointer check,
-   reload, conflict recovery, and any collaboration rollout.
-
-### Health and liveness checks
-
-`GET /api/health` is public and returns JSON only; it is safe to poll without
-credentials and never returns configuration secrets. A healthy running service
-returns HTTP 200 with `status: "ok"`. For a cloud-enabled deployment, also
-require `artifactUploadAccountingReady`, `documentStorageAccountingReady`, and
-`projectObjectStorageReady` to be `true` before enabling project sync. The remaining readiness fields describe
-separately deployed capabilities (such as measurement sync and account
-erasure); a `false` value means that capability is not ready, not that the
-basic service endpoint is down.
-
-```bash
-curl --fail --silent --show-error https://your-openzcad-domain.example/api/health
-```
-
-Treat a non-200 response, invalid JSON, `status` other than `ok`, or a required
-readiness flag set to `false` as a failed rollout. Check the Worker bindings and
-the applied D1 schema first; do not mask a readiness failure by changing the
-reported status.
-
-The repository's scheduled `Production health` workflow checks the hosted beta
-with this same contract once per day and can also be run manually.
-
-For uptime monitors that only need to know the Worker is alive, `GET /healthz`
-returns HTTP 200 with JSON `status: "ok"` and a service name. `HEAD /healthz`
-returns the same headers without a body; other methods return 405 with
-`Allow: GET, HEAD`. Responses use `Cache-Control: no-store`. The endpoint
-requires no credentials and performs no storage or upstream requests, so it
-reports Worker liveness only, never dependency readiness or browser
-geometry/solver health.
-
-Cloudflare Access, WAF, and bot challenges run before the Worker. If a monitor
-receives a login redirect or challenge, configure a narrowly scoped exception
-for GET/HEAD on the exact `/healthz` path and the intended app hostname, then
-verify the JSON response from the monitor's network. Repository changes alone
-do not alter those dashboard policies.
-
-## API surface
-
-```text
-GET|HEAD /healthz                     (liveness only)
-GET  /api/health                      (readiness)
-GET  /api/auth/config                 POST /api/auth/email/start
-GET  /api/session                     POST /api/auth/email/verify
-GET  /api/auth/desktop/config         POST /api/auth/logout
-POST /api/auth/desktop/start | approve | exchange | refresh | logout
-GET|PATCH /api/settings               PUT|DELETE /api/settings/assistant-credential
-POST /api/settings/assistant/test
-GET  /api/assistant/status            POST /api/assistant/proposals    (SSE)
-GET  /api/account/storage             GET  /api/account/deletion-preview
-POST /api/account/delete-data
-GET  /api/collaboration/config       (authenticated account capabilities)
-GET|POST /api/projects                POST /api/projects/reorder | purge
-GET|PATCH|DELETE /api/projects/:id    POST /api/projects/:id/duplicate
-PUT  /api/projects/:id/document
-GET|POST /api/projects/:id/revisions  GET  /api/projects/:id/revisions/:revisionId
-GET|PUT|DELETE /api/projects/:id/measurements
-GET  /api/projects/:id/collaboration  (WebSocket upgrade)
-POST /api/projects/:id/collaboration  (oversize snapshot recovery)
-POST /api/projects/:id/collaboration/ticket
-GET  /api/projects/:id/sharing        POST /api/projects/:id/invitations
-DELETE /api/projects/:id/invitations/:invitationId
-PATCH|DELETE /api/projects/:id/members/:userId
-GET|POST /api/projects/:id/share-links
-DELETE /api/projects/:id/share-links/:shareLinkId
-GET  /api/share                      GET  /api/share/assets/:assetId
-GET  /api/share/sources/:artifactId
-POST /api/project-invitations/accept
-POST /api/uploads                     PUT  /api/uploads/:id/content
-POST|DELETE /api/uploads/:id/multipart
-PUT  /api/uploads/:id/parts/:n        POST /api/uploads/:id/multipart/complete
-POST /api/artifacts/finalize          POST /api/imports/finalize
-GET  /api/projects/:id/artifacts      GET  /api/artifacts/:id
-GET  /api/artifacts/:id/download
-```
-
-Cloud settings, personal credentials, projects, artifacts, and collaboration require an email-code session; the assistant also serves local-only users, and share-link reads under `/api/share` need no session at all; they carry the link's token in the `x-openzcad-share-token` header rather than the URL (the older `/api/share/:token…` paths are still served for macOS builds and open tabs from before the header). The native app exchanges its fixed-origin bearer request for a short-lived, one-use collaboration ticket before opening a WebSocket, so bearer credentials never enter browser code. Artifacts require an uploaded R2 object before finalization; large uploads go through the multipart routes.
-
-## AI assistant (experimental)
-
-An optional console assistant turns plain-language requests into reviewable document patches. It is experimental and entirely optional — the workspace is fully functional without it. Provider-backed requests stay dormant until a provider key is configured; verified local recipes remain available without one.
-
-Enable the assistant in **Settings → AI**. Its conversation opens above the bottom prompt, leaving the model at full width; `Ctrl/Cmd+J` toggles it. Plain-language input asks the assistant, while `/` lists commands. Click outside the conversation to tuck it away; the prompt indicates work in progress and unread replies. Each project's thread — what was asked, what the assistant asked back, and which proposals were applied or rejected — is kept on the device and read back when the project reopens, so the scrollback is a record rather than a session.
-
-The built-in assistant (NVIDIA Nemotron 3.5 Super VL, free, through OpenRouter) uses the Responses API with native schema enforcement; a model without it, such as MiniMax, uses Chat Completions in JSON mode. It sees compact feature history, live exact-topology summaries, and the active selection, so "fillet all edges" resolves stable edge fingerprints without manual picking. Output is constrained to a strict CAD patch schema; you preview, apply, or reject, and apply is one normal undoable transaction. PDF and image drawings can be attached as references. The AI can only propose an allowlisted command patch — it cannot directly mutate a document, viewport, or kernel.
-
-**Fillet all edges** is also available without a provider key. Ask "add a fillet on all edges" or "fillet all edges by 1 mm", or choose the matching assistant action. It uses the complete local edge inventory of the named, selected, or sole part, excludes periodic seams, and previews one fillet feature before Apply. Without a radius it uses the manual tool's default of 2 document units. Explicit radius units are converted to document units. Unsupported corner combinations refuse the entire proposal and preserve the original part; joined box corners are covered, while concave bracket corners remain a kernel limitation. The viewport fillet/chamfer card also offers **Select all edges**.
-
-**Auto-parameterize model** is a provider-free verified recipe. It replaces independent literal native dimensions with named parameters, and binds kernel-proven imported through holes, blind holes, counterbores, and countersinks as one operation per physical feature. Counterbore bore diameter, outer diameter, and depth stay grouped; countersink bore diameter, opening diameter, and proof-authoritative included angle stay grouped. Exact preview must prove that body geometry is unchanged before Apply is enabled; sketch line/arc coordinates and unrecognized imported features remain untouched rather than guessing design intent.
-
-OpenRouter is the default provider. For local development, export the key in the launching shell or set it in `apps/web/.dev.vars` (git-ignored):
-
-```dotenv
-AI_PROVIDER=openrouter
-OPENROUTER_API_KEY=your_key_here
-AI_MODEL=nvidia/nemotron-3.5-super-vl:free
-AI_DEPLOYMENT_FREE_ENABLED=true
-```
-
-Runtime bindings are configured as Wrangler vars or secrets:
-
-- `AI_PROVIDER` — `openrouter`, `openai`, or `responses-compatible`.
-- `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `AI_API_KEY` — the server-side secret for the configured provider; `AI_API_KEY` is never sent to OpenRouter (see below). Never shipped to the browser or committed.
-- `AI_BASE_URL` — optional endpoint override; required for `responses-compatible`.
-- `AI_MODEL` — defaults to `nvidia/nemotron-3.5-super-vl:free` on OpenRouter or `gpt-6-luna` on direct OpenAI. Personal model settings remain independent; users can choose another exact provider model identifier with their own key.
-- `AI_REASONING_EFFORT` — `low`/`medium`/`high`/`xhigh`, default `high`.
-- `AI_MAX_OUTPUT_TOKENS` — default `32000`; reasoning shares the budget, and too low a ceiling truncates patches mid-stream as a normal incomplete response.
-- `AI_SITE_URL` / `AI_APP_NAME` — optional OpenRouter attribution.
-- `AI_ALLOWED_BASE_URL_HOSTS` — exact, comma-separated hostnames approved for saved Responses-compatible endpoints outside development. Redirects are never followed.
-- `AI_ACCOUNT_RATE_LIMIT_REQUESTS` / `AI_ACCOUNT_COST_LIMIT_UNITS` / `AI_ACCOUNT_CONCURRENCY_LIMIT` — Free account limits; defaults are 6 requests and 24 weighted units per 10 minutes, with 2 concurrent requests. Premium account limits default to 600 requests and 2,400 weighted units per 10 minutes, with 8 concurrent requests. See [account tiers](docs/plans/account-tiers.md) for overrides.
-- `AI_DEPLOYMENT_FREE_ENABLED` — opt in to built-in AI for every signed-in account, only with an OpenRouter `:free` model and the standard endpoint. Enabled in the checked-in configurations. A missing `OPENROUTER_API_KEY` leaves the public free assistant unavailable, without falling back to a paid provider.
-- `AI_ENCRYPTED_FREE_TRAINING_ENABLED` — opt in to the built-in free model on encrypted projects after each user consents for the project to possible retention and training. This applies only to the public free OpenRouter deployment route. The hosted configurations enable it. Self-hosted deployments keep stricter encrypted routing by default.
-- `AI_DEPLOYMENT_ALLOWED_EMAILS` — optional secret, comma-separated email allowlist for accounts permitted to use a paid or private deployment model. Premium membership also grants this access.
-
-Signed-in users can instead store a personal provider token (Settings → AI). Tokens are encrypted with AES-GCM by the Worker (`SETTINGS_ENCRYPTION_KEY`) and never enter project documents or browser storage. `GET /api/assistant/status` never exposes provider secrets or deployment availability to a signed-out or ineligible request. Public request identities use HMAC-SHA-256 values keyed by `AI_IDENTITY_PEPPER`.
-
-The built-in assistant uses **NVIDIA Nemotron 3.5 Super VL (free)** through OpenRouter: it reads attached drawings and images, reasons, and enforces the CAD reply's JSON schema natively. (It replaced MiniMax M3.1 Flash (free), which OpenRouter withdrew on 2026-11-14.) It has no personal-key requirement or model usage charge, but account quotas, shared OpenRouter free-tier limits and provider availability apply; free access is not unlimited or guaranteed. Free-model requests keep the exact `:free` model identifier and cap prompt, completion and per-request provider prices at zero. They never substitute a paid model.
-
-A model chosen in `AI_MODEL` or personal settings may lack native schema enforcement. MiniMax M3.1 Flash, for one, supports JSON output [without native JSON-schema enforcement](https://openrouter.ai/minimax/minimax-m3.1-flash:free). Its requests therefore include the exact capability-filtered CAD reply schema in the system prompt and use JSON mode on the Chat Completions endpoint. The Worker buffers the bounded response and checks every required field, value type, enum, numeric/array/pattern constraint and extra key against that schema, then runs the existing semantic CAD reply parser with the current digest. Only valid output is returned to the client. Invalid output becomes a sanitized failure event; the existing client retry makes at most one new request, with corrective schema instructions, a fresh account quota permit and the same free model/price caps. A second invalid reply fails closed. Connection tests use the same validation. Native-schema providers retain strict structured output.
-
-Settings → AI Assistant explains that prompts, conversation, compact model context and user-selected attachments go to the AI service. OpenRouter and its model providers may retain data or use it for training and service improvement according to their [data policies](https://openrouter.ai/docs/guides/privacy/provider-logging). The notice does not claim zero retention or that a personal key prevents training; the selected provider’s policies and charges apply. Raw STEP files and meshes are not sent.
-
-Current assistant limitations and gates:
-
-- **Assistant usage is bounded before provider dispatch** — beta requests require a verified account and server-granted hosted-AI access, D1-backed per-account request and token-weighted cost quotas, and per-account expiring concurrency leases. There is no shared deployment usage cap; provider-side billing controls remain separate.
-- Deterministic contracts are implemented for face-attached sketches, multi-profile extrudes, mirror, shell, solid offset, transforms, edge modifiers, patterns, and the existing validated direct-edit subset. The checked-in beta configuration enables the mature operation families, partial revolve, and datum-plane proposals behind independent `AI_PATCH_*_ENABLED` flags; client capability negotiation also limits the operations offered to each browser. Growing-holder hole controls remain disabled. Topology-dependent proposals must repeat the exact digest witness and are rejected when stale. Configuration describes rollout intent; it is not proof of a live deployment.
-- Exact `add_direct_edit` coordination for proved imported blind holes, counterbores, and countersinks is enabled in `AI_CAD_OPERATION_CAPABILITIES`; the standalone `recognized_imported_feature` operation name remains unsupported. Diameter changes re-cut ordinary proved holes, while blind/counterbore depth changes, countersink angle changes, and diameter changes on a counterbore with an entry chamfer fail with an explicit not-yet-supported error. Proposals cannot import geometry or perform collaboration actions.
+`pnpm deploy:beta`, `pnpm deploy:stable` and `pnpm deploy:selfhost` apply remote D1 migrations before deploying, so they need credentials and explicit authorization; they are not validation commands.
 
 ## Known limitations
 
-- Editable STEP sources are stored content-addressed: the document carries a SHA-256 reference and the bytes live in the browser's IndexedDB blob store (imports up to 128 MB), with the archived upload artifact as the cross-device fallback. Documents written before references keep their embedded text (12 MB cap) and replay unchanged; the embedded form is also the fallback when browser storage is denied. Cloud saves project payloads into checksum-verified R2 assets and keep only metadata/pointers in D1.
-- Imported meshes — STL, 3MF, OBJ, glTF binary (`.glb`) and PLY — build on the exact kernel through its own importers, sewn into a shell so they can be mirrored, shelled, and offset. Every format lands in the same `imported-mesh` feature, so the document, autosave and exports know only one mesh path. One import is one body, several shells included: a file holding several objects is sewn into one body carrying all of them, and — for every format but STL, which keeps its own parser — a file whose triangles the rebuild cannot take is refused by name at import, with the kernel's own reason, rather than importing behind a success message and leaving a feature with no body. That check runs the rebuild at the open document's units, because the sew tolerance follows the numbers the document stores rather than the millimetres the file was read in. STL accepts readable, nonempty meshes with displayable finite coordinates within the 200,000-triangle browser limit, including single triangles, open sheets and non-manifold meshes. Sewing retries below the shortest source edge when the bounds-based tolerance would collapse tiny facets. If CAD conversion is unavailable, the original facets remain a displayable mesh reference with an advisory; unconverted references have no solid volume or STEP export, but retain STL export, Move, scale, save and reopen. Malformed coordinates and oversized input still refuse. A 3MF's declared length unit is read from the package and converted to millimetres, and its `<build>` section is honoured: per-item transforms are applied, an object placed twice imports twice, and an object the build never places is left out. The other mesh formats declare no unit and follow STL's millimetre convention. It stays a mesh body: no parametric reconstruction is attempted, and a boolean against an exact body is refused by name rather than approximated.
-- Collaboration rooms store each document under its own Durable Object key (bounded history, atomic index updates, typed rejection frames for oversize or malformed payloads; documents over ~1.5 MB JSON are rejected). Invitations, owner/editor/viewer authorization, persisted per-browser edit leases for one editing account, sharing UI, and recovery-copy-first conflict choices are implemented and enabled in the checked-in beta configuration; the local development configuration keeps both sharing flags `false`.
-- Remus's difficult boolean cases can fall back to mesh-derived topology, and closed-B-spline/NURBS-blend faces are not fingerprint-stable against the corpus reference — they fail closed rather than mis-resolve.
-- True face attachment requires a schema-v5 lineage reference and an exact planar face at the sketch's history position. Legacy face attachments retain their stored migration frame with a warning; deleted, ambiguous, non-planar, and unsupported current references fail visibly.
-- The pinned Remus mirror preserves ordinary exact solids, but can report a volume mismatch for some dense boolean-plus-blend histories; exact preflight refuses those bodies without committing history rather than accepting a questionable reflection.
-- Viewport idle edges are consolidated to one draw call per visible body; hover and selected edges use small reusable overlay batches.
+- Editable STEP sources are stored content-addressed: the document carries a SHA-256 reference and the bytes live in the browser's IndexedDB blob store (imports up to 128 MB), with the archived upload artifact as the cross-device fallback. Cloud saves keep project payloads in checksum-verified R2 objects and only metadata and pointers in D1.
+- Imported meshes — STL, 3MF, OBJ, glTF binary and PLY — stay mesh bodies: no parametric reconstruction is attempted, and a boolean against an exact body is refused by name rather than approximated. One import is one body, and for every format but STL a file whose triangles the rebuild cannot take is refused by name at import, checked at the open document's units, because the sew tolerance follows the document's stored numbers. STL keeps readable meshes within the 200,000-triangle browser limit, including open and non-manifold ones; one that cannot be sewn stays a displayable mesh reference with no solid volume or STEP export, but keeps STL export, Move, scale, save and reopen.
+- Native CAD formats (Parasolid, ACIS, Rhino, SolidWorks and others) are not yet supported.
+- Remus's difficult boolean cases can fall back to mesh-derived topology, and closed-B-spline/NURBS-blend faces are not fingerprint-stable — they fail closed rather than mis-resolve. Unsupported kernel combinations refuse with a typed reason rather than produce a questionable solid.
+- Coordinated editing of imported features covers hole bindings and diameter changes; hole depths, countersink angles, bosses, pockets and tapers remain read-only.
+- Assemblies do not yet solve closed loops or couple joints; drawings and assemblies live within a single document.
+- Collaboration rooms reject documents over about 1.5 MB of JSON.
 
-## Next milestones
+## Roadmap
 
-1. Complete the recovery-copy reload E2E and the staged real-session beta checks for the sharing rollout now enabled in the checked-in beta configuration.
-2. Extend coordinated imported-feature editing from the shipped hole bindings and diameter changes to hole depths, countersink angles, bosses, pockets, and tapers.
-3. Extend verified lineage through boolean post-processing, blends, patterns, and direct edits without nearest-geometry rebinding.
-4. Enable AI imported-feature operations only after the same deterministic manual command and exact preflight path ships.
-5. Measure cache hit rate, rebuild latency, retained worker memory, and the consolidated edge-overlay draw-call reduction on target hardware.
+The [master roadmap](ROADMAP.md) is the single ledger of delivered capabilities, the ordered work queue, completion criteria and links to detailed specifications. Current priorities are kernel correctness and edit latency, then encryption, sketch and part-modeling depth, assembly couplings, and native-CAD exchange.
 
 ## License
 

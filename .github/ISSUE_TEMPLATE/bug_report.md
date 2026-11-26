@@ -18,10 +18,11 @@ Describe the observed behavior and what you expected.
 
 ## Environment
 
-- OpenZCAD version or commit (if known):
+- OpenZCAD version (Settings → Advanced → About this build) or commit:
 - Browser and version, or desktop app version:
 - Operating system:
-- Hosted site or local instance:
+- Where: zcad.app (stable), beta.zcad.app, self-hosted, or local:
+- Encrypted project (yes/no):
 
 ## Evidence
 
