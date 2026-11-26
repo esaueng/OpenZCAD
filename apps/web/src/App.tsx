@@ -348,6 +348,7 @@ import {
   duplicateProjectName,
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureManuallySuppressed,
+  isFeatureRollbackSuppressed,
   isFeatureSuppressed,
   patternSourceProblem,
   projectBranchPoint,
@@ -1129,6 +1130,7 @@ import {
 } from './components/compact/panelSheet';
 import {
   SHEET_INERT_ATTRIBUTE,
+  yieldCompactSheet,
   type CompactSelectionAction,
   type CompactSelectionSheet
 } from './components/compact/compactSlots';
@@ -36984,15 +36986,38 @@ export function App() {
    * for any other menu. Drawn on every render while it stands open, and
    * read again when an item is chosen, so each item's checks (Delete's
    * dependents, Duplicate's refusal) are the live document's. An empty list
-   * when the step is gone.
+   * when the step is gone. So is where the row stands against the rollback
+   * marker: an undo or redo that moves the marker under an open menu turns
+   * its "Roll back to here" into "Resume full history", or back.
    */
   function liveFeatureMenu(menu: ViewportMenuState) {
     const source = featureMenuSourceRef.current;
     if (!source || source.menu !== menu) return undefined;
-    const feature = features.find(
+    const index = features.findIndex(
       (candidate) => candidate.featureId === source.featureId
     );
-    return feature ? featureMenuEntries(feature, source.row) : [];
+    const feature = index >= 0 ? features[index] : undefined;
+    if (!feature) return [];
+    const row = source.row
+      ? { ...source.row, endOfHistory: liveEndOfHistory(index) }
+      : undefined;
+    return featureMenuEntries(feature, row);
+  }
+
+  /**
+   * Where the step at `index` stands against the end of history in this
+   * render's document, as History's rows read it (`findRollbackMarkerIndex`):
+   * `marker` when history is rolled back to just after it, `last` when it is
+   * the final step with nothing rolled back, otherwise null.
+   */
+  function liveEndOfHistory(index: number): HistoryRowActions['endOfHistory'] {
+    let built = features.length - 1;
+    while (built >= 0 && isFeatureRollbackSuppressed(features[built]!)) {
+      built -= 1;
+    }
+    const last = features.length - 1;
+    if (built >= 0 && built < last) return index === built ? 'marker' : null;
+    return index === last ? 'last' : null;
   }
 
   /** What a History row's menu (or a model feature's) offers for it. */
@@ -37487,8 +37512,19 @@ export function App() {
           ? keymap.commandFor(chord, ['global'])?.id
           : undefined;
       // Over the full compact sheet only a global command goes on, through
-      // the same branches below as anywhere else.
+      // the same branches below as anywhere else, in the same order. So a
+      // global command bound to a bare digit (Save on 1) waits where the
+      // regular workspace's does: a digit typed at an armed command is that
+      // command's first size there (see the in-place branch below), and it
+      // is here too, its entry drawn in the sheet.
       if (sheetHoldsStage && !global) return;
+      // The command bar and the assistant are drawn on the stage, which the
+      // full sheet holds inert: the sheet comes down to half first, at once,
+      // so what the key opens takes focus and typing. Settings and the named
+      // save are dialogs over the whole frame, usable at any height.
+      const yieldStage = () => {
+        if (sheetHoldsStage) flushSync(() => yieldCompactSheet(inertHolder));
+      };
 
       if (global === 'app-settings') {
         event.preventDefault();
@@ -37498,6 +37534,9 @@ export function App() {
 
       if (global === 'assistant-toggle') {
         event.preventDefault();
+        if (assistantAvailable && !assistantHidden && assistantCollapsed) {
+          yieldStage();
+        }
         setPanelState((current) => ({
           ...current,
           assistantCollapsed: !current.assistantCollapsed
@@ -37564,6 +37603,7 @@ export function App() {
       }
       if (global === 'command-palette') {
         event.preventDefault();
+        if (!paletteOpen) yieldStage();
         actionHandlers['command-palette']();
         return;
       }

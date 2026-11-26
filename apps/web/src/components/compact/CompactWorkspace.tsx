@@ -41,6 +41,7 @@ import { CompactPanelSheet } from './CompactPanelSheet';
 import { CompactSelectionPage } from './CompactSelectionPage';
 import {
   COMPACT_SHEET_RAISE_EVENT,
+  COMPACT_SHEET_YIELD_EVENT,
   CompactAnalysisSlotContext,
   CompactTrayContext,
   SHEET_OVERLAY_ATTRIBUTE,
@@ -125,11 +126,7 @@ const OWN_ENTER = { [OWN_ENTER_ATTRIBUTE]: '' };
 
 /** The pages the compact chrome pushes onto the sheet, by id. */
 type CompactPage =
-  | 'more'
-  | 'file'
-  | 'selection'
-  | 'all-tools'
-  | typeof PANEL_SHEET_PAGE;
+  'more' | 'file' | 'selection' | 'all-tools' | typeof PANEL_SHEET_PAGE;
 
 /** A tray's page in the back stack: this prefix, then the tray's own key. */
 const TRAY_PAGE = 'tray:';
@@ -251,6 +248,20 @@ export default function CompactWorkspace({
     };
     chrome.addEventListener(COMPACT_SHEET_RAISE_EVENT, onRaise);
     return () => chrome.removeEventListener(COMPACT_SHEET_RAISE_EVENT, onRaise);
+  }, [dispatch]);
+
+  // What a global key opens on the stage (the command bar) needs the stage
+  // live: a full sheet comes down to half for it, pages and all.
+  useEffect(() => {
+    const shell = chromeRef.current?.closest('.app-shell');
+    if (!shell) return;
+    const onYield = () => {
+      if (stateRef.current.detent === 'full') {
+        dispatch({ type: 'set-detent', detent: 'half' });
+      }
+    };
+    shell.addEventListener(COMPACT_SHEET_YIELD_EVENT, onYield);
+    return () => shell.removeEventListener(COMPACT_SHEET_YIELD_EVENT, onYield);
   }, [dispatch]);
 
   // The keypad's host: in the sheet while Build's tray holds it up, so the

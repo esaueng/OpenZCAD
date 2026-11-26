@@ -105,6 +105,21 @@ export function raiseCompactSheet(
 }
 
 /**
+ * Asks the compact sheet of the shell holding `from` to come down from full
+ * height to half (U12 review), so the stage it holds inert takes focus and
+ * taps again. What a global key opens on the stage (the command bar, the
+ * assistant) asks first, from the keymap, so it opens usable. Below full it
+ * does nothing; outside a compact shell it goes nowhere.
+ */
+export const COMPACT_SHEET_YIELD_EVENT = 'openzcad:compact-sheet-yield';
+
+export function yieldCompactSheet(from: Element | null): void {
+  from
+    ?.closest('.app-shell')
+    ?.dispatchEvent(new CustomEvent(COMPACT_SHEET_YIELD_EVENT));
+}
+
+/**
  * The compact frame is up but its chrome (loaded lazily) has not yet given
  * the host: what goes there waits rather than drawing on the stage first.
  */
