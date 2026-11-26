@@ -2120,6 +2120,7 @@ import {
   MIRROR_REFUSED_ADVICE,
   bodyCommandClick,
   composeMirrorSet,
+  mirrorRefusalMember,
   refusedMirrorMember,
   type MirrorSetMember
 } from './lib/inPlace/mirrorBodies';
@@ -29636,8 +29637,8 @@ export function App() {
               throw new Error('This did not produce a valid body.');
             }
           },
-          refusedPick: (derived: ProjectDocument['derived']) => {
-            const member = refusedMirrorMember(set.members, derived);
+          refusedPick: (derived, shown) => {
+            const member = mirrorRefusalMember(set.members, derived, shown);
             return member
               ? {
                   name: representations[member.sourceBodyId]?.name ?? 'A body',

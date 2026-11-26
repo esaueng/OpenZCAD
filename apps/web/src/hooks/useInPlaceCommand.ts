@@ -3,6 +3,7 @@ import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureData,
+  FeatureId,
   FeatureWarning,
   ParamValue,
   ParametricVector3,
@@ -75,13 +76,25 @@ export interface InPlaceBuiltCommand {
    * names it ahead of the kernel's own sentence, which keeps its typed
    * record, and closes with the advice. Null when no pick is to blame.
    */
-  refusedPick?(derived: ProjectDocument['derived']): InPlaceRefusedPick | null;
+  refusedPick?(
+    derived: ProjectDocument['derived'],
+    shown: InPlaceShownRefusal
+  ): InPlaceRefusedPick | null;
   /**
    * The host's own command behind this frame, handed back to `commit` with
    * the frame (see {@link InPlacePreviewedFrame}). The hook never reads it.
    */
   command?: AnyCommand;
 }
+
+/**
+ * Whose words a refusal shows: the feature its attributed warning names, a
+ * warning no feature is named for, or none (the command's own check). A pick
+ * named ahead of the refusal must be that feature's, so the name, the
+ * sentence and its typed record all speak of one feature.
+ */
+export type InPlaceShownRefusal =
+  { featureId: FeatureId } | 'unattributed' | null;
 
 /** The pick a refusal is about, and what the user can do about it. */
 export interface InPlaceRefusedPick {
@@ -1206,7 +1219,16 @@ export function useInPlaceCommand(
               ? result.derived.warnings.at(-1)
               : null) ??
             'This did not produce a valid body.';
-          const pick = frame?.built.refusedPick?.(result.derived) ?? null;
+          const shownBy: InPlaceShownRefusal =
+            exact && attributed
+              ? { featureId: attributed.featureId }
+              : fresh !== null ||
+                  (unresolved === null &&
+                    result.derived.featureWarnings === undefined)
+                ? 'unattributed'
+                : null;
+          const pick =
+            frame?.built.refusedPick?.(result.derived, shownBy) ?? null;
           setRefusalPickFor(pick ? { message, pick } : null);
           setRefusal(message);
         }

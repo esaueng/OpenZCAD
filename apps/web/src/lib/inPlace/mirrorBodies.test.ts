@@ -7,6 +7,7 @@ import type {
 } from '@openzcad/shared';
 import {
   bodyCommandClick,
+  mirrorRefusalMember,
   refusedMirrorMember,
   type MirrorSetMember
 } from './mirrorBodies';
@@ -122,5 +123,23 @@ describe('refusedMirrorMember', () => {
 
   it('a body that made no result is refused', () => {
     expect(refusedMirrorMember(members, derived([1, 3]))).toBe(members[1]);
+  });
+
+  it('names only the body whose feature the shown refusal is', () => {
+    const failed = derived([1, 3], [warning(2, 'build-failed')]);
+    // An earlier feature's warning leads: no picked body is blamed.
+    expect(
+      mirrorRefusalMember(members, failed, {
+        featureId: 'feat_place' as FeatureId
+      })
+    ).toBeNull();
+    expect(mirrorRefusalMember(members, failed, 'unattributed')).toBeNull();
+    expect(
+      mirrorRefusalMember(members, failed, { featureId: 'feat_2' as FeatureId })
+    ).toBe(members[1]);
+    // The set's own check refused, with no warning shown.
+    expect(mirrorRefusalMember(members, derived([1, 3]), null)).toBe(
+      members[1]
+    );
   });
 });

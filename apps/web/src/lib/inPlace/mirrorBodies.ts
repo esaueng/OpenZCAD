@@ -95,6 +95,29 @@ export function refusedMirrorMember(
 }
 
 /**
+ * The body a refusal on screen is about, or null when it is about none of
+ * them. `shown` is whose words the refusal shows: when that is a feature's
+ * attributed warning, only that feature's body is named, so the name, the
+ * sentence and its typed record all speak of one feature (an earlier
+ * feature's new failure is not blamed on a picked body). A warning no
+ * feature is named for names no body. With no warning shown (the set's own
+ * check refused), the refused member is the body named.
+ */
+export function mirrorRefusalMember(
+  members: readonly MirrorSetMember[],
+  derived: ProjectDocument['derived'],
+  shown: { featureId: FeatureId } | 'unattributed' | null
+): MirrorSetMember | null {
+  if (shown === 'unattributed') return null;
+  if (shown) {
+    return (
+      members.find((member) => member.featureId === shown.featureId) ?? null
+    );
+  }
+  return refusedMirrorMember(members, derived);
+}
+
+/**
  * What a click on the model does while a command that takes bodies runs:
  * the `plane` (a flat face, once a body is picked, for Mirror and Split),
  * a `body` to toggle (the host maps a preview's result to the first pick,
