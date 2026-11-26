@@ -1619,6 +1619,62 @@
   color: var(--color-accent);
 }
 
+/* A shared project says so over its preview's bottom-left corner, clear of
+   the flags (top right) and the select box (top left): one short word on
+   one line, "With you" in the accent
+   (shared with you), "Shared" quieter (yours, with members or a live link),
+   each with its own icon. The tooltip and accessible name carry the rest.
+   The list's small preview keeps only the icon. */
+.start-tile-share-tag {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  z-index: 1;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+  max-width: calc(100% - 12px);
+  padding: 1px 5px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+  /* Hit-testable so its tooltip shows; a click still opens the card. */
+  cursor: inherit;
+}
+
+.start-tile-share-tag.is-with-you {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, currentcolor 45%, transparent);
+}
+
+/* The thumbnail's own svg rule fills the pane; the tag's icon must not. */
+.start-tile-thumb .start-tile-share-tag svg {
+  flex: none;
+  width: 10px;
+  height: 10px;
+}
+
+.start-tile-share-tag-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.start-tile-grid.is-list .start-tile-share-tag {
+  bottom: 2px;
+  left: 2px;
+  padding: 2px;
+}
+
+.start-tile-grid.is-list .start-tile-share-tag-text {
+  display: none;
+}
+
 /* What wants a look (a divergence, a save under way or failed): one mark in
    the top-right corner of a card's preview, and the Status column in the
    list, where it keeps its words. */

@@ -258,9 +258,13 @@ export function mergeProjectSummaries(
       ...(pending ? { name: existing.name } : {}),
       ...(thumbnailArtifactId ? { thumbnailArtifactId } : {}),
       ...(organization ? { organization } : {}),
-      ...(storageFormat !== undefined ? { storageFormat } : {})
+      ...(storageFormat !== undefined ? { storageFormat } : {}),
+      // Only the account knows who else has the project: its listing
+      // speaks for sharing even when this device's record is newer.
+      ...(project.sharing ? { sharing: project.sharing } : {})
     };
     if (pending && !thumbnailArtifactId) delete summary.thumbnailArtifactId;
+    if (!project.sharing) delete summary.sharing;
     merged.set(project.projectId, summary);
   }
   return [...merged.values()].sort(compareProjectSummaries);

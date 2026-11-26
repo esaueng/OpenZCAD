@@ -4,6 +4,8 @@ export interface LibraryLayout {
   pinned: number;
   attention: number;
   local: number;
+  /** Shared either way; absent in a layout saved before the Shared tab. */
+  shared?: number;
   /** Tile positions needing a recovery-copy footer, in grouped order. */
   footers: number[];
   /** Physical tiles after folder grouping and filtering, rather than project counts. */
@@ -39,10 +41,8 @@ export function readLibraryLayout(): LibraryLayout | null {
       sessionStorage.getItem(STORAGE_KEY) ?? 'null'
     );
     if (!value || typeof value !== 'object') return null;
-    const { all, pinned, attention, local, footers, groups } = value as Record<
-      string,
-      unknown
-    >;
+    const { all, pinned, attention, local, shared, footers, groups } =
+      value as Record<string, unknown>;
     const validGroups =
       Array.isArray(groups) && groups.length <= 2 && groups.every(isGroup);
     const tileCount = validGroups
@@ -67,6 +67,7 @@ export function readLibraryLayout(): LibraryLayout | null {
       pinned,
       attention,
       local,
+      ...(isCount(shared) && shared <= all ? { shared } : {}),
       footers: footers as number[],
       ...(validGroups
         ? {

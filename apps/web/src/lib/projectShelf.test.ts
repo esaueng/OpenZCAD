@@ -97,6 +97,31 @@ describe('merged project sizes', () => {
   });
 });
 
+describe('merged project sharing', () => {
+  const local = {
+    projectId: 'proj_shared',
+    name: 'Bracket',
+    updatedAt: LISTED,
+    revisionCount: 1
+  } as ProjectSummary;
+
+  it('takes the account’s sharing even when this device’s record is newer', () => {
+    const [merged] = mergeProjectSummaries(
+      [local],
+      [{ ...local, updatedAt: EARLIER, sharing: { role: 'viewer' } }]
+    );
+    expect(merged?.sharing).toEqual({ role: 'viewer' });
+  });
+
+  it('drops sharing the account no longer lists', () => {
+    const [merged] = mergeProjectSummaries(
+      [{ ...local, sharing: { role: 'owner', linkCount: 1 } }],
+      [{ ...local, updatedAt: EARLIER }]
+    );
+    expect(merged).not.toHaveProperty('sharing');
+  });
+});
+
 describe('provisional encrypted shelf refresh', () => {
   const local = {
     projectId: 'proj_pending',
