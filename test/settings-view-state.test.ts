@@ -58,6 +58,72 @@ describe('settings view state', () => {
     });
   });
 
+  it('records a section asked for by name, for compact Settings to open', () => {
+    saveSettingsViewState({
+      open: false,
+      activeSection: 'general',
+      query: '',
+      scrollTop: 0
+    });
+    // Naming a section asks for it (Account storage, an invitation link).
+    expect(
+      updateSettingsViewState({ open: true, activeSection: 'account' })
+    ).toMatchObject({ activeSection: 'account', sectionRequested: true });
+    // A change that names none leaves the request as it was.
+    expect(updateSettingsViewState({ query: 'x' }).sectionRequested).toBe(true);
+    // A return visit opens on the list, and stores nothing for it.
+    const returned = updateSettingsViewState({
+      open: true,
+      sectionRequested: false
+    });
+    expect(returned).not.toHaveProperty('sectionRequested');
+    expect(returned.activeSection).toBe('account');
+    // A caller may name a section without asking for it.
+    expect(
+      updateSettingsViewState({
+        activeSection: 'viewport',
+        sectionRequested: false
+      })
+    ).not.toHaveProperty('sectionRequested');
+    expect(
+      normalizeSettingsViewState({ sectionRequested: 'yes' })
+    ).not.toHaveProperty('sectionRequested');
+  });
+
+  // PR #2219 review: a device-approval link stored its section but kept a
+  // search from an earlier visit, which hid the section it asked for.
+  it('drops a stale search when a section is asked for', () => {
+    saveSettingsViewState({
+      open: false,
+      activeSection: 'appearance',
+      query: 'appearance',
+      scrollTop: 300
+    });
+    expect(
+      updateSettingsViewState({ open: true, activeSection: 'encryption' })
+    ).toMatchObject({
+      activeSection: 'encryption',
+      query: '',
+      scrollTop: 0,
+      sectionRequested: true
+    });
+    // Settings saving where it is keeps its own search and scroll.
+    expect(
+      updateSettingsViewState({
+        activeSection: 'viewport',
+        query: 'grid',
+        scrollTop: 40
+      })
+    ).toMatchObject({ query: 'grid', scrollTop: 40 });
+    // A section named without being asked for leaves the search alone.
+    expect(
+      updateSettingsViewState({
+        activeSection: 'general',
+        sectionRequested: false
+      })
+    ).toMatchObject({ query: 'grid', scrollTop: 40 });
+  });
+
   it('fails open to a safe non-sensitive default', () => {
     window.localStorage.setItem(SETTINGS_VIEW_STATE_STORAGE_KEY, 'not json');
     expect(loadSettingsViewState()).toEqual(defaultSettingsViewState());
