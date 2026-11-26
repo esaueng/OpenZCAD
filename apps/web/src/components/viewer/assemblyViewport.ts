@@ -97,9 +97,13 @@ interface Drag {
   unit: 'deg' | 'mm';
   session: AssemblyDragSession;
   startValue: number;
-  previousOverride: readonly number[] | null;
-  /** The drivers before the drag took over, restored if it is cancelled. */
-  previousDrivers: AssemblyRuntimeState['drivers'];
+  /**
+   * The edit layer before the drag took over (its values, drivers and what
+   * the user moved), restored whole if the drag is cancelled. Taken from
+   * the edit layer, so a player preview is never part of it (AS06).
+   */
+  previousOverrides: AssemblyRuntimeState['editOverrides'];
+  previousDrivers: AssemblyRuntimeState['editDrivers'];
   previousMoved: AssemblyRuntimeState['moved'];
   last: AssemblyDragReading | null;
 }
@@ -482,14 +486,14 @@ export class AssemblyViewport {
     this.hideChip();
   }
 
-  /** Puts a joint's shown value, and who drives, back as before the drag. */
+  /**
+   * Puts the edit values, and who drives, back as they were before the
+   * drag. Never from what is shown now: that may be a player preview,
+   * which restoring would turn into edit values a later commit saves.
+   */
   private restoreDrag(drag: Drag) {
-    const overrides = new Map(getAssemblyRuntime().overrides);
-    if (drag.previousOverride)
-      overrides.set(drag.jointId, drag.previousOverride);
-    else overrides.delete(drag.jointId);
     assemblyRuntime.setOverrides(
-      overrides,
+      drag.previousOverrides,
       drag.previousDrivers,
       drag.previousMoved
     );
@@ -502,11 +506,12 @@ export class AssemblyViewport {
     // does the player's preview, which is never saved (AS06).
     const before = getAssemblyRuntime();
     if (before.playback || before.previewId !== null) assemblyRuntime.stop();
+    // The drag builds on the edit layer only, never on a preview's pose.
     const runtime = getAssemblyRuntime();
     const solution = solveAssembly(
       view.set,
-      runtime.overrides,
-      runtime.drivers
+      runtime.editOverrides,
+      runtime.editDrivers
     );
     const spec = dragSpecFor(view.set, solution, press.componentId);
     const joint = spec
@@ -535,8 +540,8 @@ export class AssemblyViewport {
       unit: spec.unit,
       session,
       startValue: spec.startValue,
-      previousOverride: runtime.overrides.get(joint.id) ?? null,
-      previousDrivers: runtime.drivers,
+      previousOverrides: runtime.editOverrides,
+      previousDrivers: runtime.editDrivers,
       previousMoved: runtime.moved,
       last: null
     };

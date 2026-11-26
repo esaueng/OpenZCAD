@@ -362,6 +362,88 @@ describe('Assemble viewport', () => {
     viewport.dispose();
   });
 
+  it('cancels a drag past a second finger’s scrub without keeping the preview (AS06)', () => {
+    const { document: doc, b } = twoJoints();
+    const committed: Record<string, number[]>[] = [];
+    registerAssemblyCommitHandlers({
+      commitPose: (values) => committed.push(values),
+      createJoint: () => undefined
+    });
+    assemblyRuntime.setActive(true);
+    render(createElement(AssemblyPlayer, { assembly: doc.assembly }));
+    const { viewport, pointer } = harness(b, () =>
+      onBlade(b, new THREE.Vector3(40, 0, 1))
+    );
+    viewport.setView(
+      buildAssemblyView(doc, { ...VIEW_RUNTIME, overrides: new Map() })
+    );
+    const a = THREE.MathUtils.degToRad(12.2);
+    act(() => {
+      pointer('pointerdown', 40, 0);
+      pointer('pointermove', 40 * Math.cos(a), 40 * Math.sin(a));
+    });
+    expect(Object.fromEntries(getAssemblyRuntime().overrides)).toEqual({
+      joint_pivot: [12]
+    });
+    // A second finger scrubs the player mid-drag: a pose turning both.
+    fireEvent.change(screen.getByRole('slider', { name: 'Position' }), {
+      target: { value: '1' }
+    });
+    expect(Object.fromEntries(getAssemblyRuntime().overrides)).toEqual({
+      joint_pivot: [30],
+      joint_c: [40]
+    });
+    // The browser cancels the drag (it took the touch for a gesture).
+    act(() => {
+      pointer('pointercancel', 40 * Math.cos(a), 40 * Math.sin(a));
+    });
+    // Back to the saved pose: the preview is gone, and none of it stayed.
+    expect(getAssemblyRuntime().previewId).toBeNull();
+    expect(getAssemblyRuntime().overrides.size).toBe(0);
+    expect(getAssemblyRuntime().editOverrides.size).toBe(0);
+    expect(committed).toEqual([]);
+    // The next drag saves only the joint it moved.
+    act(() => {
+      pointer('pointerdown', 40, 0);
+      pointer('pointermove', 40 * Math.cos(a), 40 * Math.sin(a));
+      pointer('pointerup', 40 * Math.cos(a), 40 * Math.sin(a));
+    });
+    expect(committed).toEqual([{ joint_pivot: [12] }]);
+    viewport.dispose();
+  });
+
+  it('saves a drag released under a preview, and only what it moved (AS06)', () => {
+    const { document: doc, b } = twoJoints();
+    const committed: Record<string, number[]>[] = [];
+    registerAssemblyCommitHandlers({
+      commitPose: (values) => committed.push(values),
+      createJoint: () => undefined
+    });
+    assemblyRuntime.setActive(true);
+    render(createElement(AssemblyPlayer, { assembly: doc.assembly }));
+    const { viewport, pointer } = harness(b, () =>
+      onBlade(b, new THREE.Vector3(40, 0, 1))
+    );
+    viewport.setView(
+      buildAssemblyView(doc, { ...VIEW_RUNTIME, overrides: new Map() })
+    );
+    const a = THREE.MathUtils.degToRad(12.2);
+    act(() => {
+      pointer('pointerdown', 40, 0);
+      pointer('pointermove', 40 * Math.cos(a), 40 * Math.sin(a));
+    });
+    fireEvent.change(screen.getByRole('slider', { name: 'Position' }), {
+      target: { value: '1' }
+    });
+    act(() => {
+      pointer('pointerup', 40 * Math.cos(a), 40 * Math.sin(a));
+    });
+    expect(committed).toEqual([{ joint_pivot: [12] }]);
+    expect(getAssemblyRuntime().previewId).toBeNull();
+    expect(getAssemblyRuntime().overrides.size).toBe(0);
+    viewport.dispose();
+  });
+
   it('never saves the player’s preview, and an edit starts from rest', () => {
     const committed: Record<string, number[]>[] = [];
     registerAssemblyCommitHandlers({

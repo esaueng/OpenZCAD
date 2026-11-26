@@ -98,18 +98,31 @@ export interface AssemblyRuntimeState {
   selectedComponentIds: readonly string[];
   selectedJointId: string | null;
   selectedStudyId: string | null;
-  /** Joint values shown instead of the saved ones; never saved. */
-  overrides: ReadonlyMap<string, readonly number[]>;
   /**
-   * The motions those values drive, most recent first. Where joints are
-   * coupled, the group follows the first of these that belongs to it (the
-   * part being dragged, the track being played) and ignores what the other
-   * members' transient values say. Always names joints in `overrides`.
+   * Joint values shown instead of the saved ones; never saved. The
+   * player's preview while one is on (`preview`), else the edit layer
+   * (`editOverrides`). Draw from these; save, key or edit only from the
+   * edit layer.
    */
+  overrides: ReadonlyMap<string, readonly number[]>;
+  /** The motions `overrides` drive: the preview's, else `editDrivers`. */
   drivers: readonly AssemblyCouplingEnd[];
   /**
-   * The motions among `drivers` that the user moved (a drag, a slider, a
-   * typed value), most recent first; never the ones a scrub or playback
+   * The edit layer: transient joint values a drag, a slider, a scrub or
+   * playback put there, and what a pose commit saves. It never holds a
+   * preview's values; a preview only covers it on screen.
+   */
+  editOverrides: ReadonlyMap<string, readonly number[]>;
+  /**
+   * The motions the edit values drive, most recent first. Where joints are
+   * coupled, the group follows the first of these that belongs to it (the
+   * part being dragged, the track being played) and ignores what the other
+   * members' transient values say. Always names joints in `editOverrides`.
+   */
+  editDrivers: readonly AssemblyCouplingEnd[];
+  /**
+   * The motions among `editDrivers` that the user moved (a drag, a slider,
+   * a typed value), most recent first; never the ones a scrub or playback
    * put there. This is what a pose commit says was moved: a motion study
    * keys from it and refuses a coupled move it does not account for.
    */
@@ -132,13 +145,30 @@ export interface AssemblyRuntimeState {
   /** Exploded-view offsets shown instead of the saved ones during a drag. */
   explodeOverrides: ReadonlyMap<string, Vector3>;
   /**
-   * The player's preview (AS06), while `overrides` are a pose it shows:
-   * the id `startPreview` handed out, or null. A preview's values are never
-   * saved nor carried into an edit; anything else that writes the
-   * transient values ends it.
+   * The player's preview layer (AS06), shown over the edit layer: its own
+   * values, never copied into the edit layer, a drag or a commit. Any
+   * write to the edit layer ends it, and ending it discards exactly this
+   * layer.
    */
+  preview: AssemblyPreviewLayer | null;
+  /** `preview`'s id, or null: the one `startPreview` handed out. */
   previewId: number | null;
 }
+
+export interface AssemblyPreviewLayer {
+  id: number;
+  overrides: ReadonlyMap<string, readonly number[]>;
+  drivers: readonly AssemblyCouplingEnd[];
+}
+
+/**
+ * What the store's methods write. The shown values (`overrides`,
+ * `drivers`) and `previewId` follow from the layers, so nothing writes
+ * them directly.
+ */
+type RuntimePatch = Partial<
+  Omit<AssemblyRuntimeState, 'overrides' | 'drivers' | 'previewId'>
+>;
 
 /** Commits the app performs on the store's behalf (registered by App). */
 export interface AssemblyCommitHandlers {
@@ -154,14 +184,18 @@ export interface AssemblyCommitHandlers {
   commitExplode?(offsets: Record<string, Vector3>): void;
 }
 
+const INITIAL_EDIT: ReadonlyMap<string, readonly number[]> = new Map();
+const INITIAL_DRIVERS: readonly AssemblyCouplingEnd[] = [];
 const INITIAL: AssemblyRuntimeState = {
   active: false,
   selectedComponentId: null,
   selectedComponentIds: [],
   selectedJointId: null,
   selectedStudyId: null,
-  overrides: new Map(),
-  drivers: [],
+  overrides: INITIAL_EDIT,
+  drivers: INITIAL_DRIVERS,
+  editOverrides: INITIAL_EDIT,
+  editDrivers: INITIAL_DRIVERS,
   moved: [],
   placementOverrides: new Map(),
   playback: null,
@@ -171,6 +205,7 @@ const INITIAL: AssemblyRuntimeState = {
   gearMesh: null,
   exploded: false,
   explodeOverrides: new Map(),
+  preview: null,
   previewId: null
 };
 
@@ -197,30 +232,31 @@ function emit(next: AssemblyRuntimeState): void {
   for (const listener of listeners) listener();
 }
 
-function patch(partial: Partial<AssemblyRuntimeState>): void {
-  // Drivers only ever name values that are still shown: whatever replaces
-  // or clears the transient values drops the drivers that went with them.
-  if (partial.overrides && !partial.drivers) {
-    const shown = partial.overrides;
-    const kept = state.drivers.filter((d) => shown.has(d.jointId));
-    if (kept.length !== state.drivers.length)
-      partial = { ...partial, drivers: kept };
+function patch(partial: RuntimePatch): void {
+  // Drivers only ever name values that are still there: whatever replaces
+  // or clears the edit values drops the drivers that went with them.
+  const edit = partial.editOverrides;
+  if (edit && !partial.editDrivers) {
+    const kept = state.editDrivers.filter((d) => edit.has(d.jointId));
+    if (kept.length !== state.editDrivers.length)
+      partial = { ...partial, editDrivers: kept };
   }
-  if (partial.overrides && !partial.moved) {
-    const shown = partial.overrides;
-    const kept = state.moved.filter((d) => shown.has(d.jointId));
+  if (edit && !partial.moved) {
+    const kept = state.moved.filter((d) => edit.has(d.jointId));
     if (kept.length !== state.moved.length)
       partial = { ...partial, moved: kept };
   }
-  // New transient values from anything but the preview end the preview.
-  if (
-    state.previewId !== null &&
-    partial.overrides &&
-    partial.overrides !== state.overrides &&
-    !('previewId' in partial)
-  )
-    partial = { ...partial, previewId: null };
-  emit({ ...state, ...partial });
+  // New edit values end the preview, discarding exactly its layer.
+  if (edit && edit !== state.editOverrides && !('preview' in partial))
+    partial = { ...partial, preview: null };
+  const next = { ...state, ...partial };
+  const preview = next.preview;
+  emit({
+    ...next,
+    overrides: preview ? preview.overrides : next.editOverrides,
+    drivers: preview ? preview.drivers : next.editDrivers,
+    previewId: preview ? preview.id : null
+  });
 }
 
 export function getAssemblyRuntime(): AssemblyRuntimeState {
@@ -268,7 +304,8 @@ export const assemblyRuntime = {
         : {
             active,
             playback: null,
-            overrides: new Map(),
+            editOverrides: new Map(),
+            preview: null,
             exploded: false,
             explodeOverrides: new Map(),
             placementOverrides: new Map(),
@@ -321,13 +358,18 @@ export const assemblyRuntime = {
     values: readonly number[] | null,
     dof?: number
   ): void {
-    // An edit starts from the saved pose, never from a preview's values.
-    const previewing = state.previewId !== null;
-    const overrides = previewing ? new Map() : new Map(state.overrides);
+    // An edit during a preview starts from the saved pose: it drops the
+    // preview, and the transient values under it, rather than build on them.
+    const previewing = state.preview !== null;
+    const overrides = previewing ? new Map() : new Map(state.editOverrides);
     if (values) overrides.set(jointId, [...values]);
     else overrides.delete(jointId);
     if (!values || dof === undefined) {
-      patch(previewing ? { overrides, drivers: [], moved: [] } : { overrides });
+      patch(
+        previewing
+          ? { editOverrides: overrides, editDrivers: [], moved: [] }
+          : { editOverrides: overrides }
+      );
       return;
     }
     const toFront = (
@@ -340,20 +382,27 @@ export const assemblyRuntime = {
             ...list.filter((d) => d.jointId !== jointId || d.dof !== dof)
           ];
     patch({
-      overrides,
-      drivers: toFront(previewing ? [] : state.drivers),
+      editOverrides: overrides,
+      editDrivers: toFront(previewing ? [] : state.editDrivers),
       moved: toFront(previewing ? [] : state.moved)
     });
   },
   /**
-   * Begins a player preview (AS06) and returns its id. The pose it then
-   * shows with `showPreview` is never saved: a drag or an edit starts from
-   * the saved pose instead, and anything else that writes the transient
-   * values ends the preview.
+   * Begins a player preview (AS06) and returns its id. It is a layer over
+   * the edit values, starting with what is shown now. The poses it then
+   * shows with `showPreview` are never saved: a drag or an edit starts from
+   * the saved pose instead, and anything that writes the edit values ends
+   * the preview.
    */
   startPreview(): number {
     lastPreviewId += 1;
-    patch({ previewId: lastPreviewId });
+    patch({
+      preview: {
+        id: lastPreviewId,
+        overrides: state.overrides,
+        drivers: state.drivers
+      }
+    });
     return lastPreviewId;
   },
   /**
@@ -365,27 +414,30 @@ export const assemblyRuntime = {
     overrides: ReadonlyMap<string, readonly number[]>,
     drivers: readonly AssemblyCouplingEnd[] = []
   ): boolean {
-    if (state.previewId !== previewId) return false;
-    patch({ overrides, drivers, moved: [], previewId });
+    if (state.preview?.id !== previewId) return false;
+    patch({ preview: { id: previewId, overrides, drivers } });
     return true;
   },
-  /** Ends the preview `previewId`, if it is still on, and drops its pose. */
+  /**
+   * Ends the preview `previewId`, if it is still on, discarding exactly its
+   * layer: the edit values under it show again.
+   */
   endPreview(previewId: number): void {
-    if (state.previewId !== previewId) return;
-    patch({ overrides: new Map(), previewId: null });
+    if (state.preview?.id !== previewId) return;
+    patch({ preview: null });
   },
   /**
-   * Replaces every transient joint value at once (playback frames, a
-   * scrub), with the motions they drive in precedence order. Nothing the
-   * user moved is carried over, unless `moved` restores it (a cancelled
-   * drag putting back what was there).
+   * Replaces every edit value at once (playback frames, a scrub), with the
+   * motions they drive in precedence order. Nothing the user moved is
+   * carried over, unless `moved` restores it (a cancelled drag putting
+   * back what was there).
    */
   setOverrides(
     overrides: ReadonlyMap<string, readonly number[]>,
     drivers: readonly AssemblyCouplingEnd[] = [],
     moved: readonly AssemblyCouplingEnd[] = []
   ): void {
-    patch({ overrides, drivers, moved });
+    patch({ editOverrides: overrides, editDrivers: drivers, moved });
   },
   setPlacementOverride(
     componentId: string,
@@ -395,37 +447,32 @@ export const assemblyRuntime = {
     if (placement) placementOverrides.set(componentId, placement);
     else placementOverrides.delete(componentId);
     // Moving a part ends a preview: its pose is never saved with it.
-    patch(
-      state.previewId !== null
-        ? { placementOverrides, overrides: new Map(), previewId: null }
-        : { placementOverrides }
-    );
+    patch({ placementOverrides, preview: null });
   },
   clearOverrides(): void {
     if (
-      state.overrides.size === 0 &&
+      state.editOverrides.size === 0 &&
       state.placementOverrides.size === 0 &&
-      state.previewId === null
+      state.preview === null
     )
       return;
     patch({
-      overrides: new Map(),
+      editOverrides: new Map(),
       placementOverrides: new Map(),
-      previewId: null
+      preview: null
     });
   },
   /**
-   * Saves the transient values as one undo step and clears them. While a
-   * motion study is open its timeline keys them at the playhead instead and
-   * the study then shows them.
+   * Saves the edit values as one undo step and clears them. While a motion
+   * study is open its timeline keys them at the playhead instead and the
+   * study then shows them. A preview's pose is only looked at (AS06): it
+   * is never among what this saves.
    */
   commitOverrides(): void {
-    if (state.overrides.size === 0 && state.placementOverrides.size === 0)
+    if (state.editOverrides.size === 0 && state.placementOverrides.size === 0)
       return;
-    // A preview's pose is only looked at (AS06).
-    if (state.previewId !== null) return;
     const values = Object.fromEntries(
-      [...state.overrides].map(([id, v]) => [id, [...v]])
+      [...state.editOverrides].map(([id, v]) => [id, [...v]])
     );
     // A free part's placement is not part of a study: that pose saves.
     if (
@@ -440,9 +487,9 @@ export const assemblyRuntime = {
     handlers.commitPose(
       values,
       state.placementOverrides.size > 0 ? placements : undefined,
-      state.drivers
+      state.editDrivers
     );
-    patch({ overrides: new Map(), placementOverrides: new Map() });
+    patch({ editOverrides: new Map(), placementOverrides: new Map() });
   },
   startJointSweep(
     jointId: string,
@@ -480,11 +527,11 @@ export const assemblyRuntime = {
   stop(): void {
     if (
       !state.playback &&
-      state.overrides.size === 0 &&
-      state.previewId === null
+      state.editOverrides.size === 0 &&
+      state.preview === null
     )
       return;
-    patch({ playback: null, overrides: new Map(), previewId: null });
+    patch({ playback: null, editOverrides: new Map(), preview: null });
   },
   setStudyTime(t: number): void {
     patch({ studyTimeS: Math.max(0, t) });
@@ -492,7 +539,7 @@ export const assemblyRuntime = {
   openJointTool(kind: AssemblyJointKind = 'revolute'): void {
     patch({
       playback: null,
-      overrides: new Map(),
+      editOverrides: new Map(),
       // Frames are picked and parts placed on the assembled pose.
       exploded: false,
       explodeOverrides: new Map(),
@@ -536,16 +583,16 @@ export const assemblyRuntime = {
     const tool = state.jointTool;
     if (!tool || tool.step !== 'review' || !handlers) return;
     handlers.createJoint(tool);
-    patch({ jointTool: null, overrides: new Map() });
+    patch({ jointTool: null, editOverrides: new Map() });
   },
   closeJointTool(): void {
-    if (state.jointTool) patch({ jointTool: null, overrides: new Map() });
+    if (state.jointTool) patch({ jointTool: null, editOverrides: new Map() });
   },
   /** Opens Set up motion with a starting draft; stops playback and the joint tool. */
   openMotionSetup(draft: MotionSetupDraft, previewing = true): void {
     patch({
       playback: null,
-      overrides: new Map(),
+      editOverrides: new Map(),
       // Frames are picked and parts placed on the assembled pose.
       exploded: false,
       explodeOverrides: new Map(),
@@ -578,17 +625,18 @@ export const assemblyRuntime = {
       JSON.stringify(setup.preview) === JSON.stringify(preview)
     )
       return;
-    const overrides = preview ? state.overrides : new Map();
-    patch({ motionSetup: { ...setup, preview }, overrides });
+    const editOverrides = preview ? state.editOverrides : new Map();
+    patch({ motionSetup: { ...setup, preview }, editOverrides });
   },
   closeMotionSetup(): void {
-    if (state.motionSetup) patch({ motionSetup: null, overrides: new Map() });
+    if (state.motionSetup)
+      patch({ motionSetup: null, editOverrides: new Map() });
   },
   /** Opens Mesh gears with a starting pair; closes the other tools. */
   openGearMesh(draft: GearMeshDraft): void {
     patch({
       playback: null,
-      overrides: new Map(),
+      editOverrides: new Map(),
       // Frames are picked and parts placed on the assembled pose.
       exploded: false,
       explodeOverrides: new Map(),
@@ -617,8 +665,10 @@ export const assemblyRuntime = {
             motionSetup: null,
             gearMesh: null,
             // Closing a tool drops the values its preview was showing.
-            overrides:
-              state.jointTool || state.motionSetup ? new Map() : state.overrides
+            editOverrides:
+              state.jointTool || state.motionSetup
+                ? new Map()
+                : state.editOverrides
           }
         : { exploded, explodeOverrides: new Map() }
     );

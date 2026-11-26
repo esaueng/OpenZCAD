@@ -391,12 +391,12 @@ export function MotionStudyTimeline({
       if (!track) continue;
       const joint = jointById.get(track.jointId);
       // What the part shows now: a pose dragged in the viewport, else the
-      // study's own value there.
+      // study's own value there. Never a player preview's pose (AS06).
       const value = joint
         ? currentJointValue(
             joint,
             track.dof,
-            shownJointValues(set, runtime.overrides, runtime.drivers)
+            shownJointValues(set, runtime.editOverrides, runtime.editDrivers)
           )
         : evaluateTrack(track, at);
       next = setKeyAt(next, index, at, value);
@@ -525,8 +525,12 @@ export function MotionStudyTimeline({
     if (pending && pending.pointerId === event.pointerId) {
       const dx = Math.abs(event.clientX - pending.x);
       const dy = Math.abs(event.clientY - pending.y);
-      if (dx < TOUCH_SCRUB_SLOP_PX || dx <= dy) return;
+      // Still within the slop: it may yet be a tap.
+      if (Math.max(dx, dy) < TOUCH_SCRUB_SLOP_PX) return;
       pendingScrubRef.current = null;
+      // Mostly up or down: a scroll, whether or not the browser claims it
+      // (its pointerup must not count as a tap).
+      if (dx <= dy) return;
       scrubRef.current = event.pointerId;
       capture(event.currentTarget, event.pointerId);
     }
@@ -538,8 +542,12 @@ export function MotionStudyTimeline({
     const pending = pendingScrubRef.current;
     if (pending && pending.pointerId === event.pointerId) {
       pendingScrubRef.current = null;
-      // A tap: the playhead goes where it landed.
-      seek(timeAt(event.currentTarget, pending.x, base.durationS));
+      // A tap, if the finger stayed within the slop: the playhead goes
+      // where it landed. Anything further was a swipe and moves nothing.
+      const dx = Math.abs(event.clientX - pending.x);
+      const dy = Math.abs(event.clientY - pending.y);
+      if (Math.max(dx, dy) < TOUCH_SCRUB_SLOP_PX)
+        seek(timeAt(event.currentTarget, pending.x, base.durationS));
     }
     if (scrubRef.current === event.pointerId) scrubRef.current = null;
   }
@@ -906,11 +914,16 @@ export function MotionStudyTimeline({
                       className="motion-track-menu-item"
                       onClick={() => {
                         setAddOpen(false);
-                        const shown = getAssemblyRuntime();
+                        // The edit pose, never a player preview's (AS06).
+                        const runtime = getAssemblyRuntime();
                         const value = currentJointValue(
                           joint,
                           dof,
-                          shownJointValues(set, shown.overrides, shown.drivers)
+                          shownJointValues(
+                            set,
+                            runtime.editOverrides,
+                            runtime.editDrivers
+                          )
                         );
                         if (
                           commit(

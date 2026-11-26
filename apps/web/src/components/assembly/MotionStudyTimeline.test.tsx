@@ -389,7 +389,12 @@ describe('MotionStudyTimeline', () => {
     // A tap moves the playhead where it landed.
     down(100, 18, 2);
     expect(getAssemblyRuntime().playback).not.toBeNull();
-    fireEvent.pointerUp(row, { pointerId: 2, pointerType: 'touch' });
+    fireEvent.pointerUp(row, {
+      clientX: 102,
+      clientY: 20,
+      pointerId: 2,
+      pointerType: 'touch'
+    });
     expect(getAssemblyRuntime().playback).toBeNull();
     expect(getAssemblyRuntime().studyTimeS).toBe(1);
 
@@ -413,6 +418,83 @@ describe('MotionStudyTimeline', () => {
     expect(getAssemblyRuntime().studyTimeS).toBeCloseTo(0.6);
   });
 
+  it('with touch, a short vertical swipe the browser releases never seeks', () => {
+    mountTouch();
+    const row = lane(screen.getByTestId('motion-lane-0'));
+    act(() => assemblyRuntime.startStudy('study_1', 1, 0.5));
+    const playing = getAssemblyRuntime().playback;
+    // Up the sheet past the slop, and released with pointerup rather than
+    // claimed as a scroll (pointercancel).
+    fireEvent.pointerDown(row, {
+      clientX: 150,
+      clientY: 18,
+      pointerId: 1,
+      pointerType: 'touch',
+      button: 0
+    });
+    fireEvent.pointerMove(row, {
+      clientX: 151,
+      clientY: 30,
+      pointerId: 1,
+      pointerType: 'touch'
+    });
+    fireEvent.pointerUp(row, {
+      clientX: 151,
+      clientY: 30,
+      pointerId: 1,
+      pointerType: 'touch'
+    });
+    expect(getAssemblyRuntime().playback).toBe(playing);
+    expect(getAssemblyRuntime().studyTimeS).toBe(0);
+
+    // Nor does one released past the slop with no move reported first.
+    fireEvent.pointerDown(row, {
+      clientX: 100,
+      clientY: 18,
+      pointerId: 2,
+      pointerType: 'touch',
+      button: 0
+    });
+    fireEvent.pointerUp(row, {
+      clientX: 101,
+      clientY: 32,
+      pointerId: 2,
+      pointerType: 'touch'
+    });
+    expect(getAssemblyRuntime().playback).toBe(playing);
+    expect(getAssemblyRuntime().studyTimeS).toBe(0);
+
+    // A vertical swipe then a sideways one in the same touch stays a
+    // scroll: the pending seek is gone once it went vertical.
+    fireEvent.pointerDown(row, {
+      clientX: 100,
+      clientY: 18,
+      pointerId: 3,
+      pointerType: 'touch',
+      button: 0
+    });
+    fireEvent.pointerMove(row, {
+      clientX: 100,
+      clientY: 30,
+      pointerId: 3,
+      pointerType: 'touch'
+    });
+    fireEvent.pointerMove(row, {
+      clientX: 180,
+      clientY: 30,
+      pointerId: 3,
+      pointerType: 'touch'
+    });
+    fireEvent.pointerUp(row, {
+      clientX: 180,
+      clientY: 30,
+      pointerId: 3,
+      pointerType: 'touch'
+    });
+    expect(getAssemblyRuntime().playback).toBe(playing);
+    expect(getAssemblyRuntime().studyTimeS).toBe(0);
+  });
+
   it('offers no key-step buttons without touch: [ and ] step there', () => {
     mount();
     expect(screen.queryByRole('button', { name: 'Previous key' })).toBeNull();
@@ -433,6 +515,43 @@ describe('MotionStudyTimeline', () => {
     fireEvent.change(playback, { target: { value: 'once' } });
     expect(lastStudy(executed).playback).toBe('once');
     expect(executed).toHaveLength(3);
+  });
+
+  it('keys and adds tracks from the edit pose, never the player’s preview (AS06)', () => {
+    const { executed } = mount();
+    const ruler = lane(screen.getByTestId('motion-ruler'));
+    fireEvent.pointerDown(ruler, { clientX: 50, pointerId: 1, button: 0 });
+    fireEvent.pointerUp(ruler, { pointerId: 1 });
+    expect(getAssemblyRuntime().overrides.get('j_pivot')).toEqual([22.5]);
+    // The player previews another pose over the scrubbed one.
+    act(() => {
+      const id = assemblyRuntime.startPreview();
+      assemblyRuntime.showPreview(id, new Map([['j_pivot', [45]]]));
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Key at playhead' }));
+    expect(lastStudy(executed).tracks[0]?.keys).toEqual([
+      { t: 0, value: 0, easing: 'linear' },
+      { t: 0.5, value: 22.5, easing: 'linear' },
+      { t: 2, value: 90, easing: 'linear' }
+    ]);
+  });
+
+  it('adds a track from the saved pose while the player previews (AS06)', () => {
+    const manager = pivotProject();
+    const study = manager.document.assembly!.studies[0]!;
+    manager.execute(
+      commandFactories.setAssemblyStudy({ study: { ...study, tracks: [] } })
+    );
+    const { executed } = mount(manager);
+    act(() => {
+      const id = assemblyRuntime.startPreview();
+      assemblyRuntime.showPreview(id, new Map([['j_pivot', [45]]]));
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add track' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Pivot/ }));
+    expect(lastStudy(executed).tracks[0]?.keys).toEqual([
+      { t: 0, value: 0, easing: 'linear' }
+    ]);
   });
 
   it('adds a track for an untracked joint motion from the menu', () => {
