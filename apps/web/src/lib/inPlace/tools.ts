@@ -5576,8 +5576,9 @@ function planeHint(
  * M11 (D4): Mirror takes several bodies about one plane. Each body is its own
  * Mirror feature, editable and deletable on its own, and Done commits them
  * all as one step. One body is the Mirror it always was. With a body picked,
- * a plain click on a flat face is the plane; Shift or ⌘ adds or removes the
- * clicked body, as a click on its Objects row does. The plane is stored by
+ * a plain click on a flat face is the plane; Shift (the viewport's additive
+ * pick, as the touch multi-select toggle) adds or removes the clicked body,
+ * as a click on its Objects row does. The plane is stored by
  * its numbers, so a face of one of the picked bodies is a plane like any
  * other, and that body's copy meets it on that face.
  */

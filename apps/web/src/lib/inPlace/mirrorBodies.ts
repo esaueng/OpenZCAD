@@ -68,31 +68,55 @@ export function composeMirrorSet(
   };
 }
 
-const FEATURE_LEAD = /^Feature "[^"]*":\s*/;
+/** What the bar says to do about a refused body, after the kernel's reason. */
+export const MIRROR_REFUSED_ADVICE =
+  'Remove it from the picks, or pick another plane.';
 
 /**
- * Why the set cannot be committed, naming the body whose mirror refused, or
- * null when every body's mirror built. A set is all or nothing: one refused
- * body holds Done for all of them.
+ * The body whose mirror refused, found by its feature's attributed warning
+ * or its missing result (never by the warning's wording), or null when every
+ * body's mirror built. A set is all or nothing: one refused body holds Done
+ * for all of them.
  */
-export function mirrorSetRefusal(
+export function refusedMirrorMember(
   members: readonly MirrorSetMember[],
-  derived: ProjectDocument['derived'],
-  bodyName: (bodyId: BodyId) => string | undefined
-): string | null {
+  derived: ProjectDocument['derived']
+): MirrorSetMember | null {
   for (const member of members) {
-    const warning = derived.featureWarnings?.find(
+    const failed = derived.featureWarnings?.some(
       (candidate) =>
         candidate.featureId === member.featureId &&
         (candidate.kind === 'build-failed' || candidate.kind === 'refusal')
     );
-    const built = ownEntry(derived.bodyRepresentations, member.resultBodyId);
-    if (!warning && built) continue;
-    const name = bodyName(member.sourceBodyId) ?? 'A body';
-    const reason = warning
-      ? warning.message.replace(FEATURE_LEAD, '')
-      : 'it produced no body.';
-    return `${name} cannot be mirrored: ${reason} Remove it from the picks, or pick another plane.`;
+    if (failed || !ownEntry(derived.bodyRepresentations, member.resultBodyId))
+      return member;
   }
   return null;
+}
+
+/**
+ * What a click on the model does while a command that takes bodies runs:
+ * the `plane` (a flat face, once a body is picked, for Mirror and Split),
+ * a `body` to toggle (the host maps a preview's result to the first pick,
+ * as Options lists it), or nothing. M11 (D4): Shift on a command that takes
+ * a plane and several bodies (Mirror) adds or removes the clicked body
+ * instead of taking its face as the plane, and on a preview's result adds
+ * nothing, since that is no body yet. A Boolean, which takes no plane, is
+ * left as it was: Shift on its preview names its first operand.
+ */
+export function bodyCommandClick(click: {
+  wantsPlane: boolean;
+  bodyMode: 'one' | 'many' | undefined;
+  /** Shift, or the touch multi-select toggle (the viewport's additive). */
+  additive: boolean;
+  bodiesPicked: number;
+  onFace: boolean;
+  previewResult: boolean;
+}): 'plane' | 'body' | 'none' {
+  const addsBody =
+    click.additive && click.wantsPlane && click.bodyMode === 'many';
+  if (click.wantsPlane && click.bodiesPicked > 0 && click.onFace && !addsBody)
+    return 'plane';
+  if (addsBody && click.previewResult) return 'none';
+  return 'body';
 }

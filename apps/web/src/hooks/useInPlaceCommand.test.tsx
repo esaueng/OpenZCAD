@@ -3798,8 +3798,12 @@ describe('useInPlaceCommand: M11 Mirror of several bodies', () => {
     origin: { x: 0, y: 0, z: 0 },
     normal: { x: 1, y: 0, z: 0 }
   };
-  const REFUSED =
-    'Right block cannot be mirrored: The plane is not finite. Remove it from the picks, or pick another plane.';
+  const KERNEL = 'Feature "Mirror 2": The plane is not finite.';
+  const RECORD = { category: 'invalid-input', code: 'plane-not-finite' };
+  const PICK = {
+    name: 'Right block',
+    advice: 'Remove it from the picks, or pick another plane.'
+  };
 
   /** A host whose mirror of `body_right` refuses, as the kernel would. */
   function harness() {
@@ -3828,9 +3832,9 @@ describe('useInPlaceCommand: M11 Mirror of several bodies', () => {
           ...(request.tool === 'modeling-each'
             ? {
                 check: () => {
-                  if (refused) throw new Error(REFUSED);
+                  if (refused) throw new Error('No mirrored body was made.');
                 },
-                namesRefusedInput: true
+                refusedPick: () => (refused ? PICK : null)
               }
             : {})
         };
@@ -3839,14 +3843,15 @@ describe('useInPlaceCommand: M11 Mirror of several bodies', () => {
         refuses.has(document)
           ? {
               ...fakeDocument(true).derived,
-              warnings: ['Feature "Mirror 2": The plane is not finite.'],
+              warnings: [KERNEL],
               featureWarnings: [
                 {
                   featureId: 'feat_right' as FeatureId,
                   featureName: 'Mirror 2',
                   kind: 'build-failed',
-                  message: 'Feature "Mirror 2": The plane is not finite.'
-                }
+                  message: KERNEL,
+                  kernelRefusal: RECORD
+                } as FeatureWarning
               ]
             }
           : fakeDocument(true).derived
@@ -3890,8 +3895,11 @@ describe('useInPlaceCommand: M11 Mirror of several bodies', () => {
     act(() => {
       hook.result.current.pickPlane(PLANE);
     });
-    // The body is named in place of the kernel's sentence about the feature.
-    await waitFor(() => expect(hook.result.current.refusal).toBe(REFUSED));
+    // The kernel's own sentence stands with its typed record; the refused
+    // body and what to do about it go to the bar as data, not prose.
+    await waitFor(() => expect(hook.result.current.refusal).toBe(KERNEL));
+    expect(hook.result.current.refusalClassification).toEqual(RECORD);
+    expect(hook.result.current.refusalPick).toEqual(PICK);
     expect(hook.result.current.canFinish).toBe(false);
     act(() => {
       expect(hook.result.current.done()).toBe(false);
@@ -3907,6 +3915,7 @@ describe('useInPlaceCommand: M11 Mirror of several bodies', () => {
     });
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
     expect(hook.result.current.refusal).toBeNull();
+    expect(hook.result.current.refusalPick).toBeNull();
   });
 
   it('an edit of one Mirror takes one body: a click replaces it', () => {

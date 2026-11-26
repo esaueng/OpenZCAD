@@ -2117,8 +2117,10 @@ import {
   type RefPick
 } from './lib/inPlace/tools';
 import {
+  MIRROR_REFUSED_ADVICE,
+  bodyCommandClick,
   composeMirrorSet,
-  mirrorSetRefusal,
+  refusedMirrorMember,
   type MirrorSetMember
 } from './lib/inPlace/mirrorBodies';
 import { imagePlacementPlane, placeImage } from './lib/inPlace/image';
@@ -23760,20 +23762,30 @@ export function App() {
         command.spec &&
         inPlaceBodyMode(command.spec, command.options)
       ) {
+        // A preview's result is not a body to pick: a click on it names the
+        // first pick, as Options lists it. A Boolean's edit previews under
+        // its committed result's id, which counts as that preview too (U11).
+        const previewResult =
+          !representations[selection.bodyId] ||
+          (command.editing?.data.featureKind === 'boolean' &&
+            command.editing.ownBodyIds.includes(selection.bodyId));
         // With the body picked, a flat face is the plane to mirror or split
-        // across; otherwise any face names its body. M11 (D4): Shift or ⌘ on
-        // a command that takes several bodies (Mirror) adds or removes the
-        // clicked body instead.
-        const addsBody =
-          additive &&
-          inPlaceBodyMode(command.spec, command.options, !!command.editing) ===
-            'many';
-        if (
-          command.spec.wantsPlane &&
-          command.slots.bodies.length > 0 &&
-          selection.kind === 'face' &&
-          !addsBody
-        ) {
+        // across; otherwise any face names its body. M11 (D4): Shift on
+        // Mirror, which takes several bodies, toggles the clicked body.
+        const click = bodyCommandClick({
+          wantsPlane: Boolean(command.spec.wantsPlane),
+          bodyMode: inPlaceBodyMode(
+            command.spec,
+            command.options,
+            !!command.editing
+          ),
+          additive,
+          bodiesPicked: command.slots.bodies.length,
+          onFace: selection.kind === 'face',
+          previewResult
+        });
+        if (click === 'none') return true;
+        if (click === 'plane' && selection.kind === 'face') {
           // The plane is the face as clicked, where it stands on screen: a
           // plane is stored by its numbers, so unlike a face operation's
           // face it is not mapped back onto an edited feature's input.
@@ -23800,15 +23812,6 @@ export function App() {
           }
           return false;
         }
-        // A preview's result is not a body to pick: a click on it names the
-        // first pick, as Options lists it. A Boolean's edit previews under
-        // its committed result's id, which counts as that preview too (U11).
-        const previewResult =
-          !representations[selection.bodyId] ||
-          (command.editing?.data.featureKind === 'boolean' &&
-            command.editing.ownBodyIds.includes(selection.bodyId));
-        // Shift or ⌘ on a preview's result adds no body: it is not one yet.
-        if (previewResult && addsBody) return true;
         const shown = previewResult
           ? (command.slots.bodies[0]?.bodyId ?? null)
           : selection.bodyId;
@@ -29626,15 +29629,22 @@ export function App() {
           validate: (document) => set.command.validate(document),
           apply: (document) => set.command.apply(document),
           resultBodyId: set.members.at(-1)?.resultBodyId,
+          // The kernel's own warning, with its typed record, is the reason
+          // the bar shows; the refused body is named ahead of it as data.
           check: (derived: ProjectDocument['derived']) => {
-            const refused = mirrorSetRefusal(
-              set.members,
-              derived,
-              (bodyId) => representations[bodyId]?.name
-            );
-            if (refused) throw new Error(refused);
+            if (refusedMirrorMember(set.members, derived)) {
+              throw new Error('This did not produce a valid body.');
+            }
           },
-          namesRefusedInput: true
+          refusedPick: (derived: ProjectDocument['derived']) => {
+            const member = refusedMirrorMember(set.members, derived);
+            return member
+              ? {
+                  name: representations[member.sourceBodyId]?.name ?? 'A body',
+                  advice: MIRROR_REFUSED_ADVICE
+                }
+              : null;
+          }
         };
       }
       // A pattern's frame is named as its commit names it, so Done can land
@@ -43157,6 +43167,7 @@ export function App() {
                   // U11: a kernel refusal says the input it is about; the
                   // last request that built stays on screen meanwhile.
                   refusalInput={inPlace.refusalInput}
+                  refusalPick={inPlace.refusalPick}
                   unitLabel={displayLengthName(doc.units)}
                   onTrySize={(dimension, size) => {
                     // The proved size is stored-unit; the panel reads a

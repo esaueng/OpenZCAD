@@ -70,16 +70,23 @@ export interface InPlaceBuiltCommand {
    */
   check?(derived: ProjectDocument['derived']): void;
   /**
-   * M11 (D4): `check` names which of several inputs refused (a Mirror of
-   * many bodies names the body), so its sentence is shown in place of the
-   * kernel's, which names only the feature.
+   * M11 (D4): which of several picks a refused frame refused (a Mirror of
+   * many bodies names the body), and what to do about it, as data: the bar
+   * names it ahead of the kernel's own sentence, which keeps its typed
+   * record, and closes with the advice. Null when no pick is to blame.
    */
-  namesRefusedInput?: boolean;
+  refusedPick?(derived: ProjectDocument['derived']): InPlaceRefusedPick | null;
   /**
    * The host's own command behind this frame, handed back to `commit` with
    * the frame (see {@link InPlacePreviewedFrame}). The hook never reads it.
    */
   command?: AnyCommand;
+}
+
+/** The pick a refusal is about, and what the user can do about it. */
+export interface InPlaceRefusedPick {
+  name: string;
+  advice: string;
 }
 
 /**
@@ -369,6 +376,12 @@ export interface InPlaceCommand {
    */
   refusalInput: string | null;
   /**
+   * M11: the pick the refusal is about (the body a Mirror of several could
+   * not mirror) and what to do about it, named in the bar around the
+   * kernel's sentence. Null for any other refusal.
+   */
+  refusalPick: InPlaceRefusedPick | null;
+  /**
    * While {@link refusalInput} is said, the values the frame still on
    * screen built from: a handle's arrow stands on its kept value, at the
    * model, while its chip reads the refused one. Null otherwise.
@@ -541,6 +554,11 @@ export function useInPlaceCommand(
    * still the refusal shown, so no other path that sets a refusal has to
    * clear it.
    */
+  /** The pick a frame's refusal names, for that refusal only (M11). */
+  const [refusalPickFor, setRefusalPickFor] = useState<{
+    message: string;
+    pick: InPlaceRefusedPick;
+  } | null>(null);
   const [typedRefusal, setTypedRefusal] = useState<{
     message: string;
     record: NonNullable<FeatureWarning['kernelRefusal']>;
@@ -1176,24 +1194,21 @@ export function useInPlaceCommand(
           // under a bare refusal, it reads as the value that was refused, so
           // only a tool that names the changed input keeps it.
           showRefused(frame?.request ?? null);
-          const named =
-            frame?.built.namesRefusedInput && unresolved !== null
-              ? unresolved
-              : null;
           setTypedRefusal(
             fresh && freshRecord
-              ? { message: named ?? fresh, record: freshRecord }
+              ? { message: fresh, record: freshRecord }
               : null
           );
-          setRefusal(
-            named ??
-              fresh ??
-              unresolved ??
-              (result.derived.featureWarnings === undefined
-                ? result.derived.warnings.at(-1)
-                : null) ??
-              'This did not produce a valid body.'
-          );
+          const message =
+            fresh ??
+            unresolved ??
+            (result.derived.featureWarnings === undefined
+              ? result.derived.warnings.at(-1)
+              : null) ??
+            'This did not produce a valid body.';
+          const pick = frame?.built.refusedPick?.(result.derived) ?? null;
+          setRefusalPickFor(pick ? { message, pick } : null);
+          setRefusal(message);
         }
       },
       onFailure: ({ error }) => {
@@ -2532,6 +2547,10 @@ export function useInPlaceCommand(
       entryRefusal || refusal === null || refusalInputs.length === 0
         ? null
         : refusalInputs.join(' and '),
+    refusalPick:
+      !entryRefusal && refusal !== null && refusalPickFor?.message === refusal
+        ? refusalPickFor.pick
+        : null,
     // An entry refused meanwhile (a 0 typed over the refused radius) leaves
     // the refused request and its kept frame as they were: the arrow stays.
     keptValues:

@@ -30,7 +30,7 @@ import {
 } from '../apps/web/src/lib/inPlace/tools';
 import {
   composeMirrorSet,
-  mirrorSetRefusal,
+  refusedMirrorMember,
   type MirrorSetMember
 } from '../apps/web/src/lib/inPlace/mirrorBodies';
 import { validatedFeatureRejection } from '../apps/web/src/lib/featureValidation';
@@ -270,7 +270,7 @@ describe('M11: Mirror of several bodies, one feature each, one transaction', () 
 
     const derived = await adapter.syncDocument(committed);
     expect(derived.warnings).toEqual([]);
-    expect(mirrorSetRefusal(members, derived, () => undefined)).toBeNull();
+    expect(refusedMirrorMember(members, derived)).toBeNull();
     expectMirrored(derived, source, members, P);
 
     // One Undo takes every copy back; one Redo restores them, same ids.
@@ -341,20 +341,23 @@ describe('M11: Mirror of several bodies, one feature each, one transaction', () 
       bodyIds,
       planeX(40)
     );
-    const names = Object.fromEntries(
-      BLOCKS.map((block, index) => [bodyIds[index]!, block.name])
-    );
     // Nothing refuses it before the rebuild: the set is judged on its build.
     command.validate(document);
     const candidate = command.apply(document);
     const derived = await adapter.syncDocument(candidate);
-    expect(mirrorSetRefusal(members, derived, (bodyId) => names[bodyId])).toBe(
-      'Back block cannot be mirrored: Mirror target is unavailable. Remove it from the picks, or pick another plane.'
-    );
-    // The others did build: only the named body holds the set.
+    // The Back block's Mirror is the one refused, found by its feature.
+    const refused = refusedMirrorMember(members, derived);
+    expect(refused?.sourceBodyId).toBe(bodyIds[2]);
     expect(
-      mirrorSetRefusal(members.slice(0, 2), derived, (id) => names[id])
-    ).toBeNull();
+      derived.featureWarnings?.find(
+        (warning) => warning.featureId === refused?.featureId
+      )
+    ).toMatchObject({
+      kind: 'build-failed',
+      message: `Feature "${refused?.featureName}": Mirror target is unavailable.`
+    });
+    // The others did build: only that body holds the set.
+    expect(refusedMirrorMember(members.slice(0, 2), derived)).toBeNull();
     // Done's commit gate judges every body's Mirror as a target of its own,
     // so the transaction is refused whole: no partial set lands.
     const rejected = members.map((member) =>
