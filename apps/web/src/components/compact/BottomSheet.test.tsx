@@ -71,9 +71,11 @@ describe('sheet state', () => {
     expect(back.detent).toBe('half');
     // Popping the last page of a sheet with nothing under it closes it.
     expect(reduce(back, false, { type: 'pop' }).detent).toBe('closed');
-    // Over the workspace's content, it goes back to that content.
+    // Over the workspace's content, it goes back to that content, at the
+    // height the content stood at before the first page (here none: peek,
+    // the least the content needs).
     expect(reduce(back, true, { type: 'pop' })).toEqual({
-      detent: 'half',
+      detent: 'peek',
       stack: []
     });
     // Pushing a page already in the stack returns to it.
@@ -82,6 +84,42 @@ describe('sheet state', () => {
         (entry) => entry.key
       )
     ).toEqual(['more']);
+  });
+
+  it('goes back to the height the root had when its first page goes', () => {
+    // All tools opened from the tray at peek comes up full, a modal over an
+    // inert stage; Back or Escape returns the tray to peek, the stage live.
+    const tray: SheetState = { detent: 'peek', stack: [] };
+    const allTools = reduce(tray, true, {
+      type: 'push',
+      page: page('all-tools'),
+      detent: 'full'
+    });
+    expect(allTools.detent).toBe('full');
+    expect(reduce(allTools, true, { type: 'pop' })).toEqual(tray);
+    expect(reduce(allTools, true, { type: 'step-down' })).toEqual(tray);
+    expect(sheetEscape(allTools, true)).toEqual(tray);
+    // Through a drill-in, the first page's root height is the one kept.
+    const drilled = reduce(
+      { detent: 'half', stack: [] },
+      true,
+      { type: 'push', page: page('more') },
+      { type: 'set-detent', detent: 'full' },
+      { type: 'push', page: page('file') }
+    );
+    expect(reduce(drilled, true, { type: 'pop' }).detent).toBe('full');
+    expect(reduce(drilled, true, { type: 'pop' }, { type: 'pop' })).toEqual({
+      detent: 'half',
+      stack: []
+    });
+    // Content that arrived under the page comes back at its own height.
+    const arrivedUnder = reduce(
+      allTools,
+      true,
+      { type: 'root', present: true, arrived: true, at: 'half' },
+      { type: 'pop' }
+    );
+    expect(arrivedUnder.detent).toBe('half');
   });
 
   it('comes up for new content and leaves with it', () => {
@@ -180,8 +218,19 @@ describe('sheet state', () => {
     expect(
       reduce({ detent: 'half', stack: [] }, true, { type: 'settle' }).detent
     ).toBe('peek');
-    const paged: SheetState = { detent: 'full', stack: [page('more')] };
-    expect(reduce(paged, true, { type: 'settle' })).toBe(paged);
+    const paged: SheetState = {
+      detent: 'full',
+      stack: [page('more')],
+      rootDetent: 'half'
+    };
+    const settled = reduce(paged, true, { type: 'settle' });
+    expect(settled.detent).toBe('full');
+    expect(settled.stack).toBe(paged.stack);
+    // The tool left under the page: the tray comes back at peek after it.
+    expect(reduce(settled, true, { type: 'pop' })).toEqual({
+      detent: 'peek',
+      stack: []
+    });
   });
 });
 
@@ -473,5 +522,44 @@ describe('BottomSheet', () => {
     expect(sheet().dataset.detent).toBe('half');
     expect(stage).not.toHaveAttribute('inert');
     stage.remove();
+  });
+
+  it('leaves controls that are not drawn out of the trap', () => {
+    render(
+      <Harness hasRoot initial={[{ type: 'set-detent', detent: 'full' }]}>
+        <button type="button">Done</button>
+        {/* A tool's Options left closed, and other controls not drawn. */}
+        <details>
+          <summary>Box options</summary>
+          <input aria-label="Width" />
+        </details>
+        <input aria-label="Folded away" style={{ display: 'none' }} />
+        <div style={{ display: 'none' }}>
+          <button type="button">Under a hidden box</button>
+        </div>
+        <button type="button" style={{ visibility: 'hidden' }}>
+          Invisible
+        </button>
+      </Harness>
+    );
+    const grabber = screen.getByRole('slider', { name: 'Sheet height' });
+    const summary = screen.getByText('Box options');
+    // Shift+Tab on the sheet's first control goes round to the last one
+    // drawn: the closed Options' summary, not the Width field inside.
+    grabber.focus();
+    fireEvent.keyDown(grabber, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(summary);
+    // And Tab from there wraps back to the first.
+    fireEvent.keyDown(summary, { key: 'Tab' });
+    expect(document.activeElement).toBe(grabber);
+    // Opened, the Options' field is the last stop.
+    act(() => {
+      (summary.parentElement as HTMLDetailsElement).open = true;
+    });
+    grabber.focus();
+    fireEvent.keyDown(grabber, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(
+      screen.getByRole('textbox', { name: 'Width' })
+    );
   });
 });

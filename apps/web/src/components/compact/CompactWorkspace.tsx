@@ -313,6 +313,38 @@ export default function CompactWorkspace({
     return () => chrome.removeEventListener('toggle', onToggle, true);
   }, []);
 
+  // A disabled verb's reason stands under the tray row: tapped at peek,
+  // the sheet comes up to half to show it, and goes back to peek with it
+  // unless it was moved meanwhile.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const raisedForReason = useRef(false);
+  const onTrayReason = useCallback(
+    (shown: boolean) => {
+      const current = stateRef.current;
+      if (shown) {
+        if (current.detent === 'peek' && current.stack.length === 0) {
+          raisedForReason.current = true;
+          dispatch({ type: 'raise', detent: 'half' });
+        }
+        return;
+      }
+      if (!raisedForReason.current) return;
+      raisedForReason.current = false;
+      if (current.detent === 'half' && current.stack.length === 0) {
+        dispatch({ type: 'set-detent', detent: 'peek' });
+      }
+    },
+    [dispatch]
+  );
+  useEffect(() => {
+    // Moved by hand (or by new content) while the reason showed: the
+    // height is the person's now.
+    if (state.detent !== 'half' || state.stack.length > 0) {
+      raisedForReason.current = false;
+    }
+  }, [state.detent, state.stack.length]);
+
   const push = (key: CompactPage, detent?: 'half' | 'full') =>
     dispatch({ type: 'push', page: { key }, ...(detent ? { detent } : {}) });
   const closePages = () => dispatch({ type: 'close' });
@@ -528,6 +560,7 @@ export default function CompactWorkspace({
               onAllTools={() =>
                 allToolsOpen ? closePages() : push('all-tools', 'full')
               }
+              onReason={onTrayReason}
             />
           ) : null}
           {/* The in-place command bar lands here (WorkspaceReadout), first:

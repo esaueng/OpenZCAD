@@ -37,11 +37,41 @@ export function useSheet(hasRoot: boolean) {
 }
 
 const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), details > summary, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+
+/**
+ * Whether a control inside `root` is drawn, so focus can land on it: not
+ * under `hidden` or `inert`, not inside a closed `<details>` (other than its
+ * own summary), and not under `display: none` or `visibility: hidden`. A
+ * tool's Options left closed hold inputs the trap must not count: focus
+ * sent to one of them stays where it was.
+ */
+function isDrawn(element: HTMLElement, root: HTMLElement): boolean {
+  if (element.closest('[hidden], [inert]')) return false;
+  for (
+    let current: HTMLElement | null = element;
+    current && current !== root;
+    current = current.parentElement
+  ) {
+    const parent = current.parentElement;
+    if (
+      parent instanceof HTMLDetailsElement &&
+      !parent.open &&
+      current.tagName !== 'SUMMARY'
+    ) {
+      return false;
+    }
+    const style = getComputedStyle(current);
+    if (style.display === 'none') return false;
+    // Visibility inherits: the control's own value is the one in force.
+    if (current === element && style.visibility === 'hidden') return false;
+  }
+  return true;
+}
 
 function focusables(root: HTMLElement): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-    (element) => !element.closest('[hidden], [inert]')
+  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((element) =>
+    isDrawn(element, root)
   );
 }
 

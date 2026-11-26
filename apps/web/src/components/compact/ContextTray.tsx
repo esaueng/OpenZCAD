@@ -1,5 +1,5 @@
 import { LayoutGrid } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { trayTools } from '../../lib/compactTray';
 import { TOOL_META, toolDisabledReason, toolTitle } from '../../lib/tools';
 import { verbIcon } from '../SelectionRail';
@@ -38,13 +38,29 @@ export function useTrayReason(): [string | null, (reason: string) => void] {
 export function ContextTray({
   build,
   allToolsOpen,
-  onAllTools
+  onAllTools,
+  onReason
 }: {
   build: CompactBuildProps;
   allToolsOpen: boolean;
   onAllTools(): void;
+  /**
+   * A disabled verb's reason came (true) or went (false). The reason stands
+   * under the row, below the peek's fold, so the sheet makes room for it
+   * while it shows.
+   */
+  onReason?(shown: boolean): void;
 }) {
   const [reason, showReason] = useTrayReason();
+  const onReasonRef = useRef(onReason);
+  onReasonRef.current = onReason;
+  const reasonShown = reason !== null;
+  const reasonSeen = useRef(false);
+  useEffect(() => {
+    if (!reasonShown && !reasonSeen.current) return;
+    reasonSeen.current = true;
+    onReasonRef.current?.(reasonShown);
+  }, [reasonShown]);
   const pick = build.pick && build.pick.verbs.length > 0 ? build.pick : null;
   const tools = pick
     ? []

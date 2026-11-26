@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -126,5 +128,48 @@ describe('the All tools sheet', () => {
       );
       expect(onLaunch, id).toHaveBeenCalledWith(tool);
     }
+  });
+
+  /**
+   * A launch is only half a flow: Sketch hands the stage to a sketch
+   * session, whose tools, relations and Finish live in the column and the
+   * instrument rail, which the compact frame otherwise hides (the review
+   * of #2216 found a sketch that could not be finished by touch). This
+   * fails when the compact stylesheet stops drawing them while a sketch is
+   * open; `test/e2e/compact-build.spec.ts` ("sketches by taps alone")
+   * drives the whole flow, plane to Finish to Extrude, with taps only.
+   */
+  it('keeps a launched sketch finishable in the compact frame', () => {
+    const css = readFileSync(
+      resolve(__dirname, '../../styles/components/compact-shell.css'),
+      'utf8'
+    ).replace(/\/\*[\s\S]*?\*\//g, '');
+    const hidden = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter((match) => /display:\s*none/.test(match[2]!))
+      .flatMap((match) => match[1]!.split(/,(?![^(]*\))/))
+      .map((selector) => selector.replace(/\s+/g, ' ').trim());
+    // Each hidden rule's subject: its last compound selector.
+    const subject = (selector: string) =>
+      selector.split(/\s*[\s>+~]\s*(?![^(]*\))/).pop()!;
+    for (const selector of hidden) {
+      const last = subject(selector);
+      if (/^\.workspace-column-float\b/.test(last)) {
+        expect(last, 'the sketch column stays drawn').toContain(
+          ':not(:has(.sketch-rail))'
+        );
+      }
+      if (/^\.instrument-rail\b/.test(last)) {
+        expect(last, 'the relations stay drawn').toContain(
+          ':not(:has(> .sketch-relations))'
+        );
+      }
+      expect(last).not.toMatch(
+        /^\.(sketch-rail|sketch-relations|workspace-column|workspace-column-(tools|footer|finish))(?![\w-])/
+      );
+    }
+    // Finish, the column's foot, is a finger's size.
+    expect(css).toMatch(
+      /\.workspace-column-footer\s+\.workspace-column-finish\s*\{[^}]*width:\s*var\(--compact-target\);[^}]*height:\s*var\(--compact-target\);/
+    );
   });
 });

@@ -45,6 +45,13 @@ export interface SheetPage {
 export interface SheetState {
   readonly detent: SheetDetent;
   readonly stack: readonly SheetPage[];
+  /**
+   * Where the sheet stood when its first page was pushed, so popping back
+   * to the root puts it there again: All tools opened from the tray at peek
+   * goes back to peek, not to a full-height modal over an inert stage.
+   * Absent while no page is open.
+   */
+  readonly rootDetent?: SheetDetent;
 }
 
 export const CLOSED_SHEET: SheetState = { detent: 'closed', stack: [] };
@@ -71,7 +78,8 @@ export type SheetAction =
   | { type: 'raise'; detent: Exclude<SheetDetent, 'closed'> }
   /**
    * The workspace's content left and only the tray stays (U12 slice 4): the
-   * sheet comes back down to peek, unless a page is open over it.
+   * sheet comes back down to peek, or, under an open page, comes back at
+   * peek once the page goes.
    */
   | { type: 'settle' };
 
@@ -137,15 +145,24 @@ export function sheetReducer(
         SHEET_DETENTS.indexOf(state.detent as 'peek')
           ? wanted
           : state.detent;
-      return { detent, stack };
+      return {
+        detent,
+        stack,
+        rootDetent:
+          state.stack.length === 0
+            ? state.detent
+            : (state.rootDetent ?? state.detent)
+      };
     }
     case 'pop': {
       if (state.stack.length === 0) return state;
       const stack = state.stack.slice(0, -1);
-      return {
-        stack,
-        detent: stack.length === 0 && !hasRoot ? 'closed' : state.detent
-      };
+      if (stack.length > 0) return { ...state, stack };
+      if (!hasRoot) return { detent: 'closed', stack };
+      // Back at the root: where it stood before the first page, never under
+      // the peek its content needs.
+      const back = state.rootDetent ?? state.detent;
+      return { detent: back === 'closed' ? 'peek' : back, stack };
     }
     case 'close':
       return {
@@ -172,7 +189,13 @@ export function sheetReducer(
         : state;
     }
     case 'settle': {
-      if (state.stack.length > 0 || !hasRoot) return state;
+      if (!hasRoot) return state;
+      if (state.stack.length > 0) {
+        // Under a page: the tray comes back at peek when the page goes.
+        return state.rootDetent === 'peek'
+          ? state
+          : { ...state, rootDetent: 'peek' };
+      }
       return state.detent === 'peek' ? state : { ...state, detent: 'peek' };
     }
     case 'root': {
@@ -189,6 +212,11 @@ export function sheetReducer(
       // running tool's row alone at peek); a person who raised the sheet
       // higher keeps it there.
       const at = action.at ?? 'half';
+      if (action.arrived && state.stack.length > 0) {
+        // Under an open page: the root comes back at least that high.
+        const base = state.rootDetent ?? 'closed';
+        return rank(at) > rank(base) ? { ...state, rootDetent: at } : state;
+      }
       if (action.arrived && rank(at) > rank(state.detent)) {
         return { ...state, detent: at };
       }

@@ -133,6 +133,22 @@ async function launchFromAllTools(page: Page, group: string, label: string) {
   await expect(toolRow(page)).toBeVisible();
 }
 
+/**
+ * Launches `label` from its group in the All tools sheet, for a tool whose
+ * flow does not run in the tray row (Sketch picks its plane in the sheet).
+ */
+async function launchFromAllToolsDirect(
+  page: Page,
+  group: string,
+  label: string
+) {
+  await openAllTools(page);
+  await sheet(page)
+    .getByRole('region', { name: group })
+    .getByRole('button', { name: label, exact: true })
+    .tap();
+}
+
 /** Every target in the compact flow at least 44 px either way. */
 async function expectLargeTargets(page: Page) {
   expect(
@@ -548,5 +564,282 @@ test.describe('Build in the compact workspace', () => {
     await expect(moveDone).toBeEnabled({ timeout: 30_000 });
     await moveDone.tap();
     await expect(move).toHaveCount(0);
+  });
+});
+
+/** Picks the box's top face through the viewer's e2e hook. */
+async function pickTopFace(page: Page) {
+  await expect
+    .poll(
+      () =>
+        page.locator('.viewer-host canvas').evaluate(
+          (element) =>
+            new Promise<{ lineageName?: string } | null>((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-planar-face', {
+                  detail: {
+                    normal: { x: 0, y: 0, z: 1 },
+                    select: true,
+                    resolve
+                  }
+                })
+              );
+            })
+        ),
+      { timeout: 60_000 }
+    )
+    .toMatchObject({ lineageName: 'primitive.box.face.z-max' });
+}
+
+/**
+ * Whether the stage takes taps: nothing over its middle but the viewer, and
+ * no inert ancestor.
+ */
+async function stageIsLive(page: Page) {
+  return page.evaluate(() => {
+    const host = document.querySelector('.viewer-host')!;
+    if (host.closest('[inert]')) return false;
+    const box = host.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      box.left + box.width / 2,
+      box.top + box.height / 3
+    );
+    return hit !== null && host.contains(hit);
+  });
+}
+
+/** The open sketch's rails: its tools with Finish, and its relations. */
+function sketchTools(page: Page) {
+  return page.getByRole('toolbar', { name: 'Sketch tools' });
+}
+
+async function expectSketchReachable(page: Page) {
+  await expect(sketchTools(page)).toBeVisible();
+  await expect(page.getByRole('toolbar', { name: 'Relations' })).toBeVisible();
+  const finish = page.getByRole('button', {
+    name: 'Finish Sketch',
+    exact: true
+  });
+  await expectReachable(finish);
+  // On a short stage the tools scroll under Finish, which stays.
+  const rectangle = sketchTools(page).getByRole('button', {
+    name: /^Rectangle/
+  });
+  await rectangle.scrollIntoViewIfNeeded();
+  await expectReachable(rectangle);
+  await expectReachable(finish);
+  expect(
+    await smallTargets(
+      page,
+      '.app-shell[data-shell="compact"] :is(.workspace-column-float, .instrument-rail)'
+    )
+  ).toEqual([]);
+}
+
+test.describe('Sketch in the compact workspace', () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test(
+    'sketches by taps alone: a plane, a rectangle, Finish, then Extrude',
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(180_000);
+      await openCompact(page, SIZES[0], null, 'Compact sketch');
+      await launchFromAllToolsDirect(page, 'Create', 'Sketch');
+      // The plane chooser in the sheet, every control a finger's size.
+      const chooser = sheet(page).locator('.sketch-plane-prompt');
+      await expect(chooser).toBeVisible();
+      await expectLargeTargets(page);
+      await sheet(page).getByRole('button', { name: 'Top (XY)' }).tap();
+
+      // The sketch's tools, relations and Finish stand on the stage.
+      await expectSketchReachable(page);
+      await sketchTools(page)
+        .getByRole('button', { name: /^Rectangle/ })
+        .tap();
+      const [a, b] = await projected(page, [
+        [-15, -10, 0],
+        [15, 10, 0]
+      ]);
+      await page.touchscreen.tap(a!.x, a!.y);
+      await page.touchscreen.tap(b!.x, b!.y);
+      await expect(
+        page.getByRole('group', { name: 'History' }).getByRole('button', {
+          name: 'Undo',
+          exact: true
+        })
+      ).toBeEnabled({ timeout: 30_000 });
+      await page
+        .getByRole('button', { name: 'Finish Sketch', exact: true })
+        .tap();
+      await expect(sketchTools(page)).toHaveCount(0);
+
+      // Back to Build's tray at peek: Extrude the new sketch's region.
+      await expect(buildTray(page)).toBeVisible();
+      await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
+      await buildTray(page).getByRole('button', { name: 'Extrude' }).tap();
+      const bar = sheet(page).getByRole('group', { name: 'Extrude command' });
+      await expect
+        .poll(
+          async () => {
+            if ((await bar.count()) === 0) {
+              const [centre] = await projected(page, [[0, 0, 0]]);
+              await page.touchscreen.tap(centre!.x, centre!.y);
+            }
+            return bar.count();
+          },
+          { timeout: 60_000 }
+        )
+        .toBe(1);
+      const done = toolRow(page).getByRole('button', { name: 'Done' });
+      await toolRow(page)
+        .getByRole('button', { name: 'Extrude options' })
+        .tap();
+      await bar.getByRole('button', { name: 'Distance', exact: true }).tap();
+      await keypadEntry(page, bar.getByRole('dialog', { name: /value$/ }), '8');
+      await expect(done).toBeEnabled({ timeout: 30_000 });
+      await done.tap();
+      await expect(bar).toHaveCount(0);
+      await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+        'data-e2e-rendered-bodies',
+        '1',
+        { timeout: 60_000 }
+      );
+    }
+  );
+
+  for (const size of SIZES.slice(1)) {
+    test(`keeps a sketch's tools and Finish in reach at ${size.width}×${size.height}`, async ({
+      page
+    }) => {
+      test.setTimeout(120_000);
+      await openCompact(page, size, null, `Compact sketch ${size.width}`);
+      await launchFromAllToolsDirect(page, 'Create', 'Sketch');
+      await sheet(page).getByRole('button', { name: 'Top (XY)' }).tap();
+      await expectSketchReachable(page);
+      await page
+        .getByRole('button', { name: 'Finish Sketch', exact: true })
+        .tap();
+      await expect(sketchTools(page)).toHaveCount(0);
+      await expect(buildTray(page)).toBeVisible();
+    });
+  }
+
+  test('leaves plane picking with Cancel or Escape, and a sketch with Escape', async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await openCompact(page, SIZES[0], null, 'Compact sketch exits');
+    const chooser = sheet(page).locator('.sketch-plane-prompt');
+    // Cancel, tapped.
+    await launchFromAllToolsDirect(page, 'Create', 'Sketch');
+    await sheet(page).getByRole('button', { name: 'Cancel sketch' }).tap();
+    await expect(chooser).toHaveCount(0);
+    await expect(buildTray(page)).toBeVisible();
+    await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
+    // Escape, from a hardware keyboard.
+    await launchFromAllToolsDirect(page, 'Create', 'Sketch');
+    await page.keyboard.press('Escape');
+    await expect(chooser).toHaveCount(0);
+    await expect(buildTray(page)).toBeVisible();
+    // A sketch left with Escape (twice: the tool, then the sketch).
+    await launchFromAllToolsDirect(page, 'Create', 'Sketch');
+    await sheet(page).getByRole('button', { name: 'Top (XY)' }).tap();
+    await expect(sketchTools(page)).toBeVisible();
+    await expect
+      .poll(
+        async () => {
+          await page.keyboard.press('Escape');
+          return sketchTools(page).count();
+        },
+        { timeout: 20_000 }
+      )
+      .toBe(0);
+    await expect(buildTray(page)).toBeVisible();
+  });
+
+  test('sketches on a picked face from its verb', async ({ page }) => {
+    test.setTimeout(150_000);
+    await openCompact(page, SIZES[0], buildDocument('Compact face sketch'));
+    await pickTopFace(page);
+    await buildTray(page)
+      .getByRole('button', { name: 'Selection: Sketch', exact: true })
+      .tap();
+    await expectSketchReachable(page);
+    await page
+      .getByRole('button', { name: 'Finish Sketch', exact: true })
+      .tap();
+    await expect(sketchTools(page)).toHaveCount(0);
+    await expect(buildTray(page)).toBeVisible();
+  });
+});
+
+test.describe('the compact sheet after All tools and a refused tap', () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test('goes back to the tray at peek, the stage live, from All tools', async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await openCompact(page, SIZES[0], null, 'Compact back');
+    await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
+    expect(await stageIsLive(page)).toBe(true);
+    for (const leave of ['Back', 'Escape'] as const) {
+      await openAllTools(page);
+      await expect(sheet(page)).toHaveAttribute('data-detent', 'full');
+      expect(await stageIsLive(page)).toBe(false);
+      if (leave === 'Back') {
+        await sheet(page).getByRole('button', { name: 'Back' }).tap();
+      } else {
+        await page.keyboard.press('Escape');
+      }
+      await expect(buildTray(page)).toBeVisible();
+      await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
+      await expect.poll(() => stageIsLive(page)).toBe(true);
+      await expect(page.locator('.workspace')).not.toHaveAttribute('inert');
+    }
+  });
+
+  test("shows a disabled verb's reason in view at peek", async ({
+    page,
+    context
+  }) => {
+    test.setTimeout(150_000);
+    await openCompact(page, SIZES[0], buildDocument('Compact refused verb'));
+    await pickTopFace(page);
+    // The same project in a second tab holds the edits: the face's tools
+    // stay in the tray, greyed, each with its reason.
+    const other = await context.newPage();
+    await other.setViewportSize(SIZES[0]);
+    await other.goto(page.url());
+    const shell = buildTray(page).getByRole('button', {
+      name: 'Selection: Shell',
+      exact: true
+    });
+    await expect(shell).toHaveAttribute('aria-disabled', 'true', {
+      timeout: 60_000
+    });
+    await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
+    await shell.scrollIntoViewIfNeeded();
+    // A finger on it: Playwright's own tap waits for an enabled control.
+    const at = (await shell.boundingBox())!;
+    await page.touchscreen.tap(at.x + at.width / 2, at.y + at.height / 2);
+    const reason = buildTray(page).locator('.compact-tray-reason');
+    await expect(reason).toContainText('open in another tab');
+    // Drawn, not just in the document: inside the sheet's box and on top.
+    await expect(sheet(page)).toHaveAttribute('data-detent', 'half');
+    await expectReachable(reason);
+    const clipped = await reason.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const sheetBox = element
+        .closest('.compact-sheet')!
+        .getBoundingClientRect();
+      return box.bottom > sheetBox.bottom || box.top < sheetBox.top;
+    });
+    expect(clipped).toBe(false);
+    // Gone with its reason, the sheet goes back to peek.
+    await expect(reason).toHaveCount(0, { timeout: 10_000 });
+    await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
+    await other.close();
   });
 });

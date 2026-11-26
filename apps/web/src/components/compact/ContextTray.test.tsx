@@ -87,6 +87,7 @@ describe("Build's context tray", () => {
       disabled: true,
       pressed: false
     };
+    const onReason = vi.fn();
     render(
       <ContextTray
         build={build({
@@ -94,8 +95,11 @@ describe("Build's context tray", () => {
         })}
         allToolsOpen={false}
         onAllTools={vi.fn()}
+        onReason={onReason}
       />
     );
+    // Nothing said yet: the sheet is not asked for room.
+    expect(onReason).not.toHaveBeenCalled();
     const button = screen.getByRole('button', { name: 'Selection: Offset' });
     expect(button).toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(button);
@@ -103,10 +107,14 @@ describe("Build's context tray", () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'Waiting for exact geometry'
     );
+    // The reason stands under the row: the sheet is asked to show it.
+    expect(onReason).toHaveBeenLastCalledWith(true);
     act(() => {
       vi.advanceTimersByTime(TRAY_REASON_MS + 10);
     });
     expect(screen.queryByRole('status')).toBeNull();
+    expect(onReason).toHaveBeenLastCalledWith(false);
+    expect(onReason).toHaveBeenCalledTimes(2);
   });
 
   it("opens every action it is the compact entry of, by taps only: a pick's verbs", async () => {

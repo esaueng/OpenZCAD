@@ -434,14 +434,15 @@ test.describe('the compact workspace frame', () => {
       page.evaluate(() =>
         (document.activeElement as HTMLElement | null)?.blur()
       );
-    // S arms the fit spline; three points are placed on open canvas.
+    // S arms the fit spline; three points are placed on open canvas, below
+    // the curve types the sketch rail opens beside it.
     await blur();
     await page.keyboard.press('s');
     const bounds = (await page.locator('.viewer-host canvas').boundingBox())!;
     for (const [fx, fy] of [
-      [0.3, 0.35],
-      [0.5, 0.3],
-      [0.65, 0.42]
+      [0.3, 0.6],
+      [0.5, 0.55],
+      [0.65, 0.67]
     ] as const) {
       const x = bounds.x + bounds.width * fx;
       const y = bounds.y + bounds.height * fy;

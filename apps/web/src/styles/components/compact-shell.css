@@ -40,9 +40,13 @@
 /* ── What the compact frame does not draw ── */
 
 .app-shell[data-shell='compact'] > .topbar,
-.app-shell[data-shell='compact'] .instrument-rail,
 .app-shell[data-shell='compact']
-  .workspace-column-float:has(> .workspace-column),
+  .instrument-rail:not(:has(> .sketch-relations)),
+.app-shell[data-shell='compact']
+  .instrument-rail:has(> .sketch-relations)
+  > :not(.sketch-relations),
+.app-shell[data-shell='compact']
+  .workspace-column-float:has(> .workspace-column):not(:has(.sketch-rail)),
 .app-shell[data-shell='compact'] .panel-resizer,
 .app-shell[data-shell='compact'] .panels-hidden-pill {
   display: none;
@@ -1028,6 +1032,158 @@
   box-shadow: none;
 }
 
+/* ── Sketching (a stopgap until slice 6 draws the compact sketch) ──
+   The frame hides the column and the instrument rail, which is where a
+   sketch keeps its tools, its relations and Finish. While a sketch is open
+   both come back as compact rails: the tools and Finish down the stage's
+   left edge, the relations down its right under the cube, each above the
+   floating undo pair and the sheet, scrolling when the stage is short,
+   with 44px targets. Finish is the column's foot, which stays while the
+   tools scroll. */
+
+.app-shell[data-shell='compact']
+  .workspace.has-column
+  .viewer-area
+  .workspace-column-float:has(.sketch-rail) {
+  top: var(--sp-2);
+  left: max(var(--sp-2), env(safe-area-inset-left));
+  bottom: calc(
+    var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2
+  );
+  width: auto;
+  max-height: none;
+  align-items: flex-start;
+  /* Still a containing block, for the rail's fixed type strip. */
+  transform: translateY(0);
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column-float:has(.sketch-rail)
+  > .workspace-column {
+  flex: 0 0 auto;
+  max-height: 100%;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column-float:has(.sketch-rail)
+  .workspace-column-tools {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  button:not(.sketch-type-tile, .sketch-type-cycle),
+.app-shell[data-shell='compact']
+  .workspace-column-footer
+  .workspace-column-finish {
+  width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column-float:has(.sketch-rail)
+  .workspace-column-footer {
+  padding: var(--sp-1);
+}
+
+/* The stage's notices stand between the two rails, not over Finish. */
+.app-shell[data-shell='compact']
+  .workspace.column-layout:has(.sketch-rail)
+  :is(.workspace-toast, .activity-lane) {
+  left: calc(
+    max(var(--sp-2), env(safe-area-inset-left)) + var(--compact-target) +
+      var(--sp-2) * 3
+  );
+  right: calc(
+    max(var(--sp-2), env(safe-area-inset-right)) + var(--compact-target) +
+      var(--sp-2) * 3
+  );
+}
+
+/* The scale bar steps right of the rail. */
+.app-shell[data-shell='compact']:has(.sketch-rail)
+  .workspace.column-layout
+  .viewport-scale-indicator {
+  left: calc(
+    max(var(--sp-2), env(safe-area-inset-left)) + var(--compact-target) +
+      var(--sp-2) * 3
+  );
+}
+
+.app-shell[data-shell='compact']
+  .workspace.column-layout
+  .viewer-area
+  .instrument-rail:has(> .sketch-relations) {
+  top: calc(var(--sp-2) * 2 + var(--cube-size, 88px));
+  right: max(var(--sp-2), env(safe-area-inset-right));
+  bottom: calc(
+    var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2
+  );
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+  /* The relations are the one island left in it. */
+  background: none;
+  border: 0;
+  box-shadow: none;
+  transform: none;
+}
+
+.app-shell[data-shell='compact']
+  .workspace.column-layout
+  .viewer-area
+  .instrument-rail:has(> .sketch-relations)
+  > :not(.sketch-relations) {
+  display: none;
+}
+
+.app-shell[data-shell='compact']
+  .workspace.column-layout
+  .viewer-area
+  .instrument-rail
+  > .sketch-relations {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  width: auto;
+  min-height: 0;
+  max-height: 100%;
+  padding: var(--sp-1);
+  overflow-y: auto;
+  scrollbar-width: none;
+  direction: ltr;
+}
+
+/* The point relations' menu takes the rail's island as its box, outside the
+   scroller, so the scroll does not clip it. */
+.app-shell[data-shell='compact']
+  .instrument-rail
+  > .sketch-relations
+  .sketch-relation-slot.sketch-point-relations-anchor {
+  position: static;
+}
+
+.app-shell[data-shell='compact']
+  .instrument-rail
+  > .sketch-relations
+  :is(.sketch-relation, .sketch-point-relation) {
+  min-width: var(--compact-target);
+  height: var(--compact-target);
+  flex: 0 0 auto;
+}
+
+.app-shell[data-shell='compact']
+  .instrument-rail
+  > .sketch-relations
+  .sketch-relation-name {
+  display: none;
+}
+
 /* ── Feature forms and operation cards in the sheet ── */
 
 .app-shell[data-shell='compact'] .compact-sheet .feature-form .form-actions {
@@ -1040,12 +1196,23 @@
 
 .app-shell[data-shell='compact']
   .compact-sheet
-  :is(.feature-form .form-actions button, .tool-card button, .panel-close) {
+  :is(
+    .feature-form .form-actions button,
+    .tool-card button,
+    .panel-close,
+    .sketch-plane-prompt button
+  ) {
   min-height: var(--compact-target);
 }
 
 .app-shell[data-shell='compact'] .compact-sheet .panel-close {
   min-width: var(--compact-target);
+}
+
+/* The plane chooser's Cancel, a finger's width as well as height. */
+.app-shell[data-shell='compact'] .compact-sheet .sketch-plane-dismiss {
+  min-width: var(--compact-target);
+  justify-content: center;
 }
 
 /* ── All tools ── */
