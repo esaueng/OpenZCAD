@@ -52,6 +52,12 @@ interface AdapterRefusalSpec {
  * - `edge_modifier_refused`: a fillet or chamfer neither the kernel built
  *   nor the adapter accepted, with no typed kernel refusal behind it (an
  *   acceptance rule declined the kernel's result).
+ * - `chamfer_face_inner_loop`: a chamfer the kernel refused with its
+ *   catch-all `fillet-failed` code at the requested and a smaller distance,
+ *   where every selected edge lies on the outline of a flat face with a
+ *   hole, pocket or boss inside it. The kernel files that as `internal`;
+ *   see `innerLoopFaceBesideEveryEdge` in `exact-edge-modifiers` for the
+ *   evidence and why the adapter files it as `unsupported` instead.
  * - `fillet_vertex_radius_unmatched`: a per-vertex fillet radius whose
  *   edge end cannot be told apart on the rebuilt body (its edge now runs
  *   across the direction it was picked in).
@@ -90,6 +96,7 @@ export const ADAPTER_REFUSALS = {
     category: 'invalid_input'
   },
   edge_modifier_refused: { family: 'blend', category: 'quality_refused' },
+  chamfer_face_inner_loop: { family: 'blend', category: 'unsupported' },
   fillet_vertex_radius_unmatched: {
     family: 'reference',
     category: 'invalid_input'
