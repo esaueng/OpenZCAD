@@ -14,6 +14,14 @@ function reached(action: string) {
   void action;
 }
 
+/**
+ * An action these sheets also run whose compact home is another surface
+ * (View's tray, slice 7): named for the reader, not counted as reached here.
+ */
+function alsoReached(action: string) {
+  void action;
+}
+
 const LAYOUT_KEY = 'openzcad.layout:v1';
 
 async function preferCompact(page: Page) {
@@ -318,7 +326,7 @@ test.describe('the compact workspace panels', () => {
       ).toBeVisible();
       await actions.getByRole('menuitem', { name: 'Cancel' }).tap();
       await expect(actions).toHaveCount(0);
-      reached('body-visibility');
+      alsoReached('body-visibility');
 
       // Swipe left: Delete.
       const last = rows.nth(2);
@@ -375,10 +383,10 @@ test.describe('the compact workspace panels', () => {
       await row.tap();
       await expect(actions).toHaveCount(0);
     }
-    reached('view-fit');
-    reached('view-grid');
-    reached('view-projection');
-    reached('view-xray');
+    alsoReached('view-fit');
+    alsoReached('view-grid');
+    alsoReached('view-projection');
+    alsoReached('view-xray');
 
     // A tap on the model picks; the chip opens the selection sheet.
     const center = await modelCenter(page);
@@ -422,7 +430,7 @@ test.describe('the compact workspace panels', () => {
     actions = await holdModel(page, center.x, center.y);
     await actions.getByRole('menuitem', { name: 'Isolate body' }).tap();
     await expect(actions).toHaveCount(0);
-    reached('view-isolate-body');
+    alsoReached('view-isolate-body');
 
     actions = await holdModel(page, center.x, center.y);
     await actions.getByRole('menuitem', { name: 'Exit isolation' }).tap();
@@ -435,6 +443,6 @@ test.describe('the compact workspace panels', () => {
     actions = await holdModel(page, empty.x, empty.y);
     await actions.getByRole('menuitem', { name: 'Show all bodies' }).tap();
     await expect(actions).toHaveCount(0);
-    reached('view-show-all');
+    alsoReached('view-show-all');
   });
 });

@@ -204,6 +204,35 @@ describe('AppShell in the compact workspace', () => {
     expect(props.onSettings).toHaveBeenCalledTimes(1);
   });
 
+  it('offers a shared link’s visitor Make a copy from More, in any mode', async () => {
+    const plain = render(shell(chrome()));
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    expect(
+      await screen.findByRole('button', { name: 'Open settings' })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Make a copy' })).toBeNull();
+    plain.unmount();
+
+    for (const workspaceMode of ['view', 'tweak'] as const) {
+      const props = chrome({
+        shareLink: true,
+        workspaceMode,
+        onMakeCopy: vi.fn()
+      });
+      const { unmount } = render(shell(props));
+      fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Make a copy' })
+      );
+      expect(props.onMakeCopy).toHaveBeenCalledTimes(1);
+      // The page closes on the way to the copy's own dialog.
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: 'Make a copy' })).toBeNull()
+      );
+      unmount();
+    }
+  });
+
   it('marks the document compact while it is up, for portalled dialogs', async () => {
     const root = document.documentElement;
     const { rerender, unmount } = render(shell(chrome()));

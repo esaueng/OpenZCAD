@@ -227,6 +227,40 @@ describe('action registry', () => {
     expect(withSource('fixed-key')).toHaveLength(fixed.length);
   });
 
+  it('gives View’s tray what slice 7 builds, and nothing it does not', () => {
+    const viewTray = Object.entries(COMPACT_ENTRIES)
+      .filter(([, surface]) => surface === 'view-tray')
+      .map(([id]) => id)
+      .sort();
+    expect(viewTray).toEqual(
+      [
+        'view-measure',
+        'view-section',
+        'view-display',
+        'view-xray',
+        'view-grid',
+        'view-projection',
+        'view-orbit-mode',
+        'view-fit',
+        'view-front',
+        'view-back',
+        'view-left',
+        'view-right',
+        'view-top',
+        'view-bottom',
+        'view-iso',
+        'body-visibility',
+        'view-isolate-body',
+        'view-show-all'
+      ].sort()
+    );
+    // A face's Look at is the model's long-press action sheet (slice 5).
+    expect(COMPACT_ENTRIES['view-normal-to-face']).toBe('action-sheet');
+    // Tweak's exports were reached from the overflow menu already.
+    expect(COMPACT_ENTRIES['file-export-step']).toBe('overflow-menu');
+    expect(COMPACT_ENTRIES['file-export-mesh']).toBe('overflow-menu');
+  });
+
   it('lists only registered actions as touch gaps and compact entries', () => {
     for (const id of REGULAR_TOUCH_GAPS) {
       expect(actionEntry(id), id).toBeDefined();
