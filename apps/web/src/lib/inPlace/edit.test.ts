@@ -30,8 +30,8 @@ import {
   keepAbsentHoleSteps,
   inPlaceEditMovedBodies,
   inPlaceEditFacePick,
-  inPlaceEditObjectRepresentations,
-  inPlaceEditOperandConsumer,
+  inPlaceEditObjects,
+  inPlaceEditOperandRefusal,
   inPlaceEditRestDocument,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
@@ -3108,18 +3108,35 @@ describe('what a Boolean edit picks from', () => {
     };
   }
 
+  /** The committed model's consumed flags, as a successful build leaves them. */
+  function builtConsumption(bodies: ReturnType<typeof chain>['bodies']) {
+    return new Map<BodyId, boolean>([
+      [bodies.block, true],
+      [bodies.post, true],
+      [bodies.bolt, true],
+      [bodies.nut, true],
+      [bodies.pin, true],
+      [bodies.spare, false]
+    ]);
+  }
+
   it('takes back a body its own feature consumed, never one another feature consumed', () => {
     const { document, edit, bodies } = chain();
-    const consumer = (bodyId: BodyId) =>
-      inPlaceEditOperandConsumer(document, edit, bodyId)?.name ?? null;
+    const model = builtConsumption(bodies);
+    const refusal = (bodyId: BodyId) => {
+      const refused = inPlaceEditOperandRefusal(document, edit, bodyId, (id) =>
+        model.get(id)
+      );
+      return refused ? (refused.consumer?.name ?? 'unnamed') : null;
+    };
     // Its own operands, and a body nothing consumes.
-    expect(consumer(bodies.block)).toBeNull();
-    expect(consumer(bodies.post)).toBeNull();
-    expect(consumer(bodies.spare)).toBeNull();
+    expect(refusal(bodies.block)).toBeNull();
+    expect(refusal(bodies.post)).toBeNull();
+    expect(refusal(bodies.spare)).toBeNull();
     // Used up by a feature before it, and by one after it.
-    expect(consumer(bodies.bolt)).toBe('Union');
-    expect(consumer(bodies.nut)).toBe('Union');
-    expect(consumer(bodies.pin)).toBe('Notch');
+    expect(refusal(bodies.bolt)).toBe('Union');
+    expect(refusal(bodies.nut)).toBe('Union');
+    expect(refusal(bodies.pin)).toBe('Notch');
     // The rule is the Boolean edit's: any other edit is not asked.
     const mirror = {
       featureId: edit.featureId,
@@ -3129,7 +3146,36 @@ describe('what a Boolean edit picks from', () => {
         plane: { origin: { x: 0, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
       } as FeatureData
     };
-    expect(inPlaceEditOperandConsumer(document, mirror, bodies.pin)).toBeNull();
+    expect(
+      inPlaceEditOperandRefusal(document, mirror, bodies.pin, () => true)
+    ).toBeNull();
+  });
+
+  it('goes by what the model consumed: a later feature that failed holds none of its tools', () => {
+    const { document, edit, bodies } = chain();
+    // Notch failed and passed its base through: Pin, its tool, is live.
+    const model = builtConsumption(bodies);
+    model.set(bodies.pin, false);
+    expect(
+      inPlaceEditOperandRefusal(document, edit, bodies.pin, (id) =>
+        model.get(id)
+      )
+    ).toBeNull();
+    // A body the model has consumed is refused even when no feature names
+    // it, and with no model to read the stored history decides.
+    model.set(bodies.spare, true);
+    expect(
+      inPlaceEditOperandRefusal(document, edit, bodies.spare, (id) =>
+        model.get(id)
+      )
+    ).toEqual({ consumer: null });
+    expect(
+      inPlaceEditOperandRefusal(document, edit, bodies.pin, () => undefined)
+        ?.consumer?.name
+    ).toBe('Notch');
+    expect(
+      inPlaceEditOperandRefusal(document, edit, bodies.spare, () => undefined)
+    ).toBeNull();
   });
 
   it('rests on the model before the Boolean: it and every later feature paused, nothing earlier', () => {
@@ -3165,7 +3211,7 @@ describe('what a Boolean edit picks from', () => {
     ).toBeNull();
   });
 
-  it('lists its own inputs as live objects and not the result it rebuilds', () => {
+  it('lists its own inputs as pick-only rows and not the result it rebuilds', () => {
     const { document, edit, bodies, union, result, notch } = chain();
     const row = (bodyId: BodyId, consumed: boolean) => ({ bodyId, consumed });
     const representations = {
@@ -3179,14 +3225,13 @@ describe('what a Boolean edit picks from', () => {
       [result]: row(result, true),
       [notch]: row(notch, false)
     };
-    const listed = inPlaceEditObjectRepresentations(
-      representations,
-      document,
-      edit
-    );
+    const listed = inPlaceEditObjects(representations, document, edit)!;
     expect(
       Object.fromEntries(
-        Object.entries(listed).map(([id, body]) => [id, body.consumed])
+        Object.entries(listed.representations).map(([id, body]) => [
+          id,
+          body.consumed
+        ])
       )
     ).toEqual({
       [bodies.block]: false,
@@ -3199,11 +3244,28 @@ describe('what a Boolean edit picks from', () => {
       [union]: false,
       [notch]: false
     });
-    // The committed map itself is left alone, and any other edit lists it.
+    // The restored inputs offer the pick alone: the committed model has
+    // them consumed, so no row action may act on them.
+    expect([...listed.pickOnly].sort()).toEqual(
+      [bodies.block, bodies.post].sort()
+    );
+    // On the rest frame, a later result its producer is paused for is not
+    // live either, nor is an input the edit's preview consumed.
+    const rest = {
+      [bodies.block]: row(bodies.block, false),
+      [bodies.post]: row(bodies.post, false),
+      [bodies.spare]: row(bodies.spare, false),
+      [union]: row(union, false),
+      [bodies.pin]: row(bodies.pin, false)
+    };
+    expect(
+      [
+        ...inPlaceEditObjects(representations, document, edit, rest)!.pickOnly
+      ].sort()
+    ).toEqual([bodies.block, bodies.post, notch].sort());
+    // The committed map itself is left alone, and any other edit is not asked.
     expect(representations[bodies.block]!.consumed).toBe(true);
     const mirror = { ...edit, data: { featureKind: 'mirror' } as FeatureData };
-    expect(
-      inPlaceEditObjectRepresentations(representations, document, mirror)
-    ).toBe(representations);
+    expect(inPlaceEditObjects(representations, document, mirror)).toBeNull();
   });
 });

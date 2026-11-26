@@ -58,6 +58,12 @@ export interface ModelPanelSource {
    * edit lists the inputs it consumed); absent, Objects lists those.
    */
   objectRepresentations?: Record<string, BodyRepresentation>;
+  /**
+   * U11: Objects rows that offer only the pick (no colour, rename, isolate,
+   * hide or drag): bodies a running command lists that the frame on screen
+   * does not have live.
+   */
+  pickOnlyBodyIds?: ReadonlySet<string>;
   failedFeatureIds?: ReadonlySet<FeatureId>;
   relatedFeatureIds?: ReadonlySet<FeatureId> | null;
   geometryPending?: boolean;

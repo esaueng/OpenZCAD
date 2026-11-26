@@ -2130,8 +2130,8 @@ import {
   inPlaceEditLineage,
   inPlaceEditMovedBodies,
   inPlaceEditFacePick,
-  inPlaceEditObjectRepresentations,
-  inPlaceEditOperandConsumer,
+  inPlaceEditObjects,
+  inPlaceEditOperandRefusal,
   inPlaceEditRestDocument,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
@@ -14266,15 +14266,22 @@ export function App() {
       return false;
     }
     // U11: a Boolean's edit takes back the inputs it consumed itself, never
-    // one another feature has already combined into its own result.
+    // one the model has another feature combine into its own result.
     const current = managerRef.current?.document;
-    const consumer = current
-      ? inPlaceEditOperandConsumer(current, editing, bodyId)
+    const refused = current
+      ? inPlaceEditOperandRefusal(
+          current,
+          editing,
+          bodyId,
+          (id) => ownEntry(current.derived.bodyRepresentations, id)?.consumed
+        )
       : null;
-    if (consumer) {
-      const name = current && findBodyNode(current, bodyId)?.name;
+    if (refused) {
+      const name = findBodyNode(current!, bodyId)?.name ?? 'That body';
       setStatus(
-        `${name ?? 'That body'} is already combined into ${consumer.name}, so ${editing.name} cannot use it.`
+        refused.consumer
+          ? `${name} is already combined into ${refused.consumer.name}, so ${editing.name} cannot use it.`
+          : `${name} is already combined into another feature, so ${editing.name} cannot use it.`
       );
       return false;
     }
@@ -29632,18 +29639,20 @@ export function App() {
     setBooleanCommandRunning(inPlaceBooleanRunning);
   }, [inPlaceBooleanRunning]);
   // U11: Objects lists what a Boolean's edit picks from, as it does for a
-  // new Boolean: the inputs the feature consumed as live rows, and not the
-  // result the edit is rebuilding.
-  const inPlaceEditObjects = useMemo(
+  // new Boolean: the inputs the feature consumed as rows to pick, and not
+  // the result the edit is rebuilding. A row not live in the frame on
+  // screen, a restored input among them, offers the pick alone.
+  const inPlaceEditObjectRows = useMemo(
     () =>
       inPlace.editing && doc
-        ? inPlaceEditObjectRepresentations(
+        ? inPlaceEditObjects(
             representations,
             doc,
-            inPlace.editing
+            inPlace.editing,
+            previewDoc?.derived.bodyRepresentations ?? null
           )
-        : undefined,
-    [inPlace.editing, doc, representations]
+        : null,
+    [inPlace.editing, doc, representations, previewDoc]
   );
   // Every open edit: an in-place command's, and the in-place Extrude's.
   cancelInPlaceRef.current = () => {
@@ -40000,7 +40009,8 @@ export function App() {
       parameterMinimums={liveParameterMinimums}
       features={features}
       representations={representations}
-      objectRepresentations={inPlaceEditObjects}
+      objectRepresentations={inPlaceEditObjectRows?.representations}
+      pickOnlyBodyIds={inPlaceEditObjectRows?.pickOnly}
       failedFeatureIds={failedHistoryFeatureIds}
       geometryPending={panelGeometryPending}
       geometryPendingShown={panelGeometryPendingShown}

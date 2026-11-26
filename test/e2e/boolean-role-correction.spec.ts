@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 import {
   addPrimitiveFeature,
   booleanBodies,
+  configureParameterToggle,
   createProjectDocument,
   transformBody
 } from '@openzcad/document-core';
@@ -738,9 +739,20 @@ test('Cell 5: during a Subtract, Find and Isolate change only the view, and canv
  * it stood before the feature (Block 2000 and Post 3000 whole), so the body
  * it took out can be clicked again. (Pinned as a Pick finding by #2187.)
  */
-async function seededSubtract(page: Page, name: string) {
+async function seededSubtract(
+  page: Page,
+  name: string,
+  /** Gives Block, while standalone, a visibility toggle parameter. */
+  blockToggle?: string
+) {
   const fixture = fixtureB(name);
-  const built = booleanBodies(fixture.document, {
+  const seeded = blockToggle
+    ? configureParameterToggle(fixture.document, {
+        name: blockToggle,
+        bodyIds: [fixture.block]
+      })
+    : fixture.document;
+  const built = booleanBodies(seeded, {
     name: 'Subtract',
     operation: 'subtract',
     targetBodyIds: [fixture.block, fixture.post]
@@ -894,9 +906,11 @@ test('Edit Subtract takes its removed Base back from Objects, and Escape leaves 
 }) => {
   test.setTimeout(120_000);
   page.setDefaultTimeout(15_000);
+  // Block's visibility is a parameter's, set while it stood alone.
   const { block, post, result, canvas } = await seededSubtract(
     page,
-    'Edit reversal in Objects'
+    'Edit reversal in Objects',
+    'ShowBlock'
   );
   const undo = page
     .getByRole('toolbar', { name: 'Viewer bar' })
@@ -914,6 +928,22 @@ test('Edit Subtract takes its removed Base back from Objects, and Escape leaves 
   await expect(row(block)).toBeVisible();
   await expect(row(post)).toBeVisible();
   await expect(row(result)).toHaveCount(0);
+  // The restored rows are there to pick: the model has those bodies
+  // consumed, so no row action may act on them. (Hiding Block wrote its
+  // toggle parameter, undoably, past Escape.)
+  for (const [bodyId, name] of [
+    [block, 'Block'],
+    [post, 'Post']
+  ] as const) {
+    const item = objects.getByRole('listitem').filter({
+      has: page.locator(`.body-row-main[data-body-row="${bodyId}"]`)
+    });
+    await expect(item.getByRole('button')).toHaveCount(1);
+    await expect(
+      item.getByRole('button', { name: `Hide body ${name}` })
+    ).toHaveCount(0);
+  }
+  await expect(undo).toBeDisabled();
   await row(block).click();
   await expect(canvas).toHaveAttribute(
     'data-e2e-selected-bodies',

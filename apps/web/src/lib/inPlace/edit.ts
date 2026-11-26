@@ -2223,58 +2223,77 @@ export function inPlaceEditRestDocument(
 }
 
 /**
- * U11: the feature that keeps a Boolean's edit from taking `bodyId` back as
- * an operand: one other than the edited feature that consumes it, before it
- * or after. The edit may take back an input its own feature consumed, never
- * one another feature has already used up; that would combine the same
- * material twice. Null when the body is free, and for any other edit.
+ * U11: why a Boolean's edit may not take `bodyId` back as an operand, or
+ * null when it may. The committed model decides, not the operands features
+ * name: a body is refused when the model has it consumed and the edited
+ * feature is not what consumed it, so a later feature that failed and left
+ * its tools live does not hold them. `consumer` is the other feature that
+ * names the body as consumed, when one does. Taking a body another feature
+ * used up would combine the same material twice. `consumed` reads the
+ * committed model (undefined: no representation, so the stored history
+ * decides). Null for any other edit.
  */
-export function inPlaceEditOperandConsumer(
+export function inPlaceEditOperandRefusal(
   document: ProjectDocument,
   edit: Pick<InPlaceEditSeed, 'featureId' | 'data'>,
-  bodyId: BodyId
-): FeatureNode | null {
+  bodyId: BodyId,
+  consumed: (bodyId: BodyId) => boolean | undefined
+): { consumer: FeatureNode | null } | null {
   if (edit.data.featureKind !== 'boolean') return null;
-  return (
-    listFeaturesInOrder(document).find(
+  const features = listFeaturesInOrder(document);
+  const own = features.find((feature) => feature.featureId === edit.featureId);
+  if (own && featureConsumedBodyIds(own).includes(bodyId)) return null;
+  const consumer =
+    features.find(
       (feature) =>
         feature.featureId !== edit.featureId &&
         featureConsumedBodyIds(feature).includes(bodyId)
-    ) ?? null
-  );
+    ) ?? null;
+  const inModel = consumed(bodyId);
+  if (inModel === false) return null;
+  if (inModel === undefined && !consumer) return null;
+  return { consumer };
 }
 
 /**
  * U11: the bodies Objects lists while a Boolean is edited, as for a new
- * Boolean: the inputs the feature itself consumed are live rows to pick
- * again, and the result the edit is rebuilding is not listed. The same
- * `representations` object for any other edit, or when nothing changes.
+ * Boolean: the inputs the feature itself consumed are rows to pick again,
+ * and the result the edit is rebuilding is not listed. `pickOnly` names the
+ * rows that offer nothing but the pick: the restored inputs (consumed in
+ * the committed model, so hiding, isolating, renaming or recolouring one
+ * would act on a body the model no longer has) and any row not live in the
+ * frame on screen (`shown`, the edit's preview; a later result its rest
+ * frame pauses). Null for any other edit.
  */
-export function inPlaceEditObjectRepresentations<
+export function inPlaceEditObjects<
   T extends { bodyId: string; consumed?: boolean }
 >(
   representations: Record<string, T>,
   document: ProjectDocument,
-  edit: Pick<InPlaceEditSeed, 'featureId' | 'data' | 'ownBodyIds'>
-): Record<string, T> {
-  if (edit.data.featureKind !== 'boolean') return representations;
+  edit: Pick<InPlaceEditSeed, 'featureId' | 'data' | 'ownBodyIds'>,
+  shown?: Readonly<Record<string, { consumed?: boolean }>> | null
+): { representations: Record<string, T>; pickOnly: ReadonlySet<string> } | null {
+  if (edit.data.featureKind !== 'boolean') return null;
   const feature = listFeaturesInOrder(document).find(
     (candidate) => candidate.featureId === edit.featureId
   );
   const inputs = feature ? featureConsumedBodyIds(feature) : [];
-  let changed = false;
   const listed: Record<string, T> = {};
+  const pickOnly = new Set<string>();
   for (const [bodyId, body] of Object.entries(representations)) {
-    if (edit.ownBodyIds.includes(bodyId as BodyId)) {
-      changed = true;
-      continue;
-    }
+    if (edit.ownBodyIds.includes(bodyId as BodyId)) continue;
     if (body.consumed && inputs.includes(bodyId as BodyId)) {
-      changed = true;
       listed[bodyId] = { ...body, consumed: false };
+      pickOnly.add(bodyId);
       continue;
     }
     listed[bodyId] = body;
+    if (!body.consumed && shown) {
+      const drawn = Object.prototype.hasOwnProperty.call(shown, bodyId)
+        ? shown[bodyId]
+        : undefined;
+      if (!drawn || drawn.consumed) pickOnly.add(bodyId);
+    }
   }
-  return changed ? listed : representations;
+  return { representations: listed, pickOnly };
 }
