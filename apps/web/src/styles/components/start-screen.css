@@ -1620,24 +1620,28 @@
 }
 
 /* A shared project says so over its preview's top-left corner, the one the
-   flags leave free: "Shared with you" in the accent, "Shared" (yours, with
-   members or a live link) quieter. The list's small preview keeps the icon. */
+   flags leave free: one short word on one line, "With you" in the accent
+   (shared with you), "Shared" quieter (yours, with members or a live link).
+   The tooltip and accessible name carry the rest. The list's small preview
+   keeps only the icon. */
 .start-tile-share-tag {
   position: absolute;
-  top: 8px;
-  left: 8px;
+  top: 6px;
+  left: 6px;
   z-index: 1;
   display: inline-flex;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 4px;
-  max-width: calc(100% - 16px);
-  padding: 2px 6px;
+  gap: 3px;
+  max-width: calc(100% - 12px);
+  padding: 1px 5px;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: 999px;
   color: var(--color-text-muted);
-  font-size: var(--fs-mini);
-  line-height: 12px;
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
   pointer-events: none;
 }
 
@@ -1649,14 +1653,14 @@
 /* The thumbnail's own svg rule fills the pane; the tag's icon must not. */
 .start-tile-thumb .start-tile-share-tag svg {
   flex: none;
-  width: 11px;
-  height: 11px;
+  width: 10px;
+  height: 10px;
 }
 
 .start-tile-share-tag-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .start-tile-grid.is-list .start-tile-share-tag {

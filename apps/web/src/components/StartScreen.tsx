@@ -334,8 +334,10 @@ const SHELF_FILTERS: ReadonlyArray<{ id: ShelfFilter; label: string }> = [
 
 interface SharingTag {
   kind: 'with-you' | 'by-you';
-  /** The card's words: who it is shared by. */
+  /** Its accessible name: who it is shared by. */
   label: string;
+  /** The card's word for it, kept to one short line. */
+  short: string;
   /** Its tooltip: with whom, or with what access. */
   detail: string;
 }
@@ -350,6 +352,7 @@ function sharingTagOf(sharing: ProjectSummarySharing): SharingTag {
     return {
       kind: 'with-you',
       label: 'Shared with you',
+      short: 'With you',
       detail:
         sharing.role === 'editor'
           ? 'Shared with you. You can edit it.'
@@ -367,6 +370,7 @@ function sharingTagOf(sharing: ProjectSummarySharing): SharingTag {
   return {
     kind: 'by-you',
     label: 'Shared',
+    short: 'Shared',
     detail: `You shared it ${reach.join(' and ')}.`
   };
 }
@@ -2408,8 +2412,8 @@ export function StartScreen({
               title={sharingTag.detail}
             >
               <Users size={11} aria-hidden="true" />
-              <span className="start-tile-share-tag-text">
-                {sharingTag.label}
+              <span className="start-tile-share-tag-text" aria-hidden="true">
+                {sharingTag.short}
               </span>
             </span>
           )}

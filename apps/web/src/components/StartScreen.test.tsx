@@ -1606,6 +1606,11 @@ describe('StartScreen shelf filters, order and layout', () => {
     expect(
       document.querySelector('[data-tile-id="project_b"]')
     ).toContainElement(withYou);
+    // One short word on the card; the accessible name says the rest.
+    expect(withYou).toHaveTextContent(/^With you$/);
+    expect(screen.getByRole('img', { name: 'Shared' })).toHaveTextContent(
+      /^Shared$/
+    );
     expect(screen.getByRole('img', { name: 'Shared' })).toHaveAttribute(
       'title',
       'You shared it with 2 people and by 1 live link.'
