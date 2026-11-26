@@ -3249,6 +3249,34 @@ describe('useInPlaceCommand: a refused fillet or chamfer value', () => {
     await waitFor(() => expect(hook.result.current.refusalInput).toBe('Edges'));
   });
 
+  // Re-check of #2242, finding 2: a refusal of the very request that built
+  // names nothing and takes the frame down, yet leaves the radius 2 frame
+  // the one a later refusal is measured from, as before #2242.
+  it('measures a later refusal from the built radius after one of its retry', async () => {
+    const { hook, refuse } = refusing();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(1)] })
+    );
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.values.radius).toBe(2);
+    refuse(true);
+    act(() => {
+      hook.result.current.setValue('radius', 3);
+    });
+    await waitFor(() => expect(hook.result.current.refusalInput).toBe('R'));
+    act(() => {
+      hook.result.current.setValue('radius', 2);
+    });
+    await waitFor(() => expect(hook.result.current.refusalInput).toBeNull());
+    expect(hook.result.current.refusal).not.toBeNull();
+    act(() => {
+      hook.result.current.setValue('radius', 30);
+    });
+    await waitFor(() => expect(hook.result.current.refusalInput).toBe('R'));
+    expect(hook.result.current.keptValues?.radius).toBe(2);
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
   // Review of #1771: a frame taken down with an emptied pick is not there to
   // keep, so a refusal after it is said plainly and shows the body bare.
   it('keeps nothing once the picks were emptied', async () => {
@@ -3905,6 +3933,50 @@ describe('useInPlaceCommand: a late Split reply', () => {
     expect(hook.result.current.keptValues).toBeNull();
     expect(hook.result.current.canFinish).toBe(false);
     expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  // Re-check of #2242, finding 1: a coupon reply that lands after the
+  // witness was picked is of the old target. Taking the kept halves down
+  // re-renders with no refusal shown, and the late frame must still not be
+  // drawn while the witness builds.
+  it('never draws a late frame of the old body once another is picked', async () => {
+    const { hook, replies, publishPreview } = harness();
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await settle(replies, 3);
+    await waitFor(() =>
+      expect(hook.result.current.refusalInput).toBe('Offset')
+    );
+    // −30 (x = 60) builds on the coupon, but its reply is still held when
+    // the witness is picked.
+    act(() => {
+      hook.result.current.setValue('offset', -30);
+    });
+    await waitFor(() => expect(replies).toHaveLength(4));
+    expect(replies[3]!.x).toBe(60);
+    act(() => {
+      hook.result.current.pickBody(WITNESS);
+    });
+    expect(hook.result.current.refusal).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    const picked = publishPreview.mock.calls.length;
+    await settle(replies, 4);
+    // The witness builds only once the coupon's reply has been published.
+    await waitFor(() => expect(replies).toHaveLength(5));
+    expect(publishPreview.mock.calls.slice(picked)).toEqual([]);
+    await settle(replies, 5);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(
+      publishPreview.mock.calls.slice(picked).every(([shown]) => shown === null)
+    ).toBe(true);
   });
 
   // The same, with +8 typed on the witness before its first frame lands:

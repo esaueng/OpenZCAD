@@ -943,30 +943,52 @@ export function useInPlaceCommand(
   ) => {
     const tool = specRef.current;
     const kept = lastBuilt.current;
-    const inputs =
+    const named =
       tool?.refusedInputs &&
       refused &&
       kept &&
       kept.session === sessionRef.current?.id &&
       kept.base === optionsRef.current.baseVersion
-        ? (tool.refusedInputs(kept.request, refused, {
+        ? tool.refusedInputs(kept.request, refused, {
             built: kept,
             refused: made
-          }) ?? [])
+          })
         : [];
+    // A refusal of another target (a Split's other body) is not measured
+    // from that frame, and neither is any after it: it is no longer kept.
+    if (named === null) lastBuilt.current = null;
+    const inputs = named ?? [];
     setRefusalInputs(inputs);
     // The handles stand on the values the kept frame built from, so a
     // refused size (a 1000 mm radius) leaves its arrow and chip at the edge
     // being edited rather than that far along the arrow, off the model.
     setKeptValues(inputs.length > 0 && kept ? kept.values : null);
-    if (inputs.length === 0) {
-      optionsRef.current.publishPreview(null);
-      // The frame comes down, so none is left to keep under a later
-      // refusal: an input is named only over the frame it is measured from.
-      lastBuilt.current = null;
-    } else if (kept && supersededDrawn.current)
+    if (inputs.length === 0) optionsRef.current.publishPreview(null);
+    else if (kept && supersededDrawn.current)
       optionsRef.current.publishPreview(kept.preview);
     supersededDrawn.current = false;
+  };
+  /**
+   * Whether a frame was built for another target than the request now
+   * made (a Split of the body picked before): nothing it shows is about
+   * the current request, so it is never drawn for it, refusal or not.
+   */
+  const ofAnotherTarget = (
+    frame: InPlaceFrameInputs & { request: InPlaceRequest }
+  ) => {
+    const tool = specRef.current;
+    const current = requestRef.current;
+    return Boolean(
+      tool?.refusedInputs &&
+      current &&
+      tool.refusedInputs(frame.request, current, {
+        built: frame,
+        refused: {
+          values: requestValuesRef.current,
+          ...requestPicksRef.current
+        }
+      }) === null
+    );
   };
   /**
    * The request the frame or refusal now on screen was published for. A
@@ -1123,7 +1145,8 @@ export function useInPlaceCommand(
             !valid ||
             !result ||
             refusalShown.current ||
-            shownKey.current === requestKeyRef.current
+            shownKey.current === requestKeyRef.current ||
+            ofAnotherTarget(frame)
           )
             return;
           shownKey.current = frame.key;
@@ -1271,23 +1294,10 @@ export function useInPlaceCommand(
     // A frame kept under a refusal that says nothing about the new request
     // (a Split's other body) comes down now, with the refusal named over
     // it, rather than standing for the new target until its frame lands.
-    // The refusal stays recorded as shown, so a late frame of the old
-    // target is not drawn in its place either.
+    // A late frame of the old target is not drawn in its place either
+    // (`ofAnotherTarget`, which reads the frame, not the refusal shown).
     const kept = lastBuilt.current;
-    const tool = specRef.current;
-    if (
-      refusalShown.current &&
-      kept &&
-      tool?.refusedInputs &&
-      requestRef.current &&
-      tool.refusedInputs(kept.request, requestRef.current, {
-        built: kept,
-        refused: {
-          values: requestValuesRef.current,
-          ...requestPicksRef.current
-        }
-      }) === null
-    ) {
+    if (refusalShown.current && kept && ofAnotherTarget(kept)) {
       lastBuilt.current = null;
       supersededDrawn.current = false;
       shownKey.current = null;
