@@ -2361,7 +2361,13 @@ export function StartScreen({
     );
   }
 
-  /** A swiped row's actions in the compact library; each is in its ⋯ sheet. */
+  /**
+   * A swiped row's actions in the compact library; each is in its ⋯ sheet
+   * and runs the handler that sheet's item runs. A swipe never deletes
+   * forever: in Trash it only restores, and Delete forever stays in the
+   * row's action sheet behind the regular tile menu's confirmation. Moving
+   * to Trash answers with the same toast and Undo the tile menu's does.
+   */
   function compactSwipeActions(projectId: string) {
     const project = shelfById.get(projectId);
     if (!project) return [];
@@ -2375,14 +2381,6 @@ export function StartScreen({
             label: `Restore ${project.name}`,
             disabled: busy,
             run: leave('active')
-          },
-          {
-            key: 'delete',
-            text: 'Delete',
-            label: `Delete ${project.name} forever`,
-            tone: 'danger' as const,
-            disabled: busy,
-            run: () => leaveShelf(project, () => onDeleteForever(project))
           }
         ]
       : [

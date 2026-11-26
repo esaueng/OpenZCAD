@@ -87,6 +87,7 @@ import {
   kernelBuildLabel
 } from '../lib/kernelBuild';
 import {
+  shownSettingTitles,
   visibleSettingsSections,
   type SettingsSectionMeta,
   type SettingsSectionId
@@ -787,7 +788,8 @@ function RestoringProfileRows() {
  */
 function compactSettingMatches(
   sections: readonly SettingsSectionMeta[],
-  query: string
+  query: string,
+  signedIn: boolean
 ): { section: SettingsSectionMeta; title: string | null }[] {
   const wanted = query.trim().toLowerCase();
   return sections.flatMap(
@@ -797,7 +799,9 @@ function compactSettingMatches(
       section: SettingsSectionMeta;
       title: string | null;
     }[] => {
-      const titles = section.settings.filter((title) =>
+      // Only rows the section draws for this account: signed out, no
+      // Account › Storage, whose meter needs a profile.
+      const titles = shownSettingTitles(section, { signedIn }).filter((title) =>
         title.toLowerCase().includes(wanted)
       );
       return titles.length > 0
@@ -864,11 +868,16 @@ export function SettingsPage({
   const [query, setQuery] = useState(
     initialSection === undefined ? initialViewState.query : ''
   );
-  // Compact: whether a section is pushed over the list. A caller-specified
-  // section (a task flow) opens on that section.
+  // Compact: whether a section is pushed over the list. A section asked for
+  // by name opens on that section: a caller-specified one (a task flow), or
+  // one stored as requested (Account storage and Sign in to share from the
+  // project sheet, an invitation or device-approval link, or a reload of a
+  // section that was open).
   const [compactPushed, setCompactPushed] = useState(
-    initialSection !== undefined
+    initialSection !== undefined || initialViewState.sectionRequested === true
   );
+  const compactPushedRef = useRef(compactPushed);
+  compactPushedRef.current = compactPushed;
   // The step back from a pushed section, while there is one (Escape's).
   const compactBackRef = useRef<(() => void) | null>(null);
   // The setting a search result was tapped for, scrolled to once drawn.
@@ -959,7 +968,9 @@ export function SettingsPage({
     updateSettingsViewState({
       activeSection: activeRef.current,
       query: queryRef.current,
-      scrollTop: scrollTopRef.current
+      scrollTop: scrollTopRef.current,
+      // Compact keeps whether its section or its list was showing.
+      ...(compact ? { sectionRequested: compactPushedRef.current } : {})
     });
 
   // Fetched only when the panel that shows it is open, and dropped on sign-out
@@ -1132,9 +1143,15 @@ export function SettingsPage({
       open: true,
       activeSection: active,
       query: queryRef.current,
-      scrollTop
+      scrollTop,
+      ...(compact ? { sectionRequested: compactPushedRef.current } : {})
     });
-  }, [active, initialSection]);
+  }, [active, initialSection, compact]);
+
+  // Compact: a reload brings back the section or the list that was showing.
+  useEffect(() => {
+    if (compact) updateSettingsViewState({ sectionRequested: compactPushed });
+  }, [compact, compactPushed]);
 
   useEffect(() => {
     const onPageHide = () => persistCurrentView();
@@ -1224,7 +1241,7 @@ export function SettingsPage({
     compactMode === 'section' ? () => setCompactPushed(false) : null;
   const compactResults =
     compactMode === 'search'
-      ? compactSettingMatches(visibleSections, query)
+      ? compactSettingMatches(visibleSections, query, Boolean(session))
       : [];
   const openCompactSection = (id: SectionId, settingTitle?: string) => {
     compactFoundRef.current = settingTitle ?? null;

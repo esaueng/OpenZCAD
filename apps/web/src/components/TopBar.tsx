@@ -48,6 +48,10 @@ import { isEncryptedProject } from '../lib/api';
 import type { WorkspaceMode } from '../lib/panelState';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { COLLABORATION_LABELS } from '../lib/collaborationLabels';
+import {
+  listedStoredFiles,
+  projectSharingOffered
+} from '../lib/projectMenuGates';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import { StableLabel } from './StableLabel';
@@ -433,7 +437,10 @@ export function TopBar({
   encryption = null
 }: TopBarProps) {
   // A share-link session has nothing to share into (design review I73).
-  const projectSharingEnabled = sharingAvailable && !shareSession;
+  const projectSharingEnabled = projectSharingOffered({
+    sharingAvailable,
+    shareSession
+  });
   const keymap = useKeymap();
   const modeLockedReason = (mode: WorkspaceMode): string | null =>
     mode === 'build'
@@ -460,10 +467,7 @@ export function TopBar({
   // A mesh payload is the import's internal triangles, not a file anyone
   // picked or would download; the original upload is listed beside it. A
   // reference image's picture is internal to its image in the same way.
-  const artifacts = storedArtifacts.filter(
-    (artifact) =>
-      artifact.kind !== 'mesh-payload' && artifact.kind !== 'reference-image'
-  );
+  const artifacts = listedStoredFiles(storedArtifacts);
   const [editingProjectName, setEditingProjectName] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState(projectName ?? '');
   const projectNameInputRef = useRef<HTMLInputElement>(null);

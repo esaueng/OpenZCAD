@@ -233,7 +233,7 @@ describe('the compact library', () => {
     expect(shown.onMoveToShelf).not.toHaveBeenCalled();
   });
 
-  it('offers Restore and Delete forever on a trashed row', async () => {
+  it('offers only Restore on a swiped trashed row; Delete forever stays in its sheet', async () => {
     const trashed = project('project_trashed', 'Scrap', {
       organization: {
         status: 'deleted',
@@ -256,9 +256,23 @@ describe('the compact library', () => {
     const actions = within(
       await within(row).findByRole('group', { name: 'Row actions' })
     );
-    fireEvent.click(
-      actions.getByRole('button', { name: 'Delete Scrap forever' })
+    // A swipe never offers permanent deletion, whatever the confirmation
+    // setting: only the way back.
+    expect(actions.getAllByRole('button')).toHaveLength(1);
+    expect(
+      actions.queryByRole('button', { name: /forever|delete/i })
+    ).toBeNull();
+    fireEvent.click(actions.getByRole('button', { name: 'Restore Scrap' }));
+    expect(shown.onMoveToShelf).toHaveBeenCalledWith(trashed, 'active');
+    expect(shown.onDeleteForever).not.toHaveBeenCalled();
+
+    // Delete forever is in the row's action sheet, which runs the same
+    // handler (and so the same confirmation) as the regular tile menu.
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Scrap' }));
+    const menu = within(
+      screen.getByRole('menu', { name: 'Actions for Scrap' })
     );
+    fireEvent.click(menu.getByRole('menuitem', { name: 'Delete forever' }));
     expect(shown.onDeleteForever).toHaveBeenCalledWith(trashed);
   });
 

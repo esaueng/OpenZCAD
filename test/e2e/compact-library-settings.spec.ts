@@ -1,5 +1,11 @@
 import type { Locator, Page } from '@playwright/test';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import {
+  addPrimitiveFeature,
+  createProjectDocument,
+  sharedProjectSnapshotDocument
+} from '@openzcad/document-core';
+import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
+import { expect, stubAnonymousApi, stubApi, test } from './openzcad-fixtures';
 import { smallTouchTargets } from './touch-hit-area';
 
 /**
@@ -284,6 +290,10 @@ for (const size of SIZES) {
     let sheet = await openProjectSheet(page, 'Sheet part');
     await expectTouchSized(page, '.compact-sheet-head');
     await expectDrawnSized(page, '.compact-sheet-body[data-page]');
+    // The owner's own project offers sharing, as the top bar's chip does.
+    await expect(
+      sheet.getByRole('button', { name: 'Share', exact: true })
+    ).toBeVisible();
 
     // Rename in place.
     const field = sheet.getByRole('textbox', { name: 'Project name' });
@@ -310,6 +320,24 @@ for (const size of SIZES) {
     const download = page.waitForEvent('download');
     await sheet.getByRole('button', { name: 'Export STEP', exact: true }).tap();
     expect((await download).suggestedFilename()).toMatch(/\.step$/i);
+
+    // Account storage opens Settings on Account itself, not on its list.
+    sheet = await openProjectSheet(page, 'Sheet renamed');
+    await sheet
+      .getByRole('button', { name: 'Account storage', exact: true })
+      .tap();
+    const settings = page.getByRole('dialog', {
+      name: 'Settings',
+      exact: true
+    });
+    await expect(
+      settings.getByRole('heading', { level: 1, name: 'Account' })
+    ).toBeVisible();
+    await expect(
+      settings.getByRole('button', { name: 'Back to all settings' })
+    ).toBeVisible();
+    await settings.getByRole('button', { name: /^Close settings/ }).tap();
+    await expect(settings).toHaveCount(0);
 
     // Duplicate project, which the regular workspace has no button for.
     sheet = await openProjectSheet(page, 'Sheet renamed');
@@ -448,3 +476,204 @@ for (const size of SIZES) {
     await expectOnScreen(page, guide);
   });
 }
+
+const PHONE = SIZES[0]!;
+
+/** A view-only share link of a one-box model, opened on the compact layout. */
+async function openShareLink(page: Page) {
+  const snapshot = sharedProjectSnapshotDocument(
+    addPrimitiveFeature(
+      createProjectDocument('Shared Review', toUserId('share_owner')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 30, height: 10, depth: 20 }
+      }
+    )
+  );
+  await page.route('**/api/share', (route) =>
+    route.fulfill({
+      json: {
+        document: snapshot,
+        project: {
+          projectId: snapshot.projectId,
+          name: snapshot.name,
+          mode: 'view'
+        }
+      }
+    })
+  );
+  await preferCompact(page);
+  await page.setViewportSize(PHONE);
+  await page.goto(`/#share=${'s'.repeat(43)}`);
+  await expect(page.locator('.app-shell[data-shell="compact"]')).toBeVisible({
+    timeout: 60_000
+  });
+}
+
+for (const signedIn of [true, false]) {
+  const who = signedIn ? 'signed in' : 'signed out';
+  test(
+    `a share link's project sheet (${who}) offers no sharing, as the top bar does not`,
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(180_000);
+      if (signedIn) await stubApi(page);
+      else await stubAnonymousApi(page);
+      await openShareLink(page);
+      const sheet = await openProjectSheet(page, 'Shared Review');
+      // The regular header withholds sharing, Sign in to share, comments a
+      // view-only link does not take, and the owner's Properties and rename.
+      for (const name of [
+        'Share',
+        'Sign in to share',
+        'Comments',
+        'Properties'
+      ]) {
+        await expect(
+          sheet.getByRole('button', { name, exact: true }),
+          name
+        ).toHaveCount(0);
+      }
+      await expect(
+        sheet.getByRole('textbox', { name: 'Project name' })
+      ).toBeDisabled();
+      // What a share link does offer is still there: a copy of the model.
+      await expect(
+        sheet.getByRole('button', { name: /^Export STEP/ })
+      ).toBeVisible();
+    }
+  );
+}
+
+test(`trash at ${PHONE.width}×${PHONE.height}: a swipe trashes with Undo, and never deletes forever`, async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize(PHONE);
+  await openCompactLibrary(page);
+  await newProject(page, 'Trash part');
+  await backToLibrary(page);
+
+  // Swiped to Trash: the tile menu's toast and its Undo.
+  await swipeLeft(page, tile(page, 'Trash part'));
+  let actions = tile(page, 'Trash part').getByRole('group', {
+    name: 'Row actions'
+  });
+  await actions.getByRole('button', { name: 'Move Trash part to trash' }).tap();
+  await expect(tile(page, 'Trash part')).toHaveCount(0);
+  const toast = page.locator('.toast');
+  await expect(toast).toContainText('Moved Trash part to the trash.');
+  await toast.getByRole('button', { name: 'Undo' }).tap();
+  await expect(tile(page, 'Trash part')).toBeVisible();
+
+  await swipeLeft(page, tile(page, 'Trash part'));
+  await tile(page, 'Trash part')
+    .getByRole('group', { name: 'Row actions' })
+    .getByRole('button', { name: 'Move Trash part to trash' })
+    .tap();
+  await expect(tile(page, 'Trash part')).toHaveCount(0);
+
+  // In Trash a swipe only restores. A trashed row opens nothing, so it is
+  // named as a group rather than an open button.
+  const shelves = page.getByRole('group', { name: 'Shelves' });
+  await shelves.getByRole('button', { name: 'Trash' }).tap();
+  const trashed = page.locator('.start-tile-project', {
+    has: page.getByRole('group', { name: /^Trash part,/ })
+  });
+  await swipeLeft(page, trashed);
+  actions = trashed.getByRole('group', { name: 'Row actions' });
+  await expect(actions).toBeVisible();
+  await expect(actions.getByRole('button')).toHaveCount(1);
+  await expect(
+    actions.getByRole('button', { name: 'Restore Trash part' })
+  ).toBeVisible();
+
+  // A tap elsewhere puts the row back, and restores nothing.
+  await trashed.getByText('Deletes in 30 days').tap();
+  await expect(actions).toHaveCount(0);
+  await expect(trashed).toBeVisible();
+
+  // Delete forever stays in the row's sheet, behind the tile menu's confirm.
+  await page.getByRole('button', { name: 'Actions for Trash part' }).tap();
+  await page
+    .getByRole('menu', { name: 'Actions for Trash part' })
+    .getByRole('menuitem', { name: 'Delete forever' })
+    .tap();
+  const confirm = page.getByRole('alertdialog', {
+    name: 'Delete “Trash part” forever?'
+  });
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole('button', { name: 'Cancel' }).tap();
+  await expect(confirm).toHaveCount(0);
+  await expect(trashed).toBeVisible();
+});
+
+test(`settings at ${PHONE.width}×${PHONE.height}: Test connection's error is shown and announced in its section`, async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await stubApi(page);
+  // A personal token stored on the account, which the provider refuses.
+  const settings = structuredClone(DEFAULT_APP_SETTINGS);
+  settings.assistant.enabled = true;
+  settings.assistant.credentialSource = 'personal';
+  await page.route('**/api/settings', (route) =>
+    route.fulfill({
+      json: {
+        settings,
+        revision: 1,
+        synced: true,
+        credential: { stored: true, hint: '…1234', storageAvailable: true },
+        effectiveAssistant: {
+          configured: true,
+          source: 'personal',
+          provider: settings.assistant.provider,
+          model: settings.assistant.model,
+          reasoningEffort: settings.assistant.reasoningEffort
+        }
+      }
+    })
+  );
+  await page.route('**/api/settings/assistant/test', (route) =>
+    route.fulfill({
+      status: 400,
+      json: { error: 'The provider refused the API key.' }
+    })
+  );
+  await preferCompact(page);
+  await page.setViewportSize(PHONE);
+  await page.goto('/');
+  await expect(page.getByRole('group', { name: 'Shelves' })).toBeVisible({
+    timeout: 60_000
+  });
+  await page
+    .locator('.compact-library-head')
+    .getByRole('button', { name: 'Open settings', exact: true })
+    .tap();
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await dialog.getByRole('button', { name: 'AI Assistant', exact: true }).tap();
+  await expect(
+    dialog.getByRole('heading', { level: 1, name: 'AI Assistant' })
+  ).toBeVisible();
+  const testButton = dialog.getByRole('button', { name: 'Test connection' });
+  await testButton.scrollIntoViewIfNeeded();
+  await expect(testButton).toBeEnabled({ timeout: 30_000 });
+  await testButton.tap();
+  const region = dialog.locator('.settings-save-message[aria-live="polite"]');
+  await expect(region).toContainText('The provider refused the API key');
+  await expect(region).toBeVisible();
+  await expectOnScreen(page, region);
+  // In the accessibility tree: not hidden from it, and its words read out.
+  expect(
+    await region.evaluate(
+      (element) =>
+        element.closest('[aria-hidden="true"]') === null &&
+        getComputedStyle(element).display !== 'none' &&
+        getComputedStyle(element).visibility === 'visible'
+    )
+  ).toBe(true);
+  await expect(dialog).toMatchAriaSnapshot(
+    '- text: /The provider refused the API key/'
+  );
+});

@@ -1114,6 +1114,11 @@ import {
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
 import type { CompactProjectSheet } from './components/compact/compactSlots';
+import {
+  listedStoredFiles,
+  projectCommentsOffered,
+  projectSharingEntry
+} from './lib/projectMenuGates';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { useWorkspaceShell } from './hooks/useWorkspaceShell';
 import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
@@ -16720,7 +16725,8 @@ export function App() {
     updateSettingsViewState(
       section
         ? { open: true, activeSection: section, query: '', scrollTop: 0 }
-        : { open: true }
+        : // A return visit: compact Settings opens on its list.
+          { open: true, sectionRequested: false }
     );
     setSettingsOpen(true);
     setPaletteOpen(false);
@@ -40453,17 +40459,18 @@ export function App() {
           onProperties: shareSession
             ? null
             : () => setProjectPropertiesOpen(true),
-          share:
-            cloudFunctionsEnabled && projectSharingPreferenceEnabled
-              ? session
-                ? { label: 'Share', run: () => setSharingOpen(true) }
-                : {
-                    label: 'Sign in to share',
-                    run: () => openSettingsAt('account')
-                  }
-              : null,
-          onComments:
-            !shareSession || shareSession.comments ? openComments : null,
+          // The top bar's own gates: never sharing from a share link.
+          share: projectSharingEntry({
+            sharingAvailable:
+              cloudFunctionsEnabled && projectSharingPreferenceEnabled,
+            shareSession,
+            signedIn: Boolean(session),
+            onOpenSharing: () => setSharingOpen(true),
+            onSignIn: () => openSettingsAt('account')
+          }),
+          onComments: projectCommentsOffered(shareSession)
+            ? openComments
+            : null,
           displayUnits: {
             shown: documentDisplayUnits(doc),
             stored: doc.units,
@@ -40484,7 +40491,8 @@ export function App() {
             disabledReason: session ? null : 'Sign in to archive imports',
             run: () => void handleArchiveLocalSources()
           },
-          storedFiles: storedFiles.map((artifact) => ({
+          // The File menu's list: what someone picked or exported.
+          storedFiles: listedStoredFiles(storedFiles).map((artifact) => ({
             id: artifact.artifactId,
             name: artifact.name,
             detail:
@@ -40743,7 +40751,7 @@ export function App() {
           }
           onGoHome={() => void handleGoHome()}
           onOpenSharing={() => setSharingOpen(true)}
-          {...(!shareSession || shareSession.comments
+          {...(projectCommentsOffered(shareSession)
             ? { onOpenComments: openComments }
             : {})}
           onSignIn={() => openSettingsAt('account')}

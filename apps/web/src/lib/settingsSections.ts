@@ -30,6 +30,13 @@ export interface SettingsSectionMeta {
   settings: string[];
   /** Additional searchable copy that is not rendered as a SettingRow title. */
   searchTerms?: readonly string[];
+  /**
+   * Of `settings`, the rows the page draws only for a signed-in account, or
+   * only signed out. A search result names a setting only where its row is
+   * drawn (`shownSettingTitles`).
+   */
+  signedInOnly?: readonly string[];
+  signedOutOnly?: readonly string[];
 }
 
 /** What Account still offers while cloud features are off: the way back. */
@@ -208,6 +215,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Project sharing',
       'Storage'
     ],
+    // Membership and the storage meter belong to a signed-in profile.
+    signedInOnly: ['Membership', 'Storage'],
     searchTerms: [
       ...CLOUD_SWITCH_SEARCH_TERMS,
       'hide name',
@@ -318,6 +327,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Local project data',
       'Cloud data'
     ],
+    // Signed in, the account's statistics consent shows; signed out, a
+    // Cloud data row says to sign in.
+    signedInOnly: ['Cloud account statistics'],
+    signedOutOnly: ['Cloud data'],
     searchTerms: [
       'privacy policy',
       'personal data',
@@ -448,4 +461,18 @@ export function visibleSettingsSections({
           .includes(normalized)
       )
     : available;
+}
+
+/**
+ * The setting titles a section's page draws for this account: its index
+ * less the rows gated on being signed in or signed out.
+ */
+export function shownSettingTitles(
+  section: SettingsSectionMeta,
+  { signedIn }: { signedIn: boolean }
+): string[] {
+  const hidden = new Set(
+    (signedIn ? section.signedOutOnly : section.signedInOnly) ?? []
+  );
+  return section.settings.filter((title) => !hidden.has(title));
 }

@@ -561,8 +561,33 @@
   letter-spacing: normal;
 }
 
-.settings-page[data-shell='compact'] .settings-save-message {
-  display: none;
+/* The page's live region (a refused sign-in code, a provider's Test
+   connection error) stays announced and on screen: a line of its own under
+   the search, read whole, over whichever section is open. Empty, it takes
+   no room but stays in the accessibility tree, so what arrives is read. */
+.settings-page[data-shell='compact'] .settings-head .settings-save-message {
+  order: 4;
+  flex: 1 0 100%;
+  display: block;
+  -webkit-line-clamp: none;
+  overflow: visible;
+  white-space: normal;
+  text-align: left;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.settings-page[data-shell='compact']
+  .settings-head
+  .settings-save-message:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .settings-page[data-shell='compact'] .settings-search {

@@ -17,6 +17,12 @@ export interface SettingsViewState {
   activeSection: SettingsSectionId;
   query: string;
   scrollTop: number;
+  /**
+   * A section was asked for by name (a task flow, a link, a search result,
+   * a section opened from the list): compact Settings opens on that section
+   * instead of its list of sections. Stored only while true.
+   */
+  sectionRequested?: true;
 }
 
 const DEFAULT_SETTINGS_VIEW_STATE: SettingsViewState = {
@@ -61,6 +67,9 @@ export function normalizeSettingsViewState(value: unknown): SettingsViewState {
   ) {
     state.scrollTop = root.scrollTop;
   }
+  if (root.sectionRequested === true) {
+    state.sectionRequested = true;
+  }
   return state;
 }
 
@@ -87,12 +96,24 @@ export function saveSettingsViewState(state: SettingsViewState): boolean {
   }
 }
 
+/**
+ * Merges a change into the stored view. A patch that names a section asks
+ * for it (an invitation, a device approval, Account storage): unless it
+ * says otherwise, compact Settings opens on that section.
+ */
 export function updateSettingsViewState(
-  patch: Partial<SettingsViewState>
+  patch: Partial<Omit<SettingsViewState, 'sectionRequested'>> & {
+    sectionRequested?: boolean;
+  }
 ): SettingsViewState {
+  const current = loadSettingsViewState();
+  const { sectionRequested, ...rest } = patch;
   const next = normalizeSettingsViewState({
-    ...loadSettingsViewState(),
-    ...patch
+    ...current,
+    ...rest,
+    sectionRequested:
+      sectionRequested ??
+      (rest.activeSection !== undefined ? true : current.sectionRequested)
   });
   saveSettingsViewState(next);
   return next;
