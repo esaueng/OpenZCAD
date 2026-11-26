@@ -42638,6 +42638,7 @@ export function App() {
                   }
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
+                  refusalClassification={inPlace.refusalClassification}
                   // U11: a kernel refusal says the input it is about; the
                   // last request that built stays on screen meanwhile.
                   refusalInput={inPlace.refusalInput}

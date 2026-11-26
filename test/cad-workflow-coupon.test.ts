@@ -36,7 +36,11 @@ import {
 } from '../apps/web/src/lib/inPlace/tools';
 import {
   GENERIC_REFUSAL,
-  plainRefusal
+  SPLIT_PLANE_MISSES,
+  SPLIT_PLANE_ON_EDGE,
+  SPLIT_PLANE_ON_FACE,
+  plainRefusal,
+  type RefusalClassification
 } from '../apps/web/src/lib/refusalLanguage';
 import {
   inspectTriangleMeshClosure,
@@ -103,12 +107,15 @@ afterAll(() => adapter.dispose());
 
 // ---------------------------------------------------------------- outcomes
 
-const TOUCH_SENTENCE =
-  'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.';
-
 /** What the Split command bar shows for a stored warning. */
-function barSentence(message: string): string {
-  return plainRefusal(message.replace(/^Feature "[^"]+":\s*/, '')).message;
+function barSentence(
+  message: string,
+  classification: RefusalClassification
+): string {
+  return plainRefusal(
+    message.replace(/^Feature "[^"]+":\s*/, ''),
+    classification
+  ).message;
 }
 
 interface Typed {
@@ -116,12 +123,14 @@ interface Typed {
   family: string;
   category: string;
   code: string;
+  /** The adapter's cause for a code that covers several, if it read one. */
+  reason?: string;
   /** The stored warning text (kernel prose; recorded, never asserted). */
   message: string;
   /**
    * The sentence the in-place command bar shows for it: the bar takes the
-   * warning without its `Feature "…":` lead and translates it with no
-   * classification (`InPlaceCommandBar.tsx`). The browser twin,
+   * warning without its `Feature "…":` lead and translates it by its typed
+   * record (`InPlaceCommandBar.tsx`). The browser twin,
    * `test/e2e/split-recovery.spec.ts`, reads the same sentences on screen.
    */
   bar: string;
@@ -159,8 +168,9 @@ async function outcome(
     family: refusal!.family,
     category: refusal!.category,
     code: refusal!.code,
+    ...(refusal!.reason ? { reason: refusal!.reason } : {}),
     message: warning!.message,
-    bar: barSentence(warning!.message)
+    bar: barSentence(warning!.message, refusal!)
   };
 }
 
@@ -578,16 +588,15 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
     expect(refused.bar).not.toMatch(
       /invalid input:|unsupported configuration|edge \d/
     );
-    if (label.startsWith('S4')) expect(refused.bar).toBe(TOUCH_SENTENCE);
+    if (label.startsWith('S4')) expect(refused.bar).toBe(SPLIT_PLANE_ON_EDGE);
   });
 
-  // Wording findings (owner refusalLanguage.ts). The typed refusal behind
-  // each one is checked in the hook, outside any expected failure, so a
-  // replay error or a wrong category fails the run instead of passing as the
-  // known defect. Each `it.fails` then asserts only on its own sentence and
-  // passes while that defect stands; once the copy is fixed it fails, and
-  // should become a plain `it` asserting the new sentence.
-  describe('wording findings', () => {
+  // Wording (owner refusalLanguage.ts; slice 1a fixed what slice 0 found).
+  // The typed refusal behind each cell is checked in the hook, so a replay
+  // error or a wrong category fails the run on its own. The kernel words a
+  // face touch and an edge touch alike; the adapter's cause code, read from
+  // the target's exact planar faces, is what tells them apart.
+  describe('wording', () => {
     const vertexPlane = {
       origin: { x: 0, y: 0, z: 0 },
       normal: {
@@ -596,11 +605,23 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
         z: 1 / Math.sqrt(3)
       }
     };
-    const bars = new Map<string, string>();
+    const edgePlane = {
+      origin: { x: 0, y: 0, z: 0 },
+      normal: { x: Math.SQRT1_2, y: Math.SQRT1_2, z: 0 }
+    };
+    const cells = new Map<string, Typed>();
     beforeAll(async () => {
       for (const [cell, plane, category] of [
         ['S2', xPlane(98), 'invalid_input'],
         ['S3', xPlane(90), 'unsupported'],
+        // The same face from the other side: the cause does not depend on
+        // which way the plane's normal points.
+        [
+          'S3 reversed',
+          { origin: { x: 90, y: 0, z: 0 }, normal: { x: -1, y: 0, z: 0 } },
+          'unsupported'
+        ],
+        ['S4', edgePlane, 'unsupported'],
         ['S5', vertexPlane, 'invalid_input']
       ] as const) {
         const { document, coupon } = blank();
@@ -609,44 +630,64 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
           targetBodyId: coupon,
           plane
         });
-        const refused = expectTyped(
-          await outcome(split.document, 'Split'),
-          category,
-          `${cell} wording`
+        cells.set(
+          cell,
+          expectTyped(
+            await outcome(split.document, 'Split'),
+            category,
+            `${cell} wording`
+          )
         );
-        bars.set(cell, refused.bar);
       }
     });
 
     it('records a typed refusal for each wording cell', () => {
-      expect([...bars.keys()]).toEqual(['S2', 'S3', 'S5']);
-      for (const bar of bars.values()) expect(bar).toEqual(expect.any(String));
+      expect([...cells.keys()]).toEqual([
+        'S2',
+        'S3',
+        'S3 reversed',
+        'S4',
+        'S5'
+      ]);
     });
 
-    // Expected for S2 and S5: a sentence saying the plane misses the body
-    // (or only touches a corner) and to slide it through the body. Actual:
-    // the table has no entry for "cutting plane does not split the solid", so
-    // the bar shows GENERIC_REFUSAL, which K10 counts as a failure. Each cell
-    // is its own case, so fixing one cannot hide the other.
-    it.fails('Wording, S2: a strict miss names the miss', () => {
-      expect(bars.get('S2')).not.toBe(GENERIC_REFUSAL);
+    // Each cell is its own case, so a regression in one cannot hide behind
+    // another.
+    it('Wording, S2: a strict miss names the miss', () => {
+      expect(cells.get('S2')).toMatchObject({
+        reason: 'plane_misses_body',
+        bar: SPLIT_PLANE_MISSES
+      });
     });
 
-    it.fails('Wording, S5: a vertex touch names the miss', () => {
-      expect(bars.get('S5')).not.toBe(GENERIC_REFUSAL);
+    it('Wording, S5: a vertex touch reads as a miss', () => {
+      expect(cells.get('S5')).toMatchObject({
+        reason: 'plane_misses_body',
+        bar: SPLIT_PLANE_MISSES
+      });
     });
 
-    // Expected: a sentence saying the plane lies on a face of the body and
-    // only touches it, so slide it into the body. Actual: the face-touch
-    // refusal shares the edge-touch entry ("lies exactly along an existing
-    // edge … off the edge"), which names the wrong cause for a face pick —
-    // and a picked face's plane always starts here, at offset 0.
-    it.fails(
-      'Wording, S3: a plane on a face is not described as lying along an edge',
-      () => {
-        expect(bars.get('S3')).not.toBe(TOUCH_SENTENCE);
+    it('Wording, S3: a plane on a face says so, not that it lies along an edge', () => {
+      for (const cell of ['S3', 'S3 reversed']) {
+        expect(cells.get(cell), cell).toMatchObject({
+          reason: 'plane_on_face',
+          bar: SPLIT_PLANE_ON_FACE
+        });
       }
-    );
+    });
+
+    it('Wording, S4: a plane along an edge keeps the edge sentence', () => {
+      expect(cells.get('S4')).toMatchObject({
+        reason: 'plane_on_edge',
+        bar: SPLIT_PLANE_ON_EDGE
+      });
+    });
+
+    it('never falls back to the generic sentence', () => {
+      for (const [cell, typed] of cells) {
+        expect(typed.bar, cell).not.toBe(GENERIC_REFUSAL);
+      }
+    });
   });
 
   it('S6: a typed zero normal makes no Split request', () => {

@@ -172,12 +172,42 @@ const BLEND_RESIZE_SENTENCES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Split by plane (M11). A plane with no edge of the body across it has three
+ * stories: it misses the body (or meets one corner), it lies flat on one of
+ * the body's faces, or it runs along one edge. The kernel words the last two
+ * alike; the adapter tells them apart from the target's exact planar faces
+ * and records which on `kernelRefusal.reason` (`exact-split-contact.ts`).
+ *
+ * A Split begun by picking the body's own face always opens on the face
+ * story, at offset 0, so that sentence says to slide the plane into the body
+ * rather than to move it off an edge. It names no sign: a picked face's
+ * offset runs along its outward normal, a principal plane's along the axis.
+ */
+export const SPLIT_PLANE_MISSES =
+  'The cutting plane does not pass through the body. Move the plane so it cuts through the body.';
+export const SPLIT_PLANE_ON_FACE =
+  'The cutting plane lies on a face of the body and only touches it. Slide the plane into the body.';
+export const SPLIT_PLANE_ON_EDGE =
+  'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.';
+/** A plane that only touches the body, where nothing said how. */
+const SPLIT_PLANE_TOUCHES =
+  'The cutting plane only touches the body, along an edge or a face. Slide the plane into the body.';
+const SPLIT_SENTENCES: Readonly<Record<string, string>> = {
+  plane_misses_body: SPLIT_PLANE_MISSES,
+  plane_on_face: SPLIT_PLANE_ON_FACE,
+  plane_on_edge: SPLIT_PLANE_ON_EDGE
+};
+
+/**
  * The sentence for a refused face move the kernel typed, read from its code
  * and cause rather than its prose. Null when the record does not name a cause
  * this table has a sentence for; the prose table below then still applies,
  * because untyped paths (move-faces, previews) reach the same sentences.
  */
 function typedSentence(typed: RefusalClassification): string | null {
+  if (typed.code === 'split_refused') {
+    return ownEntry(SPLIT_SENTENCES, typed.reason) ?? null;
+  }
   const blendResize = typed.code ? BLEND_RESIZE_SENTENCES[typed.code] : null;
   if (blendResize) {
     return blendResize;
@@ -351,14 +381,27 @@ const TRANSLATIONS: readonly Translation[] = [
       "The cutting plane crosses a curved face, which splitting can't cut yet. Move the plane so it crosses only flat faces."
   },
   {
-    // Remus 3c489d7 words it as a plane that only touches the body: "the
-    // cutting plane does not cross the solid's interior; it only touches
-    // the body and contains edge 3 of the solid, so there is nothing to
-    // split". Both say the plane lies along an edge.
-    pattern:
-      /cutting plane (?:does not cross the solid's interior; it only touches the body and )?contains edge/i,
-    sentence:
-      'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.'
+    // A plane through the body that contains one of its edges: "the cutting
+    // plane contains edge 36 of the solid; splitting along an existing edge
+    // has no unambiguous answer".
+    pattern: /cutting plane contains edge/i,
+    sentence: SPLIT_PLANE_ON_EDGE
+  },
+  {
+    // A plane that only touches the body (Remus 3c489d7): "the cutting
+    // plane does not cross the solid's interior; it only touches the body
+    // and contains edge 3 of the solid, so there is nothing to split". The
+    // same words for a plane along a lone edge and one flat on a face, so
+    // untyped, the sentence names neither; a typed refusal says which
+    // (`SPLIT_SENTENCES`).
+    pattern: /cutting plane does not cross the solid's interior/i,
+    sentence: SPLIT_PLANE_TOUCHES
+  },
+  {
+    // "invalid input: cutting plane does not split the solid (entirely on
+    // one side)": the plane misses the body, or meets only a corner of it.
+    pattern: /cutting plane does not split the solid/i,
+    sentence: SPLIT_PLANE_MISSES
   },
   {
     // A face move beside a fillet: the kernel can carry the blend along only

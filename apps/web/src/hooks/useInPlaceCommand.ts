@@ -3,6 +3,7 @@ import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureData,
+  FeatureWarning,
   ParamValue,
   ParametricVector3,
   ProjectDocument,
@@ -337,6 +338,12 @@ export interface InPlaceCommand {
   hint: string;
   refusal: string | null;
   /**
+   * The kernel's typed record of {@link refusal}, when the rebuild that
+   * refused recorded one: what the bar translates the sentence by, as the
+   * diagnostics card does. Null for any other refusal.
+   */
+  refusalClassification: FeatureWarning['kernelRefusal'] | null;
+  /**
    * U11: the input (or inputs) the kernel's refusal is about, named ahead of
    * it in the bar: what changed since the last request that built, which
    * stays on screen. Null for an entry refusal, which names its own value.
@@ -509,6 +516,16 @@ export function useInPlaceCommand(
 ): InPlaceCommand {
   const [session, setSession] = useState<Session | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  /**
+   * The typed record of the preview refusal it was read with. Kept beside
+   * the sentence rather than in it, and offered only while that sentence is
+   * still the refusal shown, so no other path that sets a refusal has to
+   * clear it.
+   */
+  const [typedRefusal, setTypedRefusal] = useState<{
+    message: string;
+    record: NonNullable<FeatureWarning['kernelRefusal']>;
+  } | null>(null);
   /**
    * U11: the inputs the refused request changed from the last one that
    * built, by their bar names, for a tool that names them.
@@ -1030,6 +1047,15 @@ export function useInPlaceCommand(
           // under a bare refusal, it reads as the value that was refused, so
           // only a tool that names the changed input keeps it.
           showRefused(frame?.request ?? null);
+          const record = fresh
+            ? result.derived.featureWarnings?.find(
+                (warning) =>
+                  (warning.kind === 'build-failed' ||
+                    warning.kind === 'refusal') &&
+                  warning.message === fresh
+              )?.kernelRefusal
+            : undefined;
+          setTypedRefusal(fresh && record ? { message: fresh, record } : null);
           setRefusal(
             fresh ??
               unresolved ??
@@ -2351,6 +2377,10 @@ export function useInPlaceCommand(
           .join(' · ')
       : '',
     refusal: entryRefusal?.message ?? refusal,
+    refusalClassification:
+      !entryRefusal && refusal !== null && typedRefusal?.message === refusal
+        ? typedRefusal.record
+        : null,
     refusalInput:
       entryRefusal || refusal === null || refusalInputs.length === 0
         ? null

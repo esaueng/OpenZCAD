@@ -17,6 +17,7 @@ import {
   threadPrintAdvisories
 } from './exact-thread';
 import { drillFeatureBores } from './exact-point-hole-cuts';
+import { splitRefusalReason } from './exact-split-contact';
 import { requireValidSolid } from './kernel-validation';
 import {
   cutKeptToolMaterialMeshRefusal,
@@ -2604,10 +2605,20 @@ function buildSplitFeature(
       planeNormal.z
     );
   } catch (error) {
+    const kernelMessage =
+      error instanceof Error ? error.message : String(error);
     throw modelingOperationRefusal(
       'split',
       error,
-      error instanceof Error ? error.message : String(error)
+      kernelMessage,
+      'modeling',
+      splitRefusalReason(
+        kernel,
+        targetSolid,
+        planePoint,
+        planeNormal,
+        kernelMessage
+      )
     );
   }
   const positive = halves[0];
