@@ -26,7 +26,7 @@ import {
  */
 
 const PROJECT = 'Reference eligibility';
-const REFUSAL = `That edge cannot be projected linked here: the source body is unavailable at the sketch's place in the history (source feature "Cap").`;
+const REFUSAL = `That edge cannot be projected linked here: the source body is unavailable at the sketch's place in the history (source feature "Cap"). To copy it as independent geometry instead, switch Project to Unlinked and pick it again.`;
 const BOSS_VOLUME = '301.59 mm³';
 const CAP_VOLUME = '1200 mm³';
 /** Written to this device: local-only or synced, not mid-save. */

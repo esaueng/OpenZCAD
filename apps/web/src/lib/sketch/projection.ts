@@ -420,22 +420,47 @@ export function projectionAddCommand(input: {
 }
 
 /**
+ * The exact build's reason when a linked projection's source body does not
+ * exist yet at the sketch's place in the history: the edge belongs to a
+ * feature after the sketch (packages/kernel-adapter's
+ * exact-sketch-projection.ts). The picked geometry is real in the model the
+ * user clicked, so an unlinked copy of it builds.
+ */
+const SOURCE_UNAVAILABLE =
+  /^its source body is unavailable at the sketch's place in the history\b/;
+
+/** How a refused linked pick can still land: the Project tool's Unlinked mode. */
+export const UNLINKED_ROUTE =
+  'To copy it as independent geometry instead, switch Project to Unlinked and pick it again.';
+
+/**
  * Refuses a candidate unless the exact build re-found every new linked
  * projection at the sketch's place in the history (current, or moved, which
  * the build follows). Broken — an edge made by a later feature, say — is
  * refused naming why; no verdict at all (the sketch is suppressed, or its
  * plane failed before projection ran) is refused too, since nothing then
  * proved the edge exists there.
+ *
+ * A source that is unavailable at the sketch's place (a later feature's
+ * edge) also offers the unlinked route, which builds. A re-pick does not:
+ * it replaces a linked source on an existing object, and stepping Project
+ * to Unlinked disarms it, so that route would add a copy rather than
+ * repair the object.
  */
 export function assertProjectionsResolve(
   derived: Pick<DerivedState, 'sketchProjections'>,
-  objectIds: readonly string[]
+  objectIds: readonly string[],
+  options: { repick?: boolean } = {}
 ): void {
   for (const objectId of objectIds) {
     const state = derived.sketchProjections?.[objectId];
     if (state?.status === 'broken') {
+      const route =
+        !options.repick && SOURCE_UNAVAILABLE.test(state.reason)
+          ? ` ${UNLINKED_ROUTE}`
+          : '';
       throw new Error(
-        `That edge cannot be projected linked here: ${state.reason.replace(/^its /, 'the ')}`
+        `That edge cannot be projected linked here: ${state.reason.replace(/^its /, 'the ')}${route}`
       );
     }
     if (!state) {

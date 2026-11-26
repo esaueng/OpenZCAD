@@ -139,7 +139,7 @@ describe('earlier-sketch reference eligibility (S06 / I01)', () => {
       });
     }
     expect(() => assertProjectionsResolve(derived, objectIds)).toThrow(
-      `That edge cannot be projected linked here: the source body is unavailable at the sketch's place in the history (source feature "Cap").`
+      `That edge cannot be projected linked here: the source body is unavailable at the sketch's place in the history (source feature "Cap"). To copy it as independent geometry instead, switch Project to Unlinked and pick it again.`
     );
   });
 
@@ -185,13 +185,10 @@ describe('earlier-sketch reference eligibility (S06 / I01)', () => {
     expect(volumes[part.capBodyId]!.volume).toBeCloseTo(VOLUMES.cap, 6);
   });
 
-  // Finding (Wording, refusalLanguage / projection.ts): the later-body
-  // refusal says why but not how to recover. Only the no-verdict branch of
-  // assertProjectionsResolve offers the unlinked route; the broken branch
-  // forwards the build's reason alone. Expected: the sentence also offers
-  // projecting the face unlinked, which the case above shows is legal. The
-  // refusal itself is taken in a hook outside the expected failure, so a
-  // setup error cannot pass as the finding.
+  // The later-body refusal says why and how to recover: the case above
+  // shows an unlinked copy of the same face is legal, so the sentence
+  // offers the Project tool's Unlinked mode. The refusal is taken in a hook,
+  // so a setup error cannot pass as the sentence.
   describe('the later-face refusal', () => {
     let refusal: unknown;
     beforeAll(async () => {
@@ -209,8 +206,10 @@ describe('earlier-sketch reference eligibility (S06 / I01)', () => {
       expect((refusal as Error).message).toContain('"Cap"');
     });
 
-    it.fails('offers the unlinked route', () => {
-      expect((refusal as Error).message).toMatch(/unlinked/);
+    it('offers the unlinked route', () => {
+      expect((refusal as Error).message).toBe(
+        `That edge cannot be projected linked here: the source body is unavailable at the sketch's place in the history (source feature "Cap"). To copy it as independent geometry instead, switch Project to Unlinked and pick it again.`
+      );
     });
   });
 });
