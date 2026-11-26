@@ -90,6 +90,40 @@ describe('settings view state', () => {
     ).not.toHaveProperty('sectionRequested');
   });
 
+  // PR #2219 review: a device-approval link stored its section but kept a
+  // search from an earlier visit, which hid the section it asked for.
+  it('drops a stale search when a section is asked for', () => {
+    saveSettingsViewState({
+      open: false,
+      activeSection: 'appearance',
+      query: 'appearance',
+      scrollTop: 300
+    });
+    expect(
+      updateSettingsViewState({ open: true, activeSection: 'encryption' })
+    ).toMatchObject({
+      activeSection: 'encryption',
+      query: '',
+      scrollTop: 0,
+      sectionRequested: true
+    });
+    // Settings saving where it is keeps its own search and scroll.
+    expect(
+      updateSettingsViewState({
+        activeSection: 'viewport',
+        query: 'grid',
+        scrollTop: 40
+      })
+    ).toMatchObject({ query: 'grid', scrollTop: 40 });
+    // A section named without being asked for leaves the search alone.
+    expect(
+      updateSettingsViewState({
+        activeSection: 'general',
+        sectionRequested: false
+      })
+    ).toMatchObject({ query: 'grid', scrollTop: 40 });
+  });
+
   it('fails open to a safe non-sensitive default', () => {
     window.localStorage.setItem(SETTINGS_VIEW_STATE_STORAGE_KEY, 'not json');
     expect(loadSettingsViewState()).toEqual(defaultSettingsViewState());

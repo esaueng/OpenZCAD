@@ -6,6 +6,11 @@ import {
 } from '@openzcad/document-core';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
 import { expect, stubAnonymousApi, stubApi, test } from './openzcad-fixtures';
+import {
+  createE2eeServer,
+  installE2eeServer,
+  seedE2eeDevice
+} from './e2ee-fixtures';
 import { smallTouchTargets } from './touch-hit-area';
 
 /**
@@ -676,4 +681,45 @@ test(`settings at ${PHONE.width}×${PHONE.height}: Test connection's error is sh
   await expect(dialog).toMatchAriaSnapshot(
     '- text: /The provider refused the API key/'
   );
+});
+
+// PR #2219 review: a search left in Settings, then Settings closed, hid the
+// Encryption section a device-approval link opened it on, since compact
+// Settings shows a search's results before any section.
+test(`settings at ${PHONE.width}×${PHONE.height}: a device-approval link opens Encryption over an earlier search`, async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  const server = createE2eeServer();
+  await stubApi(page);
+  await installE2eeServer(page.context(), server);
+  await preferCompact(page);
+  await page.setViewportSize(PHONE);
+  await page.goto('/');
+  await expect(page.getByRole('group', { name: 'Shelves' })).toBeVisible({
+    timeout: 60_000
+  });
+  await seedE2eeDevice(page, server, { label: 'Laptop' });
+
+  await page
+    .locator('.compact-library-head')
+    .getByRole('button', { name: 'Open settings', exact: true })
+    .tap();
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await dialog.getByLabel('Find a setting').fill('appearance');
+  const results = dialog.getByRole('list', { name: 'Matching settings' });
+  await expect(results).toBeVisible();
+  await dialog.getByRole('button', { name: /^Close settings/ }).tap();
+  await expect(dialog).toHaveCount(0);
+
+  // A new device's approval link, opened as a camera app would.
+  await page.goto(`/#approve-device=${'0'.repeat(52)}`);
+  await expect(
+    dialog.getByRole('heading', { level: 1, name: 'Encryption' })
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(results).toHaveCount(0);
+  expect(new URL(page.url()).hash).toBe('');
+  // Back on the list, the search is empty.
+  await dialog.getByRole('button', { name: 'Back to all settings' }).tap();
+  await expect(dialog.getByLabel('Find a setting')).toHaveValue('');
 });

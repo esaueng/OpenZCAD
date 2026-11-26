@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import type { ComponentProps } from 'react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
+import { useState, type ComponentProps } from 'react';
 import { toUserId, type AppSettings } from '@openzcad/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultAppSettings } from '../lib/appSettings';
@@ -33,10 +40,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderCompact(
+function compactProps(
   overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
 ) {
-  const props = {
+  return {
     compact: true,
     settings: defaultAppSettings(),
     cloudFunctionsEnabled: true,
@@ -68,6 +75,12 @@ function renderCompact(
     onClose: vi.fn(),
     ...overrides
   };
+}
+
+function renderCompact(
+  overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
+) {
+  const props = compactProps(overrides);
   const view = render(<SettingsPage {...props} />);
   return { ...view, props };
 }
@@ -242,6 +255,199 @@ describe('compact Settings', () => {
     expect(
       results && within(results).queryByRole('button', { name: /^Cloud data/ })
     ).toBeFalsy();
+  });
+
+  // PR #2219 review: a search left in Settings hid the section a
+  // device-approval or invitation link opened it on, since compact Settings
+  // shows a search's results before any section.
+  it('opens a linked section after a search was left and Settings closed', () => {
+    const { props, unmount } = renderCompact();
+    fireEvent.change(screen.getByLabelText('Find a setting'), {
+      target: { value: 'appearance' }
+    });
+    expect(page()).toHaveClass('is-compact-search');
+    fireEvent.click(screen.getByRole('button', { name: /^Close settings/ }));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+    // Closing leaves no search for the next visit.
+    expect(loadSettingsViewState().query).toBe('');
+    unmount();
+    expect(loadSettingsViewState().query).toBe('');
+    // What a device-approval or invitation link stores.
+    updateSettingsViewState({ open: true, activeSection: 'account' });
+    renderCompact();
+    expect(page()).toHaveClass('is-compact-section');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Account'
+    );
+    expect(screen.getByLabelText('Find a setting')).toHaveValue('');
+  });
+
+  it('opens a linked section over a search a reload left behind', () => {
+    // Settings unmounted with a search, as a reload leaves it.
+    const first = renderCompact();
+    fireEvent.change(screen.getByLabelText('Find a setting'), {
+      target: { value: 'appearance' }
+    });
+    first.unmount();
+    expect(loadSettingsViewState().query).toBe('appearance');
+    updateSettingsViewState({ open: true, activeSection: 'account' });
+    renderCompact();
+    expect(page()).toHaveClass('is-compact-section');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Account'
+    );
+  });
+
+  // PR #2219 review: opened at the regular width and narrowed to compact on
+  // its list, a reload came back on a section, because the page-hide save
+  // still read the layout Settings had opened in.
+  it('saves the list for a reload after a resize to compact', () => {
+    updateSettingsViewState({ open: true, sectionRequested: false });
+    const props = compactProps({ compact: false });
+    const view = render(<SettingsPage {...props} />);
+    view.rerender(<SettingsPage {...props} compact />);
+    expect(page()).toHaveClass('is-compact-list');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(loadSettingsViewState().sectionRequested).toBeUndefined();
+    view.unmount();
+    expect(loadSettingsViewState().sectionRequested).toBeUndefined();
+    renderCompact();
+    expect(page()).toHaveClass('is-compact-list');
+  });
+
+  // PR #2219 review: a refused email code was read twice, by the field's
+  // alert and by the header's line, which compact Settings shows.
+  it('announces a refused sign-in code once, and keeps it shown', async () => {
+    const refused = 'That sign-in code is invalid.';
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    // The page's status line as App writes it: verifying, then the error,
+    // before the promise Settings waits on rejects.
+    function Harness() {
+      const [message, setMessage] = useState('');
+      return (
+        <SettingsPage
+          {...compactProps({
+            initialSection: 'account',
+            authConfig: {
+              mode: 'email-code',
+              emailCodeEnabled: true,
+              turnstileSiteKey: 'site-key'
+            },
+            authConfigStatus: 'ready',
+            onRequestLoginCode: vi.fn().mockResolvedValue({
+              challengeId: 'challenge-1',
+              expiresInSeconds: 600
+            }),
+            onVerifyLoginCode: async () => {
+              setMessage('Verifying sign-in code…');
+              await Promise.resolve();
+              setMessage(refused);
+              throw new Error(refused);
+            }
+          })}
+          message={message}
+        />
+      );
+    }
+    try {
+      render(<Harness />);
+      fireEvent.change(screen.getByLabelText('Email address'), {
+        target: { value: 'person@example.com' }
+      });
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Email me a code' })
+        );
+      });
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      fireEvent.change(codeField, { target: { value: '123456' } });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+      });
+      await waitFor(() =>
+        expect(screen.getByRole('alert')).toHaveTextContent(refused)
+      );
+      const live = [
+        ...document.querySelectorAll<HTMLElement>(
+          '[aria-live]:not([aria-live="off"]), [role="alert"], [role="status"], [role="log"]'
+        )
+      ].filter((element) => element.textContent?.includes(refused));
+      expect(live).toHaveLength(1);
+      expect(live[0]).toHaveAttribute('role', 'alert');
+      expect(live[0]).toBeVisible();
+      // The header's line still shows it.
+      expect(
+        document.querySelector('.settings-head .settings-save-message')
+      ).toHaveTextContent(refused);
+      // Typing a new code does not read the header's line out again.
+      fireEvent.change(codeField, { target: { value: '1' } });
+      expect(
+        document.querySelector('.settings-head .settings-save-message')
+      ).toHaveTextContent(refused);
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
+  // PR #2219 review: search listed rows the section does not draw now.
+  it('finds nothing for a row its section does not draw now', () => {
+    const search = (query: string) => {
+      fireEvent.change(screen.getByLabelText('Find a setting'), {
+        target: { value: query }
+      });
+      return screen.queryByRole('list', { name: 'Matching settings' });
+    };
+    // Signed out, Account draws no Membership: no result, not even Account.
+    const signedOut = renderCompact();
+    expect(search('Membership')).toBeNull();
+    expect(screen.getByText(/No settings match/)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Account' })).toBeNull();
+    signedOut.unmount();
+
+    // A personal OpenAI key: no API endpoint, which only a
+    // Responses-compatible provider asks for.
+    const openai = defaultAppSettings();
+    openai.assistant.credentialSource = 'personal';
+    openai.assistant.provider = 'openai';
+    const withOpenai = renderCompact({ settings: openai });
+    const none = search('API endpoint');
+    expect(
+      none && within(none).queryByRole('button', { name: /^API endpoint/ })
+    ).toBeFalsy();
+    // Its other personal rows are found.
+    expect(
+      within(search('Provider')!).getByRole('button', { name: /^Provider/ })
+    ).toBeInTheDocument();
+    withOpenai.unmount();
+
+    const compatible = defaultAppSettings();
+    compatible.assistant.credentialSource = 'personal';
+    compatible.assistant.provider = 'responses-compatible';
+    renderCompact({ settings: compatible });
+    expect(
+      within(search('API endpoint')!).getByRole('button', {
+        name: /^API endpoint/
+      })
+    ).toBeInTheDocument();
   });
 
   it('keeps the live region announced and shown in a section', () => {

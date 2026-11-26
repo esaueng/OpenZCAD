@@ -99,7 +99,10 @@ export function saveSettingsViewState(state: SettingsViewState): boolean {
 /**
  * Merges a change into the stored view. A patch that names a section asks
  * for it (an invitation, a device approval, Account storage): unless it
- * says otherwise, compact Settings opens on that section.
+ * says otherwise, compact Settings opens on that section, and a search
+ * left from an earlier visit is dropped so it cannot hide that section.
+ * A patch that brings its own search and scroll (Settings saving where it
+ * is) keeps them.
  */
 export function updateSettingsViewState(
   patch: Partial<Omit<SettingsViewState, 'sectionRequested'>> & {
@@ -108,8 +111,11 @@ export function updateSettingsViewState(
 ): SettingsViewState {
   const current = loadSettingsViewState();
   const { sectionRequested, ...rest } = patch;
+  const requested =
+    rest.activeSection !== undefined && sectionRequested !== false;
   const next = normalizeSettingsViewState({
     ...current,
+    ...(requested ? { query: '', scrollTop: 0 } : {}),
     ...rest,
     sectionRequested:
       sectionRequested ??

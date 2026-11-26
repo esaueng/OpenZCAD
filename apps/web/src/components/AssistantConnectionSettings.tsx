@@ -4,6 +4,7 @@ import {
   loadAssistantStatus,
   type AssistantStatus
 } from '../lib/assistantStream';
+import { assistantPersonalRowsShown } from '../lib/settingsSections';
 import { ExternalAnchor } from './ExternalAnchor';
 import {
   Group,
@@ -41,7 +42,8 @@ export function AssistantConnectionSettings({
   onChange(next: Partial<AppSettings['assistant']>): void;
 }) {
   const effective = accountState?.effectiveAssistant;
-  const personal = assistant.credentialSource === 'personal';
+  // The test Settings search uses for which rows are drawn.
+  const personal = assistantPersonalRowsShown(assistant);
   const [read, setRead] = useState<{
     userId: string | undefined;
     result: AssistantStatus | null;

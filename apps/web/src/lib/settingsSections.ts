@@ -1,5 +1,6 @@
 import { CONTROL_REFERENCE_SEARCH_TERMS } from './controlReference';
 import { KEYMAP_COMMANDS } from './keymap';
+import type { AppSettings } from '@openzcad/shared';
 import type { SettingsSectionId } from './settingsSectionIds';
 
 /**
@@ -31,13 +32,45 @@ export interface SettingsSectionMeta {
   /** Additional searchable copy that is not rendered as a SettingRow title. */
   searchTerms?: readonly string[];
   /**
-   * Of `settings`, the rows the page draws only for a signed-in account, or
-   * only signed out. A search result names a setting only where its row is
+   * Of `settings`, the rows the page draws only under a condition (signed
+   * in or out, a personal assistant, its provider), each with the test the
+   * page draws it by. A search result names a setting only where its row is
    * drawn (`shownSettingTitles`).
    */
-  signedInOnly?: readonly string[];
-  signedOutOnly?: readonly string[];
+  shownWhen?: Readonly<Record<string, (context: SettingRowContext) => boolean>>;
 }
+
+/** What decides whether a section draws one of its conditional rows. */
+export interface SettingRowContext {
+  /** A signed-in session (Privacy's account rows). */
+  signedIn: boolean;
+  /**
+   * Account draws its profile rows: signed in, or restoring a profile this
+   * device last saw signed in.
+   */
+  profileShown: boolean;
+  assistant: Pick<AppSettings['assistant'], 'credentialSource' | 'provider'>;
+}
+
+type AssistantRowChoice = SettingRowContext['assistant'];
+
+/** AI Assistant draws its model, token and limit rows for a personal key. */
+export function assistantPersonalRowsShown(
+  assistant: AssistantRowChoice
+): boolean {
+  return assistant.credentialSource === 'personal';
+}
+
+/** API endpoint is asked for only by a Responses-compatible provider. */
+export function assistantEndpointShown(assistant: AssistantRowChoice): boolean {
+  return (
+    assistantPersonalRowsShown(assistant) &&
+    assistant.provider === 'responses-compatible'
+  );
+}
+
+const personalAssistantRow = ({ assistant }: SettingRowContext) =>
+  assistantPersonalRowsShown(assistant);
 
 /** What Account still offers while cloud features are off: the way back. */
 const CLOUD_SWITCH_SEARCH_TERMS = [
@@ -216,7 +249,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Storage'
     ],
     // Membership and the storage meter belong to a signed-in profile.
-    signedInOnly: ['Membership', 'Storage'],
+    shownWhen: {
+      Membership: ({ profileShown }) => profileShown,
+      Storage: ({ profileShown }) => profileShown
+    },
     searchTerms: [
       ...CLOUD_SWITCH_SEARCH_TERMS,
       'hide name',
@@ -299,6 +335,20 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Output budget',
       'Request timeout'
     ],
+    // The built-in model's status, or a personal key's model, token and
+    // limits; the endpoint only for a Responses-compatible provider.
+    shownWhen: {
+      'Built-in assistant': ({ assistant }) =>
+        !assistantPersonalRowsShown(assistant),
+      Provider: personalAssistantRow,
+      'API endpoint': ({ assistant }) => assistantEndpointShown(assistant),
+      Model: personalAssistantRow,
+      'Reasoning level': personalAssistantRow,
+      'Personal API token': personalAssistantRow,
+      Connection: personalAssistantRow,
+      'Output budget': personalAssistantRow,
+      'Request timeout': personalAssistantRow
+    },
     searchTerms: [
       'api key',
       'deployment',
@@ -329,8 +379,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     ],
     // Signed in, the account's statistics consent shows; signed out, a
     // Cloud data row says to sign in.
-    signedInOnly: ['Cloud account statistics'],
-    signedOutOnly: ['Cloud data'],
+    shownWhen: {
+      'Cloud account statistics': ({ signedIn }) => signedIn,
+      'Cloud data': ({ signedIn }) => !signedIn
+    },
     searchTerms: [
       'privacy policy',
       'personal data',
@@ -464,15 +516,48 @@ export function visibleSettingsSections({
 }
 
 /**
- * The setting titles a section's page draws for this account: its index
- * less the rows gated on being signed in or signed out.
+ * The setting titles a section's page draws in this context: its index less
+ * the conditional rows it does not draw now.
  */
 export function shownSettingTitles(
   section: SettingsSectionMeta,
-  { signedIn }: { signedIn: boolean }
+  context: SettingRowContext
 ): string[] {
-  const hidden = new Set(
-    (signedIn ? section.signedOutOnly : section.signedInOnly) ?? []
+  return section.settings.filter(
+    (title) => section.shownWhen?.[title]?.(context) ?? true
   );
-  return section.settings.filter((title) => !hidden.has(title));
+}
+
+/** A compact search result: a setting, or a section matched by its words. */
+export interface CompactSettingMatch {
+  section: SettingsSectionMeta;
+  title: string | null;
+}
+
+/**
+ * Compact search results: each setting the section draws whose name holds
+ * the query, under its section; a section that matched only by its own
+ * words stands alone. A row the section does not draw now (Membership
+ * signed out, API endpoint for OpenAI) matches nothing, not even its
+ * section.
+ */
+export function compactSettingMatches(
+  sections: readonly SettingsSectionMeta[],
+  query: string,
+  context: SettingRowContext
+): CompactSettingMatch[] {
+  const wanted = query.trim().toLowerCase();
+  if (!wanted) return [];
+  return sections.flatMap((section): CompactSettingMatch[] => {
+    const titles = shownSettingTitles(section, context).filter((title) =>
+      title.toLowerCase().includes(wanted)
+    );
+    if (titles.length > 0) {
+      return titles.map((title) => ({ section, title }));
+    }
+    const own = `${section.label} ${section.detail} ${
+      section.searchTerms?.join(' ') ?? ''
+    }`.toLowerCase();
+    return own.includes(wanted) ? [{ section, title: null }] : [];
+  });
 }
