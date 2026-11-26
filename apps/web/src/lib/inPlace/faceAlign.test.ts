@@ -9,7 +9,8 @@ import {
   placeDirection,
   placePoint,
   rotationFromDegrees,
-  smallestTurn
+  smallestTurn,
+  unmovedFaceGeometry
 } from './faceAlign';
 import {
   IN_PLACE_TOOL_SPECS,
@@ -424,5 +425,76 @@ describe('the Align command', () => {
       expect(sentence).not.toMatch(/kernel|remus|BRep|error/i);
       expect(sentence.length).toBeGreaterThan(10);
     }
+  });
+});
+
+describe('a click on the previewed moving body (M10 review)', () => {
+  const MOVING = 'body_moving' as BodyId;
+  it('finds where the previewed face stood before the Move', () => {
+    const placement = faceAlignPlacement({
+      moving: {
+        normal: unit({ x: 1, y: 2, z: 2 }),
+        point: { x: 5, y: -1, z: 4 }
+      },
+      target: {
+        normal: unit({ x: -2, y: 1, z: 3 }),
+        point: { x: 10, y: 20, z: -3 }
+      }
+    })!;
+    const request = {
+      tool: 'transform' as const,
+      targetBodyId: MOVING,
+      translation: placement.translation,
+      rotationDeg: placement.rotationDeg,
+      pivot: placement.pivot
+    };
+    // Any face of the moving body: where the preview draws it, and back.
+    const normal = unit({ x: 0.3, y: -0.9, z: 0.2 });
+    const at = { x: 7, y: 3, z: -2 };
+    const shown = {
+      normal: placeDirection(placement, normal),
+      at: placePoint(placement, at)
+    };
+    const back = unmovedFaceGeometry(request, MOVING, shown.normal, shown.at)!;
+    expectVector(back.normal, normal);
+    expectVector(back.at, at);
+    // A pure translation (no turn stored) maps back too.
+    expect(
+      unmovedFaceGeometry(
+        {
+          tool: 'transform',
+          targetBodyId: MOVING,
+          translation: { x: 70, y: 0, z: 0 }
+        },
+        MOVING,
+        { x: 1, y: 0, z: 0 },
+        { x: 100, y: 5, z: 5 }
+      )
+    ).toEqual({ normal: { x: 1, y: 0, z: 0 }, at: { x: 30, y: 5, z: 5 } });
+  });
+
+  it('maps nothing back for another body, a copy, a scale or a turn about an axis', () => {
+    const at = { x: 1, y: 2, z: 3 };
+    const move = {
+      tool: 'transform' as const,
+      targetBodyId: MOVING,
+      translation: Z
+    };
+    expect(unmovedFaceGeometry(move, 'body_other', Z, at)).toBeNull();
+    expect(
+      unmovedFaceGeometry({ ...move, copy: true }, MOVING, Z, at)
+    ).toBeNull();
+    expect(
+      unmovedFaceGeometry({ ...move, scale: 2 }, MOVING, Z, at)
+    ).toBeNull();
+    expect(
+      unmovedFaceGeometry(
+        { ...move, translation: { x: 'a', y: 0, z: 0 } },
+        MOVING,
+        Z,
+        at
+      )
+    ).toBeNull();
+    expect(unmovedFaceGeometry(null, MOVING, Z, at)).toBeNull();
   });
 });

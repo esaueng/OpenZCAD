@@ -1,6 +1,11 @@
-import type { Vector3 } from '@openzcad/shared';
+import type { ParametricVector3, Vector3 } from '@openzcad/shared';
 import { eulerDegrees } from './primitives';
-import type { FacePick, InPlaceContext, InPlaceToolSpec } from './tools';
+import type {
+  FacePick,
+  InPlaceContext,
+  InPlaceRequest,
+  InPlaceToolSpec
+} from './tools';
 
 /**
  * M10 (slice 5b): Align, face to face. The body of the first picked flat
@@ -400,3 +405,56 @@ export const faceAlignSpec: InPlaceToolSpec = {
     ];
   }
 };
+
+/**
+ * Where a face of a body an in-place Move is previewing stood before the
+ * move: the previewed face's normal and a point on it, taken back through
+ * the request's inverse. A click on the moved preview lands on faces the
+ * committed body does not have (a rigid move renames every face), so this
+ * is how such a click finds the committed face it came from. Null unless
+ * the request moves this very body by numbers alone (a rotation, a pivot
+ * and a translation, as Align stores them).
+ */
+export function unmovedFaceGeometry(
+  request: InPlaceRequest | null | undefined,
+  bodyId: string,
+  normal: Vector3 | undefined,
+  at: Vector3 | undefined
+): { normal: Vector3; at: Vector3 } | null {
+  if (
+    !request ||
+    request.tool !== 'transform' ||
+    request.targetBodyId !== bodyId ||
+    request.copy ||
+    request.scale !== undefined ||
+    request.axisRotation ||
+    !normal ||
+    !at
+  )
+    return null;
+  const numbers = (v: ParametricVector3 | undefined): Vector3 | null => {
+    if (!v) return { x: 0, y: 0, z: 0 };
+    const { x, y, z } = v;
+    return typeof x === 'number' &&
+      typeof y === 'number' &&
+      typeof z === 'number'
+      ? { x, y, z }
+      : null;
+  };
+  const translation = numbers(request.translation);
+  const turn = numbers(request.rotationDeg);
+  const pivot = numbers(request.pivot);
+  if (!translation || !turn || !pivot) return null;
+  const rotation = rotationFromDegrees(turn);
+  // x' = R(x − p) + p + t, so x = Rᵀ(x' − p − t) + p; a normal turns by Rᵀ.
+  const back = (v: Vector3): Vector3 => ({
+    x: rotation[0].x * v.x + rotation[1].x * v.y + rotation[2].x * v.z,
+    y: rotation[0].y * v.x + rotation[1].y * v.y + rotation[2].y * v.z,
+    z: rotation[0].z * v.x + rotation[1].z * v.y + rotation[2].z * v.z
+  });
+  const local = back(minus(minus(at, pivot), translation));
+  return {
+    normal: back(normal),
+    at: { x: local.x + pivot.x, y: local.y + pivot.y, z: local.z + pivot.z }
+  };
+}

@@ -490,6 +490,7 @@ import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
 import { loneBodyFor } from './lib/inPlace/loneBody';
+import { unmovedFaceGeometry } from './lib/inPlace/faceAlign';
 import {
   presentedDiagnostics,
   shownFeatureWarnings
@@ -14542,10 +14543,21 @@ export function App() {
         ]?.topology?.faces.find(matches)?.geometry;
       const target = editTarget ?? inPlaceRef.current.slots.faces[0]?.bodyId;
       if (target) {
+        // A body the command is moving (Align's) was renamed face by face
+        // with the move: its face is found where it stood before it.
+        const unmoved =
+          target === resolvedBodyId
+            ? unmovedFaceGeometry(
+                inPlaceRef.current.request,
+                target,
+                shown?.normal,
+                shown?.centroid ?? shown?.center
+              )
+            : null;
         face = coplanarFace(
           target,
-          shown?.normal,
-          shown?.centroid ?? shown?.center
+          unmoved?.normal ?? shown?.normal,
+          unmoved?.at ?? shown?.centroid ?? shown?.center
         );
         if (face) resolvedBodyId = target;
       }

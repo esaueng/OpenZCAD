@@ -83,6 +83,7 @@
   "extrude-through-all.spec.ts": 22,
   "extrude-to-next.spec.ts": 10,
   "extrude-to-face-draft.spec.ts": 48,
+  "face-align.spec.ts": 20,
   "face-drag-continuity.spec.ts": 18,
   "face-edge-chamfer.spec.ts": 15,
   "face-offset-continuity.spec.ts": 35,

@@ -211,3 +211,46 @@ test(
     await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   }
 );
+
+test('a click on the previewed moving face takes it back, as a click on the face itself does (M10 review)', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const document = twoBoxes();
+  const [, blockId] = document.bodyOrder;
+  await openDocument(page, document);
+  await expectBodyCount(page, 2);
+  await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+    'data-e2e-rendered-bodies',
+    '2',
+    { timeout: 30_000 }
+  );
+  await page.keyboard.press('f');
+  await waitForStillViewport(page);
+
+  await pressTool(page, /^Align/);
+  const bar = page.getByRole('group', { name: 'Align command' });
+  // Flip: the block's top lands in the target's top plane, still facing up,
+  // so the previewed face stays in view beside the target.
+  await bar.locator('summary').click();
+  await bar.getByRole('radio', { name: 'Flip' }).check();
+  await bar.locator('summary').click();
+  await clickWorldPoint(page, [65, 9, 26]);
+  await expect(bar).toContainText('Click a flat face on the target body');
+  await clickWorldPoint(page, [20, 15, 10]);
+  await expect
+    .poll(() => boxOf(page, blockId!), { timeout: 30_000 })
+    .toEqual([60, 5, 4, 70, 13, 10] satisfies Box);
+  await waitForStillViewport(page);
+
+  // The moved preview renames every face; the click still means the
+  // block's top, the moving face, and takes both picks back.
+  await clickWorldPoint(page, [65, 9, 10]);
+  await expect(bar).toContainText('Click a flat face on the body to move');
+  await expect
+    .poll(() => boxOf(page, blockId!), { timeout: 30_000 })
+    .toEqual(MOVING);
+  await page.keyboard.press('Escape');
+  await expect(bar).toHaveCount(0);
+  expect(await savedMoves(page)).toEqual(['Place the block']);
+});
