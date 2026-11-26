@@ -1589,7 +1589,19 @@ export function useInPlaceCommand(
           faces: toolSpec.faceMode
             ? toolSpec.faceMode === 'one'
               ? initialFaces.slice(0, 1)
-              : initialFaces
+              : toolSpec.faceMode === 'pair'
+                ? // A selected face is the one to move, if it may be.
+                  initialFaces
+                    .slice(0, 1)
+                    .filter(
+                      (face) =>
+                        !toolSpec.refuseFace?.(
+                          EMPTY_SLOTS,
+                          face,
+                          ctxRef.current
+                        )
+                    )
+                : initialFaces
             : [],
           bodies: toolSpec.bodyMode
             ? toolSpec.bodyMode === 'one'
@@ -1842,6 +1854,15 @@ export function useInPlaceCommand(
     if (!faceFilterAccepts(toolSpec.faceFilter, face)) {
       return false;
     }
+    const reason = toolSpec.refuseFace?.(
+      slotsRef.current,
+      face,
+      ctxRef.current
+    );
+    if (reason) {
+      optionsRef.current.onStatus(reason);
+      return true;
+    }
     // M02: a feature pattern's faces stand for the features that made them,
     // so another face of a picked feature is that feature clicked again.
     const same = (other: FacePick) =>
@@ -1857,6 +1878,20 @@ export function useInPlaceCommand(
         // One face: a click replaces it, or (on the same face) moves where
         // it was clicked, which is how a hole is repositioned.
         next = [face];
+      } else if (faceMode === 'pair') {
+        // Two faces in order: the moving face clicked again takes both back
+        // (the target was chosen for it), the target clicked again only
+        // itself, and another face is the target, replacing one picked.
+        const [moving, target] = faces;
+        const clicked = (other: FacePick) =>
+          other.bodyId === face.bodyId && other.hash === face.hash;
+        next = !moving
+          ? [face]
+          : clicked(moving)
+            ? []
+            : target && clicked(target)
+              ? [moving]
+              : [moving, face];
       } else {
         const picked = faces.some(same);
         const placing =
