@@ -9,11 +9,7 @@ import {
 import type { SelectionActionId } from '../interaction/capabilities';
 import { KEYMAP_COMMANDS, toolCommandId } from '../keymap';
 import { TOOL_GROUPS, type ToolId } from '../tools';
-import {
-  FACE_VERB_PREFIX,
-  LOOK_AT_FACE_ITEM_ID,
-  SELECT_OTHER_ITEM_ID
-} from '../viewportMenu';
+import { LOOK_AT_FACE_ITEM_ID, SELECT_OTHER_ITEM_ID } from '../viewportMenu';
 
 /**
  * Every user-reachable action, once (U12 slice 1; plan in
@@ -174,14 +170,17 @@ const MENU_ITEMS: readonly (readonly [
   action: string,
   label?: string
 ])[] = [
-  // The empty viewport's menu.
+  // The empty viewport's menu, and View mode's menu over anything; over
+  // stacked targets it leads with Select other.
+  ['viewport', SELECT_OTHER_ITEM_ID, 'selection-select-other', 'Select other'],
   ['viewport', 'fit', 'view-fit'],
   ['viewport', 'grid', 'view-grid'],
   ['viewport', 'projection', 'view-projection'],
   ['viewport', 'xray', 'view-xray'],
   ['viewport', 'showAll', 'view-show-all'],
-  // A selection's menu (`viewportMenu.ts` adds the face verbs and these two).
-  ['selection', SELECT_OTHER_ITEM_ID, 'selection-select-other', 'Select other'],
+  // A selection's menu (`viewportMenu.ts` adds the face verbs and Look at
+  // face; Select other leads it over stacked targets).
+  ['selection', SELECT_OTHER_ITEM_ID, 'selection-select-other'],
   ['selection', LOOK_AT_FACE_ITEM_ID, 'view-normal-to-face'],
   ['selection', 'fillet', toolCommandId('fillet')],
   ['selection', 'chamfer', toolCommandId('chamfer')],
@@ -323,7 +322,7 @@ const FIXED_INPUTS: readonly (readonly [
   id: string,
   label: string,
   source: 'fixed-key' | 'pointer-gesture',
-  input: string
+  input: string | readonly string[]
 ])[] = [
   ['sketch-select-all', 'Select all sketch entities', 'fixed-key', 'Ctrl+A'],
   ['sketch-copy', 'Copy sketch entities', 'fixed-key', 'Ctrl+C'],
@@ -332,7 +331,12 @@ const FIXED_INPUTS: readonly (readonly [
   ['motion-key-pose', 'Key the pose at the playhead', 'fixed-key', 'K'],
   ['motion-previous-key', 'Previous animation key', 'fixed-key', '['],
   ['motion-next-key', 'Next animation key', 'fixed-key', ']'],
-  ['motion-delete-key', 'Delete the selected key', 'fixed-key', 'Delete'],
+  [
+    'motion-delete-key',
+    'Delete the selected key',
+    'fixed-key',
+    ['Delete', 'Backspace']
+  ],
   [
     'selection-connected-edges',
     'Select connected edges',
@@ -392,14 +396,11 @@ function buildActions(): ActionEntry[] {
   for (const [menu, item, action, label] of MENU_ITEMS) {
     add(action, label, 'menu').menuItems.push({ menu, item });
   }
-  // A face's verbs also lead its selection menu, as `verb:<verb id>`
-  // (`faceVerbMenuItems`), whenever the rail offers them for that face.
+  // A face's rail verbs also lead its selection menu as `verb:<verb id>`
+  // (`faceVerbMenuItems`), but only those the rail offers for that face,
+  // so that route is not recorded per verb: it follows from this source.
   const verb = (verbId: string, label: string | undefined) => {
     add(selectionVerbAction(verbId), label, 'selection-verb');
-    add(selectionVerbAction(verbId), undefined, 'menu').menuItems.push({
-      menu: 'selection',
-      item: `${FACE_VERB_PREFIX}${verbId}`
-    });
   };
   for (const [id, label] of SELECTION_ACTIONS) verb(`action:${id}`, label);
   for (const [id, label] of OTHER_SELECTION_VERBS) verb(id, label);
@@ -415,7 +416,7 @@ function buildActions(): ActionEntry[] {
     add(id, label, 'drawing').fixedKeys.push(key);
   }
   for (const [id, label, source, input] of FIXED_INPUTS) {
-    add(id, label, source).fixedKeys.push(input);
+    add(id, label, source).fixedKeys.push(...[input].flat());
   }
   return [...byId.values()];
 }

@@ -4,11 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { ANNOTATION_TOOL_KEYS, ANNOTATION_TOOLS } from '../drawing/toolKeys';
 import { KEYMAP_COMMANDS, toolCommandId } from '../keymap';
 import { TOOL_GROUPS } from '../tools';
-import {
-  FACE_VERB_PREFIX,
-  LOOK_AT_FACE_ITEM_ID,
-  SELECT_OTHER_ITEM_ID
-} from '../viewportMenu';
+import { LOOK_AT_FACE_ITEM_ID, SELECT_OTHER_ITEM_ID } from '../viewportMenu';
 import {
   ACTIONS,
   type ActionMenu,
@@ -105,15 +101,18 @@ describe('action registry', () => {
         ].map((match) => match[1] ?? `${match[2]}*`)
       );
       expect(items.size, menu).toBeGreaterThan(0);
-      if (menu === 'selection') {
-        items.add(SELECT_OTHER_ITEM_ID);
-        items.add(LOOK_AT_FACE_ITEM_ID);
-      }
+      // Select other is built in the viewport handler, which hands it to
+      // the selection menu too; Look at face comes from `withFaceVerbs`.
+      expect(block(app, builders.viewport, '\n  function ')).toContain(
+        'item: selectOtherMenuItem(selectOther.count)'
+      );
+      if (menu !== 'history-row') items.add(SELECT_OTHER_ITEM_ID);
+      if (menu === 'selection') items.add(LOOK_AT_FACE_ITEM_ID);
       const registered = ACTIONS.flatMap((entry) =>
         entry.menuItems
           .filter((item) => item.menu === menu)
           .map((item) => item.item)
-      ).filter((item) => !item.startsWith(FACE_VERB_PREFIX));
+      );
       expect(new Set(registered).size, menu).toBe(registered.length);
       expect([...registered].sort(), menu).toEqual([...items].sort());
     }
@@ -125,7 +124,7 @@ describe('action registry', () => {
     expect(menuAction('selection', 'move')).toBe('tool-transform');
   });
 
-  it('holds exactly the verb rail’s verbs, each also a face-menu item', () => {
+  it('holds exactly the verb rail’s verbs', () => {
     expect(selectionVerbAction('tool:fillet')).toBe('tool-fillet');
     expect(selectionVerbAction('action:offset-face')).toBe(
       'selection-offset-face'
@@ -151,7 +150,7 @@ describe('action registry', () => {
       ...[...verbs.matchAll(/\btools\(([^)]*)\)/g)].flatMap((match) =>
         literalIds(match[1]!, /'([^']+)'/g)
       ),
-      ...literalIds(verbs, /edgeVerb\('([^']+)'/g)
+      ...literalIds(verbs, /\b(?:edgeVerb|toolVerb)\('([^']+)'/g)
     ]);
     expect(tools.size).toBeGreaterThan(0);
     const expected = new Set([
@@ -163,15 +162,6 @@ describe('action registry', () => {
     expect(registered.map((entry) => entry.id).sort()).toEqual(
       [...expected].map(selectionVerbAction).sort()
     );
-    for (const verb of expected) {
-      expect(
-        actionEntry(selectionVerbAction(verb))?.menuItems,
-        verb
-      ).toContainEqual({
-        menu: 'selection',
-        item: `${FACE_VERB_PREFIX}${verb}`
-      });
-    }
   });
 
   it('holds every Draw tool with the key Draw answers to', () => {
@@ -199,38 +189,38 @@ describe('action registry', () => {
       '\n  }\n'
     );
     // Each fixed key, the handler that answers it, and what it runs there.
-    const fixed: [id: string, key: string, source: string, handled: string][] =
+    const fixed: [
+      id: string,
+      key: string | string[],
+      source: string,
+      handled: string
+    ][] = [
+      ['sketch-select-all', 'Ctrl+A', clipboard, "if (key === 'a') {"],
+      ['sketch-copy', 'Ctrl+C', clipboard, "if (key === 'c') {"],
       [
-        ['sketch-select-all', 'Ctrl+A', clipboard, "if (key === 'a') {"],
-        ['sketch-copy', 'Ctrl+C', clipboard, "if (key === 'c') {"],
-        [
-          'sketch-paste',
-          'Ctrl+V',
-          clipboard,
-          'const copied = sketchClipboardRef.current;'
-        ],
-        ['motion-play-pause', 'Space', timeline, "if (event.key === ' ') {"],
-        [
-          'motion-key-pose',
-          'K',
-          timeline,
-          "event.key === 'K') keyAtPlayhead()"
-        ],
-        [
-          'motion-previous-key',
-          '[',
-          timeline,
-          "event.key === '[') jumpKey(-1)"
-        ],
-        ['motion-next-key', ']', timeline, "event.key === ']') jumpKey(1)"],
-        ['motion-delete-key', 'Delete', timeline, "event.key === 'Delete' ||"]
-      ];
+        'sketch-paste',
+        'Ctrl+V',
+        clipboard,
+        'const copied = sketchClipboardRef.current;'
+      ],
+      ['motion-play-pause', 'Space', timeline, "if (event.key === ' ') {"],
+      ['motion-key-pose', 'K', timeline, "event.key === 'K') keyAtPlayhead()"],
+      ['motion-previous-key', '[', timeline, "event.key === '[') jumpKey(-1)"],
+      ['motion-next-key', ']', timeline, "event.key === ']') jumpKey(1)"],
+      [
+        'motion-delete-key',
+        ['Delete', 'Backspace'],
+        timeline,
+        "event.key === 'Delete' || event.key === 'Backspace'"
+      ]
+    ];
     for (const [id, key, source, handled] of fixed) {
       expect(source, id).toContain(handled);
       expect(actionEntry(id)?.sources, id).toEqual(['fixed-key']);
-      expect(actionEntry(id)?.fixedKeys, id).toEqual([key]);
+      expect(actionEntry(id)?.fixedKeys, id).toEqual([key].flat());
     }
-    // Every key the timeline answers is accounted for.
+    // Every key the timeline answers is accounted for. Escape only closes
+    // its Add menu, as Escape closes any menu, so it is not an action.
     expect(literalIds(timeline, /event\.key === '([^']+)'/g).sort()).toEqual(
       [' ', 'Backspace', 'Delete', 'Escape', 'K', '[', ']', 'k'].sort()
     );
