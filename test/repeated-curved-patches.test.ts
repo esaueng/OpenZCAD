@@ -590,13 +590,12 @@ describe('repeated curved patches', { timeout: 120_000 }, () => {
       expect(cylinderResizeFold(edited, held(patch(body, 'A')), 4)).toBeNull();
     });
 
-    // Reference (K05; cylinderResizeFold.ts): the fold matches the held
-    // wall by body, radius and axis line only. Once B and then A are both
-    // resized to R4.5, a drag on B to R4 rewrites the tip "Resize patch A",
-    // so A moves to R4 and B stays at R4.5. Expected: the fold applies only
-    // to the patch the tip feature resized, otherwise the drag appends a
-    // new edit on B, so the fold is null. The setup is checked outside the
-    // expected failure, so a replay or build error cannot pass as the bug.
+    // Once B and then A are both resized to R4.5, B shares A's radius and
+    // axis line, so a fold matched by those alone rewrote the tip "Resize
+    // patch A": A moved to R4 and B stayed at R4.5. The fold now requires the
+    // face the tip resized, here by its recorded span, so the drag on B
+    // appends a new edit. The setup is checked in the hook, so a replay or
+    // build error cannot pass as a refused fold.
     describe('a drag on B when the tip resized sibling A', () => {
       let document: ProjectDocument;
       let body: BodyRepresentation;
@@ -624,10 +623,17 @@ describe('repeated curved patches', { timeout: 120_000 }, () => {
         ]);
       });
 
-      it.fails('never folds into the resize of sibling A', () => {
+      it('never folds into the resize of sibling A', () => {
         expect(
           cylinderResizeFold(document, held(patch(body, 'B')), 4)
         ).toBeNull();
+        // A itself still folds into its own resize.
+        expect(
+          cylinderResizeFold(document, held(patch(body, 'A')), 4)
+        ).toMatchObject({
+          featureId: featureNamed(document, 'Resize patch A').featureId,
+          operation: { faceHash: patch(block, 'A').hash, diameter: 8 }
+        });
       });
     });
   });

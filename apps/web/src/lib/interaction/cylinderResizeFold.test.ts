@@ -8,7 +8,8 @@ import {
 import {
   FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
-  type DirectEditOperation
+  type DirectEditOperation,
+  type FaceTopologyReferenceV5
 } from '@openzcad/shared';
 import { cylinderResizeFold } from './cylinderResizeFold';
 
@@ -110,6 +111,60 @@ describe('cylinder resize fold', () => {
     expect(
       cylinderResizeFold(bound.document, heldAt(bound.bodyId), 5)
     ).toBeNull();
+  });
+
+  it('appends on a coaxial sibling patch at the size the resize produced', () => {
+    // Same body, radius and axis line, but another span: a slot splits one
+    // bore into patches, and the tip resized the one at z 0–10.
+    const { document, bodyId } = resized();
+    const sibling = {
+      ...heldAt(bodyId),
+      axisStart: { x: 20, y: 20, z: 12 },
+      axisEnd: { x: 20, y: 20, z: 20 }
+    };
+    expect(cylinderResizeFold(document, sibling, 5)).toBeNull();
+    // Overlapping the recorded span is still another face.
+    expect(
+      cylinderResizeFold(
+        document,
+        { ...sibling, axisStart: { x: 20, y: 20, z: 0 } },
+        5
+      )
+    ).toBeNull();
+  });
+
+  it('folds by a shared face name when the span moved upstream', () => {
+    const reference = {
+      kind: 'face',
+      producingFeatureId: 'feature_bore',
+      lineageName: 'primitive.cylinder.face.wall',
+      currentHash: 7,
+      witnessVersion: 1
+    } as unknown as FaceTopologyReferenceV5;
+    const { document, bodyId } = resized({ faceReference: reference });
+    const longer = {
+      ...heldAt(bodyId),
+      axisStart: { x: 20, y: 20, z: 0 },
+      axisEnd: { x: 20, y: 20, z: 14 }
+    };
+    expect(
+      cylinderResizeFold(document, { ...longer, reference }, 5)?.featureId
+    ).toBe(document.featureOrder.at(-1));
+    // Another name with another span is a sibling, not this face.
+    expect(
+      cylinderResizeFold(
+        document,
+        {
+          ...longer,
+          reference: { ...reference, lineageName: 'subtract.tool.face.wall' }
+        },
+        5
+      )
+    ).toBeNull();
+    // Without a name the recorded span still decides.
+    expect(cylinderResizeFold(document, heldAt(bodyId), 5)?.featureId).toBe(
+      document.featureOrder.at(-1)
+    );
   });
 
   it('appends after another feature or a suppressed resize', () => {
