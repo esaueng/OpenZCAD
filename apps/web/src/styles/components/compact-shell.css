@@ -343,7 +343,9 @@
   right: 0;
   bottom: 0;
   box-sizing: border-box;
-  height: 88px;
+  /* Peek: the grabber's row over one tray row of 44px targets
+     (SHEET_PEEK_PX). */
+  height: 104px;
   max-height: 100%;
   display: flex;
   flex-direction: column;
@@ -610,4 +612,595 @@
 .app-shell[data-shell='compact']:has(.keypad-section-recovery)
   .in-place-command-recovery {
   display: none;
+}
+
+/* ── Build's tray (U12 slice 4) ──────────────────────────────
+   The sheet at peek is one row: Build's verbs and All tools at rest, or a
+   running tool's icon, step chip, Options, Cancel and Done. The row is
+   pinned at the top of the sheet's flow, so Cancel and Done stay in view
+   however far the content under it scrolls. */
+
+.compact-tray {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+}
+
+.compact-tray-row {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  min-height: calc(var(--compact-target) + var(--sp-1) * 2);
+  padding: var(--sp-1) 0;
+}
+
+.compact-tray-verbs {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.compact-tray-verbs::-webkit-scrollbar {
+  display: none;
+}
+
+.compact-tray-button {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: var(--compact-target);
+  height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.compact-tray-button svg,
+.compact-tray-tool svg,
+.compact-tool-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.compact-tray-button:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-tray-button.active,
+.compact-tray-button[aria-expanded='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+.compact-tray-button[aria-disabled='true'] {
+  color: var(--color-text-dim);
+}
+
+.compact-tray-button:focus-visible,
+.compact-tool-tile:focus-visible,
+.compact-search-input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.compact-tray-label {
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+}
+
+.compact-tray-reason {
+  margin: 0;
+  padding: 0 var(--sp-2) var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+/* ── A running tool in the tray ──
+   The bar's own markup, laid out as the tray: its row pinned, and the
+   step's wording, a refusal, its recovery and the Options in one column
+   under it, never beside it. */
+
+.app-shell[data-shell='compact']
+  .compact-command-row
+  > .in-place-command.is-tray {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: var(--sp-2);
+  left: 0;
+  width: auto;
+  max-width: none;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: 15px;
+}
+
+.app-shell[data-shell='compact']
+  .compact-command-row
+  > .in-place-command.is-tray
+  > * {
+  order: 0;
+  grid-column: auto;
+  grid-row: auto;
+  min-width: 0;
+}
+
+.app-shell[data-shell='compact']
+  .compact-command-row
+  > .in-place-command.is-tray
+  > .compact-tray-row {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-surface);
+}
+
+.compact-tray-tool {
+  flex: 0 0 auto;
+  width: 32px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-muted);
+}
+
+.compact-step-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-right: auto;
+  padding: 6px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+}
+
+.in-place-command.refused .compact-step-chip {
+  color: var(--color-warning);
+}
+
+.app-shell[data-shell='compact']
+  .compact-tray-row
+  > :is(.in-place-command-cancel, .in-place-command-done) {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+  justify-content: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-3);
+  border-radius: 999px;
+  font-size: 15px;
+}
+
+.app-shell[data-shell='compact'] .compact-tray-row > .in-place-command-cancel {
+  width: var(--compact-target);
+  padding: 0;
+  background: var(--color-surface-2);
+}
+
+/* What the chip says shortly is said in full for assistive technology:
+   the bar's title, its state and the step's sentence stay in the tree. */
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  > :is(
+    .in-place-command-title,
+    .in-place-command-state,
+    .in-place-command-hint
+  ) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* A refusal is read in the sheet, whole, in one column under the row. */
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray.refused
+  > .in-place-command-hint {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0 var(--sp-2);
+  overflow: visible;
+  clip-path: none;
+  display: block;
+  -webkit-line-clamp: unset;
+  max-height: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  > :is(
+    .in-place-command-cancel,
+    .in-place-command-more,
+    .move-two-points,
+    .move-pivot-toggle
+  ) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--compact-target);
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 15px;
+}
+
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  > .in-place-command-options
+  > summary[aria-hidden='true'] {
+  display: none;
+}
+
+.app-shell[data-shell='compact']
+  .compact-sheet
+  .in-place-command.is-tray
+  > .in-place-command-options[open] {
+  order: 0;
+  flex: 0 0 auto;
+}
+
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  > .in-place-command-options
+  > summary:not([aria-hidden]) {
+  min-height: var(--compact-target);
+  padding-inline: var(--sp-2);
+}
+
+/* A blend's picked edges are read whole: each wraps rather than clips. */
+.app-shell[data-shell='compact'] .in-place-command.is-tray .edge-pick-list {
+  max-height: none;
+  margin: 0 0 var(--sp-2);
+  overflow: visible;
+}
+
+.app-shell[data-shell='compact'] .in-place-command.is-tray .edge-pick-row {
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact'] .in-place-command.is-tray .edge-pick-name {
+  flex-wrap: wrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.app-shell[data-shell='compact'] .in-place-command.is-tray .edge-pick-remove {
+  flex: 0 0 auto;
+  width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+/* ── Targets in the compact flow: every one at least 44px ── */
+
+.app-shell[data-shell='compact']
+  :is(
+    .in-place-option-choice,
+    .in-place-param-segments [role='radio'],
+    .in-place-param-select,
+    .move-pivot-reset
+  ) {
+  min-height: var(--compact-target);
+}
+
+/* Each row of a command's Options in one column: its name over its
+   choices or fields, which take the sheet's width; a vector's fields wrap
+   rather than shrink under a finger's width. */
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  :is(.in-place-param-row, .in-place-params-grid) {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-1);
+}
+
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  .in-place-param-fields {
+  flex-wrap: wrap;
+}
+
+/* A value the keypad opens is a full-width row of its own. */
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  .in-place-params-grid
+  > .in-place-param-row
+  > .in-place-option-value {
+  flex: 0 0 auto;
+  min-height: var(--compact-target);
+  padding: 0 var(--sp-2);
+}
+
+.app-shell[data-shell='compact'] .in-place-param-field {
+  flex: 1 1 72px;
+  min-height: calc(var(--compact-target) + 2px);
+}
+
+.app-shell[data-shell='compact'] .in-place-param-field input {
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+  font-size: 17px;
+}
+
+.app-shell[data-shell='compact'] .numeric-keypad .keypad-value {
+  min-height: var(--compact-target);
+  font-size: 17px;
+}
+
+/* Fields and menus in the sheet (a Move's numbers and body, a feature
+   form's values) take a finger's height. */
+.app-shell[data-shell='compact']
+  .compact-sheet
+  :is(input:not([type='checkbox'], [type='radio'], [type='range']), select) {
+  box-sizing: border-box;
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact'] .palette-row {
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact'] .workspace-toast-undo {
+  min-width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact'] .numeric-keypad .keypad-value-row {
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact']
+  .numeric-keypad
+  :is(.keypad-grid-toggle, .keypad-commit) {
+  width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact']
+  .numeric-keypad
+  :is(.keypad-unit-help, .keypad-operation) {
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact']
+  .numeric-keypad
+  :is(.keypad-key, .keypad-units button) {
+  min-height: var(--compact-target);
+}
+
+/* ── The keypad as the sheet's content ──
+   Under the tray row, in the sheet's flow, rather than fixed over the
+   foot of the screen. */
+.compact-keypad-host:empty {
+  display: none;
+}
+
+.app-shell[data-shell='compact']
+  .compact-keypad-host
+  > .numeric-keypad[data-placement] {
+  position: static;
+  inset: auto;
+  z-index: auto;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  padding: var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-2);
+  box-shadow: none;
+}
+
+/* ── Feature forms and operation cards in the sheet ── */
+
+.app-shell[data-shell='compact'] .compact-sheet .feature-form .form-actions {
+  position: sticky;
+  bottom: calc(-1 * var(--sp-3));
+  z-index: 1;
+  padding: var(--sp-2) 0;
+  background: var(--color-surface);
+}
+
+.app-shell[data-shell='compact']
+  .compact-sheet
+  :is(.feature-form .form-actions button, .tool-card button, .panel-close) {
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact'] .compact-sheet .panel-close {
+  min-width: var(--compact-target);
+}
+
+/* ── All tools ── */
+
+.compact-all-tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.compact-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  min-height: var(--compact-target);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border-radius: 999px;
+}
+
+.compact-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--compact-target);
+  padding: 0;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  outline: none;
+  /* The compact touch field size (touch.css) applies. */
+  font: inherit;
+}
+
+.compact-tool-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.compact-tool-group-title {
+  margin: 0;
+  padding: 0 var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+}
+
+.compact-tool-grid {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: var(--sp-1);
+}
+
+.compact-tool-tile {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: var(--sp-1);
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-lg, 16px);
+  cursor: pointer;
+}
+
+.compact-tool-tile:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-tool-tile.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+
+.compact-tool-tile[aria-disabled='true'] {
+  color: var(--color-text-dim);
+}
+
+.compact-tool-icon {
+  display: inline-grid;
+  place-items: center;
+}
+
+.compact-tool-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.compact-all-tools-empty {
+  margin: 0;
+  padding: var(--sp-3);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+/* ── A phone held landscape: the sheet at the stage's side ──
+   Half height left about 140px of a 390px-tall stage. Beside the stage
+   instead, the sheet stands its full height at half and the model keeps
+   the rest of the width; full still covers the stage. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .app-shell[data-shell='compact'] {
+    --compact-side-sheet-w: min(400px, 50vw);
+  }
+
+  .app-shell[data-shell='compact'] .compact-sheet {
+    --compact-side-sheet: 1;
+    left: auto;
+    width: var(--compact-side-sheet-w);
+    border-radius: var(--compact-sheet-radius) 0 0 0;
+  }
+
+  .app-shell[data-shell='compact'] .compact-sheet[data-detent='half'] {
+    height: 100%;
+  }
+
+  .app-shell[data-shell='compact'] .compact-sheet[data-detent='full'] {
+    width: 100%;
+    border-radius: 0;
+  }
+
+  .app-shell[data-shell='compact']:has(.compact-sheet:not([hidden]))
+    .compact-stage-controls {
+    bottom: var(--sp-2);
+    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
+  }
+
+  .app-shell[data-shell='compact']:has(.compact-sheet[data-detent='half'])
+    .workspace.column-layout
+    .viewer-rail-stack {
+    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
+  }
+
+  .app-shell[data-shell='compact']
+    .workspace.column-layout
+    .viewport-scale-indicator {
+    bottom: calc(var(--compact-target) + var(--sp-2) * 2);
+  }
+
+  .app-shell[data-shell='compact'] .command-bar-lane {
+    bottom: var(--sp-2);
+  }
 }

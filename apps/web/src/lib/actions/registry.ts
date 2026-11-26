@@ -113,7 +113,34 @@ export const COMPACT_ENTRIES: Readonly<
   'file-export-step': 'overflow-menu',
   'file-export-mesh': 'overflow-menu',
   'file-export-image': 'overflow-menu',
-  'file-export-cnc-layout': 'overflow-menu'
+  'file-export-cnc-layout': 'overflow-menu',
+  // Slice 4, Build: every tool from the All tools sheet, and a pick's own
+  // verbs from the tray at rest, as the verb rail offers them. A running
+  // tool's tray row (its Options, Cancel and Done) is each command's own
+  // chrome, not a registry action, so no entry names `tool-tray`.
+  ...Object.fromEntries(
+    TOOL_GROUPS.flatMap((group) => group.tools).map((tool) => [
+      toolCommandId(tool),
+      'all-tools' as const
+    ])
+  ),
+  'selection-resize-body': 'context-tray',
+  'selection-offset-face': 'context-tray',
+  'selection-resize-radial-face': 'context-tray',
+  'selection-edit-fillet': 'context-tray',
+  'selection-remove-fillet': 'context-tray',
+  'selection-remove-all-fillets': 'context-tray',
+  'selection-remove-face-feature': 'context-tray',
+  'selection-sketch-on-face': 'context-tray',
+  'selection-fillet': 'context-tray',
+  'selection-chamfer': 'context-tray',
+  'selection-chamfer-chain': 'context-tray',
+  'selection-fillet-face-edges': 'context-tray',
+  'selection-chamfer-face-edges': 'context-tray',
+  'selection-extrude-region': 'context-tray',
+  'selection-text-on-face': 'context-tray',
+  'selection-edit-face': 'context-tray',
+  'selection-offset-faces': 'context-tray'
 };
 
 // ── Sources ────────────────────────────────────────────────────────────

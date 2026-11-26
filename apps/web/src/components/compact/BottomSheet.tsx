@@ -22,6 +22,7 @@ import {
   type SheetState
 } from './sheetState';
 import { OWN_ENTER_ATTRIBUTE } from '../../lib/exactEntryShortcut';
+import { SHEET_OVERLAY_ATTRIBUTE } from './compactSlots';
 
 /** Holds the sheet's state; `hasRoot` is whether the workspace fills it. */
 export function useSheet(hasRoot: boolean) {
@@ -44,12 +45,26 @@ function focusables(root: HTMLElement): HTMLElement[] {
   );
 }
 
-/**
- * Marks what stands over the sheet and owns its own keys and focus (the
- * numeric keypad's host): the sheet neither pulls focus out of it nor
- * takes its Escape.
- */
-export const SHEET_OVERLAY_ATTRIBUTE = 'data-sheet-overlay';
+export { SHEET_OVERLAY_ATTRIBUTE };
+
+const TEXT_INPUT_TYPES = new Set([
+  'text',
+  'search',
+  'email',
+  'number',
+  'password',
+  'tel',
+  'url'
+]);
+
+function isTextField(element: HTMLElement): boolean {
+  return (
+    element instanceof HTMLTextAreaElement ||
+    (element instanceof HTMLInputElement &&
+      TEXT_INPUT_TYPES.has(element.type)) ||
+    element.isContentEditable
+  );
+}
 
 /** What opened a page, to give focus back to when the page goes. */
 interface PageOpener {
@@ -205,7 +220,11 @@ export function BottomSheet({
       const body = sheet.querySelector<HTMLElement>(
         '.compact-sheet-body[data-page]'
       );
-      const target = body ? focusables(body)[0] : undefined;
+      // A page's first control, though not a text field: focus there would
+      // raise the on-screen keyboard over a page opened only to look (the
+      // All tools sheet's search). The field is one tap away.
+      const items = body ? focusables(body) : [];
+      const target = items.find((item) => !isTextField(item)) ?? items[0];
       (target ?? grabberRef.current)?.focus({ preventScroll: true });
       return;
     }
@@ -287,6 +306,14 @@ export function BottomSheet({
   const canClose = !hasRoot && stack.length === 0;
   const hostHeight = () =>
     sheetRef.current?.parentElement?.getBoundingClientRect().height ?? 0;
+  // A phone held landscape draws the sheet at the stage's side
+  // (compact-shell.css), which says so through this property.
+  const isSideSheet = () =>
+    sheetRef.current
+      ? getComputedStyle(sheetRef.current)
+          .getPropertyValue('--compact-side-sheet')
+          .trim() === '1'
+      : false;
 
   const onGrabberPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !sheetRef.current) return;
@@ -317,7 +344,7 @@ export function BottomSheet({
       setDragHeight(null);
       dispatch({
         type: 'set-detent',
-        detent: nearestDetent(height, hostHeight(), canClose)
+        detent: nearestDetent(height, hostHeight(), canClose, isSideSheet())
       });
     } else {
       // A tap toggles between peek and half; from full it comes down.

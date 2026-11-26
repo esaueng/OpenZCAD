@@ -130,6 +130,59 @@ describe('sheet state', () => {
     expect(nearestDetent(20, 600, true)).toBe('closed');
     expect(nearestDetent(20, 600, false)).toBe('peek');
   });
+
+  it('snaps a side sheet between peek and its full-height half only', () => {
+    expect(nearestDetent(250, 280, false, true)).toBe('half');
+    expect(nearestDetent(280, 280, false, true)).toBe('half');
+    expect(nearestDetent(SHEET_PEEK_PX + 20, 280, false, true)).toBe('peek');
+  });
+
+  it("brings a running tool's row up at peek and other content at half", () => {
+    const row = reduce(CLOSED_SHEET, true, {
+      type: 'root',
+      present: true,
+      arrived: true,
+      at: 'peek'
+    });
+    expect(row.detent).toBe('peek');
+    expect(
+      reduce(CLOSED_SHEET, true, {
+        type: 'root',
+        present: true,
+        arrived: true
+      }).detent
+    ).toBe('half');
+    // Raised higher by hand, new content leaves it there.
+    expect(
+      reduce({ detent: 'full', stack: [] }, true, {
+        type: 'root',
+        present: true,
+        arrived: true,
+        at: 'peek'
+      }).detent
+    ).toBe('full');
+  });
+
+  it('raises for Options or the keypad, never lowers', () => {
+    const peek: SheetState = { detent: 'peek', stack: [] };
+    expect(reduce(peek, true, { type: 'raise', detent: 'half' }).detent).toBe(
+      'half'
+    );
+    const full: SheetState = { detent: 'full', stack: [] };
+    expect(reduce(full, true, { type: 'raise', detent: 'half' })).toBe(full);
+    // A sheet with nothing in it does not open for a stray request.
+    expect(reduce(CLOSED_SHEET, false, { type: 'raise', detent: 'half' })).toBe(
+      CLOSED_SHEET
+    );
+  });
+
+  it('settles back to the tray once a tool leaves, unless a page is open', () => {
+    expect(
+      reduce({ detent: 'half', stack: [] }, true, { type: 'settle' }).detent
+    ).toBe('peek');
+    const paged: SheetState = { detent: 'full', stack: [page('more')] };
+    expect(reduce(paged, true, { type: 'settle' })).toBe(paged);
+  });
 });
 
 function Harness({

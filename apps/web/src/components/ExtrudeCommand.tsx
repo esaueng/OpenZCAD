@@ -37,6 +37,7 @@ import {
   type ExtrudeCommandExtent,
   type ExtrudeValueId
 } from '../lib/extrudeShownValues';
+import { TOOL_META } from '../lib/tools';
 import { InPlaceCommandBar, type InPlaceOption } from './InPlaceCommandBar';
 
 /**
@@ -731,6 +732,7 @@ export function ExtrudeCommand({
   return (
     <InPlaceCommandBar
       title={editing ? `Edit ${name ?? initial.name}` : 'Extrude'}
+      icon={TOOL_META.extrude.icon}
       hint={hint}
       refusal={toFacePicking?.armed ? null : refusal}
       refusalInput={ownRefusal === null ? refusedInput : null}

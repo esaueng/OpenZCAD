@@ -306,12 +306,19 @@ function CompactAppShell({
   );
   const [commandRowPresent, setCommandRowPresent] = useState(false);
   const [overlayHost, setOverlayHost] = useState<HTMLElement | null>(null);
+  // A running command's bar, drawn as the tray, takes the keypad under its
+  // pinned row (U12 slice 4).
+  const [keypadSlot, setKeypadSlot] = useState<HTMLElement | null>(null);
   // Dialogs, menus and popovers portalled to the body sit outside the shell:
   // marking the document too gives them the compact tokens while the compact
   // workspace is up, and nothing once it leaves.
   useLayoutEffect(() => markDocumentCompact(), []);
   const commandRowSlot = useMemo(
-    () => ({ host: commandRowHost, report: setCommandRowPresent }),
+    () => ({
+      host: commandRowHost,
+      report: setCommandRowPresent,
+      keypadSlot: setKeypadSlot
+    }),
     [commandRowHost]
   );
   const { sheetKey, ...chrome } = compact;
@@ -329,7 +336,7 @@ function CompactAppShell({
     <ParameterDefinitionProvider value={parameterDefinition}>
       <CompactCommandRowContext.Provider value={commandRowSlot}>
         <CompactOverlayHostContext.Provider
-          value={overlayHost ?? COMPACT_OVERLAY_HOST_PENDING}
+          value={keypadSlot ?? overlayHost ?? COMPACT_OVERLAY_HOST_PENDING}
         >
           <div className="app-shell column-layout" data-shell="compact">
             {/* Kept mounted for what it owns (its menus' file inputs, the
@@ -367,6 +374,10 @@ function CompactAppShell({
                 {...chrome}
                 sheetKey={`${sheetKey}|${commandRowPresent ? 'row' : ''}`}
                 hasSheetContent={hasSheetContent}
+                commandRowPresent={commandRowPresent}
+                rowOnly={
+                  commandRowPresent && !command && !inspector && !panelLane
+                }
                 onCommandRowHost={setCommandRowHost}
                 onOverlayHost={setOverlayHost}
                 sheetContent={

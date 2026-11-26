@@ -25,6 +25,13 @@ import {
   type SmallerSize
 } from '../lib/inPlace/sizeRefusal';
 import { previewExpression } from '../lib/model';
+import { trayState, trayStep } from '../lib/compactTray';
+import {
+  raiseCompactSheet,
+  SHEET_OVERLAY_ATTRIBUTE,
+  useCompactKeypadSlot,
+  useCompactTray
+} from './compact/compactSlots';
 import { useParameterDefinition } from './forms/parameterDefinition';
 import {
   undefinedParameterName,
@@ -87,6 +94,11 @@ const EMPTY_SCOPE: Record<string, number> = {};
 
 export interface InPlaceCommandBarProps {
   title: string;
+  /**
+   * The tool's icon, which leads the compact sheet's tray row (U12 slice 4)
+   * where the title is not drawn.
+   */
+  icon?: ReactNode;
   hint: string;
   /** False until every required slot is filled and the preview is valid. */
   canFinish: boolean;
@@ -209,6 +221,7 @@ type PendingEntries = Set<() => EntryFlush>;
 
 export function InPlaceCommandBar({
   title,
+  icon = null,
   hint,
   canFinish,
   previewPending = false,
@@ -343,6 +356,25 @@ export function InPlaceCommandBar({
     sentence && refusalInput ? `${refusalInput}: ${sentence}` : sentence;
   const technical = refusalSummary || plain?.detail ? refusal : null;
   const smaller = refusal && onTrySize ? smallerSizeIn(refusal) : null;
+  // In the compact sheet the bar is its tray (U12 slice 4): one pinned row
+  // of the tool's icon, its step, Options, Cancel and Done; the rest lies
+  // in one column under it.
+  const tray = useCompactTray();
+  const keypadSlot = useCompactKeypadSlot();
+  const optionsRef = useRef<HTMLDetailsElement>(null);
+  const optionsId = useId();
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  // A refusal needs the room to be read: it raises the sheet from peek.
+  useEffect(() => {
+    if (tray && refusal) raiseCompactSheet(commandRef.current, 'half');
+  }, [tray, refusal]);
+  const step =
+    trayState({
+      locked,
+      queued,
+      refused: Boolean(refusal),
+      building
+    }) ?? trayStep(hint);
   const hintRef = useRef<HTMLSpanElement>(null);
   const hintId = useId();
   // A refusal wraps to three lines; one longer than that offers the rest
@@ -367,6 +399,69 @@ export function InPlaceCommandBar({
     return () => observer?.disconnect();
   }, [shown]);
 
+  const hasOptions =
+    options.length > 0 ||
+    values.length > 0 ||
+    actions.length > 0 ||
+    Boolean(picks);
+  const cancelButton = (
+    <button
+      type="button"
+      className="in-place-command-cancel"
+      onClick={onCancel}
+      aria-keyshortcuts="Escape"
+    >
+      <X size={tray ? 20 : 14} aria-hidden="true" />
+      {tray ? <span className="visually-hidden">Cancel</span> : 'Cancel'}
+      {tray ? null : <kbd aria-hidden="true">Esc</kbd>}
+    </button>
+  );
+  const doneButton = (
+    <button
+      type="button"
+      className="in-place-command-done"
+      onPointerDown={(event) => {
+        if (locked || event.button !== 0) return;
+        // A number still being typed in Options is what Done is meant to
+        // finish with. Leaving the field applied it only as the press
+        // went on, which held Done for its new preview, so the click was
+        // lost and the count typed seemed ignored. Applied here, Done
+        // waits for that preview and then finishes, as a queued Enter does.
+        let applied = false;
+        let refused = false;
+        for (const flush of pendingEntries) {
+          const outcome = flush();
+          if (outcome === 'applied') applied = true;
+          else if (outcome === 'refused') refused = true;
+        }
+        refusedPress.current = refused;
+        if (refused) return;
+        if (applied) setQueued(true);
+      }}
+      // A press whose click never came (the button was disabled under
+      // it) must not swallow a later keyboard Done.
+      onPointerCancel={() => {
+        refusedPress.current = false;
+      }}
+      onKeyDown={() => {
+        refusedPress.current = false;
+      }}
+      onClick={() => {
+        if (refusedPress.current) {
+          refusedPress.current = false;
+          return;
+        }
+        onDone();
+      }}
+      disabled={locked || !canFinish}
+      aria-keyshortcuts="Enter"
+    >
+      <Check size={tray ? 20 : 14} aria-hidden="true" />
+      Done
+      {tray ? null : <kbd aria-hidden="true">Enter</kbd>}
+    </button>
+  );
+
   function handleRecoveryKey(event: KeyboardEvent<HTMLButtonElement>) {
     if (event.key === 'Enter') {
       recoveryEnterHeld.current = event.type === 'keydown';
@@ -381,7 +476,9 @@ export function InPlaceCommandBar({
   return (
     <div
       ref={commandRef}
-      className={`in-place-command${refusal ? ' refused' : ''}`}
+      className={`in-place-command${refusal ? ' refused' : ''}${
+        tray ? ' is-tray' : ''
+      }`}
       role="group"
       tabIndex={-1}
       aria-label={`${title} command`}
@@ -405,6 +502,44 @@ export function InPlaceCommandBar({
         event.stopPropagation();
       }}
     >
+      {tray ? (
+        <div className="compact-tray-row">
+          {icon ? (
+            <span className="compact-tray-tool" aria-hidden="true">
+              {icon}
+            </span>
+          ) : null}
+          <span className="compact-step-chip" aria-hidden="true">
+            {step}
+          </span>
+          {hasOptions ? (
+            <button
+              type="button"
+              className="compact-tray-button compact-tray-options"
+              aria-label={`${title} options`}
+              aria-expanded={optionsOpen}
+              aria-controls={optionsId}
+              title="Options"
+              onClick={() => {
+                const details = optionsRef.current;
+                if (details) details.open = !details.open;
+              }}
+            >
+              <SlidersHorizontal size={20} aria-hidden="true" />
+            </button>
+          ) : null}
+          {cancelButton}
+          {doneButton}
+        </div>
+      ) : null}
+      {tray ? (
+        // The keypad, when a value's chip opens it: under the pinned row.
+        <div
+          ref={keypadSlot}
+          className="compact-keypad-host"
+          {...{ [SHEET_OVERLAY_ATTRIBUTE]: '' }}
+        />
+      ) : null}
       <span className="in-place-command-title">{title}</span>
       <span className="in-place-command-state">
         {/* Empty, and unseen, until there is something to preview: the
@@ -498,12 +633,25 @@ export function InPlaceCommandBar({
           {shownRecovery.label}
         </button>
       )}
-      {options.length > 0 ||
-      values.length > 0 ||
-      actions.length > 0 ||
-      picks ? (
-        <details className="in-place-command-options in-place-command-parameters">
-          <summary aria-label={`${title} options`} title="Options">
+      {hasOptions ? (
+        <details
+          ref={optionsRef}
+          id={optionsId}
+          className="in-place-command-options in-place-command-parameters"
+          onToggle={(event) => {
+            const open = event.currentTarget.open;
+            setOptionsOpen(open);
+            // Options open in the sheet's flow, at half height at least.
+            if (open && tray) raiseCompactSheet(event.currentTarget, 'half');
+          }}
+        >
+          {/* In the tray the row's Options button opens these; the summary
+              stays only as the disclosure's own part, out of reach. */}
+          <summary
+            {...(tray
+              ? { 'aria-hidden': true, tabIndex: -1 }
+              : { 'aria-label': `${title} options`, title: 'Options' })}
+          >
             {options.length > 0 || values.length > 0 ? (
               <SlidersHorizontal size={14} aria-hidden="true" />
             ) : (
@@ -649,59 +797,8 @@ export function InPlaceCommandBar({
           </div>
         </details>
       ) : null}
-      <button
-        type="button"
-        className="in-place-command-cancel"
-        onClick={onCancel}
-        aria-keyshortcuts="Escape"
-      >
-        <X size={14} aria-hidden="true" />
-        Cancel
-        <kbd aria-hidden="true">Esc</kbd>
-      </button>
-      <button
-        type="button"
-        className="in-place-command-done"
-        onPointerDown={(event) => {
-          if (locked || event.button !== 0) return;
-          // A number still being typed in Options is what Done is meant to
-          // finish with. Leaving the field applied it only as the press
-          // went on, which held Done for its new preview, so the click was
-          // lost and the count typed seemed ignored. Applied here, Done
-          // waits for that preview and then finishes, as a queued Enter does.
-          let applied = false;
-          let refused = false;
-          for (const flush of pendingEntries) {
-            const outcome = flush();
-            if (outcome === 'applied') applied = true;
-            else if (outcome === 'refused') refused = true;
-          }
-          refusedPress.current = refused;
-          if (refused) return;
-          if (applied) setQueued(true);
-        }}
-        // A press whose click never came (the button was disabled under
-        // it) must not swallow a later keyboard Done.
-        onPointerCancel={() => {
-          refusedPress.current = false;
-        }}
-        onKeyDown={() => {
-          refusedPress.current = false;
-        }}
-        onClick={() => {
-          if (refusedPress.current) {
-            refusedPress.current = false;
-            return;
-          }
-          onDone();
-        }}
-        disabled={locked || !canFinish}
-        aria-keyshortcuts="Enter"
-      >
-        <Check size={14} aria-hidden="true" />
-        Done
-        <kbd aria-hidden="true">Enter</kbd>
-      </button>
+      {tray ? null : cancelButton}
+      {tray ? null : doneButton}
       {aside}
     </div>
   );

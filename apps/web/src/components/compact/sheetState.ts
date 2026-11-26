@@ -3,7 +3,7 @@
  * and the pages drilled into it. Pure, so the rules are testable without a
  * DOM; `BottomSheet` draws it and `useSheet` holds it.
  *
- * Three heights: peek (one row, about 88 px), half and full. Closed is the
+ * Three heights: peek (the tray's one row), half and full. Closed is the
  * sheet with nothing to hold. Whatever the workspace puts in the sheet (a
  * running tool's card, the inspector, a panel) is the root page; pages
  * pushed over it (a menu, a drill-in) form the back stack.
@@ -25,8 +25,12 @@ export const SHEET_DETENT_NAMES: Record<SheetDetent, string> = {
   full: 'Full height'
 };
 
-/** The peek row's height in CSS pixels. */
-export const SHEET_PEEK_PX = 88;
+/**
+ * The peek height in CSS pixels: the grabber's row over one tray row of
+ * 44 px targets (U12 slice 4), so the tray's verbs, or a running tool's
+ * Cancel and Done, stand in reach at the lowest height the sheet rests at.
+ */
+export const SHEET_PEEK_PX = 104;
 
 /**
  * A page in the back stack, by id only: its title and content are drawn
@@ -52,8 +56,29 @@ export type SheetAction =
   | { type: 'close' }
   | { type: 'step-up' }
   | { type: 'step-down' }
-  /** The workspace's own content arrived, changed or left. */
-  | { type: 'root'; present: boolean; arrived: boolean };
+  /**
+   * The workspace's own content arrived, changed or left. Content that
+   * arrives comes up to `at` (half unless said otherwise): a running tool's
+   * tray row alone needs only peek, so the model stays in view to pick on.
+   */
+  | {
+      type: 'root';
+      present: boolean;
+      arrived: boolean;
+      at?: Exclude<SheetDetent, 'closed'>;
+    }
+  /** At least this high: a tool's Options, a refusal or the keypad. */
+  | { type: 'raise'; detent: Exclude<SheetDetent, 'closed'> }
+  /**
+   * The workspace's content left and only the tray stays (U12 slice 4): the
+   * sheet comes back down to peek, unless a page is open over it.
+   */
+  | { type: 'settle' };
+
+/** Where a detent stands, low to high; closed is below them all. */
+function rank(detent: SheetDetent): number {
+  return SHEET_DETENTS.indexOf(detent as 'peek');
+}
 
 /** The detent one step above, or the same at full. */
 function above(detent: SheetDetent): SheetDetent {
@@ -140,6 +165,16 @@ export function sheetReducer(
       const detent = below(state, hasRoot);
       return detent === state.detent ? state : { ...state, detent };
     }
+    case 'raise': {
+      if (!hasRoot && state.stack.length === 0) return state;
+      return rank(action.detent) > rank(state.detent)
+        ? { ...state, detent: action.detent }
+        : state;
+    }
+    case 'settle': {
+      if (state.stack.length > 0 || !hasRoot) return state;
+      return state.detent === 'peek' ? state : { ...state, detent: 'peek' };
+    }
     case 'root': {
       if (!action.present) {
         // The workspace took its content back (the tool finished, the
@@ -150,13 +185,12 @@ export function sheetReducer(
             ? state
             : { ...state, detent: 'closed' };
       }
-      // New content comes up at half, where it can be read and used; a
-      // person who raised the sheet to full keeps it there.
-      if (
-        action.arrived &&
-        (state.detent === 'closed' || state.detent === 'peek')
-      ) {
-        return { ...state, detent: 'half' };
+      // New content comes up at half, where it can be read and used (a
+      // running tool's row alone at peek); a person who raised the sheet
+      // higher keeps it there.
+      const at = action.at ?? 'half';
+      if (action.arrived && rank(at) > rank(state.detent)) {
+        return { ...state, detent: at };
       }
       return state.detent === 'closed' ? { ...state, detent: 'peek' } : state;
     }
@@ -184,19 +218,28 @@ export function sheetEscape(
 
 /**
  * The detent nearest a dragged height, with the host's full height for
- * scale. A drag below half the peek row closes a sheet that may close.
+ * scale. A drag below half the peek row closes a sheet that may close. A
+ * side sheet (a phone held landscape) stands the stage's full height at
+ * half, and widens rather than grows to full, so a drag only steps between
+ * peek and half.
  */
 export function nearestDetent(
   heightPx: number,
   hostPx: number,
-  canClose: boolean
+  canClose: boolean,
+  side = false
 ): SheetDetent {
   if (canClose && heightPx < SHEET_PEEK_PX / 2) return 'closed';
-  const heights: [SheetDetent, number][] = [
-    ['peek', SHEET_PEEK_PX],
-    ['half', hostPx / 2],
-    ['full', hostPx]
-  ];
+  const heights: [SheetDetent, number][] = side
+    ? [
+        ['peek', SHEET_PEEK_PX],
+        ['half', hostPx]
+      ]
+    : [
+        ['peek', SHEET_PEEK_PX],
+        ['half', hostPx / 2],
+        ['full', hostPx]
+      ];
   let best = heights[0]!;
   for (const candidate of heights) {
     if (Math.abs(candidate[1] - heightPx) < Math.abs(best[1] - heightPx)) {

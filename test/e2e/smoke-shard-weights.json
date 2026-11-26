@@ -22,6 +22,7 @@
   "collaboration-lease-recovery.spec.ts": 19,
   "collaboration.spec.ts": 20,
   "command-bar-names.spec.ts": 8,
+  "compact-build.spec.ts": 20,
   "compact-shell.spec.ts": 12,
   "configuration-export.spec.ts": 14,
   "configuration-instances.spec.ts": 12,

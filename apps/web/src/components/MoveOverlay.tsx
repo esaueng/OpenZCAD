@@ -5,7 +5,20 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { moveHasFiniteValues } from '../lib/moveCard';
-import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { TOOL_META } from '../lib/tools';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type MutableRefObject
+} from 'react';
+import {
+  raiseCompactSheet,
+  SHEET_OVERLAY_ATTRIBUTE,
+  useCompactKeypadSlot,
+  useCompactTray
+} from './compact/compactSlots';
 
 /*
  * The Move bar (U09): the gizmo is the command, so this is the in-place
@@ -324,9 +337,47 @@ export function MoveOverlay({
   // search); the card called itself "Move / Rotate". Rotation is still here,
   // on the gizmo's rings and under Options.
   const title = 'Move';
+  // In the compact sheet the bar is its tray (U12 slice 4), as every
+  // in-place command's: the step, Options, Cancel and Done in one pinned row.
+  const tray = useCompactTray();
+  const keypadSlot = useCompactKeypadSlot();
+  const optionsRef = useRef<HTMLDetailsElement>(null);
+  const optionsId = useId();
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const step = pointPick
+    ? pointPick.from === null
+      ? 'From point'
+      : 'To point'
+    : pivotMode
+      ? 'Pivot'
+      : 'Drag';
+  const cancelButton = (
+    <button
+      type="button"
+      className="in-place-command-cancel"
+      onClick={onCancel}
+      aria-keyshortcuts="Escape"
+    >
+      <X size={tray ? 20 : 14} aria-hidden="true" />
+      {tray ? <span className="visually-hidden">Cancel</span> : 'Cancel'}
+      {tray ? null : <kbd aria-hidden="true">Esc</kbd>}
+    </button>
+  );
+  const doneButton = (
+    <button
+      type="submit"
+      className="in-place-command-done"
+      disabled={!canApply}
+      aria-keyshortcuts="Enter"
+    >
+      <Check size={tray ? 20 : 14} aria-hidden="true" />
+      Done
+      {tray ? null : <kbd aria-hidden="true">Enter</kbd>}
+    </button>
+  );
   return (
     <form
-      className="in-place-command move-command"
+      className={`in-place-command move-command${tray ? ' is-tray' : ''}`}
       aria-label="Move controls"
       onSubmit={(event) => {
         event.preventDefault();
@@ -335,6 +386,40 @@ export function MoveOverlay({
         }
       }}
     >
+      {tray ? (
+        <div className="compact-tray-row">
+          <span className="compact-tray-tool" aria-hidden="true">
+            {TOOL_META.transform.icon}
+          </span>
+          <span className="compact-step-chip" aria-hidden="true">
+            {step}
+          </span>
+          <button
+            type="button"
+            className="compact-tray-button compact-tray-options"
+            aria-label={`${title} options`}
+            aria-expanded={optionsOpen}
+            aria-controls={optionsId}
+            title="Options"
+            onClick={() => {
+              const details = optionsRef.current;
+              if (details) details.open = !details.open;
+            }}
+          >
+            <SlidersHorizontal size={20} aria-hidden="true" />
+          </button>
+          {cancelButton}
+          {doneButton}
+        </div>
+      ) : null}
+      {tray ? (
+        // The keypad, when a value's chip opens it: under the pinned row.
+        <div
+          ref={keypadSlot}
+          className="compact-keypad-host"
+          {...{ [SHEET_OVERLAY_ATTRIBUTE]: '' }}
+        />
+      ) : null}
       <span className="in-place-command-title">{title}</span>
       {/* The same state pill as every other command's: empty until there is
           a move to preview. */}
@@ -399,8 +484,21 @@ export function MoveOverlay({
       ) : null}
       {/* The gizmo is the Move: its exact numbers, name, body and copy are
           rare enough to sit behind Options, as every in-place command's. */}
-      <details className="in-place-command-options">
-        <summary aria-label={`${title} options`} title="Options">
+      <details
+        ref={optionsRef}
+        id={optionsId}
+        className="in-place-command-options"
+        onToggle={(event) => {
+          const open = event.currentTarget.open;
+          setOptionsOpen(open);
+          if (open && tray) raiseCompactSheet(event.currentTarget, 'half');
+        }}
+      >
+        <summary
+          {...(tray
+            ? { 'aria-hidden': true, tabIndex: -1 }
+            : { 'aria-label': `${title} options`, title: 'Options' })}
+        >
           <SlidersHorizontal size={14} aria-hidden="true" />
           <span>Options</span>
         </summary>
@@ -527,26 +625,8 @@ export function MoveOverlay({
           ) : null}
         </div>
       </details>
-      <button
-        type="button"
-        className="in-place-command-cancel"
-        onClick={onCancel}
-        aria-keyshortcuts="Escape"
-      >
-        <X size={14} aria-hidden="true" />
-        Cancel
-        <kbd aria-hidden="true">Esc</kbd>
-      </button>
-      <button
-        type="submit"
-        className="in-place-command-done"
-        disabled={!canApply}
-        aria-keyshortcuts="Enter"
-      >
-        <Check size={14} aria-hidden="true" />
-        Done
-        <kbd aria-hidden="true">Enter</kbd>
-      </button>
+      {tray ? null : cancelButton}
+      {tray ? null : doneButton}
     </form>
   );
 }

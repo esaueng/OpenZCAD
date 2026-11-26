@@ -7,8 +7,15 @@ import {
 } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AppShell } from '../AppShell';
+import { createPortal } from 'react-dom';
+import { commandContextFor } from '../../lib/commandContext';
+import { InPlaceCommandBar } from '../InPlaceCommandBar';
 import { NumericKeypad } from '../NumericKeypad';
-import type { CompactChromeProps } from './compactSlots';
+import {
+  CompactTrayContext,
+  useCompactCommandRowHost,
+  type CompactChromeProps
+} from './compactSlots';
 
 function chrome(
   overrides: Partial<CompactChromeProps & { sheetKey: string }> = {}
@@ -242,6 +249,197 @@ describe('AppShell in the compact workspace', () => {
     expect(
       within(control).getByRole('textbox', { name: 'Width' })
     ).toHaveFocus();
+  });
+
+  it("stands Build's tray at peek and opens All tools as a page", async () => {
+    const onLaunchTool = vi.fn();
+    const { container } = render(
+      shell(
+        chrome({
+          build: {
+            context: commandContextFor({
+              edgeCount: 0,
+              faceSelected: false,
+              bodyCount: 0,
+              regionCount: 0
+            }),
+            pick: null,
+            availability: {
+              sketchCount: 0,
+              liveBodyCount: 0,
+              exactGeometryReady: true,
+              hasEdgeSelected: false
+            },
+            activeTool: null,
+            recentTools: [],
+            pinnedTools: ['box'],
+            onLaunchTool
+          }
+        })
+      )
+    );
+    const sheet = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('.compact-sheet');
+      expect(element).toHaveAttribute('data-detent', 'peek');
+      return element!;
+    });
+    const tray = within(sheet).getByRole('group', { name: 'Build tray' });
+    fireEvent.click(within(tray).getByRole('button', { name: 'All tools' }));
+    expect(sheet).toHaveAttribute('data-detent', 'full');
+    expect(within(sheet).getByRole('heading', { name: 'All tools' }));
+    // Opened to look: focus is on the page, not in its search field, which
+    // would raise the on-screen keyboard.
+    expect(
+      within(sheet).getByRole('searchbox', { name: 'Search tools' })
+    ).not.toHaveFocus();
+    const pinned = within(sheet).getByRole('region', { name: 'Pinned' });
+    fireEvent.click(within(pinned).getByRole('button', { name: 'Box' }));
+    expect(onLaunchTool).toHaveBeenCalledWith('box');
+    // The page closes on launch, back to the tray.
+    expect(within(sheet).queryByRole('heading', { name: 'All tools' })).toBe(
+      null
+    );
+    expect(sheet).toHaveAttribute('data-detent', 'peek');
+  });
+
+  it('draws the keypad in the sheet under the tray while Build holds it', async () => {
+    const keypad = (
+      <div className="viewer-shell">
+        <NumericKeypad
+          request={{
+            kind: 'command',
+            label: 'Radius',
+            initial: '1',
+            unitKind: 'length',
+            commandValueId: 'radius'
+          }}
+          units="mm"
+          scope={{}}
+          anchorRef={{ current: null }}
+          onPreview={() => undefined}
+          onCommit={() => undefined}
+          onCancel={() => undefined}
+        />
+      </div>
+    );
+    const { container } = render(
+      shell(
+        chrome({
+          build: {
+            context: commandContextFor({
+              edgeCount: 0,
+              faceSelected: false,
+              bodyCount: 0,
+              regionCount: 0
+            }),
+            pick: null,
+            availability: {
+              sketchCount: 0,
+              liveBodyCount: 1,
+              exactGeometryReady: true,
+              hasEdgeSelected: false
+            },
+            activeTool: null,
+            recentTools: [],
+            pinnedTools: [],
+            onLaunchTool: vi.fn()
+          }
+        }),
+        { viewer: keypad }
+      )
+    );
+    const control = await waitFor(() =>
+      screen.getByRole('dialog', { name: 'Radius value' })
+    );
+    const sheet = container.querySelector<HTMLElement>('.compact-sheet')!;
+    expect(sheet.querySelector('.compact-keypad-host')).toContainElement(
+      control
+    );
+    await waitFor(() => expect(sheet).toHaveAttribute('data-detent', 'half'));
+    expect(
+      within(control).getByRole('textbox', { name: 'Radius' })
+    ).toHaveFocus();
+  });
+
+  it("draws the keypad under a running tool's pinned row, in its bar", async () => {
+    // The bar as WorkspaceReadout draws it in the compact sheet.
+    function Row() {
+      const host = useCompactCommandRowHost(true);
+      return host
+        ? createPortal(
+            <CompactTrayContext.Provider value={true}>
+              <InPlaceCommandBar
+                title="Fillet"
+                hint="1 edge · drag the radius"
+                canFinish
+                onDone={vi.fn()}
+                onCancel={vi.fn()}
+              />
+            </CompactTrayContext.Provider>,
+            host
+          )
+        : null;
+    }
+    const keypad = (
+      <div className="viewer-shell">
+        <Row />
+        <NumericKeypad
+          request={{
+            kind: 'command',
+            label: 'Radius',
+            initial: '1',
+            unitKind: 'length',
+            commandValueId: 'radius'
+          }}
+          units="mm"
+          scope={{}}
+          anchorRef={{ current: null }}
+          onPreview={() => undefined}
+          onCommit={() => undefined}
+          onCancel={() => undefined}
+        />
+      </div>
+    );
+    render(
+      shell(
+        chrome({
+          build: {
+            context: commandContextFor({
+              edgeCount: 0,
+              faceSelected: false,
+              bodyCount: 0,
+              regionCount: 0
+            }),
+            pick: null,
+            availability: {
+              sketchCount: 0,
+              liveBodyCount: 1,
+              exactGeometryReady: true,
+              hasEdgeSelected: false
+            },
+            activeTool: 'fillet',
+            recentTools: [],
+            pinnedTools: [],
+            onLaunchTool: vi.fn()
+          }
+        }),
+        { viewer: keypad }
+      )
+    );
+    const bar = await waitFor(() =>
+      screen.getByRole('group', { name: 'Fillet command' })
+    );
+    const control = await waitFor(() =>
+      within(bar).getByRole('dialog', { name: 'Radius value' })
+    );
+    // After the pinned row, inside the bar: the row's sticky span covers it.
+    const row = bar.querySelector('.compact-tray-row')!;
+    expect(
+      row.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(document.querySelectorAll('.numeric-keypad')).toHaveLength(1);
+    // The bar's tray stands in for Build's.
+    expect(screen.queryByRole('group', { name: 'Build tray' })).toBeNull();
   });
 
   it('draws an open File page from the commands as they are now', async () => {
