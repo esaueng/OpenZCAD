@@ -679,6 +679,7 @@ import {
   setActiveKeymapOverrides,
   useKeymap
 } from './lib/keymap';
+import { actionHandler, type ActionHandlers } from './lib/actions/handlers';
 import {
   TOOL_GROUPS,
   TOOL_META,
@@ -37168,6 +37169,38 @@ export function App() {
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
 
+  // One handler per action (U12): its keyboard shortcut and its command-bar
+  // row both run this entry. Normal to face is not here: its key turns only
+  // to a settled face pick, which the keyboard map checks first.
+  const openShortcutReference = () => setShortcutsOpen(true);
+  const actionHandlers = {
+    'view-front': () => requestView('front'),
+    'view-top': () => requestView('top'),
+    'view-right': () => requestView('right'),
+    'view-iso': () => requestView('iso'),
+    'view-back': () => requestView('back'),
+    'view-bottom': () => requestView('bottom'),
+    'view-left': () => requestView('left'),
+    'view-measure': () => toggleMeasure(!measuring),
+    'view-fit': () => setFitSignal((value) => value + 1),
+    'view-grid': () =>
+      setViewerSettings((current) => ({
+        ...current,
+        showGrid: !current.showGrid
+      })),
+    'view-display': cycleDisplayMode,
+    'view-projection': toggleProjection,
+    'view-xray': toggleXray,
+    'view-orbit-mode': toggleOrbitMode,
+    // The slash is the command grammar: the field opens with it typed,
+    // listing every command.
+    'command-slash': () => draftPrompt('/'),
+    // The `?` key and the command bar's Help row open the same reference.
+    'shortcut-reference': openShortcutReference,
+    'app-help': openShortcutReference,
+    'app-settings': openSettings
+  } satisfies ActionHandlers;
+
   // Workspace keyboard map (ignored while typing in a field). The ref must be
   // refreshed before paint: a keydown arriving between a commit and a passive
   // effect flush would otherwise run the previous render's closure — where a
@@ -37206,7 +37239,7 @@ export function App() {
 
       if (global === 'app-settings') {
         event.preventDefault();
-        openSettings();
+        actionHandlers['app-settings']();
         return;
       }
 
@@ -38058,60 +38091,12 @@ export function App() {
       ) {
         event.preventDefault();
       }
+      const keyAction = actionHandler(actionHandlers, modelCommand?.id);
+      if (keyAction) {
+        keyAction();
+        return;
+      }
       switch (modelCommand?.id) {
-        case 'shortcut-reference':
-          setShortcutsOpen(true);
-          return;
-        case 'command-slash':
-          // The slash is the command grammar: the field opens with it typed,
-          // listing every command.
-          draftPrompt('/');
-          return;
-        case 'view-front':
-          requestView('front');
-          return;
-        case 'view-top':
-          requestView('top');
-          return;
-        case 'view-right':
-          requestView('right');
-          return;
-        case 'view-iso':
-          requestView('iso');
-          return;
-        case 'view-back':
-          requestView('back');
-          return;
-        case 'view-bottom':
-          requestView('bottom');
-          return;
-        case 'view-left':
-          requestView('left');
-          return;
-        case 'view-measure':
-          toggleMeasure(!measuring);
-          return;
-        case 'view-fit':
-          setFitSignal((value) => value + 1);
-          return;
-        case 'view-grid':
-          setViewerSettings((current) => ({
-            ...current,
-            showGrid: !current.showGrid
-          }));
-          return;
-        case 'view-display':
-          cycleDisplayMode();
-          return;
-        case 'view-projection':
-          toggleProjection();
-          return;
-        case 'view-xray':
-          toggleXray();
-          return;
-        case 'view-orbit-mode':
-          toggleOrbitMode();
-          return;
         case 'selection-filter': {
           // A vertex repair picks edges whatever the manual filter says
           // (selectionFilter above; picking a sketch plane, which forces
@@ -38824,7 +38809,7 @@ export function App() {
           : interaction.mode === 'sketch'
             ? 'Finish the sketch first'
             : null,
-      run: () => toggleMeasure(!measuring)
+      run: actionHandlers['view-measure']
     },
     {
       id: 'view-front',
@@ -38832,7 +38817,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-front'),
       icon: <Monitor size={16} aria-hidden="true" />,
-      run: () => requestView('front')
+      run: actionHandlers['view-front']
     },
     {
       id: 'view-top',
@@ -38840,7 +38825,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-top'),
       icon: <Monitor size={16} aria-hidden="true" />,
-      run: () => requestView('top')
+      run: actionHandlers['view-top']
     },
     {
       id: 'view-right',
@@ -38848,7 +38833,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-right'),
       icon: <Monitor size={16} aria-hidden="true" />,
-      run: () => requestView('right')
+      run: actionHandlers['view-right']
     },
     {
       id: 'view-iso',
@@ -38856,7 +38841,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-iso'),
       icon: <Monitor size={16} aria-hidden="true" />,
-      run: () => requestView('iso')
+      run: actionHandlers['view-iso']
     },
     {
       id: 'view-back',
@@ -38864,7 +38849,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-back'),
       icon: <Monitor size={16} aria-hidden="true" />,
-      run: () => requestView('back')
+      run: actionHandlers['view-back']
     },
     {
       id: 'view-bottom',
@@ -38872,7 +38857,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-bottom'),
       icon: <Monitor size={16} aria-hidden="true" />,
-      run: () => requestView('bottom')
+      run: actionHandlers['view-bottom']
     },
     {
       id: 'view-left',
@@ -38880,7 +38865,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-left'),
       icon: <Monitor size={16} aria-hidden="true" />,
-      run: () => requestView('left')
+      run: actionHandlers['view-left']
     },
     {
       id: 'view-fit',
@@ -38888,7 +38873,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-fit'),
       icon: <Maximize2 size={16} aria-hidden="true" />,
-      run: () => setFitSignal((value) => value + 1)
+      run: actionHandlers['view-fit']
     },
     {
       id: 'view-normal-to-face',
@@ -38910,11 +38895,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-grid'),
       icon: <Grid3x3 size={16} aria-hidden="true" />,
-      run: () =>
-        setViewerSettings((current) => ({
-          ...current,
-          showGrid: !current.showGrid
-        }))
+      run: actionHandlers['view-grid']
     },
     {
       id: 'view-display',
@@ -38922,7 +38903,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-display'),
       icon: <Monitor size={16} aria-hidden="true" />,
-      run: cycleDisplayMode
+      run: actionHandlers['view-display']
     },
     {
       id: 'view-projection',
@@ -38930,7 +38911,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-projection'),
       icon: <Camera size={16} aria-hidden="true" />,
-      run: toggleProjection
+      run: actionHandlers['view-projection']
     },
     {
       id: 'view-xray',
@@ -38938,7 +38919,7 @@ export function App() {
       group: 'View',
       shortcut: keymap.label('view-xray'),
       icon: <ScanEye size={16} aria-hidden="true" />,
-      run: toggleXray
+      run: actionHandlers['view-xray']
     },
     {
       id: 'view-orbit-mode',
@@ -38950,7 +38931,7 @@ export function App() {
       keywords: ['orbit mode', 'turntable', 'free orbit', 'upside down'],
       shortcut: keymap.label('view-orbit-mode'),
       icon: <Orbit size={16} aria-hidden="true" />,
-      run: toggleOrbitMode
+      run: actionHandlers['view-orbit-mode']
     },
     {
       id: 'view-show-all',
@@ -39292,7 +39273,7 @@ export function App() {
       ],
       shortcut: keymap.label('shortcut-reference'),
       icon: <Keyboard size={16} aria-hidden="true" />,
-      run: () => setShortcutsOpen(true)
+      run: actionHandlers['app-help']
     },
     ...(doc && !shareSession
       ? [
@@ -39337,7 +39318,7 @@ export function App() {
       group: 'General',
       shortcut: keymap.label('app-settings'),
       icon: <SettingsIcon size={16} aria-hidden="true" />,
-      run: openSettings
+      run: actionHandlers['app-settings']
     },
     // What the model is made of: every feature and parameter by name, last,
     // so a search that names one lands on it in its panel.
