@@ -581,27 +581,28 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
     if (label.startsWith('S4')) expect(refused.bar).toBe(TOUCH_SENTENCE);
   });
 
-  // Wording findings (owner refusalLanguage.ts). Each `it.fails` states the
-  // expected behaviour and passes while the defect stands; it fails, and
-  // should become a plain `it`, once the copy is fixed.
-  it.fails(
-    'Wording, S2/S5: a strict miss names the miss instead of the generic sentence',
-    async () => {
-      // Expected: a sentence saying the plane misses the body (or only
-      // touches a corner) and to slide it through the body. Actual: the
-      // table has no entry for "cutting plane does not split the solid", so
-      // the bar shows GENERIC_REFUSAL, which K10 counts as a failure.
-      for (const plane of [
-        xPlane(98),
-        {
-          origin: { x: 0, y: 0, z: 0 },
-          normal: {
-            x: 1 / Math.sqrt(3),
-            y: 1 / Math.sqrt(3),
-            z: 1 / Math.sqrt(3)
-          }
-        }
-      ]) {
+  // Wording findings (owner refusalLanguage.ts). The typed refusal behind
+  // each one is checked in the hook, outside any expected failure, so a
+  // replay error or a wrong category fails the run instead of passing as the
+  // known defect. Each `it.fails` then asserts only on its own sentence and
+  // passes while that defect stands; once the copy is fixed it fails, and
+  // should become a plain `it` asserting the new sentence.
+  describe('wording findings', () => {
+    const vertexPlane = {
+      origin: { x: 0, y: 0, z: 0 },
+      normal: {
+        x: 1 / Math.sqrt(3),
+        y: 1 / Math.sqrt(3),
+        z: 1 / Math.sqrt(3)
+      }
+    };
+    const bars = new Map<string, string>();
+    beforeAll(async () => {
+      for (const [cell, plane, category] of [
+        ['S2', xPlane(98), 'invalid_input'],
+        ['S3', xPlane(90), 'unsupported'],
+        ['S5', vertexPlane, 'invalid_input']
+      ] as const) {
         const { document, coupon } = blank();
         const split = addSplitFeature(document, {
           name: 'Split',
@@ -610,36 +611,43 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
         });
         const refused = expectTyped(
           await outcome(split.document, 'Split'),
-          'invalid_input',
-          'strict miss'
+          category,
+          `${cell} wording`
         );
-        expect(refused.bar).not.toBe(GENERIC_REFUSAL);
+        bars.set(cell, refused.bar);
       }
-    }
-  );
+    });
 
-  it.fails(
-    'Wording, S3: a plane on a face is not described as lying along an edge',
-    async () => {
-      // Expected: a sentence saying the plane lies on a face of the body and
-      // only touches it, so slide it into the body. Actual: the face-touch
-      // refusal shares the edge-touch entry ("lies exactly along an existing
-      // edge … off the edge"), which names the wrong cause for a face pick —
-      // and a picked face's plane always starts here, at offset 0.
-      const { document, coupon } = blank();
-      const split = addSplitFeature(document, {
-        name: 'Split',
-        targetBodyId: coupon,
-        plane: xPlane(90)
-      });
-      const refused = expectTyped(
-        await outcome(split.document, 'Split'),
-        'unsupported',
-        'face touch'
-      );
-      expect(refused.bar).not.toBe(TOUCH_SENTENCE);
-    }
-  );
+    it('records a typed refusal for each wording cell', () => {
+      expect([...bars.keys()]).toEqual(['S2', 'S3', 'S5']);
+      for (const bar of bars.values()) expect(bar).toEqual(expect.any(String));
+    });
+
+    // Expected for S2 and S5: a sentence saying the plane misses the body
+    // (or only touches a corner) and to slide it through the body. Actual:
+    // the table has no entry for "cutting plane does not split the solid", so
+    // the bar shows GENERIC_REFUSAL, which K10 counts as a failure. Each cell
+    // is its own case, so fixing one cannot hide the other.
+    it.fails('Wording, S2: a strict miss names the miss', () => {
+      expect(bars.get('S2')).not.toBe(GENERIC_REFUSAL);
+    });
+
+    it.fails('Wording, S5: a vertex touch names the miss', () => {
+      expect(bars.get('S5')).not.toBe(GENERIC_REFUSAL);
+    });
+
+    // Expected: a sentence saying the plane lies on a face of the body and
+    // only touches it, so slide it into the body. Actual: the face-touch
+    // refusal shares the edge-touch entry ("lies exactly along an existing
+    // edge … off the edge"), which names the wrong cause for a face pick —
+    // and a picked face's plane always starts here, at offset 0.
+    it.fails(
+      'Wording, S3: a plane on a face is not described as lying along an edge',
+      () => {
+        expect(bars.get('S3')).not.toBe(TOUCH_SENTENCE);
+      }
+    );
+  });
 
   it('S6: a typed zero normal makes no Split request', () => {
     const slots: InPlaceSlots = {
@@ -712,6 +720,7 @@ describe('K10 workflow coupon: the mixed chain (W1–W8, C1–C2, R1–R3)', () 
       expectVolume(solid(derived, coupon, name).volume, volume, name);
       if (name === 'A0') continue;
       const witness = solid(derived, fixture.witness, `${name} witness`);
+      expect(witness.consumed, `${name} witness consumed`).toBe(false);
       expectVolume(witness.volume, V.witness, `${name} witness`);
       expect(witness.bbox, `${name} witness bounds`).toEqual(
         fixture.witnessBox
@@ -765,6 +774,7 @@ describe('K10 workflow coupon: the mixed chain (W1–W8, C1–C2, R1–R3)', () 
     expect(derived.bodyRepresentations[coupon]?.consumed).toBe(true);
     expect(low.consumed || high.consumed).toBe(false);
     const witness = solid(derived, fixture.witness, 'W8 witness');
+    expect(witness.consumed, 'W8 witness consumed').toBe(false);
     expectVolume(witness.volume, V.witness, 'W8 witness');
     expect(witness.bbox).toEqual(fixture.witnessBox);
   });

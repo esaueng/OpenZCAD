@@ -66,13 +66,16 @@ async function drawnBodies(page: Page): Promise<LiveBody[]> {
   );
 }
 
-/** Drawn bodies as `[min x, max x, volume]`, rounded, sorted by min x. */
+/**
+ * Drawn bodies as `[min x, max x, volume]`, sorted by min x. Volumes keep two
+ * decimals, inside the K10 tolerance of 0.05 mm³ for these bodies.
+ */
 async function drawnSpans(page: Page): Promise<number[][]> {
   return (await drawnBodies(page))
     .map((body) => [
       Math.round(body.min.x * 1000) / 1000,
       Math.round(body.max.x * 1000) / 1000,
-      Math.round(body.volume)
+      Math.round(body.volume * 100) / 100
     ])
     .sort((a, b) => a[0]! - b[0]!);
 }
@@ -274,6 +277,13 @@ test(
     // 5. Undo, Redo and a reload keep the body count, ids and plane.
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expectBodyCount(page, 2);
+    // The Undo reaches storage before Redo, so the reload below reads the
+    // redone split and not the save from step 4 that both steps left alone.
+    await expect
+      .poll(async () => storedSplit(await storedProject(page, projectName)), {
+        timeout: 20_000
+      })
+      .toBeNull();
     await page.getByRole('button', { name: 'Redo', exact: true }).click();
     await expectBodyCount(page, 3);
     await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
