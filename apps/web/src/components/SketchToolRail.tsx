@@ -4,7 +4,8 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
-  type ReactNode
+  type ReactNode,
+  type Ref
 } from 'react';
 import {
   ArrowRightToLine,
@@ -192,7 +193,7 @@ interface SketchToolRailProps {
   onExtrude(): void;
 }
 
-const TOOLS: {
+export const SKETCH_RAIL_TOOLS: {
   id: Exclude<
     SketchToolId,
     | 'circle'
@@ -221,7 +222,7 @@ const TOOLS: {
 ];
 
 /** The Project tool's two modes, in the order its strip shows them. */
-const PROJECT_MODES: {
+export const PROJECT_MODES: {
   mode: SketchProjectionMode;
   label: string;
   tile: string;
@@ -246,7 +247,7 @@ const PROJECT_MODES: {
 ];
 
 /** A circle through three points on its circumference, drawn like lucide. */
-function ThreePointCircle({ size }: { size: number }) {
+export function ThreePointCircle({ size }: { size: number }) {
   return (
     <svg
       width={size}
@@ -271,7 +272,7 @@ function ThreePointCircle({ size }: { size: number }) {
  * The circle's three types. `label` names the type on the tool and in its
  * tooltip; `tile` is the short word on the strip beside the rail.
  */
-const CIRCLE_MODES: {
+export const CIRCLE_MODES: {
   mode: SketchCircleMode;
   label: string;
   tile: string;
@@ -328,7 +329,7 @@ function ThreePointRectangle({ size }: { size: number }) {
  * its own tool sharing the slot. Every one draws real lines held by
  * relations and named as one object.
  */
-const SHAPE_MODES: {
+export const SHAPE_MODES: {
   mode: SketchRectangleMode | 'polygon' | 'slot' | 'point';
   label: string;
   tile: string;
@@ -424,7 +425,7 @@ function ControlSpline({ size }: { size: number }) {
  * The curve slot's types (I01): the Ellipse tool's two and the Spline
  * tool's two, sharing one rail slot the way the rectangle and polygon do.
  */
-const CURVE_MODES: {
+export const CURVE_MODES: {
   mode: SketchCurveMode;
   label: string;
   tile: string;
@@ -489,7 +490,7 @@ function validPolygonSides(sides: number): boolean {
  * fixed: blurring it back to 6 without a word read as the field ignoring
  * the user (F019).
  */
-function PolygonSidesField({
+export function PolygonSidesField({
   value,
   onCommit
 }: {
@@ -536,7 +537,7 @@ function PolygonSidesField({
   );
 }
 
-const EDIT_TOOL_ICONS: Record<SketchEditToolKind, typeof Minus> = {
+export const EDIT_TOOL_ICONS: Record<SketchEditToolKind, typeof Minus> = {
   fillet: Radius,
   chamfer: Slice,
   offset: SquareDashed,
@@ -562,7 +563,7 @@ const FOLDED_EDIT_TOOLS = new Set<SketchEditToolKind>([
 ]);
 
 /** Offset's corner joins, as its strip offers them. */
-const OFFSET_JOINS = [
+export const OFFSET_JOINS = [
   {
     join: 'miter',
     label: 'Miter',
@@ -584,7 +585,7 @@ const STRIP_EDIT_TOOLS = new Set<SketchEditToolKind>([
   'circular-pattern'
 ]);
 
-const PATTERN_SPACINGS: readonly {
+export const PATTERN_SPACINGS: readonly {
   value: SketchPatternSpacing;
   label: string;
   detail: string;
@@ -605,7 +606,7 @@ const PATTERN_SPACINGS: readonly {
   }
 ];
 
-const PATTERN_ORIENTATIONS: readonly {
+export const PATTERN_ORIENTATIONS: readonly {
   value: SketchPatternOrientation;
   label: string;
   detail: string;
@@ -648,7 +649,8 @@ export function sketchDrawToolLabel(
         ? shapeModeSpec('polygon').label
         : tool === 'ellipse' || tool === 'spline'
           ? curveModeSpec(sketchCurveModeFor(tool, curveMode)).label
-          : (TOOLS.find((entry) => entry.id === tool)?.label ?? tool);
+          : (SKETCH_RAIL_TOOLS.find((entry) => entry.id === tool)?.label ??
+            tool);
 }
 
 /**
@@ -656,7 +658,7 @@ export function sketchDrawToolLabel(
  * Home and End go to the ends. Only the checked tile is in the tab order
  * (a roving tabIndex), so Tab leaves the group in one press.
  */
-function radioGroupKeyStep(
+export function radioGroupKeyStep(
   event: KeyboardEvent<HTMLElement>,
   count: number,
   index: number
@@ -819,9 +821,6 @@ export function SketchToolRail({
   const modifyTriggerRef = useRef<HTMLButtonElement>(null);
   const modifyGroupId = useId();
   const reviewRequested = useRef(false);
-  const [inspectedConstraintId, setInspectedConstraintId] = useState<
-    string | null
-  >(null);
   const focusConstraints = () => {
     constraintGroupRef.current?.focus();
     constraintGroupRef.current?.scrollIntoView?.({ block: 'nearest' });
@@ -842,28 +841,6 @@ export function SketchToolRail({
     }
   };
   const warning = solveStatus?.tone === 'warn';
-  const freeEntities =
-    solveStatus?.definedState === 'under-defined'
-      ? solveStatus.freeEntities
-      : undefined;
-  // Only rows still present in the live sketch can be recovery targets. A
-  // refused prospective dimension may have residuals for its uncommitted ID.
-  const hasAttributedConflict = constraints.some((item) => item.conflicted);
-  const solveExplanation = warning
-    ? hasAttributedConflict
-      ? 'Marked constraints have measured residuals. Show their geometry, then edit a value or delete a relation.'
-      : 'The solver did not identify a conflicting constraint. Review the relations below.'
-    : solveStatus?.definedState === 'fully-defined'
-      ? 'All sketch geometry is fully constrained.'
-      : solveStatus?.definedState === 'under-defined'
-        ? freeEntities
-          ? freeEntities.length === 0
-            ? 'The remaining freedom lies in geometry the solver cannot hold on its own, such as a spline.'
-            : `${freeEntities.length === 1 ? 'One entity' : `${freeEntities.length} entities`} can still move; green geometry is fully constrained.`
-          : 'Remaining freedom is reported for the whole sketch, not individual entities.'
-        : null;
-  const patchSettings = (patch: Partial<AppSettings['sketching']>) =>
-    onSettings({ ...settings, ...patch });
 
   // Icon-only, like the verb rail: the name and key ride the tooltip, and
   // the accessible name is the tool's name alone.
@@ -872,7 +849,7 @@ export function SketchToolRail({
     label,
     command,
     icon: Icon
-  }: (typeof TOOLS)[number]) => {
+  }: (typeof SKETCH_RAIL_TOOLS)[number]) => {
     // An armed modify tool picks through Select's hit-testing, so the
     // machine parks the tool there; the rail lights the modify tool alone
     // rather than Select beside it as a second live tool.
@@ -917,7 +894,7 @@ export function SketchToolRail({
   const chooseCurve = (mode: SketchCurveMode) => onCurveMode?.(mode);
   const drawTools = (
     <>
-      {TOOLS.slice(0, 3).map(drawTool)}
+      {SKETCH_RAIL_TOOLS.slice(0, 3).map(drawTool)}
       <span className="sketch-circle-tool">
         <Tooltip
           label={circleSpec.label}
@@ -1183,7 +1160,7 @@ export function SketchToolRail({
           </span>
         ) : null}
       </span>
-      {TOOLS.slice(3).map(drawTool)}
+      {SKETCH_RAIL_TOOLS.slice(3).map(drawTool)}
       <span className="sketch-circle-tool">
         <Tooltip
           label="Project edges"
@@ -1620,273 +1597,21 @@ export function SketchToolRail({
           </span>
         </header>
         {workflow}
-        <div className="sketch-palette-content">
-          <fieldset>
-            <legend>Display</legend>
-            <label>
-              <input
-                type="checkbox"
-                checked={settings.gridVisible}
-                onChange={(event) =>
-                  patchSettings({
-                    gridVisible: event.currentTarget.checked
-                  })
-                }
-              />
-              Show adaptive grid
-            </label>
-            <label className="sketch-palette-number sketch-palette-select">
-              <span>Relation glyphs</span>
-              <select
-                value={settings.relationGlyphs}
-                onChange={(event) =>
-                  patchSettings({
-                    relationGlyphs: event.currentTarget
-                      .value as AppSettings['sketching']['relationGlyphs']
-                  })
-                }
-              >
-                <option value="always">Always</option>
-                <option value="selected">Selected</option>
-                <option value="hidden">Hidden</option>
-              </select>
-            </label>
-            <RelationGlyphFilter
-              hidden={settings.hiddenRelationGlyphs}
-              disabled={settings.relationGlyphs === 'hidden'}
-              onChange={(hiddenRelationGlyphs) =>
-                patchSettings({ hiddenRelationGlyphs })
-              }
-            />
-          </fieldset>
-          <fieldset>
-            <legend>Snapping</legend>
-            <label>
-              <input
-                type="checkbox"
-                checked={settings.geometrySnapEnabled}
-                onChange={(event) =>
-                  patchSettings({
-                    geometrySnapEnabled: event.currentTarget.checked
-                  })
-                }
-              />
-              Geometry snaps
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={settings.inferenceEnabled}
-                onChange={(event) =>
-                  patchSettings({
-                    inferenceEnabled: event.currentTarget.checked
-                  })
-                }
-              />
-              Automatic inferencing
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={settings.autoConstrain}
-                onChange={(event) =>
-                  patchSettings({
-                    autoConstrain: event.currentTarget.checked
-                  })
-                }
-              />
-              Auto-constrain
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={settings.snapHints}
-                onChange={(event) =>
-                  patchSettings({
-                    snapHints: event.currentTarget.checked
-                  })
-                }
-              />
-              Snap hints
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={settings.snapEnabled}
-                onChange={(event) =>
-                  patchSettings({
-                    snapEnabled: event.currentTarget.checked
-                  })
-                }
-              />
-              Snap to grid
-            </label>
-            <label className="sketch-palette-number">
-              <span>Snap spacing</span>
-              <span>
-                <SnapSpacingField
-                  value={settings.linearSnap}
-                  onCommit={(linearSnap) => patchSettings({ linearSnap })}
-                />
-                <small>{units}</small>
-              </span>
-            </label>
-          </fieldset>
-          {constraints.length > 0 || solveStatus ? (
-            <fieldset ref={constraintGroupRef} tabIndex={-1}>
-              <legend>Constraints</legend>
-              {solveStatus && (
-                <div
-                  className="sketch-constraint-explanation"
-                  data-tone={solveStatus.tone}
-                >
-                  <strong>{solveStatus.label}</strong>
-                  {solveExplanation && <p>{solveExplanation}</p>}
-                  {freeEntities && freeEntities.length > 0 && (
-                    <div
-                      className="sketch-constraint-targets"
-                      role="group"
-                      aria-label="Geometry that can still move"
-                    >
-                      <span>Can still move</span>
-                      {freeEntities.map(({ objectId, label, freedom }) => (
-                        <button
-                          key={objectId}
-                          type="button"
-                          aria-label={`Select free geometry: ${label}, ${freedom} ${freedom === 1 ? 'freedom' : 'freedoms'}`}
-                          aria-pressed={selectedObjectId === objectId}
-                          disabled={solving}
-                          onClick={() => onSelectFreeEntity?.(objectId)}
-                        >
-                          {label} · {freedom} DOF
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-              <ul className="sketch-constraint-list">
-                {constraints.map(
-                  ({
-                    constraintId,
-                    label,
-                    editable,
-                    conflicted,
-                    defined,
-                    targets = []
-                  }) => (
-                    <li
-                      key={constraintId}
-                      data-conflicted={conflicted ? 'true' : undefined}
-                      data-defined={defined ? 'true' : undefined}
-                      aria-label={
-                        conflicted
-                          ? `${label} · solver residual; edit or delete this constraint`
-                          : defined
-                            ? `${label} · fully defined`
-                            : label
-                      }
-                    >
-                      {editable ? (
-                        <Tooltip
-                          label={
-                            conflicted
-                              ? `Edit conflicting constraint: ${label}`
-                              : `Edit constraint: ${label}`
-                          }
-                        >
-                          <button
-                            type="button"
-                            className="sketch-constraint-edit"
-                            data-conflicted={conflicted ? 'true' : undefined}
-                            data-defined={defined ? 'true' : undefined}
-                            aria-label={`Edit constraint: ${label}`}
-                            onClick={(event) =>
-                              onEditConstraint(constraintId, {
-                                x: event.clientX,
-                                y: event.clientY
-                              })
-                            }
-                          >
-                            {label}
-                          </button>
-                        </Tooltip>
-                      ) : (
-                        <Tooltip label={label}>
-                          <span>{label}</span>
-                        </Tooltip>
-                      )}
-                      <Tooltip label={`Show geometry for constraint: ${label}`}>
-                        <button
-                          type="button"
-                          className="sketch-constraint-show"
-                          aria-label={`Show geometry for constraint: ${label}`}
-                          aria-expanded={inspectedConstraintId === constraintId}
-                          disabled={solving}
-                          onClick={() =>
-                            setInspectedConstraintId((current) =>
-                              current === constraintId ? null : constraintId
-                            )
-                          }
-                        >
-                          <ScanSearch size={14} aria-hidden="true" />
-                        </button>
-                      </Tooltip>
-                      <Tooltip label={`Delete constraint: ${label}`}>
-                        <button
-                          type="button"
-                          className="row-delete"
-                          aria-label={`Delete constraint: ${label}`}
-                          disabled={solving}
-                          onClick={() => onDeleteConstraint(constraintId)}
-                        >
-                          <Trash2 size={12} aria-hidden="true" />
-                        </button>
-                      </Tooltip>
-                      {inspectedConstraintId === constraintId && (
-                        <div
-                          className="sketch-constraint-targets"
-                          role="group"
-                          aria-label={`Geometry for constraint: ${label}`}
-                        >
-                          <span>Referenced geometry</span>
-                          {targets.length === 0 ? (
-                            <p>
-                              The referenced geometry is no longer available.
-                            </p>
-                          ) : (
-                            targets.map(({ objectId, label: targetLabel }) => (
-                              <button
-                                key={objectId}
-                                type="button"
-                                aria-label={`Select geometry: ${targetLabel}`}
-                                aria-pressed={selectedObjectId === objectId}
-                                disabled={solving}
-                                onClick={() =>
-                                  onSelectConstraintObject(
-                                    constraintId,
-                                    objectId
-                                  )
-                                }
-                              >
-                                {targetLabel}
-                              </button>
-                            ))
-                          )}
-                        </div>
-                      )}
-                    </li>
-                  )
-                )}
-              </ul>
-            </fieldset>
-          ) : null}
-          {referenceDimensions}
-          <p className="sketch-palette-help">
-            <Magnet size={12} aria-hidden="true" />
-            Tab cycles overlaps · Shift suppresses snaps
-          </p>
-        </div>
+        <SketchPaletteContent
+          settings={settings}
+          units={units}
+          constraints={constraints}
+          selectedObjectId={selectedObjectId}
+          solveStatus={solveStatus}
+          solving={solving}
+          referenceDimensions={referenceDimensions}
+          constraintGroupRef={constraintGroupRef}
+          onSettings={onSettings}
+          onEditConstraint={onEditConstraint}
+          onDeleteConstraint={onDeleteConstraint}
+          onSelectConstraintObject={onSelectConstraintObject}
+          onSelectFreeEntity={onSelectFreeEntity}
+        />
       </aside>
     ) : null;
 
@@ -1934,6 +1659,358 @@ export function SketchToolRail({
         {palette}
       </div>
     </>
+  );
+}
+
+/** What the palette's constraint group says of the last solve, or null. */
+export function sketchSolveExplanation(
+  solveStatus: SketchSolveStatus | null,
+  constraints: readonly SketchConstraintListItem[]
+): string | null {
+  const freeEntities =
+    solveStatus?.definedState === 'under-defined'
+      ? solveStatus.freeEntities
+      : undefined;
+  // Only rows still present in the live sketch can be recovery targets. A
+  // refused prospective dimension may have residuals for its uncommitted ID.
+  const hasAttributedConflict = constraints.some((item) => item.conflicted);
+  return solveStatus?.tone === 'warn'
+    ? hasAttributedConflict
+      ? 'Marked constraints have measured residuals. Show their geometry, then edit a value or delete a relation.'
+      : 'The solver did not identify a conflicting constraint. Review the relations below.'
+    : solveStatus?.definedState === 'fully-defined'
+      ? 'All sketch geometry is fully constrained.'
+      : solveStatus?.definedState === 'under-defined'
+        ? freeEntities
+          ? freeEntities.length === 0
+            ? 'The remaining freedom lies in geometry the solver cannot hold on its own, such as a spline.'
+            : `${freeEntities.length === 1 ? 'One entity' : `${freeEntities.length} entities`} can still move; green geometry is fully constrained.`
+          : 'Remaining freedom is reported for the whole sketch, not individual entities.'
+        : null;
+}
+
+export interface SketchPaletteContentProps {
+  settings: AppSettings['sketching'];
+  units: string;
+  constraints: readonly SketchConstraintListItem[];
+  selectedObjectId?: string | null;
+  solveStatus: SketchSolveStatus | null;
+  solving: boolean;
+  referenceDimensions?: ReactNode;
+  /** The constraint group, which Review constraints focuses. */
+  constraintGroupRef?: Ref<HTMLFieldSetElement>;
+  /**
+   * The keyboard's snapping keys under the palette; off where no keyboard
+   * is assumed (the compact sheet).
+   */
+  keyboardHelp?: boolean;
+  onSettings(settings: AppSettings['sketching']): void;
+  onEditConstraint(
+    constraintId: string,
+    anchor: { x: number; y: number }
+  ): void;
+  onDeleteConstraint(constraintId: string): void;
+  onSelectConstraintObject(constraintId: string, objectId: string): void;
+  onSelectFreeEntity?(objectId: string): void;
+}
+
+/**
+ * The sketch palette's body: display, snapping, the constraint list with
+ * the solve's state and feedback, and the reference dimensions. The rail's
+ * flyout heads it with the sketch's name and plane; the compact sheet draws
+ * it as a page (U12 slice 6).
+ */
+export function SketchPaletteContent({
+  settings,
+  units,
+  constraints,
+  selectedObjectId,
+  solveStatus,
+  solving,
+  referenceDimensions,
+  constraintGroupRef,
+  keyboardHelp = true,
+  onSettings,
+  onEditConstraint,
+  onDeleteConstraint,
+  onSelectConstraintObject,
+  onSelectFreeEntity
+}: SketchPaletteContentProps) {
+  const [inspectedConstraintId, setInspectedConstraintId] = useState<
+    string | null
+  >(null);
+  const freeEntities =
+    solveStatus?.definedState === 'under-defined'
+      ? solveStatus.freeEntities
+      : undefined;
+  const solveExplanation = sketchSolveExplanation(solveStatus, constraints);
+  const patchSettings = (patch: Partial<AppSettings['sketching']>) =>
+    onSettings({ ...settings, ...patch });
+  return (
+    <div className="sketch-palette-content">
+      <fieldset>
+        <legend>Display</legend>
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.gridVisible}
+            onChange={(event) =>
+              patchSettings({
+                gridVisible: event.currentTarget.checked
+              })
+            }
+          />
+          Show adaptive grid
+        </label>
+        <label className="sketch-palette-number sketch-palette-select">
+          <span>Relation glyphs</span>
+          <select
+            value={settings.relationGlyphs}
+            onChange={(event) =>
+              patchSettings({
+                relationGlyphs: event.currentTarget
+                  .value as AppSettings['sketching']['relationGlyphs']
+              })
+            }
+          >
+            <option value="always">Always</option>
+            <option value="selected">Selected</option>
+            <option value="hidden">Hidden</option>
+          </select>
+        </label>
+        <RelationGlyphFilter
+          hidden={settings.hiddenRelationGlyphs}
+          disabled={settings.relationGlyphs === 'hidden'}
+          onChange={(hiddenRelationGlyphs) =>
+            patchSettings({ hiddenRelationGlyphs })
+          }
+        />
+      </fieldset>
+      <fieldset>
+        <legend>Snapping</legend>
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.geometrySnapEnabled}
+            onChange={(event) =>
+              patchSettings({
+                geometrySnapEnabled: event.currentTarget.checked
+              })
+            }
+          />
+          Geometry snaps
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.inferenceEnabled}
+            onChange={(event) =>
+              patchSettings({
+                inferenceEnabled: event.currentTarget.checked
+              })
+            }
+          />
+          Automatic inferencing
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.autoConstrain}
+            onChange={(event) =>
+              patchSettings({
+                autoConstrain: event.currentTarget.checked
+              })
+            }
+          />
+          Auto-constrain
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.snapHints}
+            onChange={(event) =>
+              patchSettings({
+                snapHints: event.currentTarget.checked
+              })
+            }
+          />
+          Snap hints
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.snapEnabled}
+            onChange={(event) =>
+              patchSettings({
+                snapEnabled: event.currentTarget.checked
+              })
+            }
+          />
+          Snap to grid
+        </label>
+        <label className="sketch-palette-number">
+          <span>Snap spacing</span>
+          <span>
+            <SnapSpacingField
+              value={settings.linearSnap}
+              onCommit={(linearSnap) => patchSettings({ linearSnap })}
+            />
+            <small>{units}</small>
+          </span>
+        </label>
+      </fieldset>
+      {constraints.length > 0 || solveStatus ? (
+        <fieldset ref={constraintGroupRef} tabIndex={-1}>
+          <legend>Constraints</legend>
+          {solveStatus && (
+            <div
+              className="sketch-constraint-explanation"
+              data-tone={solveStatus.tone}
+            >
+              <strong>{solveStatus.label}</strong>
+              {solveExplanation && <p>{solveExplanation}</p>}
+              {freeEntities && freeEntities.length > 0 && (
+                <div
+                  className="sketch-constraint-targets"
+                  role="group"
+                  aria-label="Geometry that can still move"
+                >
+                  <span>Can still move</span>
+                  {freeEntities.map(({ objectId, label, freedom }) => (
+                    <button
+                      key={objectId}
+                      type="button"
+                      aria-label={`Select free geometry: ${label}, ${freedom} ${freedom === 1 ? 'freedom' : 'freedoms'}`}
+                      aria-pressed={selectedObjectId === objectId}
+                      disabled={solving}
+                      onClick={() => onSelectFreeEntity?.(objectId)}
+                    >
+                      {label} · {freedom} DOF
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <ul className="sketch-constraint-list">
+            {constraints.map(
+              ({
+                constraintId,
+                label,
+                editable,
+                conflicted,
+                defined,
+                targets = []
+              }) => (
+                <li
+                  key={constraintId}
+                  data-conflicted={conflicted ? 'true' : undefined}
+                  data-defined={defined ? 'true' : undefined}
+                  aria-label={
+                    conflicted
+                      ? `${label} · solver residual; edit or delete this constraint`
+                      : defined
+                        ? `${label} · fully defined`
+                        : label
+                  }
+                >
+                  {editable ? (
+                    <Tooltip
+                      label={
+                        conflicted
+                          ? `Edit conflicting constraint: ${label}`
+                          : `Edit constraint: ${label}`
+                      }
+                    >
+                      <button
+                        type="button"
+                        className="sketch-constraint-edit"
+                        data-conflicted={conflicted ? 'true' : undefined}
+                        data-defined={defined ? 'true' : undefined}
+                        aria-label={`Edit constraint: ${label}`}
+                        onClick={(event) =>
+                          onEditConstraint(constraintId, {
+                            x: event.clientX,
+                            y: event.clientY
+                          })
+                        }
+                      >
+                        {label}
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip label={label}>
+                      <span>{label}</span>
+                    </Tooltip>
+                  )}
+                  <Tooltip label={`Show geometry for constraint: ${label}`}>
+                    <button
+                      type="button"
+                      className="sketch-constraint-show"
+                      aria-label={`Show geometry for constraint: ${label}`}
+                      aria-expanded={inspectedConstraintId === constraintId}
+                      disabled={solving}
+                      onClick={() =>
+                        setInspectedConstraintId((current) =>
+                          current === constraintId ? null : constraintId
+                        )
+                      }
+                    >
+                      <ScanSearch size={14} aria-hidden="true" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label={`Delete constraint: ${label}`}>
+                    <button
+                      type="button"
+                      className="row-delete"
+                      aria-label={`Delete constraint: ${label}`}
+                      disabled={solving}
+                      onClick={() => onDeleteConstraint(constraintId)}
+                    >
+                      <Trash2 size={12} aria-hidden="true" />
+                    </button>
+                  </Tooltip>
+                  {inspectedConstraintId === constraintId && (
+                    <div
+                      className="sketch-constraint-targets"
+                      role="group"
+                      aria-label={`Geometry for constraint: ${label}`}
+                    >
+                      <span>Referenced geometry</span>
+                      {targets.length === 0 ? (
+                        <p>The referenced geometry is no longer available.</p>
+                      ) : (
+                        targets.map(({ objectId, label: targetLabel }) => (
+                          <button
+                            key={objectId}
+                            type="button"
+                            aria-label={`Select geometry: ${targetLabel}`}
+                            aria-pressed={selectedObjectId === objectId}
+                            disabled={solving}
+                            onClick={() =>
+                              onSelectConstraintObject(constraintId, objectId)
+                            }
+                          >
+                            {targetLabel}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </li>
+              )
+            )}
+          </ul>
+        </fieldset>
+      ) : null}
+      {referenceDimensions}
+      {keyboardHelp && (
+        <p className="sketch-palette-help">
+          <Magnet size={12} aria-hidden="true" />
+          Tab cycles overlaps · Shift suppresses snaps
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -1,4 +1,5 @@
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
   CircleHelp,
@@ -40,6 +41,7 @@ import {
   CompactAnalysisSlotContext,
   CompactTrayContext,
   SHEET_OVERLAY_ATTRIBUTE,
+  SKETCH_SELECTION_PAGE,
   type CompactChromeProps,
   type CompactSheetRaise,
   type CompactTraySlot
@@ -199,6 +201,7 @@ export default function CompactWorkspace({
   onMakeCopy,
   reducedMotion,
   build = null,
+  sketch = null,
   sheetContent,
   hasSheetContent,
   sheetKey,
@@ -301,6 +304,9 @@ export default function CompactWorkspace({
   // is the page on show.
   const trayTitles = useRef(new Map<string, string>());
   const [trayPageHost, setTrayPageHost] = useState<HTMLElement | null>(null);
+  // What a tray stands on the stage, over the sheet (the sketch's
+  // relations row).
+  const [trayStageHost, setTrayStageHost] = useState<HTMLElement | null>(null);
   const trayEntry = state.stack.find((page) => page.key.startsWith(TRAY_PAGE));
   const trayPage = trayEntry ? trayEntry.key.slice(TRAY_PAGE.length) : null;
   const trayPageOnTop =
@@ -324,9 +330,10 @@ export default function CompactWorkspace({
       },
       closePage() {
         dispatch({ type: 'close' });
-      }
+      },
+      stageHost: trayStageHost
     }),
-    [dispatch, trayPage, trayPageOnTop, trayPageHost]
+    [dispatch, trayPage, trayPageOnTop, trayPageHost, trayStageHost]
   );
   // Back from a tray page (its Back, Escape, or the page closing itself)
   // lowers the sheet to the tray's peek, unless the workspace has content
@@ -545,6 +552,13 @@ export default function CompactWorkspace({
   };
 
   const openSelection = () => {
+    if (sketch) {
+      // A sketch's pick: its editor and actions are the tray's page.
+      if (trayPage === SKETCH_SELECTION_PAGE) traySlot.closePage();
+      else
+        traySlot.openPage(SKETCH_SELECTION_PAGE, selectionLabel ?? 'Selection');
+      return;
+    }
     if (hasSheetContent) {
       // The pick's inspector is the sheet's own content: bring it up.
       dispatch({ type: 'close' });
@@ -557,11 +571,14 @@ export default function CompactWorkspace({
 
   // A shared link's visitor sees only the modes the link opens, as on the
   // top bar; with one, there is nothing to switch.
-  const modes = shareLink
-    ? WORKSPACE_MODE_OPTIONS.filter(
-        ({ mode }) => modeLockedReason(mode) === null
-      )
-    : WORKSPACE_MODE_OPTIONS;
+  const modes = sketch
+    ? // A sketch takes over the shell: Finish, not a mode, leaves it.
+      []
+    : shareLink
+      ? WORKSPACE_MODE_OPTIONS.filter(
+          ({ mode }) => modeLockedReason(mode) === null
+        )
+      : WORKSPACE_MODE_OPTIONS;
   const presentation = WORKSPACE_SAVE_STATE_PRESENTATION[saveState];
 
   return (
@@ -575,15 +592,40 @@ export default function CompactWorkspace({
         >
           <ChevronLeft size={24} aria-hidden="true" />
         </button>
-        <div className="compact-title">
-          <h1 className="compact-project-name">{projectName}</h1>
-          <span
-            className={`compact-save-dot is-${saveTone(saveState)}`}
-            role="img"
-            aria-label={presentation.topBarLabel}
-            title={presentation.title}
-          />
-        </div>
+        {sketch ? (
+          <div className="compact-title">
+            <h1 className="compact-project-name">{sketch.name}</h1>
+            <span
+              className={`compact-save-dot compact-solve-dot is-${
+                sketch.solve?.tone ?? 'unsolved'
+              }`}
+              role="img"
+              aria-label={`Sketch state: ${sketch.solve?.label ?? 'not solved yet'}`}
+              title={sketch.solve?.label ?? 'Not solved yet'}
+            />
+          </div>
+        ) : (
+          <div className="compact-title">
+            <h1 className="compact-project-name">{projectName}</h1>
+            <span
+              className={`compact-save-dot is-${saveTone(saveState)}`}
+              role="img"
+              aria-label={presentation.topBarLabel}
+              title={presentation.title}
+            />
+          </div>
+        )}
+        {sketch ? (
+          <button
+            type="button"
+            className="compact-finish-button"
+            aria-label="Finish Sketch"
+            onClick={sketch.onFinish}
+          >
+            <Check size={20} aria-hidden="true" />
+            <span aria-hidden="true">Finish</span>
+          </button>
+        ) : null}
         <button
           type="button"
           className="compact-icon-button"
@@ -650,6 +692,9 @@ export default function CompactWorkspace({
               <span className="compact-selection-text">{selectionLabel}</span>
             </button>
           ) : null}
+          {/* A tray's row on the stage (the sketch's relations), over the
+              undo pair and the chip: last, so it wraps to a row above. */}
+          <div ref={setTrayStageHost} className="compact-stage-tray" />
         </div>
         <BottomSheet
           label="Workspace sheet"

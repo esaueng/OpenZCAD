@@ -608,32 +608,26 @@ async function stageIsLive(page: Page) {
   });
 }
 
-/** The open sketch's rails: its tools with Finish, and its relations. */
+/** The open sketch's tray (U12 slice 6): its draw tools at peek. */
 function sketchTools(page: Page) {
   return page.getByRole('toolbar', { name: 'Sketch tools' });
 }
 
 async function expectSketchReachable(page: Page) {
   await expect(sketchTools(page)).toBeVisible();
-  await expect(page.getByRole('toolbar', { name: 'Relations' })).toBeVisible();
   const finish = page.getByRole('button', {
     name: 'Finish Sketch',
     exact: true
   });
   await expectReachable(finish);
-  // On a short stage the tools scroll under Finish, which stays.
+  // On a narrow stage the tools scroll in the tray; Finish is the header's.
   const rectangle = sketchTools(page).getByRole('button', {
     name: /^Rectangle/
   });
   await rectangle.scrollIntoViewIfNeeded();
   await expectReachable(rectangle);
   await expectReachable(finish);
-  expect(
-    await smallTargets(
-      page,
-      '.app-shell[data-shell="compact"] :is(.workspace-column-float, .instrument-rail)'
-    )
-  ).toEqual([]);
+  await expectLargeTargets(page);
 }
 
 test.describe('Sketch in the compact workspace', () => {
@@ -726,7 +720,7 @@ test.describe('Sketch in the compact workspace', () => {
   }
 
   for (const size of [SIZES[2], SIZES[1]]) {
-    test(`reaches every curve type by touch, in the rail, at ${size.width}×${size.height}`, async ({
+    test(`reaches every curve type by touch, in the tray, at ${size.width}×${size.height}`, async ({
       page
     }) => {
       test.setTimeout(120_000);
@@ -734,36 +728,41 @@ test.describe('Sketch in the compact workspace', () => {
       await launchFromAllToolsDirect(page, 'Create', 'Sketch');
       await sheet(page).getByRole('button', { name: 'Top (XY)' }).tap();
       await expect(sketchTools(page)).toBeVisible();
-      const curve = sketchTools(page).getByRole('button', { name: /^Curve:/ });
-      await curve.scrollIntoViewIfNeeded();
-      await curve.tap();
-      const types = sketchTools(page).getByRole('radiogroup', {
-        name: 'Curve type'
-      });
-      await expect(types).toBeVisible();
-      // The types stand in the rail's column, not out over the canvas
-      // where a drawing tap would land on them.
-      const column = (await page
-        .locator('.workspace-column-float:has(.sketch-rail) .workspace-column')
-        .boundingBox())!;
-      const strip = (await types.boundingBox())!;
-      expect(strip.x).toBeGreaterThanOrEqual(column.x);
-      expect(strip.x + strip.width).toBeLessThanOrEqual(
-        column.x + column.width + 0.5
-      );
-      for (const name of ['Ellipse', 'Arc', 'Fit', 'Control']) {
-        const radio = types.getByRole('radio', { name });
+      for (const name of [
+        'Ellipse',
+        'Elliptical arc',
+        'Fit spline',
+        'Control-point spline'
+      ]) {
+        const curve = sketchTools(page).getByRole('button', {
+          name: /^Curve:/
+        });
+        await curve.scrollIntoViewIfNeeded();
+        // A tap arms the curve; a tap on the live tool opens its types.
+        if ((await curve.getAttribute('aria-pressed')) !== 'true') {
+          await curve.tap();
+        }
+        await curve.tap();
+        const types = sketchTools(page).getByRole('radiogroup', {
+          name: 'Curve type'
+        });
+        await expect(types).toBeVisible();
+        // The types stand in the tray's row, in the sheet: never out over
+        // the canvas, where a drawing tap would land on them.
+        const tray = (await sheet(page).boundingBox())!;
+        const strip = (await types.boundingBox())!;
+        expect(strip.y).toBeGreaterThanOrEqual(tray.y - 0.5);
+        expect(strip.x).toBeGreaterThanOrEqual(tray.x - 0.5);
+        const radio = types.getByRole('radio', { name, exact: true });
         await radio.scrollIntoViewIfNeeded();
         await expectReachable(radio);
+        await expectLargeTargets(page);
         await radio.tap();
-        await expect(radio).toBeChecked();
+        await expect(types).toHaveCount(0);
+        await expect(
+          sketchTools(page).getByRole('button', { name: `Curve: ${name}` })
+        ).toHaveAttribute('aria-pressed', 'true');
       }
-      expect(
-        await smallTargets(
-          page,
-          '.app-shell[data-shell="compact"] .workspace-column-float'
-        )
-      ).toEqual([]);
       await expectReachable(
         page.getByRole('button', { name: 'Finish Sketch', exact: true })
       );
@@ -771,7 +770,7 @@ test.describe('Sketch in the compact workspace', () => {
   }
 
   for (const size of SIZES) {
-    test(`keeps Finish and the tools in reach with More open at ${size.width}×${size.height}`, async ({
+    test(`keeps Finish in reach with More open, and the tools behind it, at ${size.width}×${size.height}`, async ({
       page
     }) => {
       test.setTimeout(120_000);
@@ -785,6 +784,15 @@ test.describe('Sketch in the compact workspace', () => {
       await expect(
         sheet(page).getByRole('heading', { name: 'More' })
       ).toBeVisible();
+      // Finish is the header's, in reach over any page; the tools are the
+      // tray's, back as More goes.
+      await expectReachable(
+        page.getByRole('button', { name: 'Finish Sketch', exact: true })
+      );
+      await expectLargeTargets(page);
+      await sheet(page)
+        .getByRole('button', { name: 'Back', exact: true })
+        .tap();
       await expectSketchReachable(page);
       await page
         .getByRole('button', { name: 'Finish Sketch', exact: true })

@@ -1303,6 +1303,11 @@ export interface ModelViewerProps {
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
   /**
+   * Increment to finish the spline being placed, open, through its points
+   * so far: Enter's job, for a hand with no keyboard (U12 slice 6).
+   */
+  finishSketchCurveSignal?: number;
+  /**
    * A local commit and the exact bodies it published. An independently added
    * body outside the view may be framed; edits preserve the user's camera.
    */
@@ -2715,6 +2720,7 @@ export function ModelViewer({
   settings,
   exactSection,
   fitSignal,
+  finishSketchCurveSignal = 0,
   autoFrame = null,
   creationFrame = null,
   clearStageRequest = 0,
@@ -3430,6 +3436,7 @@ export function ModelViewer({
   const onSketchSlotStageRef = useRef(onSketchSlotStage);
   onSketchSlotStageRef.current = onSketchSlotStage;
   const resetSketchSlotRef = useRef<(() => void) | null>(null);
+  const finishSketchCurveRef = useRef<(() => void) | null>(null);
   const onSketchSelectObjectRef = useRef(onSketchSelectObject);
   onSketchSelectObjectRef.current = onSketchSelectObject;
   const sketchMoveEnabledRef = useRef(sketchMoveEnabled);
@@ -10295,6 +10302,15 @@ export function ModelViewer({
       onSketchSlotStageRef.current?.(null);
     }
     resetSketchSlotRef.current = resetSlotPlacement;
+    // The tray's ✓: the spline as Enter would finish it.
+    finishSketchCurveRef.current = () => {
+      if (
+        sketchModeRef.current?.tool === 'spline' &&
+        sketchGestureRef.current.curvePoints.length > 0
+      ) {
+        finishSketchSpline(false);
+      }
+    };
 
     function slotValue(field: SlotDimension): number | undefined {
       if (slotEntry?.field === field && slotEntryValue !== null) {
@@ -10856,9 +10872,13 @@ export function ModelViewer({
                 .map((next, index) => [candidate[index]!, next] as const)
             : null
         );
+        // A finger or a pen has no Enter to press: it taps the last point
+        // again, or the tray's ✓ in the compact workspace.
         positionSketchDimLabel(
           event,
-          `${candidate.length} points · Enter finishes`,
+          event.pointerType === 'mouse'
+            ? `${candidate.length} points · Enter finishes`
+            : `${candidate.length} points · tap the last point again to finish`,
           false
         );
         return;
@@ -15164,6 +15184,7 @@ export function ModelViewer({
       hud.dispose();
       releaseHudElementRef.current = null;
       resetSketchSlotRef.current = null;
+      finishSketchCurveRef.current = null;
       topologyPickListRef.current = null;
       // Dimension graphics own their own geometries and materials; clearing
       // the group they sit in would orphan those on the GPU.
@@ -19068,6 +19089,10 @@ export function ModelViewer({
       { ease: viewJumpEase }
     );
   }, [fitSignal]);
+
+  useEffect(() => {
+    if (finishSketchCurveSignal > 0) finishSketchCurveRef.current?.();
+  }, [finishSketchCurveSignal]);
 
   // Bring an independently added body into view when needed. Changes to an
   // existing body must leave the camera alone, even if the result extends

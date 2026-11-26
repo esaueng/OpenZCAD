@@ -261,6 +261,58 @@ describe('action registry', () => {
     expect(COMPACT_ENTRIES['file-export-mesh']).toBe('overflow-menu');
   });
 
+  it('gives the sketch what slice 6 builds: every sketch key and the clipboard', () => {
+    const sketchActions = ACTIONS.filter(
+      ({ id }) =>
+        id.startsWith('sketch-') &&
+        actionEntry(id)?.sources.some(
+          (source) => source === 'keymap' || source === 'fixed-key'
+        )
+    ).map(({ id }) => id);
+    // Every sketch-mode key and Ctrl+A, C and V has a compact home.
+    expect(sketchActions.length).toBeGreaterThan(0);
+    for (const id of sketchActions) {
+      expect(COMPACT_ENTRIES[id], id).toBeDefined();
+    }
+    const on = (surface: string) =>
+      Object.entries(COMPACT_ENTRIES)
+        .filter(([, entry]) => entry === surface)
+        .map(([id]) => id)
+        .sort();
+    expect(on('sketch-tray')).toEqual(
+      [
+        'sketch-select',
+        'sketch-line',
+        'sketch-arc',
+        'sketch-circle',
+        'sketch-rectangle',
+        'sketch-polygon',
+        'sketch-ellipse',
+        'sketch-spline',
+        'sketch-text',
+        'sketch-project'
+      ].sort()
+    );
+    expect(on('sketch-sheet')).toEqual(
+      [
+        'sketch-extrude',
+        'sketch-dimension',
+        'sketch-construction',
+        'sketch-trim',
+        'sketch-extend',
+        'sketch-offset',
+        'sketch-select-all',
+        'sketch-copy',
+        'sketch-paste'
+      ].sort()
+    );
+    expect(COMPACT_ENTRIES['sketch-finish']).toBe('header');
+    // The clipboard's keys were keyboard-only on the regular stage.
+    for (const id of ['sketch-select-all', 'sketch-copy', 'sketch-paste']) {
+      expect(REGULAR_TOUCH_GAPS, id).toContain(id);
+    }
+  });
+
   it('lists only registered actions as touch gaps and compact entries', () => {
     for (const id of REGULAR_TOUCH_GAPS) {
       expect(actionEntry(id), id).toBeDefined();
