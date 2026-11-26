@@ -25,6 +25,7 @@ import {
   type ImagePlacement,
   type ImageSlot,
   type InPlaceContext,
+  type InPlaceFrameInputs,
   type InPlaceRequest,
   type InPlaceSlots,
   type InPlaceToolId,
@@ -860,6 +861,9 @@ export function useInPlaceCommand(
   );
   const requestValuesRef = useRef(requestValues);
   requestValuesRef.current = requestValues;
+  /** The options and picks {@link request} was made from, likewise. */
+  const requestPicksRef = useRef({ options: chosen, slots });
+  requestPicksRef.current = { options: chosen, slots };
   const requestKey = request ? JSON.stringify(request) : null;
   const requestKeyRef = useRef(requestKey);
   requestKeyRef.current = requestKey;
@@ -889,6 +893,9 @@ export function useInPlaceCommand(
         request: InPlaceRequest;
         /** The values the request was made from. */
         values: Readonly<Record<string, number>>;
+        /** The options and picks it was made from. */
+        options: InPlaceFrameInputs['options'];
+        slots: InPlaceFrameInputs['slots'];
       }
     >()
   ).current;
@@ -914,6 +921,8 @@ export function useInPlaceCommand(
     base: number | null | undefined;
     request: InPlaceRequest;
     values: Readonly<Record<string, number>>;
+    options: InPlaceFrameInputs['options'];
+    slots: InPlaceFrameInputs['slots'];
     /** The frame as it was published, to put back under a refusal. */
     preview: ProjectDocument;
   } | null>(null);
@@ -928,7 +937,10 @@ export function useInPlaceCommand(
    * that built on screen (it is no longer this request's, and the bar says
    * which input to change back), else the preview comes down.
    */
-  const showRefused = (refused: InPlaceRequest | null) => {
+  const showRefused = (
+    refused: InPlaceRequest | null,
+    made: InPlaceFrameInputs
+  ) => {
     const tool = specRef.current;
     const kept = lastBuilt.current;
     const inputs =
@@ -937,7 +949,10 @@ export function useInPlaceCommand(
       kept &&
       kept.session === sessionRef.current?.id &&
       kept.base === optionsRef.current.baseVersion
-        ? tool.refusedInputs(kept.request, refused)
+        ? tool.refusedInputs(kept.request, refused, {
+            built: kept,
+            refused: made
+          })
         : [];
     setRefusalInputs(inputs);
     // The handles stand on the values the kept frame built from, so a
@@ -1001,7 +1016,8 @@ export function useInPlaceCommand(
           bodyId: command.resultBodyId,
           built: command,
           request: current,
-          values: requestValuesRef.current
+          values: requestValuesRef.current,
+          ...requestPicksRef.current
         });
         return built;
       },
@@ -1135,6 +1151,8 @@ export function useInPlaceCommand(
             base: frame.base,
             request: frame.request,
             values: frame.values,
+            options: frame.options,
+            slots: frame.slots,
             preview: shown
           };
         }
@@ -1169,7 +1187,13 @@ export function useInPlaceCommand(
           // The last frame that built is not this request: left on screen
           // under a bare refusal, it reads as the value that was refused, so
           // only a tool that names the changed input keeps it.
-          showRefused(frame?.request ?? null);
+          showRefused(
+            frame?.request ?? null,
+            frame ?? {
+              values: requestValuesRef.current,
+              ...requestPicksRef.current
+            }
+          );
           setTypedRefusal(
             fresh && freshRecord
               ? { message: fresh, record: freshRecord }
@@ -1198,7 +1222,10 @@ export function useInPlaceCommand(
         lastValidFrame.current = null;
         setPreviewValid(false);
         setPreviewAdvisory(null);
-        showRefused(requestRef.current);
+        showRefused(requestRef.current, {
+          values: requestValuesRef.current,
+          ...requestPicksRef.current
+        });
         setRefusal(
           error instanceof Error ? error.message : 'Unable to preview this.'
         );

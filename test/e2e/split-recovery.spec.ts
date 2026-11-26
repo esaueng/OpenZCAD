@@ -22,9 +22,12 @@ import {
  * K10 workflow coupon (Slice 0), browser half: Split by a picked face on the
  * A0 coupon blank (x 0–90, y 0–36, z 0–14) beside a witness block
  * (x 100–120). The command bar must show a typed refusal for a plane that
- * only touches or misses the body, keep the body and plane picked, take the
- * preview down, keep Done disabled, and recover when the plane is slid back
- * through the body. Root-test twin: `test/cad-workflow-coupon.test.ts`.
+ * only touches or misses the body, keep the body and plane picked, keep Done
+ * disabled, and recover when the plane is slid back through the body. A
+ * refused offset keeps the last two-halves frame on screen and names the
+ * offset (M11, owner decision D5), as Hole, Fillet and Chamfer do; the first
+ * face pick has no earlier frame to keep. Root-test twin:
+ * `test/cad-workflow-coupon.test.ts`.
  *
  * Oracles are the bar's hint/refusal region, Done, the History and Objects
  * rows, the stored feature and the drawn bodies — never kernel prose.
@@ -234,19 +237,21 @@ test(
         [100, 120, 10080]
       ]);
 
-    // 3. +8 outward puts it at x = 98, past the body: a refusal, Done
-    // disabled, the body and face still picked, and the x = 52 frame down.
+    // 3. +8 outward puts it at x = 98, past the body: a refusal that names
+    // the offset, Done disabled, the body and face still picked, and the
+    // x = 52 halves kept on screen as the last frame that built.
     await enterCommandValue(page, 'offset', '8');
     await expect(bar).toHaveClass(/\brefused\b/, { timeout: 30_000 });
     await expect(bar).toContainText('Needs attention');
     // A miss says it misses, never the generic kernel sentence.
-    await expect(hint(bar)).toContainText(SPLIT_PLANE_MISSES);
+    await expect(hint(bar)).toContainText(`Offset: ${SPLIT_PLANE_MISSES}`);
     await expect(done(bar)).toBeDisabled();
     await expect(hint(bar)).not.toContainText('Pick a plane or flat face');
     await expect
       .poll(() => drawnSpans(page))
       .toEqual([
-        [0, 90, 45360],
+        [0, 52, 26208],
+        [52, 90, 19152],
         [100, 120, 10080]
       ]);
 
