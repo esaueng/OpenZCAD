@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   FACE_SWEEP_BLOCKED,
   FACE_SWEEP_UNPROVEN,
+  GENERIC_REFUSAL,
+  SPLIT_PLANE_MISSES,
+  SPLIT_PLANE_ON_EDGE,
+  SPLIT_PLANE_ON_FACE,
   plainRefusal,
   stepImportRefusal,
   withFaceSweepReading
@@ -535,8 +539,16 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
       'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.'
     ],
     [
+      // Untyped, the touch names neither an edge nor a face: the kernel
+      // words both alike (see the typed Split cases below).
       "the cutting plane does not cross the solid's interior; it only touches the body and contains edge 3 of the solid, so there is nothing to split",
-      'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.'
+      'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.'
+    ],
+    [
+      // Untyped, not claimed as a miss: the kernel says this of a plane
+      // through a sphere too.
+      'invalid input: cutting plane does not split the solid (entirely on one side)',
+      'Split could not cut the body along this plane. Check that the plane passes through the body.'
     ],
     [
       'Remus solid offset refused: assembly failed: wire loop walk: no unvisited edge from vertex 2685 (40 visited, 3 in loop)',
@@ -578,6 +590,83 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
     const plain = plainRefusal(raw);
     expect(plain).toEqual({ message: sentence, detail: raw });
     expect(plain.message).not.toMatch(KERNEL_NOTATION);
+  });
+
+  // M11 slice 1a: a Split whose plane meets no edge across the body. Slice
+  // 0's coupon found the miss shown as the generic sentence, and a plane on
+  // a face (every Split begun from a face pick, at offset 0) told to move off
+  // an edge. The kernel text is the pinned Remus split's.
+  describe('a refused Split by plane, by its typed cause', () => {
+    const TOUCH =
+      "split: unsupported configuration: the cutting plane does not cross the solid's interior; it only touches the body and contains edge 3 of the solid, so there is nothing to split";
+    const MISS =
+      'invalid input: cutting plane does not split the solid (entirely on one side)';
+    const split = (category: string, reason?: string) => ({
+      category,
+      code: 'split_refused',
+      ...(reason ? { reason } : {})
+    });
+
+    it.each([
+      [MISS, split('invalid_input', 'plane_misses_body'), SPLIT_PLANE_MISSES],
+      [TOUCH, split('unsupported', 'plane_on_face'), SPLIT_PLANE_ON_FACE],
+      [TOUCH, split('unsupported', 'plane_on_edge'), SPLIT_PLANE_ON_EDGE]
+    ])('%j as %o', (raw, typed, sentence) => {
+      const plain = plainRefusal(raw, typed);
+      expect(plain).toEqual({
+        message: sentence,
+        detail: raw,
+        category: typed.category,
+        code: 'split_refused'
+      });
+      expect(plain.message).not.toMatch(KERNEL_NOTATION);
+    });
+
+    it('says a face touch is not an edge, and an edge touch is not a face', () => {
+      expect(SPLIT_PLANE_ON_FACE).not.toMatch(/edge/i);
+      expect(SPLIT_PLANE_ON_EDGE).not.toMatch(/\bface\b/i);
+    });
+
+    it('claims a miss only when the cause proves one, and never reads as the generic sentence', () => {
+      // The adapter records no cause for a plane through a sphere, which the
+      // kernel refuses with this same text (review of #2074, finding 1).
+      for (const plain of [
+        plainRefusal(MISS),
+        plainRefusal(MISS, 'invalid_input'),
+        plainRefusal(MISS, split('invalid_input'))
+      ]) {
+        expect(plain.message).toBe(
+          'Split could not cut the body along this plane. Check that the plane passes through the body.'
+        );
+        expect(plain.message).not.toBe(SPLIT_PLANE_MISSES);
+        expect(plain.message).not.toBe(GENERIC_REFUSAL);
+      }
+    });
+
+    it('falls back to the prose table for a cause it has no sentence for', () => {
+      expect(
+        plainRefusal(TOUCH, split('unsupported', 'some_future_cause')).message
+      ).toBe(
+        'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.'
+      );
+      expect(
+        plainRefusal(
+          'split: unsupported configuration: the cutting plane crosses curved edge 36; trimming a curve to the plane is not implemented here',
+          split('unsupported')
+        ).message
+      ).toBe(
+        "The cutting plane crosses a curved edge, which splitting can't trim yet. Move the plane so it misses fillets and curved edges."
+      );
+    });
+
+    it('keeps the edge sentence for a plane through the body along an edge', () => {
+      expect(
+        plainRefusal(
+          'split: unsupported configuration: the cutting plane contains edge 36 of the solid; splitting along an existing edge has no unambiguous answer',
+          split('unsupported')
+        ).message
+      ).toBe(SPLIT_PLANE_ON_EDGE);
+    });
   });
 
   it('lets the kernel category speak for a capitalised kernel line', () => {

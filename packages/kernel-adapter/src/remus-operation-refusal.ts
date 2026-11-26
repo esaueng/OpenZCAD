@@ -54,7 +54,13 @@ export function modelingOperationRefusal(
   operation: string,
   error: unknown,
   message: string,
-  family: 'modeling' | 'direct-edit' = 'modeling'
+  family: 'modeling' | 'direct-edit' = 'modeling',
+  /**
+   * The cause the adapter read for a code that covers several (a refused
+   * split's `plane_on_face`; see `exact-split-contact.ts`), recorded as the
+   * refusal's `reason`.
+   */
+  kernelReason?: string
 ): KernelRefusal {
   const kernelMessage =
     error instanceof Error ? error.message : 'unknown kernel error';
@@ -65,6 +71,7 @@ export function modelingOperationRefusal(
     kernelMessage,
     message,
     reason: message,
+    ...(kernelReason ? { kernelReason } : {}),
     cause: error
   });
 }

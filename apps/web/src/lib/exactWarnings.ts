@@ -1,4 +1,4 @@
-import type { ProjectDocument } from '@openzcad/shared';
+import type { FeatureWarning, ProjectDocument } from '@openzcad/shared';
 
 /**
  * Messages in `derived` that `base` did not already report.
@@ -17,31 +17,9 @@ export function newExactWarnings(
   base: ProjectDocument,
   derived: ProjectDocument['derived']
 ): string[] {
-  if (derived.featureWarnings !== undefined) {
-    const blocking = derived.featureWarnings.filter(
-      (warning) => warning.kind === 'build-failed' || warning.kind === 'refusal'
-    );
-    const existing = new Map<string, number>();
-    for (const warning of base.derived.featureWarnings ?? []) {
-      if (warning.kind !== 'build-failed' && warning.kind !== 'refusal') {
-        continue;
-      }
-      const key = `${warning.featureId} ${warning.kind} ${warning.message}`;
-      existing.set(key, (existing.get(key) ?? 0) + 1);
-    }
-    return blocking.flatMap((warning) => {
-      const key = `${warning.featureId} ${warning.kind} ${warning.message}`;
-      const remaining = existing.get(key) ?? 0;
-      if (remaining === 0) {
-        return [warning.message];
-      }
-      if (remaining === 1) {
-        existing.delete(key);
-      } else {
-        existing.set(key, remaining - 1);
-      }
-      return [];
-    });
+  const attributed = newBlockingFeatureWarnings(base, derived);
+  if (attributed !== undefined) {
+    return attributed.map((warning) => warning.message);
   }
 
   // Compatibility for stored results from before structured warning
@@ -60,6 +38,43 @@ export function newExactWarnings(
       existing.delete(warning);
     } else {
       existing.set(warning, remaining - 1);
+    }
+    return false;
+  });
+}
+
+/**
+ * The attributed warnings behind {@link newExactWarnings}, whole: what a
+ * caller needs to keep a warning's typed record beside its sentence without
+ * matching the sentence again. Undefined for a result from before structured
+ * provenance, which has only strings.
+ */
+export function newBlockingFeatureWarnings(
+  base: ProjectDocument,
+  derived: ProjectDocument['derived']
+): FeatureWarning[] | undefined {
+  if (derived.featureWarnings === undefined) return undefined;
+  const blocking = derived.featureWarnings.filter(
+    (warning) => warning.kind === 'build-failed' || warning.kind === 'refusal'
+  );
+  const existing = new Map<string, number>();
+  for (const warning of base.derived.featureWarnings ?? []) {
+    if (warning.kind !== 'build-failed' && warning.kind !== 'refusal') {
+      continue;
+    }
+    const key = `${warning.featureId} ${warning.kind} ${warning.message}`;
+    existing.set(key, (existing.get(key) ?? 0) + 1);
+  }
+  return blocking.filter((warning) => {
+    const key = `${warning.featureId} ${warning.kind} ${warning.message}`;
+    const remaining = existing.get(key) ?? 0;
+    if (remaining === 0) {
+      return true;
+    }
+    if (remaining === 1) {
+      existing.delete(key);
+    } else {
+      existing.set(key, remaining - 1);
     }
     return false;
   });

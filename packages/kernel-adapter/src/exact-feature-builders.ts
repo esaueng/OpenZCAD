@@ -17,6 +17,7 @@ import {
   threadPrintAdvisories
 } from './exact-thread';
 import { drillFeatureBores } from './exact-point-hole-cuts';
+import { splitRefusalReason } from './exact-split-contact';
 import { requireValidSolid } from './kernel-validation';
 import {
   cutKeptToolMaterialMeshRefusal,
@@ -254,7 +255,10 @@ import {
   probeBooleanEntityEvolution,
   type BooleanEvolutionOperation
 } from './exact-boolean-evolution';
-import { modelingOperationRefusal } from './remus-operation-refusal';
+import {
+  modelingOperationRefusal,
+  operationErrorCategory
+} from './remus-operation-refusal';
 import {
   remusHashOnlyLineage,
   createRemusImportedStepLineage,
@@ -2604,10 +2608,20 @@ function buildSplitFeature(
       planeNormal.z
     );
   } catch (error) {
+    const kernelMessage =
+      error instanceof Error ? error.message : String(error);
     throw modelingOperationRefusal(
       'split',
       error,
-      error instanceof Error ? error.message : String(error)
+      kernelMessage,
+      'modeling',
+      splitRefusalReason(
+        kernel,
+        targetSolid,
+        planePoint,
+        planeNormal,
+        operationErrorCategory(kernelMessage)
+      )
     );
   }
   const positive = halves[0];

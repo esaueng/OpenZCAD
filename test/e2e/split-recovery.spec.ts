@@ -13,6 +13,10 @@ import {
   test,
   waitForStillViewport
 } from './openzcad-fixtures';
+import {
+  SPLIT_PLANE_MISSES,
+  SPLIT_PLANE_ON_FACE
+} from '../../apps/web/src/lib/refusalLanguage';
 
 /**
  * K10 workflow coupon (Slice 0), browser half: Split by a picked face on the
@@ -199,11 +203,12 @@ test(
     const rowsBefore = await historyRows(page).count();
 
     // 1. The face pick stores the end face's plane at offset 0: it only
-    // touches the body, so the first preview is the face-touch refusal.
+    // touches the body, so the first preview is the face-touch refusal,
+    // which says so rather than naming an edge (M11 slice 1a).
     const bar = await splitOnEndFace(page);
     await expect(bar).toHaveClass(/\brefused\b/, { timeout: 30_000 });
     await expect(bar).toContainText('Needs attention');
-    await expect(hint(bar)).toContainText(/cutting plane/i);
+    await expect(hint(bar)).toContainText(SPLIT_PLANE_ON_FACE);
     await expect(hint(bar)).not.toContainText(
       /split:|unsupported configuration|edge \d/
     );
@@ -234,6 +239,8 @@ test(
     await enterCommandValue(page, 'offset', '8');
     await expect(bar).toHaveClass(/\brefused\b/, { timeout: 30_000 });
     await expect(bar).toContainText('Needs attention');
+    // A miss says it misses, never the generic kernel sentence.
+    await expect(hint(bar)).toContainText(SPLIT_PLANE_MISSES);
     await expect(done(bar)).toBeDisabled();
     await expect(hint(bar)).not.toContainText('Pick a plane or flat face');
     await expect

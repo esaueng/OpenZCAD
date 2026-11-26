@@ -3429,3 +3429,255 @@ describe('useInPlaceCommand: a bend table entry refused (M16, PR #1562)', () => 
     await waitFor(() => expect(hook.result.current.refusal).toBeNull());
   });
 });
+
+/**
+ * M11 slice 1a: a Split preview's reply that lands after the offset has moved
+ * on. Each preview builds on the worker in turn, and the hook publishes a
+ * reply for a superseded offset as an intermediate frame; neither its body
+ * nor its refusal may stand for the offset now in the field, and only the
+ * current offset's own frame may enable Done.
+ */
+describe('useInPlaceCommand: a late Split reply', () => {
+  const COUPON = {
+    bodyId: 'body_coupon' as BodyId,
+    min: { x: 0, y: 0, z: 0 },
+    max: { x: 90, y: 36, z: 14 }
+  };
+  const END_FACE = {
+    kind: 'face' as const,
+    origin: { x: 90, y: 18, z: 7 },
+    normal: { x: 1, y: 0, z: 0 }
+  };
+  const record = (
+    category: string,
+    reason: string
+  ): NonNullable<FeatureWarning['kernelRefusal']> => ({
+    family: 'modeling',
+    category,
+    code: 'split_refused',
+    reason
+  });
+  const refused = (
+    message: string,
+    kernelRefusal: NonNullable<FeatureWarning['kernelRefusal']>
+  ): ProjectDocument['derived'] =>
+    ({
+      bodyRepresentations: {},
+      warnings: [message],
+      featureWarnings: [
+        {
+          featureId: 'feature_split' as FeatureId,
+          featureName: 'Split',
+          kind: 'build-failed',
+          message,
+          kernelRefusal
+        }
+      ]
+    }) as unknown as ProjectDocument['derived'];
+  const ON_FACE = refused(
+    'Feature "Split": split: unsupported configuration: the cutting plane does not cross the solid\'s interior; it only touches the body and contains edge 3 of the solid, so there is nothing to split',
+    record('unsupported', 'plane_on_face')
+  );
+  const MISSES = refused(
+    'Feature "Split": invalid input: cutting plane does not split the solid (entirely on one side)',
+    record('invalid_input', 'plane_misses_body')
+  );
+
+  /** The plane x each build was asked for, and its reply, held. */
+  function harness() {
+    const replies: { x: number; release: () => void }[] = [];
+    const outcome = (x: number) =>
+      x > 0 && x < 90
+        ? ({
+            bodyRepresentations: { [BODY]: {} },
+            warnings: [],
+            featureWarnings: []
+          } as unknown as ProjectDocument['derived'])
+        : x === 90
+          ? ON_FACE
+          : MISSES;
+    const planeX = new WeakMap<object, number>();
+    const { hook } = setup({
+      buildCommand: (request) => {
+        // The Split request stores the plane's fields as written.
+        const { value } = (
+          request as unknown as { state: { value: { origin: { x: string } } } }
+        ).state;
+        const x = Number(value.origin.x);
+        return {
+          validate: () => undefined,
+          apply: (document) => {
+            const built = { ...document } as ProjectDocument;
+            planeX.set(built, x);
+            return built;
+          },
+          resultBodyId: BODY
+        };
+      },
+      derive: (document) =>
+        new Promise((resolve) => {
+          const x = planeX.get(document)!;
+          replies.push({ x, release: () => resolve(outcome(x)) });
+        })
+    });
+    act(() => hook.result.current.start('split', [], [], [COUPON]));
+    act(() => {
+      hook.result.current.pickPlane(END_FACE);
+    });
+    return { hook, replies };
+  }
+
+  it('opens on the face touch, with its typed record for the bar', async () => {
+    const { hook, replies } = harness();
+    await waitFor(() => expect(replies).toHaveLength(1));
+    expect(replies[0]!.x).toBe(90);
+    act(() => replies[0]!.release());
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toMatch(/only touches the body/)
+    );
+    expect(hook.result.current.refusalClassification).toEqual(
+      record('unsupported', 'plane_on_face')
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('does not enable Done on a late frame for an earlier offset', async () => {
+    const { hook, replies } = harness();
+    await waitFor(() => expect(replies).toHaveLength(1));
+    act(() => replies[0]!.release());
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await waitFor(() => expect(replies).toHaveLength(2));
+    expect(replies[1]!.x).toBe(52);
+    // +8 is typed while the x = 52 frame is still building.
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    act(() => replies[1]!.release());
+    await waitFor(() => expect(replies).toHaveLength(3));
+    // The x = 52 frame built, but it is not the offset in the field.
+    expect(hook.result.current.values.offset).toBe(8);
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      expect(hook.result.current.done()).toBe(false);
+    });
+    expect(replies[2]!.x).toBe(98);
+    act(() => replies[2]!.release());
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toMatch(/does not split the solid/)
+    );
+    expect(hook.result.current.refusalClassification).toEqual(
+      record('invalid_input', 'plane_misses_body')
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('does not let a late refusal for an earlier offset stand over the current one', async () => {
+    const { hook, replies } = harness();
+    await waitFor(() => expect(replies).toHaveLength(1));
+    act(() => replies[0]!.release());
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await waitFor(() => expect(replies).toHaveLength(2));
+    // −38 is typed while the refused x = 98 frame is still building.
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    act(() => replies[1]!.release());
+    await waitFor(() => expect(replies).toHaveLength(3));
+    expect(hook.result.current.values.offset).toBe(-38);
+    // The bar may still say the last refusal that landed (any refusal stays
+    // until a newer frame lands; see the PR's U01 note), but it is never
+    // the verdict on −38: Done waits for −38's own frame.
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(replies[2]!.x).toBe(52);
+    act(() => replies[2]!.release());
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.refusal).toBeNull();
+    expect(hook.result.current.refusalClassification).toBeNull();
+  });
+
+  // Review of #2074, finding 3: a stored Split that already fails (an
+  // upstream change put its plane on a face) reopens on that same failure.
+  // The preview repeats the stored warning, so it is not new; the edit's own
+  // refusal is reported without its `Feature "…":` lead, and its typed
+  // record must still come with it.
+  it("keeps the typed record of an edited Split's repeated failure", async () => {
+    const stored = ON_FACE.featureWarnings![0]!;
+    const base = {
+      derived: {
+        bodyRepresentations: { [COUPON.bodyId]: {} },
+        warnings: [stored.message],
+        featureWarnings: [stored]
+      }
+    } as unknown as ProjectDocument;
+    const { hook } = setup({
+      baseDocument: () => base,
+      derive: async () => ON_FACE
+    });
+    act(() =>
+      hook.result.current.edit('split', {
+        featureId: stored.featureId,
+        nodeId: 'node_split',
+        name: 'Split',
+        data: {
+          featureKind: 'split',
+          targetBodyId: COUPON.bodyId,
+          secondBodyId: 'body_second' as BodyId,
+          plane: {
+            origin: { x: 90, y: 18, z: 7 },
+            normal: { x: 1, y: 0, z: 0 }
+          }
+        } as unknown as InPlaceEditSeed['data'],
+        resultBodyId: BODY,
+        ownBodyIds: [BODY, 'body_second' as BodyId],
+        slots: {
+          profiles: [],
+          axisId: null,
+          path: [],
+          guide: [],
+          faces: [],
+          bodies: [COUPON],
+          plane: END_FACE,
+          edges: []
+        },
+        values: {},
+        raws: {},
+        touched: [],
+        options: { planeMode: 'picked', keepOriginal: 'no' },
+        axes: [],
+        choices: {},
+        lockedOptions: [],
+        notice: null
+      })
+    );
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toMatch(/^split: unsupported/)
+    );
+    expect(hook.result.current.refusalClassification).toEqual(
+      record('unsupported', 'plane_on_face')
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('shows the typed sentence in the bar', () => {
+    render(
+      <InPlaceCommandBar
+        title="Split"
+        hint="Slide the plane, or pick another"
+        canFinish={false}
+        refusal={ON_FACE.featureWarnings![0]!.message}
+        refusalClassification={record('unsupported', 'plane_on_face')}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'The cutting plane lies on a face of the body and only touches it. Slide the plane into the body.'
+    );
+  });
+});

@@ -3,6 +3,7 @@ import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureData,
+  FeatureWarning,
   ParamValue,
   ParametricVector3,
   ProjectDocument,
@@ -42,8 +43,11 @@ import type { InPlaceEditSeed } from '../lib/inPlace/edit';
 import { inPlacePanelState } from '../lib/inPlace/panel';
 import { findFeature } from '@openzcad/document-core';
 import type { PlacementPick } from '../lib/inPlace/primitives';
-import { newExactWarnings } from '../lib/exactWarnings';
-import { refusingWarning } from '../lib/featureValidation';
+import {
+  newBlockingFeatureWarnings,
+  newExactWarnings
+} from '../lib/exactWarnings';
+import { refusingWarningDetail } from '../lib/featureValidation';
 
 /**
  * Runs whichever in-place command (U09) is active.
@@ -337,6 +341,12 @@ export interface InPlaceCommand {
   hint: string;
   refusal: string | null;
   /**
+   * The kernel's typed record of {@link refusal}, when the rebuild that
+   * refused recorded one: what the bar translates the sentence by, as the
+   * diagnostics card does. Null for any other refusal.
+   */
+  refusalClassification: FeatureWarning['kernelRefusal'] | null;
+  /**
    * U11: the input (or inputs) the kernel's refusal is about, named ahead of
    * it in the bar: what changed since the last request that built, which
    * stays on screen. Null for an entry refusal, which names its own value.
@@ -509,6 +519,16 @@ export function useInPlaceCommand(
 ): InPlaceCommand {
   const [session, setSession] = useState<Session | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  /**
+   * The typed record of the preview refusal it was read with. Kept beside
+   * the sentence rather than in it, and offered only while that sentence is
+   * still the refusal shown, so no other path that sets a refusal has to
+   * clear it.
+   */
+  const [typedRefusal, setTypedRefusal] = useState<{
+    message: string;
+    record: NonNullable<FeatureWarning['kernelRefusal']>;
+  } | null>(null);
   /**
    * U11: the inputs the refused request changed from the last one that
    * built, by their bar names, for a tool that names them.
@@ -945,18 +965,30 @@ export function useInPlaceCommand(
         // can now publish a pass-through body under its result id).
         const base = optionsRef.current.baseDocument();
         const edit = editRef.current;
-        const fresh =
+        // The refusing warning is kept whole, so its typed record goes with
+        // the sentence on either path: an edit's own repeated failure is
+        // reported without its `Feature "…":` lead, and matching the record
+        // back by text would lose it there.
+        const attributed =
           result && base
-            ? (newExactWarnings(base, result.derived)[0] ??
-              (edit
-                ? refusingWarning(
-                    edit.name,
-                    result.derived.warnings,
-                    result.derived.featureWarnings,
-                    edit.featureId
-                  )
-                : null))
+            ? newBlockingFeatureWarnings(base, result.derived)?.[0]
+            : undefined;
+        const exact =
+          attributed?.message ??
+          (result && base ? newExactWarnings(base, result.derived)[0] : null);
+        const editRefusal =
+          !exact && result && base && edit
+            ? refusingWarningDetail(
+                edit.name,
+                result.derived.warnings,
+                result.derived.featureWarnings,
+                edit.featureId
+              )
             : null;
+        const fresh = exact ?? editRefusal?.reason ?? null;
+        const freshRecord = exact
+          ? attributed?.kernelRefusal
+          : editRefusal?.kernelRefusal;
         // A datum adds no body: its own check proves it resolved.
         let unresolved: string | null = null;
         if (result && frame?.built.check) {
@@ -1030,6 +1062,11 @@ export function useInPlaceCommand(
           // under a bare refusal, it reads as the value that was refused, so
           // only a tool that names the changed input keeps it.
           showRefused(frame?.request ?? null);
+          setTypedRefusal(
+            fresh && freshRecord
+              ? { message: fresh, record: freshRecord }
+              : null
+          );
           setRefusal(
             fresh ??
               unresolved ??
@@ -2351,6 +2388,10 @@ export function useInPlaceCommand(
           .join(' · ')
       : '',
     refusal: entryRefusal?.message ?? refusal,
+    refusalClassification:
+      !entryRefusal && refusal !== null && typedRefusal?.message === refusal
+        ? typedRefusal.record
+        : null,
     refusalInput:
       entryRefusal || refusal === null || refusalInputs.length === 0
         ? null

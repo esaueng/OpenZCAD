@@ -1677,8 +1677,9 @@ test('preflights and splits a box into two live half bodies', async ({
   await expect(splitBar).toContainText('Pick a plane or flat face');
   await clickGhostPlane(page, 'YZ');
   // Plain words lead; the kernel's sentence stays behind Technical details.
+  // The plane lies flat on a face, and says so (M11 slice 1a).
   await expect(splitBar).toContainText(
-    'The cutting plane lies exactly along an existing edge'
+    'The cutting plane lies on a face of the body and only touches it'
   );
   await expect(
     splitBar.getByRole('button', { name: 'Done', exact: true })

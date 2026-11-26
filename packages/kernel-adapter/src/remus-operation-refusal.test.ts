@@ -45,4 +45,24 @@ describe('modeling operation refusals', () => {
       code: 'draft_refused'
     });
   });
+
+  it("records the adapter's cause for a code that covers several", () => {
+    const kernelError = new Error(
+      "split: unsupported configuration: the cutting plane does not cross the solid's interior; it only touches the body and contains edge 3 of the solid, so there is nothing to split"
+    );
+    const refusal = modelingOperationRefusal(
+      'split',
+      kernelError,
+      kernelError.message,
+      'modeling',
+      'plane_on_face'
+    );
+    expect(refusal.message).toBe(kernelError.message);
+    expect(kernelRefusalRecordOf(refusal)).toEqual({
+      family: 'modeling',
+      category: 'unsupported',
+      code: 'split_refused',
+      reason: 'plane_on_face'
+    });
+  });
 });

@@ -12,7 +12,10 @@ import {
 } from 'react';
 import { ownedTopologyName } from '../lib/topologyLabels';
 import { modelingRefusalSummary } from '../lib/modelingRefusal';
-import { plainRefusal } from '../lib/refusalLanguage';
+import {
+  plainRefusal,
+  type RefusalClassification
+} from '../lib/refusalLanguage';
 import type { InPlacePanelSectionView } from '../lib/inPlace/panel';
 import { booleanOperandRole, type BodyPick } from '../lib/inPlace/tools';
 import { spokenValueName } from '../lib/inPlace/chipNames';
@@ -99,6 +102,11 @@ export interface InPlaceCommandBarProps {
   locked?: boolean;
   /** Shown instead of the hint while a refusal stands, in the warning tone. */
   refusal?: string | null;
+  /**
+   * The kernel's typed record of {@link refusal}, when it has one: the
+   * sentence is chosen by its category, code and cause before its prose.
+   */
+  refusalClassification?: RefusalClassification | null;
   /**
    * The input whose change the kernel refused ("Draft angle"), named ahead
    * of the refusal so it says what to change, not only that it failed.
@@ -206,6 +214,7 @@ export function InPlaceCommandBar({
   previewPending = false,
   locked = false,
   refusal = null,
+  refusalClassification = null,
   refusalInput = null,
   unitLabel = null,
   onTrySize,
@@ -321,7 +330,8 @@ export function InPlaceCommandBar({
         blendRefusalText(
           refusal.replace(/^-?(?:\d+\.?\d*|\.\d+);\s*/, ''),
           null
-        )
+        ),
+        refusalClassification ?? undefined
       )
     : null;
   const sentence =
