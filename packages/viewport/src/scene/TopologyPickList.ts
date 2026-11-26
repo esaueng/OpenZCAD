@@ -33,6 +33,24 @@ export class TopologyPickList {
    */
   private focusReturn: HTMLElement | null = null;
 
+  /**
+   * The rest of an Enter press that confirmed a row. Confirming hands focus
+   * back (to the viewport), so a held Enter's auto-repeat keydowns would
+   * land there and act again: open the new pick's value entry, then commit
+   * it. Until that Enter is released, its repeats are the list's and go
+   * nowhere.
+   */
+  private readonly swallowEnterRepeat = (event: KeyboardEvent) => {
+    if (event.key !== 'Enter') return;
+    if (event.type === 'keydown' && event.repeat) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    // Released, or a fresh press: the held press is over.
+    this.stopSwallowingEnter();
+  };
+
   /** Keeps an open list inside a window resized under it. */
   private readonly onResize = () => {
     this.options.hud.reclamp(this.element);
@@ -68,7 +86,10 @@ export class TopologyPickList {
         // opened, and its preventDefault cancelled the row's own activation.
         event.preventDefault();
         event.stopPropagation();
-        buttons[current]!.click();
+        if (!event.repeat) {
+          this.startSwallowingEnter();
+          buttons[current]!.click();
+        }
         return;
       }
       let next: number | null = null;
@@ -182,6 +203,20 @@ export class TopologyPickList {
       focusReturn.focus({ preventScroll: true });
     }
   }
+
+  private startSwallowingEnter(): void {
+    this.stopSwallowingEnter();
+    // Window capture runs before every other keydown listener on the page.
+    window.addEventListener('keydown', this.swallowEnterRepeat, true);
+    window.addEventListener('keyup', this.swallowEnterRepeat, true);
+    window.addEventListener('blur', this.stopSwallowingEnter);
+  }
+
+  private readonly stopSwallowingEnter = (): void => {
+    window.removeEventListener('keydown', this.swallowEnterRepeat, true);
+    window.removeEventListener('keyup', this.swallowEnterRepeat, true);
+    window.removeEventListener('blur', this.stopSwallowingEnter);
+  };
 
   private buttons(): HTMLButtonElement[] {
     return Array.from(

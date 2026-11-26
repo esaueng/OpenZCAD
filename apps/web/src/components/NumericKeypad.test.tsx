@@ -347,6 +347,20 @@ describe('numeric entry first character', () => {
     expect(onCommit).toHaveBeenCalledWith(10, '10');
   });
 
+  // U11 review: a held Enter that confirmed a Select other row went on, by
+  // auto-repeat, to open this keypad and then commit it. A repeat never
+  // commits; the press that started it already acted.
+  it('commits on a fresh Enter, never on a held Enter auto-repeat', () => {
+    const { input, onCommit } = setup('1', false);
+    fireEvent.change(input, { target: { value: '10' } });
+    expect(fireEvent.keyDown(input, { key: 'Enter', repeat: true })).toBe(
+      false
+    );
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith(10, '10');
+  });
+
   it('allows minus and decimal prefixes to become a signed distance', () => {
     const { input, onPreview } = setup('-', false);
     expect(onPreview).not.toHaveBeenCalled();

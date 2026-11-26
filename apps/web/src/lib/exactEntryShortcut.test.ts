@@ -72,6 +72,19 @@ describe('exact entry shortcut ownership', () => {
     }
   );
 
+  // U11 review: a held Enter that confirmed a Select other row reached the
+  // viewport by auto-repeat and opened the new pick's value entry.
+  it('opens the value entry on a fresh Enter only, not a held one', () => {
+    expect(exactEntryShortcut(armed, key('Enter'), false, false)).toEqual({});
+    const held = new KeyboardEvent('keydown', { key: 'Enter', repeat: true });
+    expect(exactEntryShortcut(armed, held, false, false)).toBeNull();
+    // A held digit still types: the field takes its repeats once it opens.
+    const digit = new KeyboardEvent('keydown', { key: '4', repeat: true });
+    expect(exactEntryShortcut(armed, digit, false, false)).toEqual({
+      initial: '4'
+    });
+  });
+
   it('reopens a refused value with Enter or a replacement digit', () => {
     const failed = interactionReducer(armed, {
       type: 'validation-failed',

@@ -1038,7 +1038,10 @@ export function NumericKeypad({
           !(event.target instanceof HTMLButtonElement)
         ) {
           event.preventDefault();
-          commit();
+          // A held Enter's auto-repeat commits nothing: the press that
+          // started it already acted (it may have been the one that opened
+          // this keypad, or confirmed a pick before focus arrived here).
+          if (!event.repeat) commit();
         }
         // Tab from the value goes to the command's next value, not to the
         // unit's help and the keypad button, where what was typed next for

@@ -455,6 +455,40 @@ test('Enter on a focused Select other row confirms that row', async ({
   await expect(picked).toContainText('Top face');
 });
 
+/**
+ * U11 review: a held Enter on a focused Select other row confirms that row
+ * and nothing else. Confirming hands focus back to the viewport, and the
+ * held key's auto-repeat used to land there: it opened the new pick's value
+ * entry, and further repeats reached that keypad's commit.
+ */
+test('a held Enter on a Select other row confirms it and nothing else', async ({
+  page
+}) => {
+  await openCoupon(page);
+  const picked = page.getByRole('group', { name: 'Picked' });
+  const features = await featureCount(page);
+  const rim = await screenPoint(page, RIM);
+  await page.mouse.move(rim.x, rim.y);
+  await page.mouse.click(rim.x, rim.y);
+  await expect(picked).toContainText('Hole edge');
+  const { menu } = await focusStackRow(page, rim, /Top face/);
+  // keyboard.down on a key already down is an auto-repeat (repeat: true).
+  await page.keyboard.down('Enter');
+  await expect(menu).toBeHidden();
+  for (let i = 0; i < 4; i += 1) await page.keyboard.down('Enter');
+  await page.keyboard.up('Enter');
+  await expect(picked).toContainText('Top face');
+  await expect(page.locator('.numeric-keypad')).toHaveCount(0);
+  await expect(page.locator('.viewer-shell')).toBeFocused();
+  expect(await featureCount(page)).toBe(features);
+  // Released, the next press opens the value entry as before.
+  await page.keyboard.press('Enter');
+  await expect(
+    page.getByRole('dialog', { name: 'Offset value' })
+  ).toBeVisible();
+  expect(await featureCount(page)).toBe(features);
+});
+
 test('a negative Total is refused at its field and stays editable; the same inward offset applies', async ({
   page
 }) => {
