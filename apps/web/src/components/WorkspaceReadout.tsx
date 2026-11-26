@@ -6,6 +6,8 @@ import {
   type ReactNode
 } from 'react';
 import { Info, Magnet } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { useCompactCommandRowHost } from './compact/compactSlots';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
 import { usePacedStatus } from '../hooks/usePacedStatus';
@@ -189,7 +191,7 @@ export function WorkspaceReadout({
   instructionDetails = null,
   pick = null,
   notice = null,
-  commandRow = null,
+  commandRow: givenCommandRow = null,
   projectName,
   featureCount,
   bodyCount,
@@ -202,6 +204,10 @@ export function WorkspaceReadout({
   repeatingToast = null
 }: WorkspaceReadoutProps) {
   const laneRef = useRef<HTMLDivElement>(null);
+  // The compact workspace takes an in-place command's bar into its sheet
+  // (U12); the lane then reads as one with no command row.
+  const compactRowHost = useCompactCommandRowHost(givenCommandRow !== null);
+  const commandRow = compactRowHost ? null : givenCommandRow;
   const hasCommandRow = commandRow !== null;
   const hasSelectionGuidance =
     !hasCommandRow && (pick !== null || notice !== null);
@@ -457,6 +463,9 @@ export function WorkspaceReadout({
   // its visibility changes.
   return (
     <>
+      {compactRowHost && givenCommandRow !== null
+        ? createPortal(givenCommandRow, compactRowHost)
+        : null}
       {/* The foot of the stage: one line of guidance over the search bar,
           led by what is picked. The guidance is the prompt the summary below
           already carries for assistive tech, so it is drawn here but hidden

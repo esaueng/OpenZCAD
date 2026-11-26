@@ -122,6 +122,8 @@ import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
 import { describeFailure } from '../lib/plainFailure';
 import { DataDownload } from './DataDownload';
 import { ActivityLogSettings } from './ActivityLogSettings';
+import { useLayoutPreference } from '../hooks/useWorkspaceShell';
+import type { LayoutPreference } from '../lib/layoutPreference';
 import {
   PrivateText,
   setPersonalInfoVisible,
@@ -379,6 +381,15 @@ const DENSITY_OPTIONS: readonly SegmentOption<
 >[] = [
   { value: 'compact', label: 'Compact' },
   { value: 'comfortable', label: 'Comfortable' }
+];
+
+// This device's frame (U12): kept in this browser, never in the account, so
+// a phone and a desktop signed in together each keep their own. Automatic is
+// the regular workspace until the compact one reaches every action.
+const LAYOUT_OPTIONS: readonly SegmentOption<LayoutPreference>[] = [
+  { value: 'automatic', label: 'Automatic' },
+  { value: 'compact', label: 'Phone (preview)' },
+  { value: 'full', label: 'Full' }
 ];
 
 const LIBRARY_CARD_SIZE_OPTIONS: readonly SegmentOption<
@@ -1150,6 +1161,7 @@ export function SettingsPage({
   // A search with no match leaves nothing to show; the section that was open
   // before it must not linger as if it matched.
   const anyMatch = visibleSections.length > 0;
+  const [layoutPreference, setLayoutPreference] = useLayoutPreference();
 
   return (
     <div
@@ -1449,6 +1461,17 @@ export function SettingsPage({
                         appearance: { ...settings.appearance, density }
                       })
                     }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Layout"
+                  hint="Phone is an early preview of the workspace built for small screens. This device only."
+                >
+                  <Segmented
+                    label="Layout"
+                    value={layoutPreference}
+                    options={LAYOUT_OPTIONS}
+                    onChange={setLayoutPreference}
                   />
                 </SettingRow>
                 <SettingRow

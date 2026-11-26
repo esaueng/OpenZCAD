@@ -68,11 +68,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   {
     id: 'appearance',
     label: 'Appearance',
-    detail: 'Theme, density, card size, and motion',
+    detail: 'Theme, density, layout, card size, and motion',
     group: 'Workspace',
     settings: [
       'Theme',
       'Interface density',
+      'Layout',
       'Library card size',
       'Reduce motion'
     ],
@@ -82,7 +83,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'color scheme',
       'thumbnail',
       'thumbnails',
-      'preview size'
+      'preview size',
+      'phone',
+      'mobile',
+      'compact layout'
     ]
   },
   {

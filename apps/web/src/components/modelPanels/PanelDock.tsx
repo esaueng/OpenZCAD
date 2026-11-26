@@ -91,6 +91,13 @@ export interface PanelDockProps {
     dock?: PanelDockControls
   ): ReactNode;
   handleRef?: Ref<PanelDockHandle>;
+  /**
+   * The compact workspace (U12): nothing docks or floats at any width, so
+   * the stage is reported no wider than a phone's and the one open panel
+   * goes to the phone lane, which that workspace draws in its sheet. The
+   * layout itself is not touched.
+   */
+  phoneOnly?: boolean;
 }
 
 /** Equal sizes and insets are the same stage: no re-render for a no-op. */
@@ -249,7 +256,8 @@ export function PanelDock({
   onLayout,
   onRefuse,
   renderPanel,
-  handleRef
+  handleRef,
+  phoneOnly = false
 }: PanelDockProps) {
   const layerRef = useRef<HTMLDivElement | null>(null);
   const [measured, setStage] = useState<PanelStage | null>(null);
@@ -282,6 +290,8 @@ export function PanelDock({
   latest.current = { layout, stage, hidden, onLayout, onRefuse };
   const onStageRef = useRef(onStage);
   onStageRef.current = onStage;
+  const phoneOnlyRef = useRef(phoneOnly);
+  phoneOnlyRef.current = phoneOnly;
 
   useLayoutEffect(() => {
     const layer = layerRef.current;
@@ -320,7 +330,11 @@ export function PanelDock({
       // gap-rail-gap.
       const railBand = measureRailBand(rail, gap);
       const next: PanelStage = {
-        width: Math.round(rect.width),
+        width: Math.round(
+          phoneOnlyRef.current
+            ? Math.min(rect.width, PANEL_PHONE_MAX_WIDTH)
+            : rect.width
+        ),
         height: Math.round(rect.height),
         // The layer spans the viewer area, where a window may go anywhere;
         // its padding is the band the docks stand in.

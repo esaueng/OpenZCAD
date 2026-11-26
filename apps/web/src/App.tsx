@@ -1114,6 +1114,7 @@ import {
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
 import { useMediaQuery } from './hooks/useMediaQuery';
+import { useWorkspaceShell } from './hooks/useWorkspaceShell';
 import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
@@ -3434,6 +3435,39 @@ export function App() {
     loadPanelLayout(undefined, undefined, { leftDock: true })
   );
   const [panelStage, setPanelStage] = useState<PanelStage | null>(null);
+  // U12 slice 2: the compact workspace, where this device's layout
+  // preference puts it in force (Settings › Appearance › Layout).
+  const compactShell = useWorkspaceShell().shell === 'compact';
+  // The compact workspace reads the panels as the regular one does but never
+  // stores what it changes: the regular layout taken as it comes into force
+  // is put back as it leaves, and the state it left behind is never saved.
+  const latestPanelsRef = useRef({ state: panelState, layout: panelLayout });
+  latestPanelsRef.current = { state: panelState, layout: panelLayout };
+  const regularPanelsRef = useRef<{
+    state: PanelState;
+    layout: PanelLayout;
+  } | null>(null);
+  const compactPanelsLeftRef = useRef<{
+    state: PanelState | null;
+    layout: PanelLayout | null;
+  }>({ state: null, layout: null });
+  useLayoutEffect(() => {
+    if (compactShell) {
+      regularPanelsRef.current ??= latestPanelsRef.current;
+      return;
+    }
+    const regular = regularPanelsRef.current;
+    if (!regular) return;
+    regularPanelsRef.current = null;
+    const left = latestPanelsRef.current;
+    compactPanelsLeftRef.current = { state: left.state, layout: left.layout };
+    setPanelLayout(regular.layout);
+    // The mode is where the person is working, not the layout: it stays.
+    setPanelState({
+      ...regular.state,
+      workspaceMode: left.state.workspaceMode
+    });
+  }, [compactShell]);
   // The parts list of a workspace opened on a phone: its own choice there,
   // closed until asked for, as the phone lane rests. On a phone the list
   // opens beside View's rail over the middle of the model, and the stored
@@ -8651,14 +8685,20 @@ export function App() {
           : null;
 
   useEffect(() => {
+    if (compactShell) return;
+    if (panelState === compactPanelsLeftRef.current.state) return;
+    compactPanelsLeftRef.current.state = null;
     savePanelState(panelState);
-  }, [panelState]);
+  }, [panelState, compactShell]);
 
   // Saved on load as well as on change: once the migration has run, its
   // result is the device's layout, whatever the v1 key says next.
   useEffect(() => {
+    if (compactShell) return;
+    if (panelLayout === compactPanelsLeftRef.current.layout) return;
+    compactPanelsLeftRef.current.layout = null;
     savePanelLayout(panelLayout);
-  }, [panelLayout]);
+  }, [panelLayout, compactShell]);
 
   // A workspace opened on a phone opens on the model: there the lane's panel
   // stands across the middle of the stage, so the lane rests until a panel
@@ -37199,7 +37239,16 @@ export function App() {
     // The `?` key and the command bar's Help row open the same reference.
     'shortcut-reference': openShortcutReference,
     'app-help': openShortcutReference,
-    'app-settings': openSettings
+    'app-settings': openSettings,
+    // Opening lists the commands that run here (an empty draft), so the
+    // key visibly does something before a word is typed (I20).
+    'command-palette': () => {
+      setShortcutsOpen(false);
+      if (paletteOpen) setPaletteOpen(false);
+      else draftPrompt('');
+    },
+    'edit-undo': handleUndo,
+    'edit-redo': handleRedo
   } satisfies ActionHandlers;
 
   // Workspace keyboard map (ignored while typing in a field). The ref must be
@@ -37302,11 +37351,7 @@ export function App() {
       }
       if (global === 'command-palette') {
         event.preventDefault();
-        setShortcutsOpen(false);
-        // Opening lists the commands that run here (an empty draft), so the
-        // key visibly does something before a word is typed (I20).
-        if (paletteOpen) setPaletteOpen(false);
-        else draftPrompt('');
+        actionHandlers['command-palette']();
         return;
       }
       if (paletteOpen || shortcutsOpen) {
@@ -37463,11 +37508,7 @@ export function App() {
         // decide — they allow a parameter-only top entry and keep the
         // refusal for anything that would revert modeling work.
         event.preventDefault();
-        if (global === 'edit-undo') {
-          handleUndo();
-        } else {
-          handleRedo();
-        }
+        actionHandlers[global]();
         return;
       }
       if (sketchFilletPending && !event.defaultPrevented) {
@@ -38989,7 +39030,7 @@ export function App() {
         : undoFloorTrimmed
           ? UNDO_FLOOR_TRIMMED_REASON
           : 'Nothing to undo',
-      run: handleUndo
+      run: actionHandlers['edit-undo']
     },
     {
       id: 'edit-redo',
@@ -38998,7 +39039,7 @@ export function App() {
       shortcut: keymap.label('edit-redo'),
       icon: <Redo2 size={16} aria-hidden="true" />,
       disabledReason: redoAvailable ? null : 'Nothing to redo',
-      run: handleRedo
+      run: actionHandlers['edit-redo']
     },
     {
       id: 'file-save',
@@ -40360,6 +40401,50 @@ export function App() {
   const workspace = (
     <WorkspaceAppShell
       covered={sharePage !== null}
+      compact={
+        compactShell
+          ? {
+              projectName: doc.name,
+              saveState: presentedSaveState,
+              workspaceMode: resolvedWorkspaceMode,
+              modeLockedReason: (mode) =>
+                mode === 'build'
+                  ? buildModeDisabledReason
+                  : mode === 'tweak'
+                    ? tweakModeDisabledReason
+                    : mode === 'drawing'
+                      ? drawingModeDisabledReason
+                      : mode === 'assemble'
+                        ? assembleModeDisabledReason
+                        : null,
+              shareLink: Boolean(shareSession),
+              onWorkspaceMode: handleWorkspaceMode,
+              canUndo: !viewMode && undoAvailable,
+              canRedo: !viewMode && redoAvailable,
+              onUndo: actionHandlers['edit-undo'],
+              onRedo: actionHandlers['edit-redo'],
+              onHome: () => void handleGoHome(),
+              onSearch: actionHandlers['command-palette'],
+              onSettings: actionHandlers['app-settings'],
+              onHelp: actionHandlers['app-help'],
+              // Rename opens the top bar's name field, which the compact
+              // header does not draw; the project sheet (slice 10) has it.
+              fileCommands: paletteCommands.filter(
+                (command) =>
+                  command.group === 'File' && command.id !== 'project-rename'
+              ),
+              selectionLabel:
+                selectedFeature && featureSelectionSource !== 'inferred'
+                  ? selectedFeature.name
+                  : commandContextLabel(commandSelection),
+              onClearSelection: clearSelection,
+              reducedMotion: appSettings.appearance.reducedMotion,
+              sheetKey: `${commandCardKey}|${inspectorKey}|${inPlaceKey}|${
+                phonePanel ?? ''
+              }`
+            }
+          : null
+      }
       projectId={doc.projectId}
       projectName={doc.name}
       loadingReady={
@@ -41981,6 +42066,7 @@ export function App() {
             onRefuse={setStatus}
             renderPanel={renderModelPanel}
             handleRef={panelDockRef}
+            phoneOnly={compactShell}
           />
         ) : null
       }

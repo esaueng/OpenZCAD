@@ -14,6 +14,7 @@ import {
   Ellipsis,
   LoaderCircle
 } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import type { UnitSystem } from '@openzcad/shared';
 import {
   appendKeypadKey,
@@ -50,6 +51,10 @@ import {
 import { spokenValueName } from '../lib/inPlace/chipNames';
 import type { SelectionCalloutOperation } from '../lib/selectionCallout';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import {
+  COMPACT_OVERLAY_HOST_PENDING,
+  useCompactOverlayHost
+} from './compact/compactSlots';
 import { EditRefusal } from './EditRefusal';
 import { useParameterDefinition } from './forms/parameterDefinition';
 import {
@@ -377,6 +382,17 @@ export function operationTagLabel(tag: Element | null): string | null {
   return label === '' ? null : label;
 }
 
+/**
+ * The stage element the control belongs to: where its marker stands when the
+ * compact workspace draws the control elsewhere, else the control's parent.
+ */
+function stageHostOf(
+  mark: HTMLElement | null,
+  root: HTMLElement | null
+): HTMLElement | null {
+  return mark?.parentElement ?? root?.parentElement ?? null;
+}
+
 /** Placements that leave the pick, and its operation tag, behind. */
 function detachedPlacement(side: string | null): boolean {
   return side === 'sheet' || side === 'docked';
@@ -428,7 +444,47 @@ function offsetFromTotal(
   return (total - (request.totalBaseline ?? 0)) * (request.totalSense ?? 1);
 }
 
-export function NumericKeypad({
+/**
+ * A stable key per overlay host, so a control drawn into a different host is
+ * a new control whose placement and focus effects run against its new nodes.
+ */
+const overlayHostKeys = new WeakMap<HTMLElement, number>();
+let nextOverlayHostKey = 1;
+function overlayHostKey(host: HTMLElement | null): string {
+  if (!host) return 'stage';
+  let key = overlayHostKeys.get(host);
+  if (key === undefined) {
+    key = nextOverlayHostKey++;
+    overlayHostKeys.set(host, key);
+  }
+  return `overlay-${key}`;
+}
+
+export function NumericKeypad(props: NumericKeypadProps) {
+  // Read on the first render, before the field takes focus: an entry that
+  // waits below for the compact host still hands focus back to its opener.
+  const [returnTarget] = useState(keypadReturnTarget);
+  // The compact workspace (U12) draws the control outside the stage. Its
+  // host arrives a render after the compact frame mounts (the chrome loads
+  // lazily), so the control waits for it rather than mounting on the stage
+  // and moving: a moved control kept effects bound to its old nodes and
+  // stayed hidden. Keyed on its host, a control whose host changes is drawn
+  // afresh.
+  const overlayHost = useCompactOverlayHost();
+  if (overlayHost === COMPACT_OVERLAY_HOST_PENDING) return null;
+  return (
+    <NumericKeypadControl
+      key={overlayHostKey(overlayHost)}
+      {...props}
+      overlayHost={overlayHost}
+      returnTarget={returnTarget}
+    />
+  );
+}
+
+function NumericKeypadControl({
+  overlayHost,
+  returnTarget,
   request,
   units,
   scope,
@@ -447,7 +503,10 @@ export function NumericKeypad({
   onUiStateChange,
   onStep,
   onCancel
-}: NumericKeypadProps) {
+}: NumericKeypadProps & {
+  overlayHost: HTMLElement | null;
+  returnTarget: HTMLElement | null;
+}) {
   // I03: a length opens in the document's display unit. Every prefill in
   // App.tsx is a value in document units, so a selected plain-number prefill
   // is shown converted; one that is not plain (an expression, or Ø/R
@@ -534,6 +593,13 @@ export function NumericKeypad({
   const meaningId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const rowRef = useRef<HTMLDivElement | null>(null);
+  // The compact workspace (U12) draws the control outside the stage, which
+  // is inert while its sheet stands at full, and always as the phone's
+  // sheet. A marker stays where it would have stood, so the pick's
+  // operation tag and the command bar are still found from the stage.
+  const stageMarkRef = useRef<HTMLSpanElement | null>(null);
+  const asSheetRef = useRef(overlayHost !== null);
+  asSheetRef.current = overlayHost !== null;
   const inputRef = useRef<HTMLInputElement | null>(null);
   // The pad is the touch keyboard: the field keeps focus (Enter, Escape and
   // a hardware keyboard still land on it) without raising the system
@@ -542,19 +608,24 @@ export function NumericKeypad({
   const coarsePointer = useMediaQuery('(pointer: coarse)');
   const [systemKeyboard, setSystemKeyboard] = useState(false);
   const raiseSystemKeyboard = useRef(false);
-  // Read on the first render, before the field takes focus below.
-  const [returnTarget] = useState(keypadReturnTarget);
   // A running command's entry (opened by typing, a click or Tab) has no
   // opener to go back to: its bar takes the focus, where Enter is Done.
   const returnsToCommandBar =
     request.kind === 'command' || request.kind === 'sketch-fillet';
   useEffect(() => {
-    const area = rootRef.current?.closest('.viewer-area') ?? null;
+    const stage = stageHostOf(stageMarkRef.current, rootRef.current);
+    const area = stage?.closest('.viewer-area') ?? null;
+    const shell = stage?.closest('.app-shell') ?? null;
     return () =>
       returnKeypadFocus(
         returnTarget,
         returnsToCommandBar
-          ? () => area?.querySelector<HTMLElement>('.in-place-command') ?? null
+          ? () =>
+              area?.querySelector<HTMLElement>('.in-place-command') ??
+              shell?.querySelector<HTMLElement>(
+                '.compact-command-row .in-place-command'
+              ) ??
+              null
           : undefined
       );
   }, [returnTarget, returnsToCommandBar]);
@@ -612,8 +683,9 @@ export function NumericKeypad({
     let docked = false;
     let lastAnchor: { x: number; y: number } | null = null;
     const phone = () =>
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia(PHONE_QUERY).matches;
+      asSheetRef.current ||
+      (typeof window.matchMedia === 'function' &&
+        window.matchMedia(PHONE_QUERY).matches);
     const place = (placement: KeypadPlacement) => {
       root.style.visibility = 'visible';
       root.style.left = `${placement.x}px`;
@@ -760,7 +832,7 @@ export function NumericKeypad({
   // switch the tag makes, and it never applies the value.
   const switchable = request.kind === 'edge' || request.kind === 'offset';
   useLayoutEffect(() => {
-    const host = rootRef.current?.parentElement;
+    const host = stageHostOf(stageMarkRef.current, rootRef.current);
     const tag = switchable
       ? host?.querySelector<HTMLElement>(OPERATION_TAG_SELECTOR)
       : null;
@@ -784,7 +856,7 @@ export function NumericKeypad({
   const operationShown =
     operation !== null && detachedPlacement(placement) ? operation : null;
   const switchOperation = () => {
-    rootRef.current?.parentElement
+    stageHostOf(stageMarkRef.current, rootRef.current)
       ?.querySelector<HTMLElement>(OPERATION_TAG_SELECTOR)
       ?.click();
   };
@@ -958,7 +1030,8 @@ export function NumericKeypad({
 
   const explained =
     state === 'refused' && refusal?.operation.error ? refusal : null;
-  const choosingRim = explained?.operation.error?.code === 'ambiguous_rim_chamfer';
+  const choosingRim =
+    explained?.operation.error?.code === 'ambiguous_rim_chamfer';
   // A refusal the control cannot explain on its own (no operation to name
   // it) is shown as the host's sentence.
   const reasonShown =
@@ -1033,7 +1106,7 @@ export function NumericKeypad({
       ? 'Type units or expressions: 2cm, 1in'
       : 'Type a value or an expression, like 90/4';
 
-  return (
+  const control = (
     <div
       ref={rootRef}
       className="numeric-keypad"
@@ -1396,5 +1469,13 @@ export function NumericKeypad({
         </div>
       )}
     </div>
+  );
+  return overlayHost ? (
+    <>
+      <span ref={stageMarkRef} hidden />
+      {createPortal(control, overlayHost)}
+    </>
+  ) : (
+    control
   );
 }
