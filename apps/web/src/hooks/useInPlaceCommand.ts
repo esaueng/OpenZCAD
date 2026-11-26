@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
@@ -523,21 +530,6 @@ function faceFilterAccepts(
   if (filter === 'revolution')
     return surface === 'cylinder' || surface === 'cone';
   return surface === 'cylinder';
-}
-
-/**
- * Runs `run` once the frame after the next has started, by which time what
- * was rendered now has been drawn; returns its cancel.
- */
-function afterNextPaint(run: () => void): () => void {
-  if (typeof requestAnimationFrame !== 'function') {
-    const timer = setTimeout(run, 32);
-    return () => clearTimeout(timer);
-  }
-  let frame = requestAnimationFrame(() => {
-    frame = requestAnimationFrame(run);
-  });
-  return () => cancelAnimationFrame(frame);
 }
 
 export function useInPlaceCommand(
@@ -1283,6 +1275,31 @@ export function useInPlaceCommand(
     setEntryRefusals([]);
   }, [editIdentity]);
   const instant = spec?.instant === true;
+  // A frame kept under a refusal that says nothing about the new request (a
+  // Split's other body) comes down with the request, refusal and all, in the
+  // same paint: a layout effect, so no frame shows the new pick over the old
+  // body's halves, its "Offset" refusal or the kept value on its chip, and
+  // the viewer installs the take-down in that commit too. As a passive
+  // effect it ran a paint late, and the viewer's own install one more:
+  // the preview check of #2242 caught the halves under "Checking…" in that
+  // gap. It runs before the build below is asked for, so no reply for the
+  // new request can land ahead of it. A late frame of the old target is not
+  // drawn in its place either (`ofAnotherTarget`, which reads the frame,
+  // not the refusal shown).
+  useLayoutEffect(() => {
+    const kept = lastBuilt.current;
+    if (!requestKey || !refusalShown.current || !kept) return;
+    if (!ofAnotherTarget(kept)) return;
+    lastBuilt.current = null;
+    supersededDrawn.current = false;
+    shownKey.current = null;
+    setRefusal(null);
+    setTypedRefusal(null);
+    setRefusalInputs([]);
+    setKeptValues(null);
+    optionsRef.current.publishPreview(null);
+    // Only a new request can retarget; the refs say the rest.
+  }, [requestKey]);
   useEffect(() => {
     if (!requestKey || instant) {
       // Nothing to build (a pick taken back out): no frame, and no refusal
@@ -1306,32 +1323,6 @@ export function useInPlaceCommand(
     // A new request is not shown yet: Done waits for its own frame, never
     // the previous request's (which a profile or axis change replaces).
     setPreviewValid(false);
-    // A frame kept under a refusal that says nothing about the new request
-    // (a Split's other body) comes down now, with the refusal named over
-    // it, rather than standing for the new target until its frame lands.
-    // A late frame of the old target is not drawn in its place either
-    // (`ofAnotherTarget`, which reads the frame, not the refusal shown).
-    const kept = lastBuilt.current;
-    if (refusalShown.current && kept && ofAnotherTarget(kept)) {
-      lastBuilt.current = null;
-      supersededDrawn.current = false;
-      shownKey.current = null;
-      setRefusal(null);
-      setTypedRefusal(null);
-      setRefusalInputs([]);
-      setKeptValues(null);
-      optionsRef.current.publishPreview(null);
-      // The new target's build waits until the take-down has been drawn.
-      // Started at once, its reply could land while the workspace was still
-      // rendering the take-down, ahead of the viewer installing it: the old
-      // halves then stayed on screen under "Checking…" until that reply
-      // replaced them (the preview check of #2242). A new request or the
-      // command's end before then cancels it; the generation is this
-      // request's from now, so no frame of the old one counts meanwhile.
-      generation.current += 1;
-      const requested = generation.current;
-      return afterNextPaint(() => preview.request(requested));
-    }
     generation.current += 1;
     preview.request(generation.current);
     // A re-armed edit is a new request even when it builds the same thing

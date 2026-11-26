@@ -7,6 +7,7 @@ import {
   waitFor
 } from '@testing-library/react';
 import { useEffect, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { InPlaceCommandBar } from '../components/InPlaceCommandBar';
 import { cancelCommandChipEntry } from '../lib/inPlace/chipCancel';
 import { describe, expect, it, vi } from 'vitest';
@@ -3666,38 +3667,6 @@ describe('useInPlaceCommand: a late Split reply', () => {
     return { hook, replies, publishPreview, commit, asked };
   }
 
-  /** Animation frames held, to be run one at a time in request order. */
-  function holdFrames() {
-    const queued = new Map<number, FrameRequestCallback>();
-    let ids = 0;
-    const request = vi
-      .spyOn(window, 'requestAnimationFrame')
-      .mockImplementation((callback) => {
-        ids += 1;
-        queued.set(ids, callback);
-        return ids;
-      });
-    const cancel = vi
-      .spyOn(window, 'cancelAnimationFrame')
-      .mockImplementation((id) => {
-        queued.delete(id);
-      });
-    return {
-      next: () =>
-        act(() => {
-          const [id, callback] = [...queued][0] ?? [];
-          if (id === undefined || !callback) return;
-          queued.delete(id);
-          callback(performance.now());
-        }),
-      pending: () => queued.size,
-      restore: () => {
-        request.mockRestore();
-        cancel.mockRestore();
-      }
-    };
-  }
-
   /** The coupon's x = 52 halves kept under a refused +8. */
   async function keptUnderOffset() {
     const harnessed = harness();
@@ -4034,51 +4003,39 @@ describe('useInPlaceCommand: a late Split reply', () => {
     ).toBe(true);
   });
 
-  // Preview check of #2242: in the app, the witness's reply landed while the
-  // workspace was still rendering the take-down, ahead of the viewer
-  // installing it, so the halves stayed under "Checking…" until that reply
-  // replaced them. The witness's build now waits until the take-down has
-  // been drawn: two animation frames.
-  it("builds another body only after the kept halves' take-down is drawn", async () => {
+  // Preview checks of #2242: in the app the take-down ran in a passive
+  // effect, a paint after the Objects pick, and the viewer installed it a
+  // paint later still, so the new pick showed over the coupon's halves, its
+  // "Offset" refusal and the kept −35 on the chip, then the halves under
+  // "Checking…". A click is a discrete event, which React renders and
+  // commits synchronously; the take-down must be part of that same commit,
+  // done before anything can paint. Its state and the host's preview are set
+  // together, so the hook's own result stands for both here.
+  it('takes the kept halves down in the commit of the pick itself', async () => {
     const { hook, replies, publishPreview, asked } = await keptUnderOffset();
-    const frames = holdFrames();
+    const scope = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const actEnvironment = scope.IS_REACT_ACT_ENVIRONMENT;
+    // Rendered as React renders a click, not drained by act.
+    scope.IS_REACT_ACT_ENVIRONMENT = false;
     try {
-      act(() => {
+      flushSync(() => {
         hook.result.current.pickBody(WITNESS);
       });
+      expect(hook.result.current.slots.bodies[0]?.bodyId).toBe(WITNESS.bodyId);
       expect(hook.result.current.refusal).toBeNull();
+      expect(hook.result.current.refusalInput).toBeNull();
+      expect(hook.result.current.keptValues).toBeNull();
+      expect(hook.result.current.canFinish).toBe(false);
       expect(publishPreview).toHaveBeenLastCalledWith(null);
-      expect(asked).toHaveLength(3);
-      frames.next();
-      expect(asked).toHaveLength(3);
-      frames.next();
-      expect(asked.at(-1)).toBe(WITNESS.bodyId);
-      expect(asked).toHaveLength(4);
     } finally {
-      frames.restore();
+      scope.IS_REACT_ACT_ENVIRONMENT = actEnvironment;
     }
+    // The witness's own build follows, and its refusal keeps nothing.
+    await waitFor(() => expect(asked.at(-1)).toBe(WITNESS.bodyId));
     await settle(replies, 4);
     await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
     expect(hook.result.current.refusalInput).toBeNull();
     expect(publishPreview).toHaveBeenLastCalledWith(null);
-  });
-
-  it('builds nothing for another body when the command ends before its turn', async () => {
-    const { hook, asked, commit } = await keptUnderOffset();
-    const frames = holdFrames();
-    try {
-      act(() => {
-        hook.result.current.pickBody(WITNESS);
-      });
-      act(() => {
-        expect(hook.result.current.cancel()).toBe(true);
-      });
-      while (frames.pending() > 0) frames.next();
-    } finally {
-      frames.restore();
-    }
-    expect(asked).toHaveLength(3);
-    expect(commit).not.toHaveBeenCalled();
   });
 
   // The same, with +8 typed on the witness before its first frame lands:
