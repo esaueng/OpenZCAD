@@ -172,6 +172,92 @@ describe('a refused fillet or chamfer carries its classification', () => {
     });
   });
 
+  describe('a chamfer beside a holed face', () => {
+    const catchAll = (operation: 'chamfer' | 'chamferDistanceAngle') =>
+      new BlendRefusal({
+        operation,
+        category: 'internal',
+        kernelCode: 'fillet-failed',
+        kernelMessage: 'the shell the chamfer assembled failed validation'
+      });
+    const reason =
+      "The modeling engine can't chamfer this edge yet because a flat face beside it has a hole through it, and smaller distances failed too. Add the chamfer before the hole is cut: make the hole in a separate, later step.";
+    const message = `Chamfer could not be created on 1 selected edge with distance 1. ${reason}`;
+    const advice = (
+      cause: 'face-with-hole' | 'neighbor-faces'
+    ): ConstructorParameters<typeof EdgeModifierRefusalError>[1] => ({
+      operation: 'chamfer',
+      edges: 1,
+      reason,
+      kind: 'structural',
+      cause
+    });
+
+    it('refiles the kernel catch-all as a typed unsupported refusal, keeping its code as the reason', () => {
+      for (const operation of ['chamfer', 'chamferDistanceAngle'] as const) {
+        const error = new EdgeModifierRefusalError(
+          message,
+          advice('face-with-hole'),
+          catchAll(operation)
+        );
+        expect(kernelRefusalRecordOf(error)).toEqual({
+          family: 'blend',
+          operation,
+          category: 'unsupported',
+          code: 'chamfer_face_with_hole',
+          reason: 'fillet-failed'
+        });
+      }
+    });
+
+    it("keeps the kernel's internal classification for every other cause", () => {
+      const error = new EdgeModifierRefusalError(
+        message,
+        advice('neighbor-faces'),
+        catchAll('chamfer')
+      );
+      expect(kernelRefusalRecordOf(error)).toEqual({
+        family: 'blend',
+        operation: 'chamfer',
+        category: 'internal',
+        code: 'fillet-failed'
+      });
+    });
+
+    it('does not reclassify a kernel refusal that was already typed', () => {
+      const typed = new BlendRefusal({
+        operation: 'chamfer',
+        category: 'invalid_input',
+        kernelCode: 'invalid-input',
+        kernelMessage: 'edge 7 is not on this solid'
+      });
+      const error = new EdgeModifierRefusalError(
+        message,
+        advice('face-with-hole'),
+        typed
+      );
+      expect(kernelRefusalRecordOf(error)).toEqual({
+        family: 'blend',
+        operation: 'chamfer',
+        category: 'invalid_input',
+        code: 'invalid-input'
+      });
+    });
+
+    it('reaches the card as the adapter sentence, not a category line', () => {
+      const error = new EdgeModifierRefusalError(
+        message,
+        advice('face-with-hole'),
+        catchAll('chamfer')
+      );
+      expect(plainRefusal(message, kernelRefusalRecordOf(error))).toEqual({
+        message,
+        category: 'unsupported',
+        code: 'chamfer_face_with_hole'
+      });
+    });
+  });
+
   it("uses the adapter's code when an acceptance rule declined the result", () => {
     const error = new EdgeModifierRefusalError(
       'Fillet could not be created on 1 selected edge with radius 3. Try a smaller radius.',

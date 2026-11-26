@@ -1050,6 +1050,72 @@ function trimmingFailureAdvice(
 }
 
 /**
+ * The kernel's catch-all blend code: every `OperationsError` without a more
+ * specific `blend_failure_code` arm, which the typed twins file as
+ * `internal`. Read as the report's `code:` prefix, as the shared-corner code
+ * is, never from the sentence after it.
+ */
+const CATCH_ALL_BLEND_CODE = 'fillet-failed';
+
+/**
+ * Whether a chamfer the kernel refused with {@link CATCH_ALL_BLEND_CODE} at
+ * every probed distance re-trims a flat face with a hole through it, on an
+ * edge of that face's outer boundary.
+ *
+ * Measured on the pin (`f210583`): a 20 × 10 × 10 block with a 5 × 5 notch
+ * cut from its +X/+Y corner and a 4 × 4 square bore through its top face
+ * refuses a 1 mm chamfer on the notch's x = 15 top rim at 1, 0.5 and 0.1 mm,
+ * and at a 45° distance-angle and equal two-distance chamfer too. The
+ * kernel's symmetric chamfer rebuilds the top face's outer loop, copies its
+ * hole loop as it was, and then rejects the shell it assembled (shared edges
+ * with inconsistent face orientations). Without the bore the same edge
+ * chamfers; bores at other places in the top face refuse the same way; the
+ * notch's y = 5 rim on the bored body chamfers; and chamfering the rim
+ * before the bore is cut, then cutting it, builds the exact result. A fillet
+ * on the same edge builds.
+ *
+ * The kernel classifies the failure as `internal` with its catch-all code,
+ * which a person cannot act on. A chamfer refused that way at every size
+ * beside a holed flat face is a configuration the kernel cannot build yet —
+ * `unsupported` — and the advice that helped (chamfer before the hole is
+ * cut) is what the sentence says. It is deliberately narrow: an edge on a
+ * hole's own rim (an inner loop) is excluded, since that edge does not exist
+ * before the hole does, and any other catch-all refusal keeps the kernel's
+ * classification.
+ */
+export function holedFaceBesideSelection(
+  kernel: RemusKernel,
+  target: number,
+  selected: readonly number[]
+): boolean {
+  if (selected.length === 0) return false;
+  const wanted = new Set(selected);
+  const bordering = new Map<number, number[]>();
+  for (const face of kernel.getSolidFaces(target)) {
+    for (const edge of new Set(kernel.getFaceEdges(face))) {
+      if (!wanted.has(edge)) continue;
+      const faces = bordering.get(edge) ?? [];
+      faces.push(face);
+      bordering.set(edge, faces);
+    }
+  }
+  let besideHole = false;
+  for (const edge of selected) {
+    const faces = bordering.get(edge);
+    if (!faces || faces.length === 0) return false;
+    for (const face of faces) {
+      const wires = Array.from(kernel.getFaceWires(face));
+      if (wires.length === 0) return false;
+      if (!kernel.getWireEdges(wires[0]!).includes(edge)) return false;
+      if (wires.length > 1 && surfaceTypeOf(kernel, face) === 'plane') {
+        besideHole = true;
+      }
+    }
+  }
+  return besideHole;
+}
+
+/**
  * Where a refused edge modifier reports itself: the refusal text, and the
  * kernel's typed refusal when its typed twin is what refused.
  */
@@ -1078,13 +1144,25 @@ export class EdgeModifierRefusalError extends KernelRefusal {
     kernelRefusal: BlendRefusal | null = null
   ) {
     const adapter = ADAPTER_REFUSALS.edge_modifier_refused;
+    // A chamfer beside a holed face: the kernel's catch-all `internal`
+    // record is refiled under the adapter's typed code, with the kernel's
+    // code kept as the cause (see `holedFaceBesideSelection`).
+    const besideHole =
+      blendAdvice?.kind === 'structural' &&
+      blendAdvice.cause === 'face-with-hole' &&
+      kernelRefusal?.category === 'internal';
     super({
       family: 'blend',
-      category: kernelRefusal?.category ?? adapter.category,
-      kernelCode: kernelRefusal?.kernelCode ?? 'edge_modifier_refused',
+      category: besideHole
+        ? ADAPTER_REFUSALS.chamfer_face_with_hole.category
+        : (kernelRefusal?.category ?? adapter.category),
+      kernelCode: besideHole
+        ? 'chamfer_face_with_hole'
+        : (kernelRefusal?.kernelCode ?? 'edge_modifier_refused'),
       kernelMessage: kernelRefusal?.kernelMessage ?? message,
       reason: message,
       message,
+      ...(besideHole ? { kernelReason: kernelRefusal.kernelCode } : {}),
       ...(kernelRefusal ? { cause: kernelRefusal } : {})
     });
     this.name = 'EdgeModifierRefusalError';
@@ -1289,6 +1367,17 @@ export function edgeModifierRefusal(
       return structural(
         trimming.besideBlend ? 'trim-face-beside-blend' : 'trim-face',
         trimming.text
+      );
+    }
+    if (
+      featureKind === 'chamfer' &&
+      reported?.startsWith(`${CATCH_ALL_BLEND_CODE}:`) &&
+      holedFaceBesideSelection(kernel, target, selected)
+    ) {
+      const what = named.count === 1 ? 'this edge' : 'these edges';
+      return structural(
+        'face-with-hole',
+        `The modeling engine can't chamfer ${what} yet because a flat face beside ${named.count === 1 ? 'it' : 'them'} has a hole through it, and smaller distances failed too. Add the chamfer before the hole is cut: make the hole in a separate, later step.`
       );
     }
   } catch {

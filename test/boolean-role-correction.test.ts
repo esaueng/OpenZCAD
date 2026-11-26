@@ -779,20 +779,20 @@ describe('Cells 3–4: an offset of a wall a Subtract generated, then an upstrea
 });
 
 /**
- * Class Untyped refusal (K10 adapter / kernel), Remus 2026.1.171
- * (`f210583`). Smallest failing prefix: Block, Post and a 4 × 4 × 30 Core
- * moved (3,3,0) to bore Block through; Subtract [Block, Post, Core];
- * Chamfer 1 mm on the rim edge (15,5,10)–(15,10,10). The chamfer refuses
- * with category `internal` (code `fillet-failed`), at 0.5 and 0.1 mm too,
- * where the same rim on the two-operand cut (no bore) builds. Two
- * sequential two-operand Subtracts name the rim and still refuse, so the
- * bore beside the notch, not the operand count, is the trigger.
+ * A rim chamfer beside a through bore, on Remus 2026.1.171 (`f210583`).
+ * Block, Post and a 4 × 4 × 30 Core moved (3,3,0) to bore Block through;
+ * Subtract [Block, Post, Core]; Chamfer 1 mm on the rim edge
+ * (15,5,10)–(15,10,10). The kernel cannot build it: its chamfer rebuilds the
+ * top face's outer loop around the bore, then rejects the shell it assembled
+ * (shared edges with inconsistent face orientations), at 0.5 and 0.1 mm too,
+ * while the same rim without the bore builds. The kernel files that under
+ * its catch-all `fillet-failed` code as `internal`, which was the Untyped
+ * refusal gap. The adapter now files it as a typed `unsupported` refusal
+ * with its own code and a sentence naming the remedy, and the remedy is
+ * proved below: chamfer the rim before the bore is cut.
  *
- * The setup is built once and asserted by a passing test, so only the gap
- * itself is pinned. Counts as fixed (and flips the `it.fails`): the chamfer
- * builds (expected 1590 − 2.5 = 1587.5), or it refuses with a typed
- * `kernelRefusal` whose category is not `internal`. A prose refusal with no
- * typed record is still the gap.
+ * The setup is built once and asserted by a passing test, so the refusal
+ * is asserted on its own.
  */
 describe('Cell 4b: a rim chamfer beside a through bore', () => {
   let cutVolume: number | undefined;
@@ -840,16 +840,128 @@ describe('Cell 4b: a rim chamfer beside a through bore', () => {
     expect(chamfer!.bodyRepresentations[chamferBodyId!]).toBeDefined();
   });
 
-  it.fails('the chamfer does not refuse as `internal`', () => {
-    const warning = (chamfer?.featureWarnings ?? []).find(
-      (entry) =>
-        entry.featureName === 'Chamfer' &&
-        (entry.kind === 'build-failed' || entry.kind === 'refusal')
+  it('refuses with a typed `unsupported` record and says what to do, keeping the cut', () => {
+    const refused = refusal(chamfer!, 'chamfer');
+    expect(refused?.state, refused?.evidence).toBe('typed-refusal');
+    const warning = (chamfer!.featureWarnings ?? []).find(
+      (entry) => entry.featureName === 'Chamfer'
     );
-    const fixed =
-      warning === undefined ||
-      (warning.kernelRefusal !== undefined &&
-        warning.kernelRefusal.category !== 'internal');
-    expect(fixed, JSON.stringify(warning?.kernelRefusal)).toBe(true);
+    expect(warning?.kind).toBe('build-failed');
+    expect(warning?.kernelRefusal).toEqual({
+      family: 'blend',
+      operation: 'chamfer',
+      category: 'unsupported',
+      code: 'chamfer_face_with_hole',
+      reason: 'fillet-failed'
+    });
+    expect(warning?.blendAdvice).toMatchObject({
+      kind: 'structural',
+      cause: 'face-with-hole',
+      edges: 1
+    });
+    expect(warning?.blendAdvice?.reason).toContain(
+      'Add the chamfer before the hole is cut'
+    );
+    // Not a silent no-op: the body is the cut, unchamfered.
+    near(
+      chamfer!.bodyRepresentations[chamferBodyId!]?.volume,
+      BLOCK - SHARED - 160,
+      'kept'
+    );
+    expect(chamferFaces(chamfer!.bodyRepresentations[chamferBodyId!]!)).toEqual(
+      []
+    );
+  });
+
+  it('the advice holds: chamfered before the bore is cut, the same rim builds exactly', async () => {
+    const fixture = fixtureB('bore');
+    const notch = booleanBodies(fixture.document, {
+      name: 'Subtract',
+      operation: 'subtract',
+      targetBodyIds: [fixture.block, fixture.post]
+    });
+    const built = expectBuilt(
+      await outcome(notch.document, [notch.bodyId]),
+      'notch'
+    );
+    const rim = rimEdge(built.bodyRepresentations[notch.bodyId]!, 15);
+    const chamfered = chamferEdges(notch.document, {
+      name: 'Chamfer',
+      targetBodyId: notch.bodyId,
+      edgeHashes: [rim.hash],
+      ...(rim.reference ? { edgeReferences: [rim.reference] } : {}),
+      size: 1
+    });
+    const bored = booleanBodies(chamfered.document, {
+      name: 'Bore',
+      operation: 'subtract',
+      targetBodyIds: [chamfered.bodyId, fixture.core!]
+    });
+    const after = expectBuilt(
+      await outcome(bored.document, [bored.bodyId]),
+      'bored'
+    );
+    // 2000 − 250 − 160 − 1 × 1 / 2 × 5 = 1587.5
+    near(
+      after.bodyRepresentations[bored.bodyId]?.volume,
+      BLOCK - SHARED - 160 - 2.5,
+      'bored'
+    );
+    expect(chamferFaces(after.bodyRepresentations[bored.bodyId]!)).toEqual([
+      '14.5'
+    ]);
+  });
+});
+
+/**
+ * Class Wrong result (K10 kernel), Remus 2026.1.171 (`f210583`), found while
+ * fixing Cell 4b. Smallest failing prefix: Block and Post only; Subtract
+ * [Block, Post]; Chamfer 1 mm on the notch's BOTTOM rim (15,5,0)–(15,10,0).
+ * The body is symmetric top to bottom and the top rim removes 2.5, but the
+ * bottom one builds with a bevel face whose normal leans in Y
+ * (≈ 0.68, 0.27, −0.68) and removes 0.8333. Counts as fixed: 1747.5 with one
+ * 45° (+X, −Z) bevel at x = 14.5, or a typed refusal.
+ */
+describe('Cell 4c: the same rim chamfer on the notch floor', () => {
+  it.fails('removes 2.5 like the top rim', async () => {
+    const fixture = fixtureB();
+    const cut = booleanBodies(fixture.document, {
+      name: 'Subtract',
+      operation: 'subtract',
+      targetBodyIds: [fixture.block, fixture.post]
+    });
+    const built = expectBuilt(await outcome(cut.document, [cut.bodyId]), 'cut');
+    const floorRim = (
+      built.bodyRepresentations[cut.bodyId]!.topology?.edges ?? []
+    ).find((edge) => {
+      const p = edge.points;
+      const n = p.length;
+      if (edge.curve?.type !== 'LINE' || n < 6) return false;
+      const ends = [
+        [p[0]!, p[1]!, p[2]!],
+        [p[n - 3]!, p[n - 2]!, p[n - 1]!]
+      ];
+      return (
+        ends.every(
+          ([ex, , ez]) => Math.abs(ex! - 15) < 1e-6 && Math.abs(ez!) < 1e-6
+        ) &&
+        ends.some(([, ey]) => Math.abs(ey! - 5) < 1e-6) &&
+        ends.some(([, ey]) => Math.abs(ey! - 10) < 1e-6)
+      );
+    });
+    expect(floorRim, 'floor rim').toBeDefined();
+    const chamfered = chamferEdges(cut.document, {
+      name: 'Chamfer',
+      targetBodyId: cut.bodyId,
+      edgeHashes: [floorRim!.hash],
+      size: 1
+    });
+    const result = await outcome(chamfered.document, [chamfered.bodyId]);
+    if (result.kind === 'typed') return;
+    near(
+      result.derived.bodyRepresentations[chamfered.bodyId]?.volume,
+      BLOCK - SHARED - 2.5,
+      'floor'
+    );
   });
 });
