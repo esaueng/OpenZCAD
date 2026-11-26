@@ -3617,6 +3617,7 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
     const bodies = { [bodyId]: cube(options.size) };
     const onCommand = vi.fn((_command: AnyCommand) => true);
     const onStatus = vi.fn();
+    const onAnnounceUndoable = vi.fn();
     const rendered = render(
       <AppShell
         topBar={<header className="topbar">top</header>}
@@ -3658,11 +3659,18 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
             editDisabledReason={null}
             onCommand={onCommand}
             onStatus={onStatus}
+            onAnnounceUndoable={onAnnounceUndoable}
           />
         }
       />
     );
-    return { onCommand, onStatus, document, unmount: rendered.unmount };
+    return {
+      onCommand,
+      onStatus,
+      onAnnounceUndoable,
+      document,
+      unmount: rendered.unmount
+    };
   }
   const fingerprint = () =>
     drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!;
@@ -3894,6 +3902,60 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
     );
     expect(within(sheetPanel()).queryByRole('button', { name: 'Export PDF' }))
       .toBeNull();
+  });
+
+  it('offers Undo in the notice after deleting a sheet, a view or the broken annotations', async () => {
+    const first = starter(fingerprint());
+    const front = first.views.find((view) => view.orientation === 'front')!;
+    // A dimension on an edge the cube has not got: broken.
+    first.annotations = [
+      {
+        annotationId: 'dann_lost' as DrawingAnnotationId,
+        kind: 'linear',
+        viewId: front.viewId,
+        direction: 'horizontal',
+        from: { edge: { bodyId, hash: 999_999 }, anchor: 'first' },
+        to: { edge: { bodyId, hash: 999_999 }, anchor: 'second' },
+        placementMm: { x: 0, y: -15 }
+      }
+    ];
+    const second = { ...starter(fingerprint()), name: 'Sheet 2' };
+    second.sheetId = 'dsheet_two' as DrawingSheet['sheetId'];
+    const { onCommand, onStatus, onAnnounceUndoable } = compactSetup({
+      sheets: [first, second]
+    });
+    let page = await openPage('Export');
+    const cleanup = await page.findByRole('button', {
+      name: 'Delete all broken'
+    });
+    await waitFor(() => expect(cleanup).toBeEnabled());
+    fireEvent.click(cleanup);
+    expect(onCommand.mock.calls.at(-1)![0].label).toBe(
+      'Delete broken annotations'
+    );
+    expect(onAnnounceUndoable).toHaveBeenLastCalledWith(
+      'Deleted 1 broken annotation.'
+    );
+    expect(onStatus).not.toHaveBeenCalledWith(
+      expect.stringMatching(/broken annotation/)
+    );
+    fireEvent.click(page.getByRole('button', { name: 'Back' }));
+    page = await openPage('Views');
+    fireEvent.click(
+      within(
+        page.getByRole('listbox', { name: 'Views on this sheet' })
+      ).getAllByRole('option')[0]!
+    );
+    fireEvent.click(await page.findByRole('button', { name: 'Delete view' }));
+    expect(onCommand.mock.calls.at(-1)![0].kind).toBe('drawing.view.delete');
+    expect(onAnnounceUndoable).toHaveBeenCalledTimes(2);
+    fireEvent.click(page.getByRole('button', { name: 'Back' }));
+    page = await openPage('Sheets');
+    fireEvent.click(page.getByRole('button', { name: 'Delete Sheet 2' }));
+    expect(onCommand.mock.calls.at(-1)![0].kind).toBe('drawing.sheet.delete');
+    expect(onAnnounceUndoable).toHaveBeenLastCalledWith(
+      expect.stringMatching(/^Deleted Sheet 2 and its \d views\.$/)
+    );
   });
 
   it('offers only a new sheet before the first one', async () => {

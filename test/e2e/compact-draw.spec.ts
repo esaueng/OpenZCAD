@@ -1,5 +1,23 @@
 import type { Download, Locator, Page } from '@playwright/test';
 import {
+  addPrimitiveFeature,
+  booleanBodies,
+  createProjectDocument,
+  setParameter
+} from '@openzcad/document-core';
+import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import {
+  toUserId,
+  type DrawingAnnotation,
+  type DrawingAnnotationId,
+  type ProjectDocument
+} from '@openzcad/shared';
+import {
+  createStarterSheet,
+  drawingSourceFingerprint
+} from '../../apps/web/src/lib/drawing/sheetSources';
+import { resolveDrawingAnnotation } from '../../apps/web/src/lib/drawing/annotations';
+import {
   expect,
   stubApi,
   test,
@@ -335,6 +353,95 @@ const viewOptions = (page: Page): Locator =>
     .getByRole('listbox', { name: 'Views on this sheet' })
     .getByRole('option');
 
+/**
+ * A union whose width parameter changed after its sheet was drawn: two
+ * of the sheet's dimensions measure edges the edit replaced, so they
+ * break once the sheet is updated.
+ */
+async function brokenDimensionsProject(): Promise<ProjectDocument> {
+  let document = setParameter(
+    createProjectDocument('Broken dimensions', toUserId('test')),
+    { name: 'width', expression: '20' }
+  );
+  for (const [name, width, height] of [
+    ['Base', 'width', 10],
+    ['Upright', 10, 20]
+  ] as const)
+    document = addPrimitiveFeature(document, {
+      name,
+      primitiveKind: 'box',
+      dimensions: { width, height, depth: 10 }
+    });
+  const union = booleanBodies(document, {
+    name: 'Union',
+    operation: 'union',
+    targetBodyIds: [...document.bodyOrder]
+  });
+  document = union.document;
+  const adapter = await createExactKernelAdapter();
+  try {
+    const before = (await adapter.syncDocument(document)).bodyRepresentations;
+    const sheet = createStarterSheet({
+      name: 'Sheet 1',
+      bodyIds: [union.bodyId],
+      bodies: before,
+      units: 'mm',
+      paper: { size: 'A3', orientation: 'landscape' },
+      projectionAngle: 'first',
+      fingerprint: drawingSourceFingerprint(before, [union.bodyId])!
+    });
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    const candidates: DrawingAnnotation[] = before[
+      union.bodyId
+    ]!.topology!.edges.flatMap((edge, index) =>
+      (['horizontal', 'vertical'] as const).map((direction) => ({
+        kind: 'linear' as const,
+        annotationId: `dann_${direction}${index}` as DrawingAnnotationId,
+        viewId: front.viewId,
+        direction,
+        from: {
+          edge: { bodyId: union.bodyId, hash: edge.hash },
+          anchor: 'first' as const
+        },
+        to: {
+          edge: { bodyId: union.bodyId, hash: edge.hash },
+          anchor: 'second' as const
+        },
+        placementMm: { x: 0, y: -20 }
+      }))
+    ).filter(
+      (annotation) =>
+        resolveDrawingAnnotation(annotation, front, before, 'mm').ok
+    );
+    document = setParameter(document, { name: 'width', expression: '30' });
+    const after = (await adapter.syncDocument(document)).bodyRepresentations;
+    const broken = candidates
+      .filter(
+        (annotation) =>
+          !resolveDrawingAnnotation(annotation, front, after, 'mm').ok
+      )
+      .slice(0, 2);
+    expect(broken).toHaveLength(2);
+    sheet.annotations = broken;
+    return { ...document, drawings: { sheets: [sheet] } };
+  } finally {
+    adapter.dispose();
+  }
+}
+
+/**
+ * The notice's Undo after a delete: in reach over the sheet, a finger's
+ * size, and tapped.
+ */
+async function tapNoticeUndo(page: Page) {
+  const undo = page.locator('.toast').getByRole('button', { name: 'Undo' });
+  await expectReachable(undo);
+  const box = (await undo.boundingBox())!;
+  expect(box.width).toBeGreaterThanOrEqual(43.5);
+  expect(box.height).toBeGreaterThanOrEqual(43.5);
+  await undo.tap();
+}
+
 test.describe('Draw in the compact sheet', () => {
   test.use({ hasTouch: true, isMobile: true });
 
@@ -559,6 +666,89 @@ test.describe('Draw in the compact sheet', () => {
           .getByRole('button', { name: 'Fit sheet' })
           .tap();
         await expect(canvas(page)).toHaveAttribute('viewBox', fitted!);
+        expect(errors).toEqual([]);
+      }
+    );
+  }
+
+  for (const size of [SIZES[0]!, SIZES[2]!]) {
+    test(
+      `puts Undo in reach after deleting broken annotations, a view and a sheet at ${size.width}×${size.height}`,
+      size.width === 390 ? { tag: '@ci-smoke' } : {},
+      async ({ page }) => {
+        test.setTimeout(240_000);
+        const errors: string[] = [];
+        page.on('pageerror', (error) => errors.push(error.message));
+        const document = await brokenDimensionsProject();
+        await stubApi(page);
+        await preferCompact(page);
+        await page.setViewportSize(size);
+        await page.goto('/');
+        await page.getByLabel('Import project backup').setInputFiles({
+          name: 'broken.openzcad',
+          mimeType: 'application/json',
+          buffer: Buffer.from(
+            JSON.stringify({
+              format: 'openzcad-project',
+              version: 1,
+              document,
+              files: []
+            })
+          )
+        });
+        await expect(
+          page.locator('.app-shell[data-shell="compact"]')
+        ).toBeVisible({ timeout: 60_000 });
+        const draw = page
+          .getByRole('group', { name: 'Workspace mode' })
+          .getByRole('button', { name: 'Draw', exact: true });
+        await draw.tap();
+        await expect(draw).toHaveAttribute('aria-pressed', 'true');
+
+        // The model changed since the sheet was drawn: Export offers its
+        // Update, which redraws the sheet and breaks the two dimensions.
+        await openPage(page, 'Export');
+        const update = sheet(page).getByRole('button', { name: 'Update' });
+        await expect(update).toBeEnabled({ timeout: 60_000 });
+        await update.tap();
+        const cleanup = sheet(page).getByRole('button', {
+          name: 'Delete all broken'
+        });
+        await expect(cleanup).toBeEnabled({ timeout: 60_000 });
+        await expect(
+          sheet(page).getByRole('button', { name: 'Export PDF' })
+        ).toBeDisabled();
+
+        // Delete all broken, then Undo from the notice: they are back.
+        await cleanup.tap();
+        await expect(cleanup).toHaveCount(0);
+        await tapNoticeUndo(page);
+        await expect(cleanup).toBeEnabled();
+        await back(page);
+
+        // A view deleted, and back.
+        await openPage(page, 'Views');
+        const views = await viewOptions(page).count();
+        await viewOptions(page).first().tap();
+        await sheet(page).getByRole('button', { name: 'Delete view' }).tap();
+        await expect(viewOptions(page)).toHaveCount(views - 1);
+        await tapNoticeUndo(page);
+        await expect(viewOptions(page)).toHaveCount(views);
+        await back(page);
+
+        // A sheet deleted, and back.
+        await openPage(page, 'Sheets');
+        await sheet(page)
+          .getByRole('button', { name: 'New drawing sheet' })
+          .tap();
+        const sheets = sheet(page)
+          .getByRole('list', { name: 'Sheets' })
+          .getByRole('listitem');
+        await expect(sheets).toHaveCount(2);
+        await sheet(page).getByRole('button', { name: 'Delete Sheet 2' }).tap();
+        await expect(sheets).toHaveCount(1);
+        await tapNoticeUndo(page);
+        await expect(sheets).toHaveCount(2);
         expect(errors).toEqual([]);
       }
     );

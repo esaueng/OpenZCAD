@@ -6132,9 +6132,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     ) {
       if (broken.some((entry) => entry.annotationId === selectedAnnotationId))
         setSelectedAnnotationId(null);
-      props.onStatus(
-        `Deleted ${broken.length} broken ${broken.length === 1 ? 'annotation' : 'annotations'}. Undo to restore.`
-      );
+      const deleted = `Deleted ${broken.length} broken ${broken.length === 1 ? 'annotation' : 'annotations'}.`;
+      // In the compact frame the notice carries Undo, as a deleted sheet
+      // or view's does.
+      if (compact) announceUndoable(deleted);
+      else props.onStatus(`${deleted} Undo to restore.`);
     }
   };
   const moveAnnotation = (
