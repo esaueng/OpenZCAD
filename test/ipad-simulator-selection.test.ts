@@ -121,4 +121,48 @@ describe('iPad and iPhone simulator selection', () => {
       chooseSimulator({ devices: { [ios(27, 2)]: [] } }, { iphone: true })
     ).toThrow(/No iPhone simulator/);
   });
+
+  it('reuses a booted copy of the chosen model before a newer shut-down one', () => {
+    const booted = {
+      devices: {
+        [ios(26, 5)]: [
+          device(
+            'iPad Pro 11-inch (M5)',
+            'old-pro',
+            'iPad-Pro-11-inch-M5-12GB',
+            'Booted'
+          )
+        ],
+        [ios(27, 2)]: [
+          device('iPad Pro 11-inch (M5)', 'pro', 'iPad-Pro-11-inch-M5-12GB')
+        ]
+      }
+    };
+    expect(chooseSimulator(booted)).toMatchObject({
+      device: { udid: 'old-pro' }
+    });
+  });
+
+  it('skips runtimes below the app’s deployment target', () => {
+    const old = {
+      devices: {
+        [ios(16, 4)]: [
+          device(
+            'iPad Air (5th generation)',
+            'air16',
+            'iPad-Air-5th-generation'
+          )
+        ]
+      }
+    };
+    expect(() => chooseSimulator(old)).toThrow(/No iPad simulator/);
+  });
+
+  it('refuses a stale UDID instead of choosing another device', () => {
+    expect(() =>
+      chooseSimulator(inventory, {
+        requested: 'D79A92F1-0000-4000-8000-000000000000'
+      })
+    ).toThrow(/No available simulator/);
+  });
 });

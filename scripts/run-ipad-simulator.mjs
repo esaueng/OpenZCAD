@@ -28,6 +28,9 @@ export function simulatorFamily(device) {
   return undefined;
 }
 
+/** The app's deployment target (`IPHONEOS_DEPLOYMENT_TARGET`). */
+export const MINIMUM_IOS = [17, 0, 0];
+
 function runtimeVersion(runtime) {
   const match = /\.SimRuntime\.iOS-(\d+)-(\d+)(?:-(\d+))?$/.exec(runtime);
   return match ? match.slice(1).map((part) => Number(part ?? 0)) : undefined;
@@ -51,7 +54,7 @@ export function chooseSimulator(inventory, { requested, iphone = false } = {}) {
   const devices = Object.entries(inventory.devices).flatMap(
     ([runtime, list]) => {
       const version = runtimeVersion(runtime);
-      return version
+      return version && compareVersions(version, MINIMUM_IOS) >= 0
         ? list
             .filter((device) => device.isAvailable !== false)
             .map((device) => ({ ...device, runtime, version }))
@@ -68,8 +71,9 @@ export function chooseSimulator(inventory, { requested, iphone = false } = {}) {
           Number(b.name.startsWith(line)) - Number(a.name.startsWith(line)),
         0
       ) ||
-      compareVersions(b.version, a.version) ||
+      // A booted copy is reused, as it may hold the projects under test.
       Number(b.state === 'Booted') - Number(a.state === 'Booted') ||
+      compareVersions(b.version, a.version) ||
       a.name.localeCompare(b.name) ||
       a.udid.localeCompare(b.udid);
   const exact = devices
@@ -86,6 +90,13 @@ export function chooseSimulator(inventory, { requested, iphone = false } = {}) {
     );
   }
   if (named) return { device: named, family, fellBack: false };
+  // A requested simulator that is gone and names no family (a stale UDID)
+  // must not quietly become a different device.
+  if (requested && !simulatorFamily({ name: requested })) {
+    throw new Error(
+      `No available simulator is named or has the UDID ${requested}.`
+    );
+  }
   // "iPad Pro 11-inch (M4)" → prefer another "iPad Pro 11-inch" first, then
   // the family's preferred line.
   const line = (model) => model.replace(/\s*\([^)]*\)\s*$/, '');

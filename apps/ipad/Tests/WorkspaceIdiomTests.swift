@@ -101,14 +101,16 @@ final class WorkspaceIdiomTests: XCTestCase {
         web.load(URLRequest(url: BundleServer.origin))
         await fulfillment(of: [navigation.loaded!], timeout: 10)
         let result = try await web.callAsyncJavaScript("""
-            const run = (storage, place = {protocol: 'zcad-ipad:', host: 'app'}) => {
+            const run = (storage, place = {protocol: 'zcad-ipad:', host: 'app', pathname: '/'}) => {
                 new Function('localStorage', 'location', source)(storage, place);
             };
             const writes = [];
             const recording = value => ({ getItem: () => value, setItem: (...pair) => writes.push(pair.join('=')) });
             run(recording(null));
             run(recording('automatic'));
-            run(recording(null), {protocol: 'http:', host: '127.0.0.1:27183'});
+            run(recording(null), {protocol: 'http:', host: '127.0.0.1:27183', pathname: '/'});
+            // The bootstrap page that restores the earlier prototype's storage.
+            run(recording(null), {protocol: 'zcad-ipad:', host: 'app', pathname: '/__native_bootstrap__'});
             run({ getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } });
             run({ getItem: () => null, setItem() { throw new Error('quota'); } });
             return writes;

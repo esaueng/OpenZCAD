@@ -136,7 +136,7 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
                     guard let snapshot = result as? String else { throw URLError(.cannotDecodeContentData) }
                     pendingSnapshot = snapshot
                     bootstrap = .copy
-                    webView.load(URLRequest(url: BundleServer.origin.appendingPathComponent("__native_bootstrap__")))
+                    webView.load(URLRequest(url: BundleServer.origin.appendingPathComponent(BundleServer.bootstrapPath)))
                 case .copy:
                     guard let snapshot = pendingSnapshot else { throw URLError(.cannotDecodeContentData) }
                     _ = try await webView.callAsyncJavaScript(PrototypeStorage.restore, arguments: ["snapshot": snapshot], in: nil, contentWorld: .page)
@@ -224,7 +224,7 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
         case .legacy:
             webView.loadHTMLString("<!doctype html><html><body></body></html>", baseURL: PrototypeStorage.legacyOrigin)
         case .copy:
-            webView.load(URLRequest(url: BundleServer.origin.appendingPathComponent("__native_bootstrap__")))
+            webView.load(URLRequest(url: BundleServer.origin.appendingPathComponent(BundleServer.bootstrapPath)))
         case .workspace:
             webView.load(URLRequest(url: BundleServer.origin))
         }

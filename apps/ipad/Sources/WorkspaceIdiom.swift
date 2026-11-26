@@ -32,12 +32,14 @@ enum WorkspaceIdiom: Equatable {
     static let layoutPreferenceKey = "openzcad.layout:v1"
 
     /// Opens the phone in the compact layout unless the person already chose
-    /// one. Only the private workspace origin is touched, never the earlier
-    /// prototype's origin during its storage copy, and a storage failure
-    /// leaves the web app on its own default.
+    /// one. Only the workspace document itself is touched: never the earlier
+    /// prototype's origin, and never the native bootstrap page that restores
+    /// its storage, so a copy that fails leaves nothing written. A storage
+    /// failure leaves the web app on its own default.
     static let seedCompactLayout = """
     try {
         if (location.protocol === '\(BundleServer.scheme):' && location.host === '\(BundleServer.origin.host!)'
+            && location.pathname !== '/\(BundleServer.bootstrapPath)'
             && localStorage.getItem('\(layoutPreferenceKey)') === null) {
             localStorage.setItem('\(layoutPreferenceKey)', 'compact');
         }
