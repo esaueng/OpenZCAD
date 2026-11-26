@@ -20,6 +20,7 @@ import {
   test
 } from './openzcad-fixtures';
 import { reimportSolids } from '../support/exchange-harness';
+import { analyticSurfaceRecord } from '../../packages/kernel-adapter/src/exact-brep';
 import {
   RemusKernel,
   loadRemusTranslators
@@ -55,7 +56,8 @@ interface ExpectedSolid {
   min: Vec;
   max: Vec;
   volume: number;
-  bore: boolean;
+  /** A through bore along Z: its axis position in x and y, and its radius. */
+  bore: { x: number; y: number; radius: number } | null;
 }
 
 const BLOCK: ExpectedSolid = {
@@ -63,21 +65,21 @@ const BLOCK: ExpectedSolid = {
   min: [0, 0, 0],
   max: [30, 20, 10],
   volume: 6000,
-  bore: false
+  bore: null
 };
 const BEAM: ExpectedSolid = {
   name: 'Beam',
   min: [20, 5, 0],
   max: [40, 15, 10],
   volume: 2000,
-  bore: false
+  bore: null
 };
 const BORED: ExpectedSolid = {
   name: 'Bored plate',
   min: [60, 0, 0],
   max: [100, 40, 10],
   volume: BORED_VOLUME,
-  bore: true
+  bore: { x: 80, y: 20, radius: 5 }
 };
 
 function fixtureB(): ProjectDocument {
@@ -228,7 +230,8 @@ interface ReadSolid {
   max: Vec;
   volume: number;
   valid: boolean;
-  cylinder: boolean;
+  /** Each cylindrical face's axis origin, unit axis and radius. */
+  cylinders: { origin: Vec; axis: Vec; radius: number }[];
 }
 
 /**
@@ -250,9 +253,19 @@ async function readSolids(bytes: Uint8Array) {
           max: [box[3]!, box[4]!, box[5]!] as Vec,
           volume: kernel.volume(handle, 0.001),
           valid: kernel.validateSolid(handle) === 0,
-          cylinder: [...kernel.getSolidFaces(handle)].some(
-            (face) => kernel.getSurfaceType(face) === 'cylinder'
-          )
+          cylinders: [...kernel.getSolidFaces(handle)]
+            .filter((face) => kernel.getSurfaceType(face) === 'cylinder')
+            .map((face) => {
+              const record = analyticSurfaceRecord(kernel, face);
+              const origin = record?.origin as Vec;
+              const axis = record?.axis as Vec;
+              const length = Math.hypot(...axis);
+              return {
+                origin,
+                axis: axis.map((value) => value / length) as Vec,
+                radius: record?.radius as number
+              };
+            })
         } satisfies ReadSolid
       };
     });
@@ -286,7 +299,30 @@ function expectSolid(actual: ReadSolid, expected: ExpectedSolid) {
     2
   );
   expect(actual.valid, `${expected.name} closed`).toBe(true);
-  expect(actual.cylinder, `${expected.name} analytic bore`).toBe(expected.bore);
+  if (!expected.bore) {
+    expect(actual.cylinders, `${expected.name} has no bore`).toEqual([]);
+    return;
+  }
+  // The bore is still one analytic cylinder, and it sits where it was cut:
+  // a bore moved within the plate keeps the bounds and volume above.
+  expect(actual.cylinders, `${expected.name} analytic bore`).toHaveLength(1);
+  const [bore] = actual.cylinders;
+  expect(Math.abs(bore!.axis[2]), `${expected.name} bore along Z`).toBeCloseTo(
+    1,
+    6
+  );
+  expect(bore!.origin[0], `${expected.name} bore x`).toBeCloseTo(
+    expected.bore.x,
+    4
+  );
+  expect(bore!.origin[1], `${expected.name} bore y`).toBeCloseTo(
+    expected.bore.y,
+    4
+  );
+  expect(bore!.radius, `${expected.name} bore radius`).toBeCloseTo(
+    expected.bore.radius,
+    4
+  );
 }
 
 async function expectStep(bytes: Uint8Array, expected: ExpectedSolid[]) {
@@ -335,7 +371,7 @@ const importedAt = (x: number): ExpectedSolid => ({
   min: [x - 10, -8, -6],
   max: [x + 10, 8, 6],
   volume: 3840,
-  bore: false
+  bore: null
 });
 
 test('imports an independently authored STEP component while a body is isolated, then places, undoes and reloads it', async ({
@@ -421,6 +457,15 @@ test('imports an independently authored STEP component while a body is isolated,
 
   // A reload keeps the import, unplaced, and the user's own hidden set.
   await objects.getByRole('button', { name: 'Isolate body Block' }).click();
+  // Isolation took again, so the reload below proves it is not saved. Block
+  // alone is isolated now: the import joined the earlier isolation only
+  // because it arrived during it.
+  await expect(exitBlock).toHaveAttribute('aria-pressed', 'true');
+  await expectShown(
+    objects,
+    ['Block'],
+    [...others, IMPORTED, 'Spare', 'Disabled']
+  );
   await expect(page.locator('.save-state')).toHaveClass(/is-(synced|local)\b/);
   await page.reload();
   await revealModelPanel(page, 'Objects');
@@ -436,6 +481,12 @@ test('imports an independently authored STEP component while a body is isolated,
   await expect(
     page.locator('.feature-row').getByTitle('Feature failed to build')
   ).toHaveCount(1);
+  // The saved import still names its source file; the status line that named
+  // it before the reload is gone.
+  await page.locator('.feature-row-main', { hasText: IMPORTED }).click();
+  await expect(
+    page.locator('.kv-grid', { hasText: 'editable exact B-rep' })
+  ).toContainText('occt-box-20x16x12.step');
   await objects.getByRole('button', { name: IMPORTED, exact: true }).click();
   await expectStep(await exportStep(page), [importedAt(0)]);
   expect(errors).toEqual([]);

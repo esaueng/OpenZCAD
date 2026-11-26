@@ -15,8 +15,9 @@ Undo takes back only the Move, Exit restores the earlier visibility, and a
 reload keeps the import unplaced without isolation's hiding. The isolated
 bored part and then the full scope export as STEP and reimport per body with
 millimetre units, bounds, closed-form volume, closure and a cylindrical bore
-face, and the two boxes keep their overlap. Consumed tools and hidden and
-parameter-off bodies stay out and are counted. The failed body is withheld
+face on its cut axis, and the two boxes keep their overlap. Consumed
+tools stay out and are not counted; hidden and parameter-off bodies stay
+out and are counted as hidden. The failed body is withheld
 with its reason rather than counted as hidden; isolated alone, it disables
 Export STEP with that reason. A hidden body picked in Objects does not narrow
 the scope. No mismatches with `apps/web/src/lib/exportScope.ts` were found.
