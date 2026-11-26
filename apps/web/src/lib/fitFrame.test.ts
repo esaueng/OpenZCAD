@@ -315,6 +315,35 @@ describe('measureClearStage', () => {
     expect(measureClearStage(canvas)!.rect.bottom).toBe(900);
   });
 
+  it('frames beside the compact sheet a landscape phone stands at the side', () => {
+    // U12 slice 4: held landscape, the sheet stands the stage's full height
+    // at its right; Measure's page there (I47) asks for the model beside it.
+    const shell = document.createElement('div');
+    shell.className = 'app-shell';
+    const { workspace, canvas } = workspaceStage();
+    shell.append(workspace);
+    document.body.append(shell);
+    const sheet = document.createElement('section');
+    sheet.className = 'compact-sheet';
+    sheet.dataset.detent = 'half';
+    shell.append(placed(sheet, 1040, 0, 1440, 900));
+    const { rect } = measureClearStage(canvas)!;
+    expect(rect.top).toBe(0);
+    expect(rect.bottom).toBe(900);
+    expect(rect.right).toBeLessThanOrEqual(1040);
+    const corner = (x: number, y: number) => ({
+      x: (x / 1440) * 2 - 1,
+      y: 1 - (y / 900) * 2,
+      z: 0
+    });
+    expect(
+      cornersClearOfStage(canvas, [corner(900, 300), corner(1200, 600)])
+    ).toBe(false);
+    expect(
+      cornersClearOfStage(canvas, [corner(300, 300), corner(700, 600)])
+    ).toBe(true);
+  });
+
   it('takes a band off the top for a flyout standing over the middle', () => {
     const { area, canvas } = workspaceStage();
     const flyout = document.createElement('div');
