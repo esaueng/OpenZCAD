@@ -595,11 +595,13 @@ describe('repeated curved patches', { timeout: 120_000 }, () => {
     // resized to R4.5, a drag on B to R4 rewrites the tip "Resize patch A",
     // so A moves to R4 and B stays at R4.5. Expected: the fold applies only
     // to the patch the tip feature resized, otherwise the drag appends a
-    // new edit on B.
-    it.fails(
-      'never folds a drag on patch B into the resize of sibling A',
-      async () => {
-        let document = directEditBody(model.document, {
+    // new edit on B, so the fold is null. The setup is checked outside the
+    // expected failure, so a replay or build error cannot pass as the bug.
+    describe('a drag on B when the tip resized sibling A', () => {
+      let document: ProjectDocument;
+      let body: BodyRepresentation;
+      beforeAll(async () => {
+        document = directEditBody(model.document, {
           name: 'Resize patch B',
           targetBodyId: model.bodyId,
           operation: resize(patch(block, 'B'), 4.5)
@@ -609,18 +611,25 @@ describe('repeated curved patches', { timeout: 120_000 }, () => {
           targetBodyId: model.bodyId,
           operation: resize(patch(block, 'A'), 4.5)
         }).document;
-        const { derived, body } = await build(document);
-        expect(derived.warnings).toEqual([]);
+        const built = await build(document);
+        expect(built.derived.warnings).toEqual([]);
+        body = built.body;
+      });
+
+      it('builds both resizes on their own patches', () => {
         expect(layout(body)).toEqual([
           '[0, 9] r4.5',
           '[11, 19] r4.5',
           '[21, 30] r5'
         ]);
-        const fold = cylinderResizeFold(document, held(patch(body, 'B')), 4);
-        const siblingTip = featureNamed(document, 'Resize patch A');
-        expect(fold?.featureId).not.toBe(siblingTip.featureId);
-      }
-    );
+      });
+
+      it.fails('never folds into the resize of sibling A', () => {
+        expect(
+          cylinderResizeFold(document, held(patch(body, 'B')), 4)
+        ).toBeNull();
+      });
+    });
   });
 });
 
@@ -637,12 +646,12 @@ describe('partial-turn repeated patches', { timeout: 120_000 }, () => {
       () => slottedBlock('trough'),
       5,
       'hole',
-      'partial_reversed_wall'
+      { reason: 'partial_reversed_wall' }
     ],
-    ['ribs', ribbedPlate, 10, 'boss', undefined]
+    ['ribs', ribbedPlate, 10, 'boss', { code: 'topology_change' }]
   ] as const)(
     'refuses a %s patch resize with a typed reason and leaves every patch in place',
-    async (_label, make, radius, concavity, reason) => {
+    async (_label, make, radius, concavity, pinned) => {
       const { document, bodyId } = make();
       const before = await adapter.syncDocument(document);
       expect(before.warnings).toEqual([]);
@@ -675,7 +684,7 @@ describe('partial-turn repeated patches', { timeout: 120_000 }, () => {
         family: 'direct-edit',
         operation: 'resize-cylindrical-face',
         category: 'unsupported',
-        ...(reason ? { reason } : {})
+        ...pinned
       });
       const result = after.bodyRepresentations[bodyId]!;
       expect(result.volume).toBe(body.volume);
