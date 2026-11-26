@@ -69,5 +69,8 @@
    After every sizing rule, so it can re-place the stage's islands inside
    that frame; touch.css sizes nothing and stays last. */
 @import './components/compact-shell.css';
+/* U12 slice 10: the compact library, project sheet, Settings, search and
+   guide, scoped the same way. */
+@import './components/compact-surfaces.css';
 /* Touch-only browser behaviour; it sizes nothing. */
 @import './components/touch.css';
