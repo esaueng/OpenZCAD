@@ -15,8 +15,11 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
     private var bootstrapGeneration = 0
     private var processRecoveries = 0
 
-    override var prefersStatusBarHidden: Bool { true }
+    private let idiom = WorkspaceIdiom.current
+
+    override var prefersStatusBarHidden: Bool { idiom.prefersStatusBarHidden }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { idiom.supportedOrientations }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -41,6 +44,11 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
             source: "localStorage.setItem('openzcad-cloud-functions-enabled:v1', 'false');",
             injectionTime: .atDocumentStart, forMainFrameOnly: true
         ))
+        for source in idiom.documentStartScripts {
+            configuration.userContentController.addUserScript(WKUserScript(
+                source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true
+            ))
+        }
         configuration.userContentController.addUserScript(WKUserScript(
             source: """
             const viewport = document.querySelector('meta[name="viewport"]');
@@ -128,7 +136,7 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
                     guard let snapshot = result as? String else { throw URLError(.cannotDecodeContentData) }
                     pendingSnapshot = snapshot
                     bootstrap = .copy
-                    webView.load(URLRequest(url: BundleServer.origin.appendingPathComponent("__native_bootstrap__")))
+                    webView.load(URLRequest(url: BundleServer.origin.appendingPathComponent(BundleServer.bootstrapPath)))
                 case .copy:
                     guard let snapshot = pendingSnapshot else { throw URLError(.cannotDecodeContentData) }
                     _ = try await webView.callAsyncJavaScript(PrototypeStorage.restore, arguments: ["snapshot": snapshot], in: nil, contentWorld: .page)
@@ -216,7 +224,7 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
         case .legacy:
             webView.loadHTMLString("<!doctype html><html><body></body></html>", baseURL: PrototypeStorage.legacyOrigin)
         case .copy:
-            webView.load(URLRequest(url: BundleServer.origin.appendingPathComponent("__native_bootstrap__")))
+            webView.load(URLRequest(url: BundleServer.origin.appendingPathComponent(BundleServer.bootstrapPath)))
         case .workspace:
             webView.load(URLRequest(url: BundleServer.origin))
         }

@@ -6,6 +6,9 @@ import WebKit
 final class BundleServer: NSObject, WKURLSchemeHandler {
     static let scheme = "zcad-ipad"
     static let origin = URL(string: "zcad-ipad://app")!
+    /// The native-supplied blank page the earlier prototype's storage is
+    /// restored into before the workspace loads.
+    static let bootstrapPath = "__native_bootstrap__"
     private let root: URL
 
     init(root: URL) { self.root = root }
@@ -17,7 +20,7 @@ final class BundleServer: NSObject, WKURLSchemeHandler {
             task.didFailWithError(URLError(.unsupportedURL))
             return
         }
-        let bootstrap = url.path == "/__native_bootstrap__"
+        let bootstrap = url.path == "/\(Self.bootstrapPath)"
         let resource = Self.resource(root: root, target: url.path.isEmpty ? "/" : url.path)
         let data = bootstrap ? Data("<!doctype html><html><body></body></html>".utf8)
             : resource.flatMap { try? Data(contentsOf: $0, options: .mappedIfSafe) }

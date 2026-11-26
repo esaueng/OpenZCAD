@@ -96,13 +96,26 @@ final class BundleServerTests: XCTestCase {
         XCTAssertEqual(values["storage"] as? Bool, true, String(describing: result))
     }
 
-    func testInstalledAppContainsTheIPadHomeScreenIcon() throws {
-        let icons = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "CFBundleIcons~ipad") as? [String: Any])
-        let primary = try XCTUnwrap(icons["CFBundlePrimaryIcon"] as? [String: Any])
-        let files = try XCTUnwrap(primary["CFBundleIconFiles"] as? [String])
-        XCTAssertFalse(files.isEmpty)
-        for file in files {
-            XCTAssertNotNil(UIImage(named: file))
+    func testInstalledAppContainsTheIPhoneAndIPadHomeScreenIcons() throws {
+        // Read the packaged file: Bundle resolves `~ipad` keys for the host idiom.
+        let url = try XCTUnwrap(Bundle.main.url(forResource: "Info", withExtension: "plist"))
+        let info = try XCTUnwrap(PropertyListSerialization.propertyList(
+            from: Data(contentsOf: url), format: nil) as? [String: Any])
+        let packaged = try FileManager.default.contentsOfDirectory(atPath: Bundle.main.bundlePath)
+        func iconFiles(_ icons: Any?, _ key: String) throws -> [String] {
+            let primary = try XCTUnwrap((icons as? [String: Any])?["CFBundlePrimaryIcon"] as? [String: Any], key)
+            let files = try XCTUnwrap(primary["CFBundleIconFiles"] as? [String], key)
+            XCTAssertFalse(files.isEmpty, key)
+            return files
+        }
+        for key in ["CFBundleIcons", "CFBundleIcons~ipad"] {
+            for file in try iconFiles(info[key], key) {
+                XCTAssertTrue(packaged.contains { $0.hasPrefix(file + "@") && $0.hasSuffix(".png") }, "\(key): \(file)")
+            }
+        }
+        // The host device's own icons load, whichever idiom it is.
+        for file in try iconFiles(Bundle.main.object(forInfoDictionaryKey: "CFBundleIcons"), "host icons") {
+            XCTAssertNotNil(UIImage(named: file), file)
         }
     }
 
