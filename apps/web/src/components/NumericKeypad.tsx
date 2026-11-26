@@ -24,8 +24,10 @@ import {
   keypadClampPosition,
   keypadDockedPosition,
   keypadInPlacePosition,
+  radialSizeError,
   type DimensionMode,
   type EditControlState,
+  type KeypadEvaluation,
   type KeypadExclusion,
   type KeypadPlacement,
   type KeypadUnit,
@@ -487,10 +489,26 @@ export function NumericKeypad({
     raw: string,
     unit: KeypadUnit,
     mode: typeof dimensionMode
-  ) =>
-    convertsPrefill && raw === prefill && unit === initialEntryUnit
-      ? evaluateKeypadInput(request.initial, units, units, scope, mode)
-      : evaluateKeypadInput(raw, unit, units, scope, mode);
+  ): KeypadEvaluation => {
+    const result =
+      convertsPrefill && raw === prefill && unit === initialEntryUnit
+        ? evaluateKeypadInput(request.initial, units, units, scope, mode)
+        : evaluateKeypadInput(raw, unit, units, scope, mode);
+    // A Diameter or Radius of zero or less is no size: refused at the
+    // field, never previewed, and never handed to the commit.
+    const sizeError =
+      request.dimensionMode && mode && result.ok && result.value !== undefined
+        ? radialSizeError(result.value, mode, unitLabel('length', shown))
+        : null;
+    return sizeError
+      ? {
+          ok: false,
+          isExpression: result.isExpression,
+          error: sizeError,
+          refused: true
+        }
+      : result;
+  };
   const label = dimensionMode
     ? dimensionMode === 'diameter'
       ? 'Diameter'
@@ -1236,6 +1254,12 @@ export function NumericKeypad({
             }}
           />
         </div>
+      ) : unreadable && evaluation.refused ? (
+        // A size refused for what it is, not unreadable: said as a refusal
+        // is, so it is announced when it appears.
+        <p className="keypad-warning" role="alert" id={reasonId}>
+          {entryError}
+        </p>
       ) : unreadable ? (
         <p className="keypad-warning" id={reasonId}>
           {entryError === 'invalid' ? 'Not a number or expression' : entryError}

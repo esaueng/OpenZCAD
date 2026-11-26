@@ -889,18 +889,6 @@ export function useInPlaceCommand(
   const showRefused = (refused: InPlaceRequest | null) => {
     const tool = specRef.current;
     const kept = lastBuilt.current;
-    // A refusal of a request since replaced (a value put back while the
-    // refused one still built) is no input's to name, and the newer
-    // request's own frame decides what is shown.
-    if (
-      tool?.refusedInputs &&
-      refused &&
-      JSON.stringify(refused) !== requestKeyRef.current
-    ) {
-      setRefusalInputs([]);
-      setKeptValues(null);
-      return;
-    }
     const inputs =
       tool?.refusedInputs &&
       refused &&
@@ -916,6 +904,13 @@ export function useInPlaceCommand(
     setKeptValues(inputs.length > 0 && kept ? kept.values : null);
     if (inputs.length === 0) optionsRef.current.publishPreview(null);
   };
+  /**
+   * The request the frame or refusal now on screen was published for. A
+   * superseded frame is drawn only while that is not the current request:
+   * once the current request has had its say (a value put back to one
+   * already shown), a frame of the value passed on the way says nothing.
+   */
+  const shownKey = useRef<string | null>(null);
   /** The last frame published as valid; see {@link InPlacePreviewedFrame}. */
   const lastValidFrame = useRef<
     (InPlacePreviewedFrame & { key: string }) | null
@@ -1009,6 +1004,34 @@ export function useInPlaceCommand(
             : bodyId && ownEntry(result.derived.bodyRepresentations, bodyId)) &&
           !fresh
         );
+        // A frame of a request since replaced (a value typed over, an axis
+        // picked again, a handle dragged on) is not the verdict on the
+        // request now on screen, whose own frame is still building. It says
+        // no refusal, takes nothing down, and leaves a frame kept under a
+        // refusal where it is: the current request's frame decides those.
+        // One that built is still drawn, so a handle drag keeps following
+        // the hand, but it neither enables Done (gated on the key) nor
+        // becomes the frame Done commits.
+        if (frame && frame.key !== requestKeyRef.current) {
+          if (!valid || !result || shownKey.current === requestKeyRef.current)
+            return;
+          shownKey.current = frame.key;
+          lastBuilt.current = {
+            session: sessionRef.current?.id,
+            base: frame.base,
+            request: frame.request,
+            values: frame.values
+          };
+          setRefusal(null);
+          setRefusalInputs([]);
+          setKeptValues(null);
+          optionsRef.current.publishPreview({
+            ...result.document,
+            derived: result.derived
+          });
+          return;
+        }
+        shownKey.current = result ? (frame?.key ?? null) : null;
         setPreviewValid(valid);
         setPreviewedKey(valid ? (frame?.key ?? null) : null);
         lastValidFrame.current =
@@ -1078,6 +1101,8 @@ export function useInPlaceCommand(
         }
       },
       onFailure: ({ error }) => {
+        // LivePreview reports only the current request's failure.
+        shownKey.current = requestKeyRef.current;
         lastValidFrame.current = null;
         setPreviewValid(false);
         setPreviewAdvisory(null);
@@ -1111,6 +1136,7 @@ export function useInPlaceCommand(
       setKeptValues(null);
       // The frame comes down, so none is left to keep under a later refusal.
       lastBuilt.current = null;
+      shownKey.current = null;
       optionsRef.current.publishPreview(null);
       return;
     }
@@ -1361,6 +1387,7 @@ export function useInPlaceCommand(
     commitToken.current += 1;
     lastValidFrame.current = null;
     lastBuilt.current = null;
+    shownKey.current = null;
     preview.clear();
     setSession(null);
     setCommitting(false);

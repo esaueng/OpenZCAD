@@ -1,0 +1,5 @@
+---
+row: U01
+---
+
+Two Command state gaps pinned by the U11 slice 2a coverage are fixed (Remus pin f210583ef8b4). A preview frame built for a request since replaced (a value typed over, an axis picked again) no longer says its refusal, takes the preview down, or moves a frame kept under a refusal (Fillet, Chamfer, Hole); a superseded frame that built is still drawn, so a handle drag keeps following the hand, and Done still waits for the current request's own frame (`apps/web/src/hooks/useInPlaceCommand.ts`; `apps/web/src/hooks/useInPlaceCommandSuperseded.test.tsx`, both `it.fails` flipped, plus a kept-fillet case). A Diameter or Radius of zero or less on a cylindrical wall is refused at the keypad field ("Diameter must be more than 0 mm.", an alert, `aria-invalid`, Apply held, Enter refused, never previewed) where it used to read as Ready and be dropped at Enter without a word (`radialSizeError` in `apps/web/src/lib/keypad.ts`; `keypad.test.ts`, `NumericKeypad.test.tsx`; `test/e2e/selection-preview-feedback.spec.ts` unpinned, with Radius starting from a fresh valid size).

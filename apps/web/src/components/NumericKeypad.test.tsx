@@ -1768,3 +1768,83 @@ describe('a face offset says what its number means', () => {
     expect(document.querySelector('.keypad-meaning')).toBeNull();
   });
 });
+
+// U01: a bore's Diameter or Radius of zero or less is no size. It used to
+// read as Ready (the host marked it unchecked), so Apply stayed live and
+// Enter handed −12 to a commit that dropped it without a word.
+describe('a radial size of zero or less', () => {
+  function radial(dimensionMode: 'diameter' | 'radius', initial: string) {
+    const onPreview = vi.fn();
+    const onCommit = vi.fn();
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'radius',
+          label: dimensionMode === 'diameter' ? 'Diameter' : 'Radius',
+          initial,
+          unitKind: 'length',
+          dimensionMode,
+          baseline: 6
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        verdict={null}
+        onPreview={onPreview}
+        onCommit={onCommit}
+        onCancel={() => undefined}
+      />
+    );
+    const keypad = screen.getByRole('dialog');
+    return {
+      keypad,
+      input: within(keypad).getByRole<HTMLInputElement>('textbox'),
+      apply: within(keypad).getByRole('button', { name: /^Apply/ }),
+      onPreview,
+      onCommit
+    };
+  }
+
+  it.each([
+    ['diameter', '12', '-12', 'Diameter must be more than 0 mm.'],
+    ['diameter', '12', '0', 'Diameter must be more than 0 mm.'],
+    ['radius', '6', '-6', 'Radius must be more than 0 mm.'],
+    ['radius', '6', '0', 'Radius must be more than 0 mm.']
+  ] as const)(
+    'refuses a %s (prefill %s) typed as %s at the field, keeping it',
+    (mode, initial, typed, sentence) => {
+      const view = radial(mode, initial);
+      view.onPreview.mockClear();
+      fireEvent.change(view.input, { target: { value: typed } });
+      expect(within(view.keypad).getByRole('alert')).toHaveTextContent(
+        sentence
+      );
+      expect(view.input).toHaveAttribute('aria-invalid', 'true');
+      expect(view.input).toHaveValue(typed);
+      expect(view.apply).toBeDisabled();
+      // Never previewed, and Enter does not hand it over or close.
+      expect(view.onPreview).not.toHaveBeenCalled();
+      fireEvent.keyDown(view.input, { key: 'Enter' });
+      expect(view.onCommit).not.toHaveBeenCalled();
+      expect(view.input).toHaveValue(typed);
+      cleanup();
+    }
+  );
+
+  it('refuses a radius typed as an expression, and a Radius it switches to', () => {
+    const view = radial('diameter', '12');
+    fireEvent.change(view.input, { target: { value: '2 - 8' } });
+    expect(within(view.keypad).getByRole('alert')).toHaveTextContent(
+      'Diameter must be more than 0 mm.'
+    );
+    fireEvent.click(within(view.keypad).getByRole('radio', { name: /Radius/ }));
+    expect(within(view.keypad).getByRole('alert')).toHaveTextContent(
+      'Radius must be more than 0 mm.'
+    );
+    // A size back above zero takes the refusal away and previews.
+    fireEvent.change(view.input, { target: { value: '5' } });
+    expect(within(view.keypad).queryByRole('alert')).toBeNull();
+    expect(view.input).toHaveAttribute('aria-invalid', 'false');
+    expect(view.onPreview).toHaveBeenLastCalledWith(5);
+  });
+});

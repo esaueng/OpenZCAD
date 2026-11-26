@@ -520,22 +520,25 @@ test('a negative Total is refused at its field and stays editable; the same inwa
 });
 
 /**
- * Pinned gap, failure class Command state (U01 / face direct edit): a
- * negative Diameter or Radius on the bore is not refused. The chip takes the
- * value (Ø −12 mm), the keypad shows no alert, the field is not marked
- * invalid and Apply stays enabled; Enter then closes the keypad without a
- * commit or a word. Smallest failing prefix: open Fixture A, pick the bore
- * wall (Select other at the rim, "Through hole"), open its Diameter keypad,
- * type −12. Expected, as for a negative Total: an alert at the field,
- * `aria-invalid`, Apply held, and value, focus and face kept — in Radius as
- * in Diameter.
+ * Was a pinned gap (Command state, U01 / face direct edit): a negative
+ * Diameter or Radius on the bore was not refused. The chip took the value
+ * (Ø −12 mm), the keypad showed no alert, the field was not marked invalid
+ * and Apply stayed enabled; Enter then closed the keypad without a commit or
+ * a word. Prefix: open Fixture A, pick the bore wall (Select other at the
+ * rim, "Through hole"), open its Diameter keypad, type −12. Now, as for a
+ * negative Total: an alert at the field, `aria-invalid`, Apply held, Enter
+ * refused, and value, focus and face kept, in Radius as in Diameter. Radius
+ * starts from a valid size, not from the −12 converted, so it has to refuse
+ * its own entry.
  */
-test.fixme('a negative Diameter or Radius on the bore is refused at its field', async ({
+test('a negative Diameter or Radius on the bore is refused at its field', async ({
   page
 }) => {
   test.setTimeout(120_000);
   await openCoupon(page);
   const picked = page.getByRole('group', { name: 'Picked' });
+  const chip = page.getByTestId('direct-manipulation-value');
+  const features = await featureCount(page);
   const rim = await screenPoint(page, RIM);
   await page.mouse.move(rim.x, rim.y);
   await page.mouse.click(rim.x, rim.y);
@@ -543,12 +546,19 @@ test.fixme('a negative Diameter or Radius on the bore is refused at its field', 
   await page.keyboard.press('Space');
   await expect(menu).toBeHidden();
   await expect(picked).toContainText('Through hole');
-  await page.getByTestId('direct-manipulation-value').click();
+  await expect(chip).toHaveText('Ø 12 mm');
+  await chip.click();
   // The keypad is named for the mode it is in: "Diameter value", then
   // "Radius value" once R is chosen.
-  for (const [radio, name, value] of [
-    ['Ø Diameter', 'Diameter value', '-12'],
-    ['R Radius', 'Radius value', '-6']
+  for (const [radio, name, valid, value, sentence] of [
+    [
+      'Ø Diameter',
+      'Diameter value',
+      '12',
+      '-12',
+      'Diameter must be more than 0 mm.'
+    ],
+    ['R Radius', 'Radius value', '6', '-6', 'Radius must be more than 0 mm.']
   ] as const) {
     await page
       .locator('.numeric-keypad')
@@ -557,14 +567,32 @@ test.fixme('a negative Diameter or Radius on the bore is refused at its field', 
     const keypad = page.getByRole('dialog', { name });
     await expect(keypad).toBeVisible();
     const field = keypad.getByRole('textbox');
+    const apply = keypad.getByRole('button', { name: /^Apply/ });
+    // A fresh, valid size first: nothing is refused yet.
+    await field.fill(valid);
+    await expect(keypad.getByRole('alert')).toHaveCount(0);
+    await expect(field).toHaveAttribute('aria-invalid', 'false');
+    const size = await chip.textContent();
     await field.fill(value);
-    await expect(keypad.getByRole('alert')).toBeVisible({ timeout: 30_000 });
+    const refusal = keypad.getByRole('alert');
+    await expect(refusal).toHaveText(sentence, { timeout: 30_000 });
     await expect(field).toHaveAttribute('aria-invalid', 'true');
-    await expect(keypad.getByRole('button', { name: /^Apply/ })).toBeDisabled();
+    await expect(apply).toBeDisabled();
     await expect(field).toHaveValue(value);
     await expect(field).toBeFocused();
     await expect(picked).toContainText('Through hole');
+    // The chip keeps the valid size; the refused one was never previewed.
+    await expect(chip).toHaveText(size ?? '');
+    // Enter does not take a refused size, and does not close the keypad.
+    await field.press('Enter');
+    await expect(keypad).toBeVisible();
+    await expect(field).toHaveValue(value);
+    await expect(refusal).toBeVisible();
+    // Back to a valid size for the next mode.
+    await field.fill(valid);
+    await expect(refusal).toHaveCount(0);
   }
+  expect(await featureCount(page)).toBe(features);
 });
 
 /**

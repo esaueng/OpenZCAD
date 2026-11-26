@@ -284,6 +284,11 @@ export interface KeypadEvaluation {
   /** Unit the value named for itself, when it did not use the entry chip. */
   typedUnit?: UnitSystem;
   error?: string;
+  /**
+   * The entry reads, but as a value the field never takes (a radial size of
+   * zero or less): `error` is then a sentence to say as a refusal.
+   */
+  refused?: boolean;
 }
 
 /**
@@ -399,6 +404,25 @@ function stripDimensionPrefix(
   return dimensionModeForInput(input, scope)
     ? input.replace(DIMENSION_PREFIX, '').trim()
     : input;
+}
+
+/**
+ * The refusal of a radial size that is not a size: a Diameter or Radius of
+ * zero or less. A wall's size is measured across it, so −12 is no diameter
+ * (and the commit path refused it without a word, after the field had shown
+ * it as Ready). The sentence has the shape of a refused command value
+ * (`valueRangeSentence`): "Diameter must be more than 0 mm." Null for a size
+ * that is more than zero. `value` may be the radius or the diameter, as the
+ * sign is the same; `unit` is what follows a number ("mm"), or "".
+ */
+export function radialSizeError(
+  value: number,
+  mode: DimensionMode,
+  unit: string
+): string | null {
+  if (value > 0) return null;
+  const name = mode === 'diameter' ? 'Diameter' : 'Radius';
+  return `${name} must be more than 0${unit ? ` ${unit}` : ''}.`;
 }
 
 /** Switch entry notation without changing the radius the field represents. */
