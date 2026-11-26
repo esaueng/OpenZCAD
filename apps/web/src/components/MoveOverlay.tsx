@@ -17,7 +17,7 @@ import {
   raiseCompactSheet,
   SHEET_OVERLAY_ATTRIBUTE,
   useCompactKeypadSlot,
-  useCompactTray
+  useCompactCommandTray
 } from './compact/compactSlots';
 
 /*
@@ -339,7 +339,7 @@ export function MoveOverlay({
   const title = 'Move';
   // In the compact sheet the bar is its tray (U12 slice 4), as every
   // in-place command's: the step, Options, Cancel and Done in one pinned row.
-  const tray = useCompactTray();
+  const tray = useCompactCommandTray();
   const keypadSlot = useCompactKeypadSlot();
   const optionsRef = useRef<HTMLDetailsElement>(null);
   const optionsId = useId();

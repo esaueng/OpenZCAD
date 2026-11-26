@@ -70,7 +70,13 @@ function ParametersFrame(props: ModelPanelProps) {
   );
 }
 
-function ObjectsFrame(props: ModelPanelProps) {
+function ObjectsFrame(panel: ModelPanelProps) {
+  const props = panel.objectRepresentations
+    ? {
+        ...panel,
+        representations: panel.objectRepresentations
+      }
+    : panel;
   // `geometryPendingShown` defaults to `geometryPending`.
   const preparing =
     props.geometryPending && props.geometryPendingShown !== false;

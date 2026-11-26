@@ -8,7 +8,7 @@ import {
 import { Info, Magnet } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import {
-  CompactTrayContext,
+  CompactCommandTrayContext,
   useCompactCommandRowHost
 } from './compact/compactSlots';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
@@ -469,9 +469,9 @@ export function WorkspaceReadout({
       {compactRowHost && givenCommandRow !== null
         ? createPortal(
             // Drawn as the sheet's tray: one pinned row (U12 slice 4).
-            <CompactTrayContext.Provider value={true}>
+            <CompactCommandTrayContext.Provider value={true}>
               {givenCommandRow}
-            </CompactTrayContext.Provider>,
+            </CompactCommandTrayContext.Provider>,
             compactRowHost
           )
         : null}

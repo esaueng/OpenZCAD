@@ -263,3 +263,40 @@ describe('I03: an edit typed back to the shown value', () => {
     expect(onCommit).toHaveBeenCalledWith(0.5);
   });
 });
+
+describe('inline in the compact sheet (U12 slice 7)', () => {
+  function panel(inline: boolean) {
+    const { container, unmount } = render(
+      <div className="viewer-area">
+        <SectionToolbox
+          inline={inline}
+          section={{ plane: 'XZ', offset: 5 }}
+          range={{ min: 0, max: 10 }}
+          outline={{ kind: 'clipping' }}
+          units="mm"
+          onSwitch={vi.fn()}
+          onPlane={vi.fn()}
+          onOffset={vi.fn()}
+          onCommit={vi.fn()}
+          onExport={vi.fn()}
+        />
+      </div>
+    );
+    const element = container.querySelector<HTMLElement>(
+      '.rail-section-panel'
+    )!;
+    return { element, unmount };
+  }
+
+  it('stays in its container’s flow, not placed as a rail flyout', () => {
+    const inline = panel(true);
+    expect(inline.element).toHaveClass('is-inline');
+    expect(inline.element).not.toHaveAttribute('data-rail-flyout');
+    expect(inline.element.style.translate).toBe('');
+    inline.unmount();
+    // Beside its rail button it is a flyout, as before.
+    const floating = panel(false);
+    expect(floating.element).toHaveAttribute('data-rail-flyout', '');
+    expect(floating.element).not.toHaveClass('is-inline');
+  });
+});

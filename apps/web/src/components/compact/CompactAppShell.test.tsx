@@ -14,7 +14,7 @@ import { InPlaceCommandBar } from '../InPlaceCommandBar';
 import { NumericKeypad } from '../NumericKeypad';
 import { TRAY_REASON_MS } from './ContextTray';
 import {
-  CompactTrayContext,
+  CompactCommandTrayContext,
   useCompactCommandRowHost,
   type CompactChromeProps
 } from './compactSlots';
@@ -172,6 +172,35 @@ describe('AppShell in the compact workspace', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
     expect(props.onSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers a shared link’s visitor Make a copy from More, in any mode', async () => {
+    const plain = render(shell(chrome()));
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    expect(
+      await screen.findByRole('button', { name: 'Open settings' })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Make a copy' })).toBeNull();
+    plain.unmount();
+
+    for (const workspaceMode of ['view', 'tweak'] as const) {
+      const props = chrome({
+        shareLink: true,
+        workspaceMode,
+        onMakeCopy: vi.fn()
+      });
+      const { unmount } = render(shell(props));
+      fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Make a copy' })
+      );
+      expect(props.onMakeCopy).toHaveBeenCalledTimes(1);
+      // The page closes on the way to the copy's own dialog.
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: 'Make a copy' })).toBeNull()
+      );
+      unmount();
+    }
   });
 
   it('marks the document compact while it is up, for portalled dialogs', async () => {
@@ -473,7 +502,7 @@ describe('AppShell in the compact workspace', () => {
       const host = useCompactCommandRowHost(true);
       return host
         ? createPortal(
-            <CompactTrayContext.Provider value={true}>
+            <CompactCommandTrayContext.Provider value={true}>
               <InPlaceCommandBar
                 title="Fillet"
                 hint="1 edge · drag the radius"
@@ -481,7 +510,7 @@ describe('AppShell in the compact workspace', () => {
                 onDone={vi.fn()}
                 onCancel={vi.fn()}
               />
-            </CompactTrayContext.Provider>,
+            </CompactCommandTrayContext.Provider>,
             host
           )
         : null;

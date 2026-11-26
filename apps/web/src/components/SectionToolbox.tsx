@@ -123,6 +123,11 @@ interface SectionToolboxProps {
   onCommit(offset?: number): void;
   onFlip?(): void;
   onExport(): void;
+  /**
+   * Laid out in its container's flow (the compact sheet's Section page)
+   * rather than placed beside its rail button over the stage.
+   */
+  inline?: boolean;
 }
 
 /**
@@ -165,7 +170,8 @@ export function SectionToolbox({
   onOffset,
   onCommit,
   onFlip,
-  onExport
+  onExport,
+  inline = false
 }: SectionToolboxProps) {
   const headingId = useId();
   const positionId = useId();
@@ -206,7 +212,7 @@ export function SectionToolbox({
   // Keep its toolbox on screen even when there is no room to its left.
   useLayoutEffect(() => {
     const panel = panelRef.current;
-    if (!panel) return;
+    if (!panel || inline) return;
     let frame: number | null = null;
     function place() {
       if (!panel) return;
@@ -290,7 +296,7 @@ export function SectionToolbox({
       window.removeEventListener('resize', schedulePlacement);
       window.removeEventListener('scroll', schedulePlacement, true);
     };
-  }, []);
+  }, [inline]);
 
   function commitPosition() {
     if (cancelEdit.current) {
@@ -324,8 +330,10 @@ export function SectionToolbox({
   return (
     <div
       ref={panelRef}
-      className={`rail-section-panel${active ? '' : ' is-off'}`}
-      data-rail-flyout=""
+      className={`rail-section-panel${active ? '' : ' is-off'}${
+        inline ? ' is-inline' : ''
+      }`}
+      {...(inline ? {} : { 'data-rail-flyout': '' })}
       role="group"
       aria-labelledby={headingId}
     >

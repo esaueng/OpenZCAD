@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   COMPACT_SHEET_RAISE_EVENT,
-  CompactTrayContext
+  CompactCommandTrayContext
 } from './compact/compactSlots';
 import { InPlaceCommandBar } from './InPlaceCommandBar';
 import { MoveOverlay } from './MoveOverlay';
@@ -12,9 +12,9 @@ import { MoveOverlay } from './MoveOverlay';
 /** Drawn in the compact sheet, as WorkspaceReadout portals it there. */
 function inTray(children: ReactNode) {
   return (
-    <CompactTrayContext.Provider value={true}>
+    <CompactCommandTrayContext.Provider value={true}>
       {children}
-    </CompactTrayContext.Provider>
+    </CompactCommandTrayContext.Provider>
   );
 }
 

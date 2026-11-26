@@ -56,16 +56,16 @@ export function useCompactCommandRowHost(present: boolean): HTMLElement | null {
  * Done, with everything else in the sheet's flow under it. False on the
  * regular stage, where the bar keeps its own layout.
  */
-export const CompactTrayContext = createContext(false);
+export const CompactCommandTrayContext = createContext(false);
 
-export function useCompactTray(): boolean {
-  return useContext(CompactTrayContext);
+export function useCompactCommandTray(): boolean {
+  return useContext(CompactCommandTrayContext);
 }
 
 /** The tray bar's ref for its keypad slot; a no-op outside the tray. */
 export function useCompactKeypadSlot(): (element: HTMLElement | null) => void {
   const slot = useContext(CompactCommandRowContext);
-  const tray = useContext(CompactTrayContext);
+  const tray = useContext(CompactCommandTrayContext);
   const keypadSlot = slot?.keypadSlot;
   return useCallback(
     (element: HTMLElement | null) => {
@@ -150,6 +150,12 @@ export interface CompactChromeProps {
   /** The current pick's name, or null with nothing picked. */
   selectionLabel: string | null;
   onClearSelection?(): void;
+  /**
+   * A shared link's visitor: copy the model into a project of their own.
+   * Offered whenever the regular top bar offers it, whatever the link's
+   * mode; absent outside a share session.
+   */
+  onMakeCopy?(): void;
   reducedMotion: boolean;
   /**
    * Build's tray at rest (U12 slice 4): the suggested verbs and the All
@@ -183,3 +189,42 @@ export interface CompactBuildProps {
   /** Launches a tool through the workspace's own launch path. */
   onLaunchTool(tool: ToolId): void;
 }
+
+/**
+ * A mode's tray in the compact sheet (U12 slice 7): View's and Tweak's verbs
+ * at peek, each opening a page over the tray. The compact chrome provides
+ * this to the tray it draws; the tray draws its open page's content into
+ * `pageHost` (a portal), so the page carries the sheet's Back, title and
+ * Escape like any page in the back stack. Null outside a tray.
+ */
+export interface CompactTraySlot {
+  /** The page open over the tray, by the tray's own key, or null. */
+  page: string | null;
+  /** Where that page's content goes while the sheet draws it, else null. */
+  pageHost: HTMLElement | null;
+  /** Opens a page over the tray at half height; `title` heads the sheet. */
+  openPage(key: string, title: string): void;
+  /** Back to the tray, the sheet at peek. */
+  closePage(): void;
+}
+
+export const CompactTrayContext = createContext<CompactTraySlot | null>(null);
+
+/** The tray's page controls; null outside the compact sheet's tray. */
+export function useCompactTray(): CompactTraySlot | null {
+  return useContext(CompactTrayContext);
+}
+
+/**
+ * Where the analysis panel (M09's legend, provenance and limits) goes in the
+ * compact workspace: View's Display page provides a host, and the viewer
+ * draws the panel there rather than over the stage's foot, where the sheet
+ * stands. Null in the regular workspace.
+ */
+export interface CompactAnalysisSlot {
+  host: HTMLElement | null;
+  setHost(element: HTMLElement | null): void;
+}
+
+export const CompactAnalysisSlotContext =
+  createContext<CompactAnalysisSlot | null>(null);

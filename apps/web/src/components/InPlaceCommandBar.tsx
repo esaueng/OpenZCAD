@@ -30,7 +30,7 @@ import {
   raiseCompactSheet,
   SHEET_OVERLAY_ATTRIBUTE,
   useCompactKeypadSlot,
-  useCompactTray
+  useCompactCommandTray
 } from './compact/compactSlots';
 import { useParameterDefinition } from './forms/parameterDefinition';
 import {
@@ -359,7 +359,7 @@ export function InPlaceCommandBar({
   // In the compact sheet the bar is its tray (U12 slice 4): one pinned row
   // of the tool's icon, its step, Options, Cancel and Done; the rest lies
   // in one column under it.
-  const tray = useCompactTray();
+  const tray = useCompactCommandTray();
   const keypadSlot = useCompactKeypadSlot();
   const optionsRef = useRef<HTMLDetailsElement>(null);
   const optionsId = useId();

@@ -284,6 +284,37 @@ describe('measureClearStage', () => {
     expect(measureClearStage(canvas)!.rect.bottom).toBe(600 - 12);
   });
 
+  it('frames above the compact sheet, which stands in the shell’s chrome', () => {
+    // U12 slice 7 (I47): Measure's page rises in the sheet across a
+    // phone's foot, outside the viewer area; the model is framed above it.
+    const shell = document.createElement('div');
+    shell.className = 'app-shell';
+    const { workspace, canvas } = workspaceStage();
+    shell.append(workspace);
+    document.body.append(shell);
+    const sheet = document.createElement('section');
+    sheet.className = 'compact-sheet';
+    sheet.dataset.detent = 'half';
+    shell.append(placed(sheet, 0, 450, 1440, 900));
+    expect(measureClearStage(canvas)!.rect.bottom).toBe(450 - 12);
+    // A request reframes a model the sheet covers, and leaves one above it.
+    const corner = (x: number, y: number) => ({
+      x: (x / 1440) * 2 - 1,
+      y: 1 - (y / 900) * 2,
+      z: 0
+    });
+    const covered = [corner(500, 300), corner(900, 700)];
+    const above = [corner(500, 100), corner(900, 400)];
+    expect(cornersClearOfStage(canvas, covered)).toBe(false);
+    expect(cornersClearOfStage(canvas, above)).toBe(true);
+    // At full height the stage under it is inert: nothing is framed for it.
+    sheet.dataset.detent = 'full';
+    expect(measureClearStage(canvas)!.rect.bottom).toBe(900);
+    sheet.dataset.detent = 'half';
+    sheet.hidden = true;
+    expect(measureClearStage(canvas)!.rect.bottom).toBe(900);
+  });
+
   it('takes a band off the top for a flyout standing over the middle', () => {
     const { area, canvas } = workspaceStage();
     const flyout = document.createElement('div');
