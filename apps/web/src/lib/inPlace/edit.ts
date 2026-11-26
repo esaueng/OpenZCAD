@@ -1,4 +1,5 @@
 import {
+  featureConsumedBodyIds,
   listFeaturesInOrder,
   type FeatureUpdateInput
 } from '@openzcad/document-core';
@@ -2176,4 +2177,104 @@ export function withFeatureBuilt(
     ...document,
     nodes: { ...document.nodes, [node.id]: { ...node, metadata } }
   };
+}
+
+/**
+ * U11: the model as it stood before `featureId`: that feature and every
+ * later one paused, as a rollback pauses them, so the inputs it consumed are
+ * live again where they stood. Null when the feature is not in History.
+ */
+export function documentBeforeFeature(
+  document: ProjectDocument,
+  featureId: FeatureId
+): ProjectDocument | null {
+  const features = listFeaturesInOrder(document);
+  const index = features.findIndex(
+    (feature) => feature.featureId === featureId
+  );
+  if (index < 0) return null;
+  const nodes = { ...document.nodes };
+  for (const feature of features.slice(index)) {
+    nodes[feature.id] = {
+      ...feature,
+      metadata: {
+        ...feature.metadata,
+        [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: true
+      }
+    };
+  }
+  return { ...document, nodes };
+}
+
+/**
+ * U11: what an edit shows while its picks build nothing. A Boolean's
+ * operands are inside its result, so with one taken out the edit shows the
+ * model before it, where the operand can be clicked back in (as Tool, or as
+ * Base once the list is empty), exactly as a new Boolean shows the bodies it
+ * picks from. Every other edit shows the model as it is: null.
+ */
+export function inPlaceEditRestDocument(
+  document: ProjectDocument,
+  edit: Pick<InPlaceEditSeed, 'featureId' | 'data'>
+): ProjectDocument | null {
+  return edit.data.featureKind === 'boolean'
+    ? documentBeforeFeature(document, edit.featureId)
+    : null;
+}
+
+/**
+ * U11: the feature that keeps a Boolean's edit from taking `bodyId` back as
+ * an operand: one other than the edited feature that consumes it, before it
+ * or after. The edit may take back an input its own feature consumed, never
+ * one another feature has already used up; that would combine the same
+ * material twice. Null when the body is free, and for any other edit.
+ */
+export function inPlaceEditOperandConsumer(
+  document: ProjectDocument,
+  edit: Pick<InPlaceEditSeed, 'featureId' | 'data'>,
+  bodyId: BodyId
+): FeatureNode | null {
+  if (edit.data.featureKind !== 'boolean') return null;
+  return (
+    listFeaturesInOrder(document).find(
+      (feature) =>
+        feature.featureId !== edit.featureId &&
+        featureConsumedBodyIds(feature).includes(bodyId)
+    ) ?? null
+  );
+}
+
+/**
+ * U11: the bodies Objects lists while a Boolean is edited, as for a new
+ * Boolean: the inputs the feature itself consumed are live rows to pick
+ * again, and the result the edit is rebuilding is not listed. The same
+ * `representations` object for any other edit, or when nothing changes.
+ */
+export function inPlaceEditObjectRepresentations<
+  T extends { bodyId: string; consumed?: boolean }
+>(
+  representations: Record<string, T>,
+  document: ProjectDocument,
+  edit: Pick<InPlaceEditSeed, 'featureId' | 'data' | 'ownBodyIds'>
+): Record<string, T> {
+  if (edit.data.featureKind !== 'boolean') return representations;
+  const feature = listFeaturesInOrder(document).find(
+    (candidate) => candidate.featureId === edit.featureId
+  );
+  const inputs = feature ? featureConsumedBodyIds(feature) : [];
+  let changed = false;
+  const listed: Record<string, T> = {};
+  for (const [bodyId, body] of Object.entries(representations)) {
+    if (edit.ownBodyIds.includes(bodyId as BodyId)) {
+      changed = true;
+      continue;
+    }
+    if (body.consumed && inputs.includes(bodyId as BodyId)) {
+      changed = true;
+      listed[bodyId] = { ...body, consumed: false };
+      continue;
+    }
+    listed[bodyId] = body;
+  }
+  return changed ? listed : representations;
 }

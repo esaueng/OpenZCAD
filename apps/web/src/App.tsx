@@ -2130,6 +2130,9 @@ import {
   inPlaceEditLineage,
   inPlaceEditMovedBodies,
   inPlaceEditFacePick,
+  inPlaceEditObjectRepresentations,
+  inPlaceEditOperandConsumer,
+  inPlaceEditRestDocument,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
@@ -14253,14 +14256,29 @@ export function App() {
    */
   function inPlaceEditTakesBody(bodyId: BodyId): boolean {
     const editing = inPlaceRef.current.editing;
-    if (!editing || inPlaceEditMayUse(producingFeatureOf({ bodyId }), editing))
-      return true;
-    if (!editing.ownBodyIds.includes(bodyId)) {
-      setStatus(
-        `${editing.name} can only use bodies made before it in History.`
-      );
+    if (!editing) return true;
+    if (!inPlaceEditMayUse(producingFeatureOf({ bodyId }), editing)) {
+      if (!editing.ownBodyIds.includes(bodyId)) {
+        setStatus(
+          `${editing.name} can only use bodies made before it in History.`
+        );
+      }
+      return false;
     }
-    return false;
+    // U11: a Boolean's edit takes back the inputs it consumed itself, never
+    // one another feature has already combined into its own result.
+    const current = managerRef.current?.document;
+    const consumer = current
+      ? inPlaceEditOperandConsumer(current, editing, bodyId)
+      : null;
+    if (consumer) {
+      const name = current && findBodyNode(current, bodyId)?.name;
+      setStatus(
+        `${name ?? 'That body'} is already combined into ${consumer.name}, so ${editing.name} cannot use it.`
+      );
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -23693,9 +23711,16 @@ export function App() {
           }
           return false;
         }
-        const shown = representations[selection.bodyId]
-          ? selection.bodyId
-          : (command.slots.bodies[0]?.bodyId ?? null);
+        // A preview's result is not a body to pick: a click on it names the
+        // first pick, as Options lists it. A Boolean's edit previews under
+        // its committed result's id, which counts as that preview too (U11).
+        const previewResult =
+          !representations[selection.bodyId] ||
+          (command.editing?.data.featureKind === 'boolean' &&
+            command.editing.ownBodyIds.includes(selection.bodyId));
+        const shown = previewResult
+          ? (command.slots.bodies[0]?.bodyId ?? null)
+          : selection.bodyId;
         if (shown && !inPlaceEditTakesBody(shown)) return true;
         const body = shown ? inPlaceBodyPick(shown) : null;
         if (body) return command.pickBody(body);
@@ -29568,6 +29593,7 @@ export function App() {
       )?.then((outcome) => outcome === 'committed');
     },
     publishPreview: setPreviewDoc,
+    editRestDocument: inPlaceEditRestDocument,
     onStatus: setStatus
   });
   // A value keypad opens from an armed handle, a running command or a tool
@@ -29605,6 +29631,20 @@ export function App() {
   useLayoutEffect(() => {
     setBooleanCommandRunning(inPlaceBooleanRunning);
   }, [inPlaceBooleanRunning]);
+  // U11: Objects lists what a Boolean's edit picks from, as it does for a
+  // new Boolean: the inputs the feature consumed as live rows, and not the
+  // result the edit is rebuilding.
+  const inPlaceEditObjects = useMemo(
+    () =>
+      inPlace.editing && doc
+        ? inPlaceEditObjectRepresentations(
+            representations,
+            doc,
+            inPlace.editing
+          )
+        : undefined,
+    [inPlace.editing, doc, representations]
+  );
   // Every open edit: an in-place command's, and the in-place Extrude's.
   cancelInPlaceRef.current = () => {
     inPlaceRef.current.cancel(true);
@@ -39960,6 +40000,7 @@ export function App() {
       parameterMinimums={liveParameterMinimums}
       features={features}
       representations={representations}
+      objectRepresentations={inPlaceEditObjects}
       failedFeatureIds={failedHistoryFeatureIds}
       geometryPending={panelGeometryPending}
       geometryPendingShown={panelGeometryPendingShown}

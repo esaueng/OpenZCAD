@@ -8,6 +8,7 @@ import {
   transformBody
 } from '@openzcad/document-core';
 import {
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
   type ProjectDocument
@@ -29,6 +30,9 @@ import {
   keepAbsentHoleSteps,
   inPlaceEditMovedBodies,
   inPlaceEditFacePick,
+  inPlaceEditObjectRepresentations,
+  inPlaceEditOperandConsumer,
+  inPlaceEditRestDocument,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
@@ -3044,5 +3048,162 @@ describe('the steps after a copying transform', () => {
       featureOrder: [...document.featureOrder, edit.featureId]
     };
     expect(laterDirectEdit(withEdit, copy)).toBe(true);
+  });
+});
+
+/**
+ * U11 (M11 decision D1): a Boolean's edit takes back the inputs it
+ * consumed, as a new Boolean takes the bodies on screen, and never a body
+ * another feature has used up. Synthetic bodies: Block and Post feed the
+ * edited Subtract; Bolt and Nut an earlier Union; Pin a later Subtract of
+ * the result; Spare stands free.
+ */
+describe('what a Boolean edit picks from', () => {
+  function chain() {
+    let document = createProjectDocument('Chain', toUserId('user_test'));
+    for (const name of ['Block', 'Post', 'Bolt', 'Nut', 'Pin', 'Spare']) {
+      document = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+    }
+    const [block, post, bolt, nut, pin, spare] = document.bodyOrder as [
+      BodyId,
+      BodyId,
+      BodyId,
+      BodyId,
+      BodyId,
+      BodyId
+    ];
+    const union = booleanBodies(document, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [bolt, nut]
+    });
+    const cut = booleanBodies(union.document, {
+      name: 'Subtract',
+      operation: 'subtract',
+      targetBodyIds: [block, post]
+    });
+    const later = booleanBodies(cut.document, {
+      name: 'Notch',
+      operation: 'subtract',
+      targetBodyIds: [cut.bodyId, pin]
+    });
+    const features = listFeaturesInOrder(later.document);
+    const edited = features.find((feature) => feature.name === 'Subtract')!;
+    const edit = {
+      featureId: edited.featureId,
+      data: edited.data,
+      ownBodyIds: [cut.bodyId]
+    };
+    return {
+      document: later.document,
+      edit,
+      bodies: { block, post, bolt, nut, pin, spare },
+      union: union.bodyId,
+      result: cut.bodyId,
+      notch: later.bodyId
+    };
+  }
+
+  it('takes back a body its own feature consumed, never one another feature consumed', () => {
+    const { document, edit, bodies } = chain();
+    const consumer = (bodyId: BodyId) =>
+      inPlaceEditOperandConsumer(document, edit, bodyId)?.name ?? null;
+    // Its own operands, and a body nothing consumes.
+    expect(consumer(bodies.block)).toBeNull();
+    expect(consumer(bodies.post)).toBeNull();
+    expect(consumer(bodies.spare)).toBeNull();
+    // Used up by a feature before it, and by one after it.
+    expect(consumer(bodies.bolt)).toBe('Union');
+    expect(consumer(bodies.nut)).toBe('Union');
+    expect(consumer(bodies.pin)).toBe('Notch');
+    // The rule is the Boolean edit's: any other edit is not asked.
+    const mirror = {
+      featureId: edit.featureId,
+      data: {
+        featureKind: 'mirror',
+        targetBodyId: bodies.pin,
+        plane: { origin: { x: 0, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+      } as FeatureData
+    };
+    expect(inPlaceEditOperandConsumer(document, mirror, bodies.pin)).toBeNull();
+  });
+
+  it('rests on the model before the Boolean: it and every later feature paused, nothing earlier', () => {
+    const { document, edit } = chain();
+    const rest = inPlaceEditRestDocument(document, edit)!;
+    expect(rest).not.toBeNull();
+    const paused = listFeaturesInOrder(rest)
+      .filter(
+        (feature) =>
+          feature.metadata?.[FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY] === true
+      )
+      .map((feature) => feature.name);
+    expect(paused).toEqual(['Subtract', 'Notch']);
+    // The committed document is untouched.
+    expect(
+      listFeaturesInOrder(document).some(
+        (feature) =>
+          feature.metadata?.[FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY] === true
+      )
+    ).toBe(false);
+    // Any other edit shows the model as it is; a feature gone, nothing.
+    expect(
+      inPlaceEditRestDocument(document, {
+        featureId: edit.featureId,
+        data: { featureKind: 'mirror' } as FeatureData
+      })
+    ).toBeNull();
+    expect(
+      inPlaceEditRestDocument(document, {
+        featureId: 'feature_gone' as FeatureId,
+        data: edit.data
+      })
+    ).toBeNull();
+  });
+
+  it('lists its own inputs as live objects and not the result it rebuilds', () => {
+    const { document, edit, bodies, union, result, notch } = chain();
+    const row = (bodyId: BodyId, consumed: boolean) => ({ bodyId, consumed });
+    const representations = {
+      [bodies.block]: row(bodies.block, true),
+      [bodies.post]: row(bodies.post, true),
+      [bodies.bolt]: row(bodies.bolt, true),
+      [bodies.nut]: row(bodies.nut, true),
+      [bodies.pin]: row(bodies.pin, true),
+      [bodies.spare]: row(bodies.spare, false),
+      [union]: row(union, false),
+      [result]: row(result, true),
+      [notch]: row(notch, false)
+    };
+    const listed = inPlaceEditObjectRepresentations(
+      representations,
+      document,
+      edit
+    );
+    expect(
+      Object.fromEntries(
+        Object.entries(listed).map(([id, body]) => [id, body.consumed])
+      )
+    ).toEqual({
+      [bodies.block]: false,
+      [bodies.post]: false,
+      // Consumed elsewhere: still a source, not a row to pick.
+      [bodies.bolt]: true,
+      [bodies.nut]: true,
+      [bodies.pin]: true,
+      [bodies.spare]: false,
+      [union]: false,
+      [notch]: false
+    });
+    // The committed map itself is left alone, and any other edit lists it.
+    expect(representations[bodies.block]!.consumed).toBe(true);
+    const mirror = { ...edit, data: { featureKind: 'mirror' } as FeatureData };
+    expect(
+      inPlaceEditObjectRepresentations(representations, document, mirror)
+    ).toBe(representations);
   });
 });

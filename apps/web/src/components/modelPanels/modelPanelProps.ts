@@ -52,6 +52,12 @@ export interface ModelPanelSource {
   features: FeatureNode[];
   localAppend?: LocalHistoryAppend | null;
   representations: Record<string, BodyRepresentation>;
+  /**
+   * U11: the bodies Objects lists in place of `representations` while a
+   * command picks from another model than the one committed (a Boolean's
+   * edit lists the inputs it consumed); absent, Objects lists those.
+   */
+  objectRepresentations?: Record<string, BodyRepresentation>;
   failedFeatureIds?: ReadonlySet<FeatureId>;
   relatedFeatureIds?: ReadonlySet<FeatureId> | null;
   geometryPending?: boolean;

@@ -12,7 +12,6 @@ import {
   stubApi,
   clickWorldPoint,
   expectFeatureMeasurement,
-  finishInPlaceCommand,
   modelPanel,
   pressTool,
   revealModelPanel,
@@ -733,61 +732,217 @@ test('Cell 5: during a Subtract, Find and Isolate change only the view, and canv
 });
 
 /**
- * FIXME — class Pick (U11 / viewer), Remus 2026.1.171 (`f210583`).
- * Smallest failing prefix: Fixture B with Subtract [Block, Post] committed;
- * open Edit Subtract from History; Options → Remove 1 Base · Block; click
- * Block's top at (2, 2, 10). The click fills no slot: the viewport still
- * draws the committed Block − Post result, Objects lists only that result
- * row, and Done stays disabled with one operand. Removing the Tool and
- * clicking Post's top fails the same way. So a committed Boolean's roles
- * cannot be reversed in its edit; only Undo or delete-and-redo reverses
- * them. Expected: the edit shows the removed operand where it stands and
- * takes it back as the Tool, so Post − Block commits from the edit (2750)
- * with no new History row.
+ * M11 / U11 (owner decision D1): a committed Subtract's roles reverse in its
+ * own edit, as in a new Subtract: Remove the Base and pick it back, and it
+ * is the Tool. While the operands build nothing the edit shows the model as
+ * it stood before the feature (Block 2000 and Post 3000 whole), so the body
+ * it took out can be clicked again. (Pinned as a Pick finding by #2187.)
  */
-test.fixme('Edit Subtract takes back an operand it removed, so its roles reverse in the edit', async ({
-  page
-}) => {
-  test.setTimeout(120_000);
-  page.setDefaultTimeout(15_000);
-  const fixture = fixtureB('Edit reversal');
-  const document = booleanBodies(fixture.document, {
+async function seededSubtract(page: Page, name: string) {
+  const fixture = fixtureB(name);
+  const built = booleanBodies(fixture.document, {
     name: 'Subtract',
     operation: 'subtract',
     targetBodyIds: [fixture.block, fixture.post]
-  }).document;
-  await openSeeded(page, document);
+  });
+  await openSeeded(page, built.document);
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
     timeout: 30_000
   });
-  await page.keyboard.press('f');
-  await waitForStillViewport(page);
+  // The committed body's volume is read from its History row: the drawn
+  // model's own volume is filled in later, and only a preview carries one.
+  await expectSubtractMeasures(page, BLOCK_MINUS_POST);
+  return { ...fixture, result: built.bodyId, canvas };
+}
+
+function expectSubtractMeasures(page: Page, volume: number) {
+  return expectFeatureMeasurement(
+    page,
+    page.locator('.feature-row', {
+      has: page.locator('.feature-row-main', { hasText: 'Subtract' })
+    }),
+    String(volume)
+  );
+}
+
+/** Opens Edit Subtract from its History row and removes its Base. */
+async function editAndRemoveBase(page: Page, post: BodyId) {
   const subtract = page
     .locator('.feature-row-main', { hasText: 'Subtract' })
     .last();
   await subtract.click();
   const edit = page.getByRole('group', { name: 'Edit Subtract command' });
   await expect(edit).toBeVisible();
+  const done = edit.getByRole('button', { name: 'Done' });
+  await expect(done).toBeEnabled({ timeout: 30_000 });
   await edit.locator('summary').click();
   const operands = edit.getByRole('list', { name: 'Boolean operands' });
+  await expect(operands.getByRole('listitem')).toHaveText([
+    /Base · Block/,
+    /Tool · Post/
+  ]);
   await operands.getByRole('button', { name: /Remove 1 Base · Block/ }).click();
   await edit.locator('summary').click();
-  await expect(canvas).toHaveAttribute(
+  await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
     'data-e2e-selected-bodies',
-    fixture.post
+    post
   );
+  await expect(done).toBeDisabled();
+  // The model before the Subtract: both inputs whole, nothing committed.
+  await expect
+    .poll(async () => (await drawnVolumes(page)).sort((a, b) => a - b), {
+      timeout: 30_000
+    })
+    .toEqual([2000, 3000]);
+  return { subtract, edit, done, operands };
+}
+
+test('Edit Subtract takes back an operand it removed, so its roles reverse in the edit', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  page.setDefaultTimeout(15_000);
+  const { block, post, result, canvas } = await seededSubtract(
+    page,
+    'Edit reversal'
+  );
+  const historyRows = page.locator('.feature-row');
+  await expect(historyRows).toHaveCount(4);
+  const features = await featureCount(page);
+  const undo = page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo' });
+  await expect(undo).toBeDisabled();
+  await page.keyboard.press('f');
+  await waitForStillViewport(page);
+
+  const { subtract, edit, done, operands } = await editAndRemoveBase(
+    page,
+    post
+  );
+  // Block's top, clear of Post, is Block again: it comes back as the Tool.
   await waitForStillViewport(page);
   await clickWorldPoint(page, [2, 2, 10]);
   await expect(canvas).toHaveAttribute(
     'data-e2e-selected-bodies',
-    `${fixture.post},${fixture.block}`
+    `${post},${block}`
   );
-  await finishInPlaceCommand(page, 'Edit Subtract');
-  await expect(page.locator('.feature-row')).toHaveCount(4);
-  await expectFeatureMeasurement(
+  await edit.locator('summary').click();
+  await expect(operands.getByRole('listitem')).toHaveText([
+    /Base · Post/,
+    /Tool · Block/
+  ]);
+  await edit.locator('summary').click();
+  // Done waits for the reversed frame, drawn under the feature's own id.
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  await expect
+    .poll(() => drawnVolumes(page), { timeout: 30_000 })
+    .toEqual([POST_MINUS_BLOCK]);
+  expect((await drawnBodies(page)).map((body) => body.bodyId)).toEqual([
+    result
+  ]);
+  // Nothing written while the edit runs.
+  await expect(undo).toBeDisabled();
+
+  // Done: one History change, an update of the same feature and body.
+  await done.click();
+  await expect(edit).toHaveCount(0);
+  await expect(historyRows).toHaveCount(4);
+  expect(await featureCount(page)).toBe(features);
+  await expect
+    .poll(async () => (await drawnBodies(page)).map((body) => body.bodyId))
+    .toEqual([result]);
+  await expect(undo).toBeEnabled();
+  await expectSubtractMeasures(page, POST_MINUS_BLOCK);
+
+  // Reopened, the stored feature has Post as its Base and Block as its Tool.
+  await subtract.click();
+  await expect(edit).toBeVisible();
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-bodies',
+    `${post},${block}`
+  );
+  await edit.locator('summary').click();
+  await expect(operands.getByRole('listitem')).toHaveText([
+    /Base · Post/,
+    /Tool · Block/
+  ]);
+  await page.keyboard.press('Escape');
+  await expect(edit).toHaveCount(0);
+
+  // One Undo takes the whole change back: Block − Post, as stored before.
+  await undo.click();
+  await expect(undo).toBeDisabled();
+  await expect(historyRows).toHaveCount(4);
+  await expectSubtractMeasures(page, BLOCK_MINUS_POST);
+  expect((await drawnBodies(page)).map((body) => body.bodyId)).toEqual([
+    result
+  ]);
+  await subtract.click();
+  await expect(edit).toBeVisible();
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-bodies',
+    `${block},${post}`
+  );
+  await page.keyboard.press('Escape');
+  await expect(edit).toHaveCount(0);
+});
+
+test('Edit Subtract takes its removed Base back from Objects, and Escape leaves the feature as stored', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  page.setDefaultTimeout(15_000);
+  const { block, post, result, canvas } = await seededSubtract(
     page,
-    page.locator('.feature-row', { has: subtract }),
-    String(POST_MINUS_BLOCK)
+    'Edit reversal in Objects'
+  );
+  const undo = page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo' });
+  await revealModelPanel(page, 'Objects');
+  const objects = modelPanel(page, 'Objects');
+  const row = (bodyId: BodyId) =>
+    objects.locator(`.body-row-main[data-body-row="${bodyId}"]`);
+  // Outside the edit, Objects lists the result; its inputs are sources.
+  await expect(row(result)).toHaveCount(1);
+
+  const { edit, done, operands } = await editAndRemoveBase(page, post);
+  // In the edit, Objects lists what it picks from, as for a new Subtract:
+  // both inputs live, and not the result being rebuilt.
+  await expect(row(block)).toBeVisible();
+  await expect(row(post)).toBeVisible();
+  await expect(row(result)).toHaveCount(0);
+  await row(block).click();
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-bodies',
+    `${post},${block}`
+  );
+  await edit.locator('summary').click();
+  await expect(operands.getByRole('listitem')).toHaveText([
+    /Base · Post/,
+    /Tool · Block/
+  ]);
+  await edit.locator('summary').click();
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  await expect
+    .poll(() => drawnVolumes(page), { timeout: 30_000 })
+    .toEqual([POST_MINUS_BLOCK]);
+
+  // Escape: the feature stays as stored, and nothing was written.
+  await page.keyboard.press('Escape');
+  await expect(edit).toHaveCount(0);
+  await expect(undo).toBeDisabled();
+  await expect(row(result)).toHaveCount(1);
+  await expectSubtractMeasures(page, BLOCK_MINUS_POST);
+  await page
+    .locator('.feature-row-main', { hasText: 'Subtract' })
+    .last()
+    .click();
+  await expect(edit).toBeVisible();
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-bodies',
+    `${block},${post}`
   );
 });
