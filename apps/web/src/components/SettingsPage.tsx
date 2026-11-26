@@ -20,6 +20,8 @@ import {
   ArrowLeft,
   Bot,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CloudOff,
   Cpu,
   Database,
@@ -85,6 +87,9 @@ import {
   kernelBuildLabel
 } from '../lib/kernelBuild';
 import {
+  assistantEndpointShown,
+  assistantPersonalRowsShown,
+  compactSettingMatches,
   visibleSettingsSections,
   type SettingsSectionId
 } from '../lib/settingsSections';
@@ -161,6 +166,12 @@ function allowanceFigure(usedBytes: number, limitBytes: number): string {
 type SectionId = SettingsSectionId;
 
 interface SettingsPageProps {
+  /**
+   * The compact presentation (U12 slice 10): the sections as a pushed list
+   * under the search, each one full-screen with a way back to the list.
+   * The controls are the same ones.
+   */
+  compact?: boolean;
   settings: AppSettings;
   cloudFunctionsEnabled: boolean;
   accountState: AppSettingsResponse | null;
@@ -773,6 +784,7 @@ function RestoringProfileRows() {
 }
 
 export function SettingsPage({
+  compact = false,
   settings,
   cloudFunctionsEnabled,
   accountState,
@@ -828,6 +840,20 @@ export function SettingsPage({
   const [query, setQuery] = useState(
     initialSection === undefined ? initialViewState.query : ''
   );
+  // Compact: whether a section is pushed over the list. A section asked for
+  // by name opens on that section: a caller-specified one (a task flow), or
+  // one stored as requested (Account storage and Sign in to share from the
+  // project sheet, an invitation or device-approval link, or a reload of a
+  // section that was open).
+  const [compactPushed, setCompactPushed] = useState(
+    initialSection !== undefined || initialViewState.sectionRequested === true
+  );
+  const compactPushedRef = useRef(compactPushed);
+  compactPushedRef.current = compactPushed;
+  // The step back from a pushed section, while there is one (Escape's).
+  const compactBackRef = useRef<(() => void) | null>(null);
+  // The setting a search result was tapped for, scrolled to once drawn.
+  const compactFoundRef = useRef<string | null>(null);
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
@@ -901,6 +927,10 @@ export function SettingsPage({
   );
   const activeRef = useRef(active);
   const queryRef = useRef(query);
+  // Read when the page is hidden or Settings closes: the layout then, not
+  // the one Settings opened in (a resize can change it while open).
+  const compactRef = useRef(compact);
+  compactRef.current = compact;
 
   activeRef.current = active;
   queryRef.current = query;
@@ -914,7 +944,11 @@ export function SettingsPage({
     updateSettingsViewState({
       activeSection: activeRef.current,
       query: queryRef.current,
-      scrollTop: scrollTopRef.current
+      scrollTop: scrollTopRef.current,
+      // Compact keeps whether its section or its list was showing.
+      ...(compactRef.current
+        ? { sectionRequested: compactPushedRef.current }
+        : {})
     });
 
   // Fetched only when the panel that shows it is open, and dropped on sign-out
@@ -1031,15 +1065,30 @@ export function SettingsPage({
     }
   };
 
+  // Closing Settings leaves no search to greet the next visit, or to hide
+  // the section a link or a task flow opens it on.
+  const close = () => {
+    queryRef.current = '';
+    updateSettingsViewState({ query: '' });
+    onClose();
+  };
+  const closeRef = useRef(close);
+  closeRef.current = close;
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        onClose();
+        // Compact: Escape steps back from a section to the list first.
+        if (compactBackRef.current) {
+          compactBackRef.current();
+          return;
+        }
+        closeRef.current();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
+  }, []);
 
   // The overlay's modal focus lands on the first control, the brand button,
   // which closes Settings: a first Enter dismissed the page. Start on the
@@ -1082,9 +1131,15 @@ export function SettingsPage({
       open: true,
       activeSection: active,
       query: queryRef.current,
-      scrollTop
+      scrollTop,
+      ...(compact ? { sectionRequested: compactPushedRef.current } : {})
     });
-  }, [active, initialSection]);
+  }, [active, initialSection, compact]);
+
+  // Compact: a reload brings back the section or the list that was showing.
+  useEffect(() => {
+    if (compact) updateSettingsViewState({ sectionRequested: compactPushed });
+  }, [compact, compactPushed]);
 
   useEffect(() => {
     const onPageHide = () => persistCurrentView();
@@ -1159,15 +1214,65 @@ export function SettingsPage({
   // From the start screen there is no workspace behind Settings to go back to.
   const backLabel = workspaceOpen ? 'Back to workspace' : 'Back to projects';
   // A search with no match leaves nothing to show; the section that was open
-  // before it must not linger as if it matched.
-  const anyMatch = visibleSections.length > 0;
+  // before it must not linger as if it matched (`anyMatch`, below).
+  // Compact: the list of sections, one pushed section, or a search's
+  // results over the section that holds the first match.
+  const compactMode = !compact
+    ? null
+    : query.trim()
+      ? 'search'
+      : compactPushed
+        ? 'section'
+        : 'list';
+  compactBackRef.current =
+    compactMode === 'section' ? () => setCompactPushed(false) : null;
+  // Only rows the open sections draw now, by the tests they draw them by.
+  const compactResults =
+    compactMode === 'search'
+      ? compactSettingMatches(visibleSections, query, {
+          signedIn: Boolean(session),
+          profileShown: Boolean(session) || restoringSignedIn,
+          assistant: settings.assistant
+        })
+      : [];
+  // A compact search whose only matches are rows not drawn now finds
+  // nothing, and shows no section as if it had.
+  const anyMatch =
+    visibleSections.length > 0 &&
+    (compactMode !== 'search' || compactResults.length > 0);
+  const openCompactSection = (id: SectionId, settingTitle?: string) => {
+    compactFoundRef.current = settingTitle ?? null;
+    setActive(id);
+    setCompactPushed(true);
+    if (query) changeQuery('');
+    contentRef.current?.scrollTo?.({ top: 0 });
+  };
+  const activeLabel =
+    visibleSections.find((section) => section.id === active)?.label ??
+    'Settings';
   const [layoutPreference, setLayoutPreference] = useLayoutPreference();
+  // A search result tapped: its row brought into view in its section.
+  useLayoutEffect(() => {
+    const title = compactFoundRef.current;
+    if (!title || compactMode !== 'section') return;
+    compactFoundRef.current = null;
+    const row = [
+      ...(contentRef.current?.querySelectorAll<HTMLElement>('.setting-title') ??
+        [])
+    ]
+      .find((element) => element.textContent?.trim() === title)
+      ?.closest<HTMLElement>('.setting-row');
+    row?.scrollIntoView?.({ block: 'center' });
+  }, [active, compactMode]);
 
   return (
     <div
       ref={pageRef}
-      className={`settings-page density-${settings.appearance.density}`}
+      className={`settings-page density-${settings.appearance.density}${
+        compactMode ? ` is-compact-${compactMode}` : ''
+      }`}
       data-reduced-motion={settings.appearance.reducedMotion ? 'true' : 'false'}
+      data-shell={compact ? 'compact' : undefined}
     >
       <div className="settings-layout">
         <aside className="settings-nav" aria-label="Settings sections">
@@ -1180,7 +1285,7 @@ export function SettingsPage({
               className="brand"
               type="button"
               title={`${backLabel} (Esc)`}
-              onClick={onClose}
+              onClick={close}
             >
               <BrandMark compact />
               OpenZCAD <ChannelTag />
@@ -1203,10 +1308,21 @@ export function SettingsPage({
                   aria-label={section.label}
                   aria-current={active === section.id ? 'page' : undefined}
                   title={section.detail}
-                  onClick={() => setActive(section.id)}
+                  onClick={() =>
+                    compact
+                      ? openCompactSection(section.id)
+                      : setActive(section.id)
+                  }
                 >
                   {SECTION_ICONS[section.id]}
                   <span>{SECTION_NAV_LABELS[section.id] ?? section.label}</span>
+                  {compact ? (
+                    <ChevronRight
+                      className="settings-compact-chevron"
+                      size={18}
+                      aria-hidden="true"
+                    />
+                  ) : null}
                 </button>
               </Fragment>
             ))}
@@ -1252,12 +1368,24 @@ export function SettingsPage({
         {/* The head stays put while a long page scrolls under it, as the
             workspace's top bar does. */}
         <header className="settings-head">
+          {compactMode === 'section' ? (
+            <button
+              type="button"
+              className="settings-compact-back"
+              aria-label="Back to all settings"
+              onClick={() => setCompactPushed(false)}
+            >
+              <ChevronLeft size={22} aria-hidden="true" />
+            </button>
+          ) : null}
           <h1 ref={headingRef} className="settings-head-title" tabIndex={-1}>
-            Settings
+            {compactMode === 'section' ? activeLabel : 'Settings'}
           </h1>
           <span
             className="settings-save-message"
-            aria-live="polite"
+            // Compact shows this line too; while a field's own alert says
+            // what went wrong (a refused email code), it is not read again.
+            aria-live={compact && loginCodeError ? 'off' : 'polite'}
             // Two lines of the head hold most messages; a longer one (an
             // outage, offline mode) is cut there, and reads whole on hover.
             title={message || undefined}
@@ -1290,7 +1418,7 @@ export function SettingsPage({
               type="button"
               aria-label={`Close settings and go ${backLabel.toLowerCase()}`}
               title={`${backLabel} (Esc)`}
-              onClick={onClose}
+              onClick={close}
             >
               <ArrowLeft size={14} aria-hidden="true" />
               {backLabel}
@@ -1304,6 +1432,41 @@ export function SettingsPage({
             scrollTopRef.current = event.currentTarget.scrollTop;
           }}
         >
+          {compactResults.length > 0 ? (
+            <ul
+              className="settings-compact-results"
+              aria-label="Matching settings"
+            >
+              {compactResults.map((result) => (
+                <li key={`${result.section.id}:${result.title ?? ''}`}>
+                  <button
+                    type="button"
+                    className="settings-compact-result"
+                    onClick={() =>
+                      openCompactSection(
+                        result.section.id,
+                        result.title ?? undefined
+                      )
+                    }
+                  >
+                    <span className="settings-compact-result-title">
+                      {result.title ?? result.section.label}
+                    </span>
+                    {result.title ? (
+                      <small className="settings-compact-result-section">
+                        {result.section.label}
+                      </small>
+                    ) : null}
+                    <ChevronRight
+                      className="settings-compact-chevron"
+                      size={18}
+                      aria-hidden="true"
+                    />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {!anyMatch && (
             <p className="settings-empty">
               No settings match “{query.trim()}”. Clear the search to see every
@@ -2031,7 +2194,7 @@ export function SettingsPage({
                 onChange={patchAssistant}
               />
 
-              {settings.assistant.credentialSource === 'personal' ? (
+              {assistantPersonalRowsShown(settings.assistant) ? (
                 <>
                   <Group title="Model">
                     <SettingRow
@@ -2059,7 +2222,7 @@ export function SettingsPage({
                         </option>
                       </select>
                     </SettingRow>
-                    {settings.assistant.provider === 'responses-compatible' ? (
+                    {assistantEndpointShown(settings.assistant) ? (
                       <SettingRow
                         title="API endpoint"
                         hint="Public HTTPS only. Changing endpoint removes the saved token."
