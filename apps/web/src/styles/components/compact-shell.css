@@ -182,6 +182,7 @@
 .compact-tab:focus-visible,
 .compact-float-button:focus-visible,
 .compact-selection-chip:focus-visible,
+.compact-analysis-chip:focus-visible,
 .compact-menu-row:focus-visible,
 .compact-sheet-grabber:focus-visible {
   outline: 2px solid var(--color-accent);
@@ -272,6 +273,9 @@
   right: max(var(--sp-2), env(safe-area-inset-right));
   bottom: calc(var(--compact-sheet-h, 0px) + var(--sp-2));
   display: flex;
+  /* A chip that does not fit beside the undo pair takes a row of its own
+     above it, rather than squeezing another chip below its 44 px target. */
+  flex-wrap: wrap-reverse;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
@@ -285,7 +289,8 @@
 }
 
 .compact-float-button,
-.compact-selection-chip {
+.compact-selection-chip,
+.compact-analysis-chip {
   pointer-events: auto;
   box-sizing: border-box;
   min-height: var(--compact-target);
@@ -310,12 +315,40 @@
 }
 
 .compact-selection-chip {
-  min-width: 0;
+  min-width: var(--compact-target);
   max-width: 60%;
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: 0 var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: 22px;
+  font-size: 15px;
+  text-align: start;
+}
+
+/* A long name wraps between words onto a second line, never cut mid-word. */
+.compact-selection-chip .compact-selection-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: 1.25;
+}
+
+/* An analysis left on, away from View's Display page: its name and Off,
+   beside the undo pair, clear of the view cube's corner on a short
+   landscape stage; the selection chip keeps the right. */
+.compact-analysis-chip {
+  flex: 0 0 auto;
+  min-width: var(--compact-target);
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
   border-radius: 999px;
   font-size: 15px;
 }
@@ -333,6 +366,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* An analysis's name is one word, shown whole: the chip does not shrink. */
+.compact-analysis-chip .compact-selection-text {
+  overflow: visible;
 }
 
 /* ── The bottom sheet ── */
@@ -610,4 +648,394 @@
 .app-shell[data-shell='compact']:has(.keypad-section-recovery)
   .in-place-command-recovery {
   display: none;
+}
+
+/* ── A mode's tray (U12 slice 7) ──
+   View's and Tweak's verbs as one row of 44 px icons: the sheet at peek.
+   Resting on the tray alone, the sheet is that row and a grip: its head
+   (Back, the height slider, Close) returns with a page, which a verb opens. */
+.compact-sheet[data-detent='peek']:has(
+    > .compact-sheet-body:not([hidden]) > .compact-tray-slot.is-alone
+  )
+  > .compact-sheet-head {
+  display: none;
+}
+
+.compact-tray-slot {
+  position: relative;
+  min-width: 0;
+}
+
+.compact-sheet[data-detent='peek'] .compact-tray-slot.is-alone {
+  padding-top: var(--sp-3);
+}
+
+.compact-sheet[data-detent='peek'] .compact-tray-slot.is-alone::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 36px;
+  height: 5px;
+  margin-left: -18px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+}
+
+.compact-tray {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: var(--sp-1);
+  min-height: var(--compact-target);
+}
+
+.compact-tray-button {
+  position: relative;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.compact-tray-button:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-tray-button[aria-pressed='true'],
+.compact-tray-button[aria-expanded='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+/* Its subject is on (a cut, hidden parts): a dot on the icon. */
+.compact-tray-button.is-on::after {
+  content: '';
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-accent);
+}
+
+.compact-tray-button:disabled {
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+.compact-tray-button:focus-visible,
+.compact-round-button:focus-visible,
+.compact-choice:focus-visible,
+.compact-param-value:focus-visible,
+.compact-switch:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ── A tray's page ── */
+
+.compact-tray-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.compact-page-note {
+  margin: 0;
+  font-size: 15px;
+  color: var(--color-text-muted);
+}
+
+.compact-page-note.is-error,
+.compact-param-error {
+  color: var(--color-error-text);
+}
+
+.compact-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--sp-2);
+}
+
+.compact-choice {
+  box-sizing: border-box;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.compact-choice.is-wide {
+  grid-column: 1 / -1;
+}
+
+.compact-choice[aria-pressed='true'],
+.compact-menu-row[aria-pressed='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+.compact-menu-check {
+  flex: 0 0 auto;
+  color: var(--color-accent);
+}
+
+.compact-stepper-row {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-4);
+}
+
+.compact-round-button {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.compact-round-button:disabled {
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+.compact-analysis-host:empty {
+  display: none;
+}
+
+.compact-saved-views {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+/* The workspace's panels, which float as islands on the regular stage,
+   sit in the page's flow here: their placement and frames are reset. */
+.compact-tray-page > .measurement-dock,
+.compact-tray-page > .view-mode-rail,
+.compact-tray-page > .rail-section-panel,
+.compact-analysis-host > .analysis-panel {
+  position: static;
+  inset: auto;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  overflow: visible;
+  transform: none;
+  translate: none;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.compact-tray-page > .measurement-dock .measurement-dock-body,
+.compact-tray-page > .view-mode-rail .view-mode-rail-list {
+  max-height: none;
+  overflow: visible;
+}
+
+/* The sheet's title names the page; the panel's own heading repeats it. */
+.compact-tray-page > .measurement-dock > .measurement-dock-head > h2,
+.compact-tray-page > .view-mode-rail > .view-mode-rail-head {
+  display: none;
+}
+
+/* Every control in a page takes a thumb. */
+.compact-tray-page button,
+.compact-tray-page select,
+.compact-tray-page input {
+  min-height: var(--compact-target);
+}
+
+/* The cut's slider: a thumb-high strip around its thin track, and a
+   thumb a finger can find. */
+.compact-tray-page .rail-section-slider {
+  height: var(--compact-target);
+}
+
+.compact-tray-page .rail-section-slider::-webkit-slider-thumb {
+  width: 22px;
+  height: 22px;
+  margin-top: -9px;
+}
+
+.compact-tray-page .rail-section-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+}
+
+.compact-tray-page
+  :is(
+    .view-mode-rail-action,
+    .rail-section-icon,
+    .rail-section-flip,
+    .analysis-panel-off,
+    .measurement-row-actions button
+  ) {
+  min-width: var(--compact-target);
+}
+
+/* A part's Show only and Hide stand in its row: there is no hover to
+   bring them up on a touch screen. */
+.compact-tray-page .view-mode-rail-action {
+  height: var(--compact-target);
+  opacity: 1;
+}
+
+.compact-tray-page .view-mode-rail-action > svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* The cut's switch: a larger pill in a thumb-high strip. */
+.compact-tray-page .rail-section-switch {
+  box-sizing: border-box;
+  width: 60px;
+  height: var(--compact-target);
+  padding: 6px 0;
+  background-clip: content-box;
+}
+
+.compact-tray-page .rail-section-switch > span {
+  top: 10px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+}
+
+.compact-tray-page .rail-section-switch[aria-checked='false'] > span {
+  right: auto;
+  left: 4px;
+}
+
+/* ── Tweak's parameters ── */
+
+.compact-param-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.compact-param {
+  box-sizing: border-box;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.compact-param-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 17px;
+  color: var(--color-text);
+}
+
+.compact-param-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.compact-param-value {
+  box-sizing: border-box;
+  min-width: 72px;
+  min-height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.compact-param-value[aria-busy='true'] {
+  color: var(--color-text-muted);
+}
+
+.compact-param-number {
+  font-variant-numeric: tabular-nums;
+}
+
+.compact-param-unit {
+  font-size: 15px;
+  color: var(--color-text-muted);
+}
+
+.compact-param-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 13px;
+}
+
+/* An on/off parameter: one switch, a thumb's width. */
+.compact-switch {
+  box-sizing: border-box;
+  width: 60px;
+  height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  cursor: pointer;
+}
+
+.compact-switch > span {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-1, 0 1px 2px rgb(0 0 0 / 0.2));
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.compact-switch[aria-checked='true'] {
+  background: var(--color-accent);
+}
+
+.compact-switch[aria-checked='true'] > span {
+  transform: translateX(20px);
 }

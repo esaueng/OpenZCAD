@@ -113,7 +113,30 @@ export const COMPACT_ENTRIES: Readonly<
   'file-export-step': 'overflow-menu',
   'file-export-mesh': 'overflow-menu',
   'file-export-image': 'overflow-menu',
-  'file-export-cnc-layout': 'overflow-menu'
+  'file-export-cnc-layout': 'overflow-menu',
+  // Slice 7, View's tray: Measure, and the Section, Display, Views and
+  // Parts pages it opens (Fit, grid, projection and orbit on Display; a
+  // body's visibility, Show only and Show all on Parts). Tweak's sheet
+  // offers STEP and mesh export too, already reached from the overflow
+  // menu; its parameters and configurations are document rows, not actions.
+  'view-measure': 'view-tray',
+  'view-section': 'view-tray',
+  'view-display': 'view-tray',
+  'view-xray': 'view-tray',
+  'view-grid': 'view-tray',
+  'view-projection': 'view-tray',
+  'view-orbit-mode': 'view-tray',
+  'view-fit': 'view-tray',
+  'view-front': 'view-tray',
+  'view-back': 'view-tray',
+  'view-left': 'view-tray',
+  'view-right': 'view-tray',
+  'view-top': 'view-tray',
+  'view-bottom': 'view-tray',
+  'view-iso': 'view-tray',
+  'body-visibility': 'view-tray',
+  'view-isolate-body': 'view-tray',
+  'view-show-all': 'view-tray'
 };
 
 // ── Sources ────────────────────────────────────────────────────────────

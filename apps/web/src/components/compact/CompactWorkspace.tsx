@@ -2,19 +2,25 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleHelp,
+  Copy,
   Ellipsis,
   FileText,
   FolderOpen,
   Redo2,
   Search,
   Settings,
-  Undo2
+  Undo2,
+  X
 } from 'lucide-react';
 import {
+  Suspense,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
+  useState,
   type ReactNode
 } from 'react';
 import { WORKSPACE_MODE_OPTIONS } from '../../lib/topBarPresentation';
@@ -23,7 +29,17 @@ import type { WorkspaceSaveState } from '../../lib/cloudProjectAutosave';
 import { OWN_ENTER_ATTRIBUTE } from '../../lib/exactEntryShortcut';
 import type { PaletteCommand } from '../CommandBar';
 import { BottomSheet, SHEET_OVERLAY_ATTRIBUTE, useSheet } from './BottomSheet';
-import type { CompactChromeProps } from './compactSlots';
+import {
+  ANALYSIS_LABELS,
+  analysisRuntime,
+  useAnalysisRuntime
+} from '../../lib/analysis/analysisRuntime';
+import {
+  CompactAnalysisSlotContext,
+  CompactTrayContext,
+  type CompactChromeProps,
+  type CompactTraySlot
+} from './compactSlots';
 
 /** The save dot's tone: settled, under way, or worth a look. */
 function saveTone(state: WorkspaceSaveState): 'ok' | 'busy' | 'local' | 'warn' {
@@ -111,6 +127,13 @@ export interface CompactWorkspaceProps extends CompactChromeProps {
   hasSheetContent: boolean;
   /** Changes when different content arrives, so the sheet comes up. */
   sheetKey: string;
+  /**
+   * The mode's tray (U12 slice 7: View's and Tweak's verbs), the sheet's
+   * row at peek; its pages open over it through `CompactTrayContext`. A
+   * tray keeps the sheet at peek rather than closed, and arriving does not
+   * raise it: only a page does.
+   */
+  tray?: ReactNode;
   /** The host the in-place command bar is portalled into. */
   onCommandRowHost(element: HTMLElement | null): void;
   /**
@@ -129,6 +152,9 @@ const OWN_ENTER = { [OWN_ENTER_ATTRIBUTE]: '' };
 
 /** The pages the compact chrome pushes onto the sheet, by id. */
 type CompactPage = 'more' | 'file' | 'selection';
+
+/** A tray's page in the back stack: this prefix, then the tray's own key. */
+const TRAY_PAGE = 'tray:';
 
 /**
  * The compact workspace's chrome (U12 slice 2): a header, the mode tabs, the
@@ -155,10 +181,12 @@ export default function CompactWorkspace({
   fileCommands,
   selectionLabel,
   onClearSelection,
+  onMakeCopy,
   reducedMotion,
   sheetContent,
   hasSheetContent,
   sheetKey,
+  tray = null,
   onCommandRowHost,
   onOverlayHost
 }: CompactWorkspaceProps) {
@@ -166,16 +194,84 @@ export default function CompactWorkspace({
   const headerRef = useRef<HTMLElement | null>(null);
   const tabsRef = useRef<HTMLElement | null>(null);
   const floatRef = useRef<HTMLDivElement | null>(null);
-  const { state, dispatch } = useSheet(hasSheetContent);
+  const hasTray = tray !== null && tray !== undefined && tray !== false;
+  // An analysis left on (M09) keeps colouring the model in every mode, as in
+  // the regular workspace, where its panel with Off stays over the stage.
+  // Here the panel lives in View's Display page; wherever that page is not
+  // showing it, a chip on the stage says what is on and turns it off.
+  const analysisKind = useAnalysisRuntime((s) => s.request?.kind ?? null);
+  const analysisPanelShown = Boolean(
+    useContext(CompactAnalysisSlotContext)?.host
+  );
+  // A tray is the sheet's own root too: the sheet rests at peek on it.
+  const hasRoot = hasSheetContent || hasTray;
+  const { state, dispatch } = useSheet(hasRoot);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   // Content arriving brings the sheet up to half; content leaving closes a
-  // sheet that holds nothing else.
+  // sheet that holds nothing else, or lowers it to a tray's peek.
   const lastKey = useRef('');
+  const hadContent = useRef(false);
   useEffect(() => {
     const arrived = hasSheetContent && sheetKey !== lastKey.current;
     lastKey.current = hasSheetContent ? sheetKey : '';
-    dispatch({ type: 'root', present: hasSheetContent, arrived });
-  }, [dispatch, hasSheetContent, sheetKey]);
+    const left = hadContent.current && !hasSheetContent;
+    hadContent.current = hasSheetContent;
+    dispatch({ type: 'root', present: hasRoot, arrived });
+    if (left && hasTray && stateRef.current.stack.length === 0) {
+      dispatch({ type: 'set-detent', detent: 'peek' });
+    }
+  }, [dispatch, hasSheetContent, hasRoot, hasTray, sheetKey]);
+
+  // The tray's open page, wherever it is in the stack (a page such as More
+  // can stand over it), and the element its content is drawn into while it
+  // is the page on show.
+  const trayTitles = useRef(new Map<string, string>());
+  const [trayPageHost, setTrayPageHost] = useState<HTMLElement | null>(null);
+  const trayEntry = state.stack.find((page) => page.key.startsWith(TRAY_PAGE));
+  const trayPage = trayEntry ? trayEntry.key.slice(TRAY_PAGE.length) : null;
+  const trayPageOnTop =
+    trayEntry !== undefined &&
+    state.stack[state.stack.length - 1]?.key === trayEntry.key;
+  const traySlot = useMemo<CompactTraySlot>(
+    () => ({
+      page: trayPage,
+      pageHost: trayPageOnTop ? trayPageHost : null,
+      openPage(key, title) {
+        trayTitles.current.set(key, title);
+        // One tray page at a time: another one open goes first. A sheet
+        // raised to full stays there.
+        const full = stateRef.current.detent === 'full';
+        if (stateRef.current.stack.length > 0) dispatch({ type: 'close' });
+        dispatch({
+          type: 'push',
+          page: { key: `${TRAY_PAGE}${key}` },
+          detent: full ? 'full' : 'half'
+        });
+      },
+      closePage() {
+        dispatch({ type: 'close' });
+      }
+    }),
+    [dispatch, trayPage, trayPageOnTop, trayPageHost]
+  );
+  // Back from a tray page (its Back, Escape, or the page closing itself)
+  // lowers the sheet to the tray's peek, unless the workspace has content
+  // of its own in the sheet.
+  const lastTrayPage = useRef<string | null>(null);
+  useEffect(() => {
+    const left = lastTrayPage.current !== null && trayPage === null;
+    lastTrayPage.current = trayPage;
+    if (
+      left &&
+      hasTray &&
+      !hasSheetContent &&
+      stateRef.current.stack.length === 0
+    ) {
+      dispatch({ type: 'set-detent', detent: 'peek' });
+    }
+  }, [dispatch, hasSheetContent, hasTray, trayPage]);
 
   const shell = () => chromeRef.current?.closest('.app-shell') ?? null;
   const background = useCallback(
@@ -241,6 +337,14 @@ export default function CompactWorkspace({
   const renderPage = (
     key: string
   ): { title: string; content: ReactNode } | null => {
+    if (key.startsWith(TRAY_PAGE)) {
+      return {
+        title: trayTitles.current.get(key.slice(TRAY_PAGE.length)) ?? '',
+        // The tray draws the page's content in here (a portal), so it keeps
+        // the tray's own state and handlers.
+        content: <div ref={setTrayPageHost} className="compact-tray-page" />
+      };
+    }
     switch (key as CompactPage) {
       case 'file':
         return {
@@ -256,6 +360,21 @@ export default function CompactWorkspace({
             <MenuList
               label="More"
               rows={[
+                // A shared link's visitor's way to keep the model, in any
+                // mode: the regular top bar's labelled button, here.
+                ...(onMakeCopy
+                  ? [
+                      {
+                        id: 'make-copy',
+                        label: 'Make a copy',
+                        icon: <Copy size={18} />,
+                        run: () => {
+                          closePages();
+                          onMakeCopy();
+                        }
+                      }
+                    ]
+                  : []),
                 {
                   id: 'settings',
                   label: 'Open settings',
@@ -400,6 +519,20 @@ export default function CompactWorkspace({
               <Redo2 size={20} aria-hidden="true" />
             </button>
           </div>
+          {analysisKind && !analysisPanelShown ? (
+            <button
+              type="button"
+              className="compact-analysis-chip"
+              aria-label={`Turn off ${ANALYSIS_LABELS[analysisKind].toLowerCase()} analysis`}
+              onClick={() => analysisRuntime.off()}
+            >
+              <span className="compact-selection-dot" aria-hidden="true" />
+              <span className="compact-selection-text" aria-hidden="true">
+                {ANALYSIS_LABELS[analysisKind]}
+              </span>
+              <X size={18} aria-hidden="true" />
+            </button>
+          ) : null}
           {selectionLabel ? (
             <button
               type="button"
@@ -416,12 +549,24 @@ export default function CompactWorkspace({
           label="Workspace sheet"
           state={state}
           dispatch={dispatch}
-          hasRoot={hasSheetContent}
+          hasRoot={hasRoot}
           renderPage={renderPage}
           reducedMotion={reducedMotion}
           background={background}
           onHeight={onHeight}
         >
+          {/* The mode's tray first: the row the sheet shows at peek. */}
+          {hasTray ? (
+            <CompactTrayContext.Provider value={traySlot}>
+              <div
+                className={`compact-tray-slot${
+                  hasSheetContent ? '' : ' is-alone'
+                }`}
+              >
+                <Suspense fallback={null}>{tray}</Suspense>
+              </div>
+            </CompactTrayContext.Provider>
+          ) : null}
           {/* The in-place command bar lands here (WorkspaceReadout), first:
               its step and Done are what a running command needs in reach. */}
           <div ref={onCommandRowHost} className="compact-command-row" />
