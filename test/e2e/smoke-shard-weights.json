@@ -23,6 +23,7 @@
   "collaboration.spec.ts": 20,
   "command-bar-names.spec.ts": 8,
   "compact-build.spec.ts": 20,
+  "compact-draw.spec.ts": 45,
   "compact-shell.spec.ts": 12,
   "compact-view-tweak.spec.ts": 24,
   "configuration-export.spec.ts": 14,

@@ -261,6 +261,27 @@ describe('action registry', () => {
     expect(COMPACT_ENTRIES['file-export-mesh']).toBe('overflow-menu');
   });
 
+  it('gives Draw’s tray every drawing tool, and nothing else', () => {
+    const drawTray = Object.entries(COMPACT_ENTRIES)
+      .filter(([, surface]) => surface === 'draw-tray')
+      .map(([id]) => id)
+      .sort();
+    const drawing = ACTIONS.filter((entry) =>
+      entry.sources.includes('drawing')
+    ).map((entry) => entry.id);
+    // Draw's 25 letter keys: 22 annotation tools and 3 view tools.
+    expect(drawing).toHaveLength(25);
+    expect(drawTray).toEqual([...drawing].sort());
+    expect(drawTray).toEqual(
+      [
+        ...ANNOTATION_TOOLS.map((kind) => `drawing-${kind}`),
+        'drawing-section-view',
+        'drawing-detail-view',
+        'drawing-auxiliary-view'
+      ].sort()
+    );
+  });
+
   it('lists only registered actions as touch gaps and compact entries', () => {
     for (const id of REGULAR_TOUCH_GAPS) {
       expect(actionEntry(id), id).toBeDefined();

@@ -163,7 +163,17 @@ export const COMPACT_ENTRIES: Readonly<
   'view-iso': 'view-tray',
   'body-visibility': 'view-tray',
   'view-isolate-body': 'view-tray',
-  'view-show-all': 'view-tray'
+  'view-show-all': 'view-tray',
+  // Slice 9, Draw's tray: every annotation tool from Annotate's five
+  // groups, and the section, detail and auxiliary view tools from Views.
+  // Draw's sheets, properties and exports are its own controls, not
+  // registry actions.
+  ...Object.fromEntries(
+    ANNOTATION_TOOLS.map((kind) => [`drawing-${kind}`, 'draw-tray' as const])
+  ),
+  'drawing-section-view': 'draw-tray',
+  'drawing-detail-view': 'draw-tray',
+  'drawing-auxiliary-view': 'draw-tray'
 };
 
 // ── Sources ────────────────────────────────────────────────────────────

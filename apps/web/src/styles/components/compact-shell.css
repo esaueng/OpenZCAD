@@ -1916,3 +1916,250 @@
 .compact-switch[aria-checked='true'] > span {
   transform: translateX(20px);
 }
+
+/* ── Draw (U12 slice 9) ──────────────────────────────────────
+   The sheet fills the stage; its tabs, toolbar, properties and exports are
+   the tray's Annotate, Views, Sheets, Properties and Export pages. The
+   drawing workspace draws its tray into the tray slot's anchor. */
+
+.compact-tray-anchor {
+  display: contents;
+}
+
+/* The paper keeps clear of the sheet at peek and the undo pair over it;
+   its zoom row stands over its top. */
+.app-shell[data-shell='compact'] .drawing-workspace {
+  padding: 0;
+}
+
+/* Before the first sheet: its invitation, clear of the stage's edges and
+   of the sheet at peek. */
+.app-shell[data-shell='compact'] .drawing-empty {
+  box-sizing: border-box;
+  padding: var(--sp-4) max(var(--sp-4), env(safe-area-inset-right))
+    calc(var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2)
+    max(var(--sp-4), env(safe-area-inset-left));
+}
+
+.app-shell[data-shell='compact'] .drawing-stage {
+  gap: var(--sp-2);
+  padding: var(--sp-2) max(var(--sp-2), env(safe-area-inset-right))
+    calc(var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2)
+    max(var(--sp-2), env(safe-area-inset-left));
+  transition: padding-bottom var(--dur-base) var(--ease-out);
+}
+
+.app-shell[data-shell='compact'] .drawing-canvas-area {
+  flex-direction: column;
+  padding: calc(var(--compact-target) + var(--sp-2)) 0 0;
+}
+
+.compact-draw-zoom {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.compact-draw-chip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  max-width: calc(100% - (var(--compact-target) + var(--sp-2)) * 4);
+  min-height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-2);
+  color: var(--color-text);
+  font-size: 15px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.compact-draw-chip.is-pending {
+  color: var(--color-text-muted);
+  cursor: default;
+}
+
+.compact-draw-chip:disabled {
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+/* A running tool's row: its icon and step, Cancel and Done. */
+.compact-draw-run {
+  padding: 0 var(--sp-1);
+}
+
+.compact-draw-run-button {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.compact-draw-run-button.is-done {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.compact-draw-run-button:focus-visible,
+.compact-draw-chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* A page: tiles first, then the regular panel's sections, at thumb size. */
+.compact-draw-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.compact-draw-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.compact-draw-section .drawing-panel-section {
+  gap: var(--sp-2);
+  padding: 0;
+  border-bottom: 0;
+}
+
+.compact-draw-section .drawing-panel-section h3,
+.compact-draw-section .drawing-selection-title {
+  color: var(--color-text-muted);
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.compact-draw-section :is(.drawing-field, .drawing-check, .drawing-hint) {
+  font-size: 15px;
+}
+
+.compact-draw-section .drawing-field-row {
+  flex-wrap: wrap;
+}
+
+.compact-draw-section .drawing-field-row > .drawing-field {
+  flex-basis: 140px;
+}
+
+.compact-draw-section
+  :is(
+    button,
+    select,
+    summary,
+    .drawing-field input:not([type='checkbox'], [type='radio'])
+  ) {
+  box-sizing: border-box;
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+}
+
+.compact-draw-section .drawing-sheet-item {
+  font-size: 17px;
+}
+
+/* A check box's target is its whole row. */
+.compact-draw-section .drawing-check {
+  min-height: var(--compact-target);
+}
+
+.compact-draw-section .drawing-check input {
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  margin: 0;
+}
+
+.compact-draw-section .drawing-line-weights > summary {
+  display: flex;
+  align-items: center;
+}
+
+/* The sheet list: each sheet's row, its actions under it. */
+.compact-draw-sheets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.compact-draw-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.compact-draw-sheet:last-child {
+  border-bottom: 0;
+}
+
+.compact-draw-sheet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2);
+}
+
+.compact-round-button.is-danger:not(:disabled) {
+  color: var(--color-error-text);
+}
+
+.compact-draw-rename {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.compact-draw-rename-input {
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--compact-target);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font: inherit;
+}
+
+/* Held landscape, the sheet stands beside the stage: the paper keeps its
+   width clear instead, and only the undo pair's row below. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .app-shell[data-shell='compact'] .drawing-stage {
+    padding-bottom: calc(var(--compact-target) + var(--sp-2) * 2);
+  }
+
+  .app-shell[data-shell='compact']:has(.compact-sheet:not([hidden]))
+    .drawing-stage {
+    padding-right: calc(var(--compact-side-sheet-w) + var(--sp-2));
+  }
+}

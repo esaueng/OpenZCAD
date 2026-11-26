@@ -40476,11 +40476,14 @@ export function App() {
     }));
   // U12 slice 7: View's and Tweak's tray in the compact sheet, in place of
   // View's bar and rail and Tweak's rail and flyouts. Each control runs the
-  // handler those run.
+  // handler those run. U12 slice 9: Draw's tray is the drawing workspace's
+  // own, drawn from the stage into an anchor the sheet's tray slot holds.
   const compactModeTray =
-    !compactShell || !(viewMode || tweakMode) ? null : (
+    !compactShell || !(viewMode || tweakMode || drawingMode) ? null : (
       <ErrorBoundary label="Mode tray" resetKey={resolvedWorkspaceMode}>
-        {viewMode ? (
+        {drawingMode ? (
+          <LazyCompactModeTray mode="drawing" />
+        ) : viewMode ? (
           <LazyCompactModeTray
             mode="view"
             measure={{

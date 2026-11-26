@@ -216,6 +216,35 @@ export function useCompactTray(): CompactTraySlot | null {
 }
 
 /**
+ * Where a mode that keeps its own state on the stage draws its tray (U12
+ * slice 9: Draw). The drawing workspace owns its sheets, tools and
+ * selection, so its tray cannot be drawn by the workspace the way View's
+ * and Tweak's are: the compact sheet's tray slot holds an anchor element
+ * instead, and the drawing workspace portals its tray there, under the
+ * tray's own page controls. The compact frame provides this slot (null in
+ * the regular workspace, which is how the drawing workspace knows which
+ * layout it is in); `host` is null until the anchor is up.
+ */
+export interface CompactTrayHost {
+  element: HTMLElement;
+  tray: CompactTraySlot;
+}
+
+export interface CompactTrayHostSlot {
+  host: CompactTrayHost | null;
+  setHost(host: CompactTrayHost | null): void;
+}
+
+export const CompactTrayHostContext = createContext<CompactTrayHostSlot | null>(
+  null
+);
+
+/** The compact frame's tray host slot; null in the regular workspace. */
+export function useCompactTrayHost(): CompactTrayHostSlot | null {
+  return useContext(CompactTrayHostContext);
+}
+
+/**
  * Where the analysis panel (M09's legend, provenance and limits) goes in the
  * compact workspace: View's Display page provides a host, and the viewer
  * draws the panel there rather than over the stage's foot, where the sheet

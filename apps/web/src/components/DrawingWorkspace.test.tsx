@@ -34,6 +34,10 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { DrawingWorkspace, resetRetainedProjections } from './DrawingWorkspace';
+import { AppShell } from './AppShell';
+import CompactModeTray from './compact/CompactModeTray';
+import { ANNOTATION_TOOLS } from '../lib/drawing/toolKeys';
+import { ANNOTATION_TOOL_LABELS } from '../lib/drawing/annotationPicking';
 import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
 import { WHEEL_DEVICE_STORAGE_KEY } from '../lib/wheelDeviceMemory';
 import { viewConfigurationRows } from '../lib/drawing/viewConfigurations';
@@ -3492,5 +3496,268 @@ describe('DrawingWorkspace dimension check (D06)', () => {
     const auto = await screen.findByRole('button', { name: 'Auto-dimension' });
     expect(auto).toBeDisabled();
     expect(auto).toHaveAttribute('title', 'Viewers cannot edit drawings.');
+  });
+});
+
+describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
+  /**
+   * The drawing workspace on the compact frame's stage, its tray in the
+   * sheet's tray slot, as App draws them: the tray is the anchor, and the
+   * workspace portals its own tray into it.
+   */
+  function compactSetup(
+    options: { sheet?: DrawingSheet; sheets?: DrawingSheet[] } = {}
+  ) {
+    resetRetainedProjections();
+    const sheets = options.sheets ?? (options.sheet ? [options.sheet] : []);
+    const document: ProjectDocument = {
+      ...createProjectDocument('Bracket', toUserId('test')),
+      bodyOrder: [bodyId],
+      ...(sheets.length > 0 ? { drawings: { sheets } } : {})
+    };
+    const bodies = { [bodyId]: cube() };
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    const onStatus = vi.fn();
+    render(
+      <AppShell
+        topBar={<header className="topbar">top</header>}
+        toolBar={null}
+        sidebar={null}
+        viewer={<div className="viewer-shell">viewer</div>}
+        inspector={null}
+        assistant={null}
+        sidebarWidth={252}
+        assistantWidth={360}
+        compact={{
+          projectName: 'Bracket',
+          saveState: 'synced',
+          workspaceMode: 'drawing',
+          modeLockedReason: () => null,
+          shareLink: false,
+          onWorkspaceMode: vi.fn(),
+          canUndo: false,
+          canRedo: false,
+          onUndo: vi.fn(),
+          onRedo: vi.fn(),
+          onHome: vi.fn(),
+          onSearch: vi.fn(),
+          onSettings: vi.fn(),
+          onHelp: vi.fn(),
+          fileCommands: [],
+          selectionLabel: null,
+          reducedMotion: true,
+          sheetKey: ''
+        }}
+        compactTray={<CompactModeTray mode="drawing" />}
+        stage={
+          <DrawingWorkspace
+            document={document}
+            bodies={bodies}
+            geometryPending={false}
+            defaultBodyIds={[bodyId]}
+            requestTessellation={displayTessellation(bodies)}
+            editDisabledReason={null}
+            onCommand={onCommand}
+            onStatus={onStatus}
+          />
+        }
+      />
+    );
+    return { onCommand, onStatus };
+  }
+  const fingerprint = () =>
+    drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!;
+  const tray = () => screen.findByRole('toolbar', { name: 'Draw tools' });
+  const sheetPanel = () =>
+    document.querySelector<HTMLElement>('.compact-sheet')!;
+  async function openPage(name: string) {
+    fireEvent.click(within(await tray()).getByRole('button', { name }));
+    return within(sheetPanel());
+  }
+
+  it('fills the stage with the sheet and moves its chrome into the tray', async () => {
+    compactSetup({ sheet: starter(fingerprint()) });
+    const toolbar = await tray();
+    expect(
+      within(toolbar)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+    ).toEqual(['Annotate', 'Views', 'Sheets', 'Properties', 'Export']);
+    // The sheet itself, with its own zoom; none of the regular chrome.
+    expect(
+      screen.getByRole('application', { name: 'Sheet Sheet 1' })
+    ).toBeTruthy();
+    expect(screen.getByRole('toolbar', { name: 'Sheet zoom' })).toBeTruthy();
+    expect(
+      screen.queryByRole('toolbar', { name: 'Annotation tools' })
+    ).toBeNull();
+    expect(
+      screen.queryByRole('complementary', { name: 'Drawing properties' })
+    ).toBeNull();
+    expect(document.querySelector('.drawing-stage-bar')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Export PDF' })).toBeNull();
+    expect(document.querySelector('.drawing-tool-hint')).toBeNull();
+  });
+
+  it('puts all 22 annotation tools in five groups, and starts one as the toolbar does', async () => {
+    const { onStatus } = compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Annotate');
+    const groups = page
+      .getAllByRole('heading', { level: 3 })
+      .map((heading) => heading.textContent)
+      .slice(0, 5);
+    expect(groups).toEqual([
+      'Dimensions',
+      'Symbols and marks',
+      'Notes and balloons',
+      'Tables',
+      'Tolerances'
+    ]);
+    for (const kind of ANNOTATION_TOOLS) {
+      expect(
+        page.getByRole('button', {
+          name: ANNOTATION_TOOL_LABELS[kind],
+          exact: true
+        }),
+        kind
+      ).toBeTruthy();
+    }
+    // Auto-dimension, with its preview, is reachable from the same page.
+    expect(page.getByText('Dimension check')).toBeTruthy();
+    const horizontal = page.getByRole('button', {
+      name: 'Horizontal',
+      exact: true
+    });
+    await waitFor(() =>
+      expect(horizontal).toHaveAttribute('aria-disabled', 'false')
+    );
+    fireEvent.click(horizontal);
+    expect(onStatus).toHaveBeenCalledWith('Horizontal placement started.', {
+      immediate: true
+    });
+    // The tool's row stands in for the tray: its step, Cancel and Done.
+    const run = await screen.findByRole('group', {
+      name: 'Horizontal placement'
+    });
+    expect(run.querySelector('.compact-step-chip')?.textContent).toBe(
+      'Point 1'
+    );
+    expect(screen.queryByRole('toolbar', { name: 'Draw tools' })).toBeNull();
+    fireEvent.click(within(run).getByRole('button', { name: 'Done' }));
+    expect(onStatus).toHaveBeenLastCalledWith('Placement finished.', {
+      immediate: true
+    });
+    expect(await tray()).toBeTruthy();
+    fireEvent.click(
+      within(await tray()).getByRole('button', { name: 'Annotate' })
+    );
+    fireEvent.click(
+      within(sheetPanel()).getByRole('button', { name: 'Radius', exact: true })
+    );
+    const radius = await screen.findByRole('group', {
+      name: 'Radius placement'
+    });
+    fireEvent.click(within(radius).getByRole('button', { name: 'Cancel' }));
+    expect(onStatus).toHaveBeenLastCalledWith('Placement canceled.', {
+      immediate: true
+    });
+  });
+
+  it('says why a tool is refused when it is tapped', async () => {
+    compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Annotate');
+    const image = page.getByRole('button', { name: 'Image', exact: true });
+    expect(image).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(image);
+    expect(page.getByRole('status').textContent).toMatch(/^Image: /);
+    expect(screen.queryByRole('group', { name: 'Image placement' })).toBeNull();
+  });
+
+  it('offers the view tools, the views and their configuration on Views', async () => {
+    const { onCommand } = compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Views');
+    for (const name of ['Section view', 'Detail view', 'Auxiliary view']) {
+      expect(page.getByRole('button', { name })).toBeTruthy();
+    }
+    const views = page.getByRole('listbox', { name: 'Views on this sheet' });
+    fireEvent.click(within(views).getByRole('option', { name: /^Front/ }));
+    const remove = page.getByRole('button', { name: 'Delete view' });
+    fireEvent.click(remove);
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    expect(page.getByRole('button', { name: 'Add view' })).toBeTruthy();
+  });
+
+  it('lists every sheet with new, rename, duplicate, move and delete', async () => {
+    const first = starter(fingerprint());
+    const second = { ...starter(fingerprint()), name: 'Sheet 2' };
+    second.sheetId = 'dsheet_two' as DrawingSheet['sheetId'];
+    const { onCommand } = compactSetup({ sheets: [first, second] });
+    const page = await openPage('Sheets');
+    const list = page.getByRole('list', { name: 'Sheets' });
+    expect(
+      within(list)
+        .getAllByRole('button', { pressed: true })
+        .map((button) => button.textContent)
+    ).toEqual(['Sheet 1']);
+    expect(
+      page.getByRole('button', { name: 'Move Sheet 1 up' })
+    ).toBeDisabled();
+    expect(
+      page.getByRole('button', { name: 'Move Sheet 2 down' })
+    ).toBeDisabled();
+    fireEvent.click(page.getByRole('button', { name: 'Rename Sheet 2' }));
+    const name = page.getByRole('textbox', { name: 'Sheet name' });
+    fireEvent.change(name, { target: { value: 'Details' } });
+    fireEvent.click(page.getByRole('button', { name: 'Save name' }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    expect(onCommand.mock.calls[0]![0].label).toBe('Rename drawing to Details');
+    fireEvent.click(page.getByRole('button', { name: 'Move Sheet 1 down' }));
+    expect(onCommand.mock.calls[1]![0].label).toBe('Move sheet');
+    fireEvent.click(page.getByRole('button', { name: 'Duplicate Sheet 1' }));
+    expect(onCommand.mock.calls[2]![0].label).toBe('Duplicate Sheet 1');
+    fireEvent.click(page.getByRole('button', { name: 'Delete Sheet 2' }));
+    expect(onCommand).toHaveBeenCalledTimes(4);
+    fireEvent.click(page.getByRole('button', { name: 'New drawing sheet' }));
+    expect(onCommand).toHaveBeenCalledTimes(5);
+  });
+
+  it('keeps the title block, paper, projection, units and decimals on Properties', async () => {
+    const { onCommand } = compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Properties');
+    for (const label of [
+      'Paper',
+      'Projection',
+      'Dimension units',
+      'Length decimals',
+      'Title',
+      'Drawing no.'
+    ]) {
+      expect(page.getByLabelText(label), label).toBeTruthy();
+    }
+    const title = page.getByLabelText('Title');
+    fireEvent.change(title, { target: { value: 'Clamp' } });
+    fireEvent.blur(title);
+    expect(onCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('exports PDF, SVG and DXF from Export', async () => {
+    compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Export');
+    for (const name of ['Export PDF', 'Export SVG', 'Export DXF']) {
+      await waitFor(() =>
+        expect(page.getByRole('button', { name })).toBeEnabled()
+      );
+    }
+  });
+
+  it('offers only a new sheet before the first one', async () => {
+    const { onCommand } = compactSetup();
+    const toolbar = await tray();
+    for (const name of ['Annotate', 'Views', 'Properties', 'Export']) {
+      expect(within(toolbar).getByRole('button', { name })).toBeDisabled();
+    }
+    const page = await openPage('Sheets');
+    fireEvent.click(page.getByRole('button', { name: 'New drawing sheet' }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
   });
 });

@@ -19,7 +19,9 @@ import {
   CompactCommandRowContext,
   COMPACT_OVERLAY_HOST_PENDING,
   CompactOverlayHostContext,
-  type CompactChromeProps
+  CompactTrayHostContext,
+  type CompactChromeProps,
+  type CompactTrayHost
 } from './compact/compactSlots';
 
 // The compact workspace's chrome (U12 slice 2) loads only where it is in
@@ -324,6 +326,13 @@ function CompactAppShell({
     () => ({ host: analysisHost, setHost: setAnalysisHost }),
     [analysisHost]
   );
+  // Draw's tray (U12 slice 9): the anchor the compact sheet's tray slot
+  // holds, which the drawing workspace on the stage draws its tray into.
+  const [trayHost, setTrayHost] = useState<CompactTrayHost | null>(null);
+  const trayHostSlot = useMemo(
+    () => ({ host: trayHost, setHost: setTrayHost }),
+    [trayHost]
+  );
   // Dialogs, menus and popovers portalled to the body sit outside the shell:
   // marking the document too gives them the compact tokens while the compact
   // workspace is up, and nothing once it leaves.
@@ -354,68 +363,74 @@ function CompactAppShell({
           value={keypadSlot ?? overlayHost ?? COMPACT_OVERLAY_HOST_PENDING}
         >
           <CompactAnalysisSlotContext.Provider value={analysisSlot}>
-            <div className="app-shell column-layout" data-shell="compact">
-              {/* Kept mounted for what it owns (its menus' file inputs, the
+            <CompactTrayHostContext.Provider value={trayHostSlot}>
+              <div className="app-shell column-layout" data-shell="compact">
+                {/* Kept mounted for what it owns (its menus' file inputs, the
               rename field), and hidden: the compact header stands in. */}
-              {topBar}
-              <main
-                ref={workspaceRef}
-                className={`workspace no-sidebar column-layout${
-                  assistantDocked ? ' with-assistant' : ''
-                }${sidebar ? ' has-column' : ''}`}
-                style={widths}
-              >
-                <div className="viewer-area">
-                  {sidebar && (
-                    <div className="workspace-column-float">{sidebar}</div>
-                  )}
-                  {viewer}
-                  {stage && <div className="stage-takeover">{stage}</div>}
-                  {toolBar && <div className="palette-float">{toolBar}</div>}
-                  {panels}
-                  {readout}
-                  {onDropFiles && (
-                    <Suspense fallback={null}>
-                      <LazyFileDropTarget
-                        onDrop={onDropFiles}
-                        onRefuse={onRefuseDroppedFiles}
-                      />
-                    </Suspense>
-                  )}
-                </div>
-                {assistant}
-              </main>
-              <Suspense fallback={null}>
-                <LazyCompactWorkspace
-                  {...chrome}
-                  sheetKey={`${sheetKey}|${commandRowPresent ? 'row' : ''}`}
-                  hasSheetContent={hasSheetContent}
-                  commandRowPresent={commandRowPresent}
-                  rowOnly={
-                    commandRowPresent && !command && !inspector && !panelLane
-                  }
-                  tray={compactTray}
-                  onCommandRowHost={setCommandRowHost}
-                  onOverlayHost={setOverlayHost}
-                  sheetContent={
-                    hasSheetContent ? (
-                      <>
-                        {command && (
-                          <div className="compact-sheet-card">{command}</div>
-                        )}
-                        {inspector && (
-                          <div className="compact-sheet-card">{inspector}</div>
-                        )}
-                        {panelLane && (
-                          <div className="compact-sheet-card">{panelLane}</div>
-                        )}
-                      </>
-                    ) : null
-                  }
-                />
-              </Suspense>
-              {overlays}
-            </div>
+                {topBar}
+                <main
+                  ref={workspaceRef}
+                  className={`workspace no-sidebar column-layout${
+                    assistantDocked ? ' with-assistant' : ''
+                  }${sidebar ? ' has-column' : ''}`}
+                  style={widths}
+                >
+                  <div className="viewer-area">
+                    {sidebar && (
+                      <div className="workspace-column-float">{sidebar}</div>
+                    )}
+                    {viewer}
+                    {stage && <div className="stage-takeover">{stage}</div>}
+                    {toolBar && <div className="palette-float">{toolBar}</div>}
+                    {panels}
+                    {readout}
+                    {onDropFiles && (
+                      <Suspense fallback={null}>
+                        <LazyFileDropTarget
+                          onDrop={onDropFiles}
+                          onRefuse={onRefuseDroppedFiles}
+                        />
+                      </Suspense>
+                    )}
+                  </div>
+                  {assistant}
+                </main>
+                <Suspense fallback={null}>
+                  <LazyCompactWorkspace
+                    {...chrome}
+                    sheetKey={`${sheetKey}|${commandRowPresent ? 'row' : ''}`}
+                    hasSheetContent={hasSheetContent}
+                    commandRowPresent={commandRowPresent}
+                    rowOnly={
+                      commandRowPresent && !command && !inspector && !panelLane
+                    }
+                    tray={compactTray}
+                    onCommandRowHost={setCommandRowHost}
+                    onOverlayHost={setOverlayHost}
+                    sheetContent={
+                      hasSheetContent ? (
+                        <>
+                          {command && (
+                            <div className="compact-sheet-card">{command}</div>
+                          )}
+                          {inspector && (
+                            <div className="compact-sheet-card">
+                              {inspector}
+                            </div>
+                          )}
+                          {panelLane && (
+                            <div className="compact-sheet-card">
+                              {panelLane}
+                            </div>
+                          )}
+                        </>
+                      ) : null
+                    }
+                  />
+                </Suspense>
+                {overlays}
+              </div>
+            </CompactTrayHostContext.Provider>
           </CompactAnalysisSlotContext.Provider>
         </CompactOverlayHostContext.Provider>
       </CompactCommandRowContext.Provider>
