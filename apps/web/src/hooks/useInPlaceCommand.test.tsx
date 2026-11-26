@@ -2942,6 +2942,108 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     expect(onStatus).toHaveBeenCalledWith('Edit canceled; Cut 2 is unchanged.');
     expect(hook.result.current.editing).toBeNull();
   });
+
+  /**
+   * U11 (M11 decision D1): a Boolean's edit with an operand taken out shows
+   * the model before the feature, so that operand can be picked back in as
+   * the Tool; that frame is never a verdict and never enables Done.
+   */
+  it('rests on the model before a Boolean while its operands build nothing, and takes the removed Base back as the Tool', async () => {
+    const before = {
+      name: 'before',
+      derived: {
+        bodyRepresentations: { body_a: {}, body_b: {} },
+        warnings: []
+      }
+    } as unknown as ProjectDocument;
+    const editRestDocument = vi.fn<
+      NonNullable<UseInPlaceCommandOptions['editRestDocument']>
+    >(() => before);
+    const held: (() => void)[] = [];
+    let hold = false;
+    const derive = vi.fn<UseInPlaceCommandOptions['derive']>(
+      (document) =>
+        hold && (document as { name?: string }).name === 'before'
+          ? new Promise((resolve) => held.push(() => resolve(document.derived)))
+          : Promise.resolve(document.derived)
+    );
+    const { hook, built, publishPreview } = setup({ editRestDocument, derive });
+    const restShown = () =>
+      publishPreview.mock.calls.filter(
+        ([preview]) => (preview as { name?: string } | null)?.name === 'before'
+      ).length;
+    const [base, tool] = SEED.slots.bodies;
+    act(() => hook.result.current.edit('subtract', SEED));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(editRestDocument).not.toHaveBeenCalled();
+
+    // The Base taken out: the model before the Subtract is drawn, and the
+    // edit cannot be finished from it.
+    act(() => {
+      hook.result.current.pickBody(base!);
+    });
+    await waitFor(() => expect(restShown()).toBe(1));
+    expect(editRestDocument).toHaveBeenLastCalledWith(
+      expect.anything(),
+      SEED
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(hook.result.current.refusal).toBeNull();
+
+    // Picked again it is the Tool: the reversed request builds and is
+    // what Done commits.
+    act(() => {
+      hook.result.current.pickBody(base!);
+    });
+    expect(hook.result.current.slots.bodies.map((body) => body.bodyId)).toEqual(
+      ['body_b', 'body_a']
+    );
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(built.at(-1)).toEqual({
+      tool: 'boolean',
+      operation: 'subtract',
+      targetBodyIds: ['body_b', 'body_a']
+    });
+    expect(
+      (publishPreview.mock.calls.at(-1)?.[0] as { name?: string } | null)?.name
+    ).toBeUndefined();
+
+    // A rest frame that lands after the operands were picked again is not
+    // drawn: the request picked since builds after it and is what shows.
+    hold = true;
+    act(() => {
+      hook.result.current.pickBody(tool!);
+    });
+    await waitFor(() => expect(held).toHaveLength(1));
+    act(() => {
+      hook.result.current.pickBody(tool!);
+    });
+    expect(hook.result.current.canFinish).toBe(false);
+    await act(async () => {
+      held.splice(0).forEach((resolve) => resolve());
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(restShown()).toBe(1);
+    expect(
+      (publishPreview.mock.calls.at(-1)?.[0] as { name?: string } | null)?.name
+    ).toBeUndefined();
+  });
+
+  it('shows no rest frame for a new Boolean with one body picked', async () => {
+    const editRestDocument = vi.fn<
+      NonNullable<UseInPlaceCommandOptions['editRestDocument']>
+    >(() => null);
+    const { hook } = setup({ editRestDocument });
+    act(() => hook.result.current.start('subtract'));
+    act(() => {
+      hook.result.current.pickBody(SEED.slots.bodies[0]!);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(editRestDocument).not.toHaveBeenCalled();
+  });
 });
 
 describe('useInPlaceCommand: fillet edges', () => {
