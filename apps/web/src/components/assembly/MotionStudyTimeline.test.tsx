@@ -214,6 +214,45 @@ describe('MotionStudyTimeline', () => {
     expect(getAssemblyRuntime().studyTimeS).toBe(0);
   });
 
+  it('steps between keys and deletes one by buttons alone with touch (U12)', () => {
+    const manager = pivotProject();
+    const executed: AnyCommand[] = [];
+    const element = () => (
+      <MotionStudyTimeline
+        assembly={manager.document.assembly}
+        execute={(command) => {
+          executed.push(command);
+          manager.execute(command);
+          view.rerender(element());
+          return true;
+        }}
+        touch
+      />
+    );
+    const view = render(element());
+    const previous = screen.getByRole('button', { name: 'Previous key' });
+    const next = screen.getByRole('button', { name: 'Next key' });
+    // At the start there is nothing before the playhead.
+    expect(previous).toBeDisabled();
+    fireEvent.click(next);
+    expect(getAssemblyRuntime().studyTimeS).toBe(2);
+    expect(screen.getByRole('button', { name: 'Next key' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous key' }));
+    expect(getAssemblyRuntime().studyTimeS).toBe(0);
+    // A tapped key is selected, and Delete key takes it out.
+    fireEvent.click(screen.getByRole('button', { name: 'Key at 2.00 s, 90°' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete key' }));
+    expect(lastStudy(executed).tracks[0]?.keys).toEqual([
+      { t: 0, value: 0, easing: 'linear' }
+    ]);
+  });
+
+  it('offers no key-step buttons without touch: [ and ] step there', () => {
+    mount();
+    expect(screen.queryByRole('button', { name: 'Previous key' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Next key' })).toBeNull();
+  });
+
   it('changes duration and playback mode as single commands', () => {
     const { executed } = mount();
     const duration = screen.getByLabelText('Duration in seconds');

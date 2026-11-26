@@ -13,6 +13,8 @@ import {
   Play,
   Plus,
   SkipBack,
+  StepBack,
+  StepForward,
   Trash2,
   X
 } from 'lucide-react';
@@ -77,6 +79,11 @@ export interface MotionStudyTimelineProps {
   floating?: boolean;
   /** The document's unit: a slide's values are in it. */
   lengthUnit?: UnitSystem;
+  /**
+   * Touch (U12 slice 8): buttons for the previous and next key, which a
+   * keyboard reaches with [ and ], beside Play.
+   */
+  touch?: boolean;
 }
 
 const SPEEDS = [0.5, 1, 2] as const;
@@ -139,7 +146,8 @@ export function MotionStudyTimeline({
   onClose,
   readOnly = false,
   floating = false,
-  lengthUnit = 'mm'
+  lengthUnit = 'mm',
+  touch = false
 }: MotionStudyTimelineProps) {
   const selectedStudyId = useAssemblyRuntime((s) => s.selectedStudyId);
   const studyTimeS = useAssemblyRuntime((s) => s.studyTimeS);
@@ -407,13 +415,16 @@ export function MotionStudyTimeline({
       setSelection(null);
   }
 
-  function jumpKey(direction: -1 | 1) {
+  /** The key `[` or `]` goes to from `at`, or null with none that way. */
+  function keyTarget(direction: -1 | 1, at: number): number | null {
     const scope = selection?.trackIndex ?? selectedTrack ?? undefined;
-    const at = getAssemblyRuntime().studyTimeS;
-    const target =
-      direction > 0
-        ? nextKeyTime(base, at, scope)
-        : previousKeyTime(base, at, scope);
+    return direction > 0
+      ? nextKeyTime(base, at, scope)
+      : previousKeyTime(base, at, scope);
+  }
+
+  function jumpKey(direction: -1 | 1) {
+    const target = keyTarget(direction, getAssemblyRuntime().studyTimeS);
     if (target !== null) seek(target);
   }
 
@@ -569,6 +580,30 @@ export function MotionStudyTimeline({
             <Play size={14} aria-hidden="true" />
           )}
         </button>
+        {touch ? (
+          <>
+            <button
+              type="button"
+              className="motion-icon-button"
+              aria-label="Previous key"
+              title="Previous key ([)"
+              disabled={keyTarget(-1, studyTimeS) === null}
+              onClick={() => jumpKey(-1)}
+            >
+              <StepBack size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="motion-icon-button"
+              aria-label="Next key"
+              title="Next key (])"
+              disabled={keyTarget(1, studyTimeS) === null}
+              onClick={() => jumpKey(1)}
+            >
+              <StepForward size={14} aria-hidden="true" />
+            </button>
+          </>
+        ) : null}
         <span className="motion-time" aria-label="Playhead">
           {formatStudyTime(t)}
         </span>
