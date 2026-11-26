@@ -29,7 +29,10 @@ import {
   findRollbackMarkerIndex,
   type HistoryRowActions
 } from '../HistoryTimeline';
-import type { ModelPanelSource } from '../modelPanels/modelPanelProps';
+import type {
+  ModelPanelSource,
+  PendingHistoryStep
+} from '../modelPanels/modelPanelProps';
 import {
   isSwipe,
   reorderTarget,
@@ -57,6 +60,8 @@ export type CompactHistoryListProps = Pick<
   | 'reorderBusy'
   | 'onRenameFeature'
   | 'onDeleteFeatures'
+  | 'pendingHistoryStep'
+  | 'editingHistoryFeatureId'
 > & {
   /** A tap on a row: opens the step's edit (a sketch opens to edit it). */
   onEditStep(feature: FeatureNode): void;
@@ -121,7 +126,9 @@ export function CompactHistoryList({
   onRenameFeature,
   onDeleteFeatures,
   onEditStep,
-  historyText
+  historyText,
+  pendingHistoryStep = null,
+  editingHistoryFeatureId = null
 }: CompactHistoryListProps) {
   const listRef = useRef<HTMLOListElement | null>(null);
   const shownUnits = useDisplayUnits(units);
@@ -175,10 +182,27 @@ export function CompactHistoryList({
       return box.top + box.height / 2;
     });
 
+  // A refused edit of a step: that step's row brings it back. A new step
+  // that was not built (or one still being made) has no row of its own: it
+  // trails the list, as in the regular History panel.
+  const pendingOnRow =
+    pendingHistoryStep !== null &&
+    features.some((feature) => feature.featureId === editingHistoryFeatureId);
+  const pendingRow =
+    pendingHistoryStep && !pendingOnRow ? (
+      <PendingStepRow step={pendingHistoryStep} />
+    ) : null;
+
   if (features.length === 0) {
     return (
       <div className="compact-panel-list">
-        <p className="compact-panel-empty">No steps yet</p>
+        {pendingRow ? (
+          <ol className="compact-rows" aria-label="History steps">
+            {pendingRow}
+          </ol>
+        ) : (
+          <p className="compact-panel-empty">No steps yet</p>
+        )}
       </div>
     );
   }
@@ -227,6 +251,11 @@ export function CompactHistoryList({
               status={status}
               selected={feature.id === selectedFeatureNodeId}
               actions={actions}
+              refusal={
+                pendingOnRow && feature.featureId === editingHistoryFeatureId
+                  ? pendingHistoryStep
+                  : null
+              }
               open={open?.id === feature.id ? open.side : null}
               renaming={renamingId === feature.featureId}
               reorderBusy={reorderBusy}
@@ -279,6 +308,7 @@ export function CompactHistoryList({
             ) : null
           ];
         })}
+        {pendingRow}
       </ol>
       {historyDetails}
     </div>
@@ -292,6 +322,8 @@ interface CompactHistoryRowProps {
   status: RowStatus;
   selected: boolean;
   actions: HistoryRowActions;
+  /** The refused edit of this step, while one is set aside. */
+  refusal: PendingHistoryStep | null;
   open: SwipeSide | null;
   anyOpen: boolean;
   renaming: boolean;
@@ -320,6 +352,7 @@ function CompactHistoryRow({
   status,
   selected,
   actions,
+  refusal,
   open,
   anyOpen,
   renaming,
@@ -574,8 +607,33 @@ function CompactHistoryRow({
                 aria-hidden="true"
               />
             ) : null}
+            {refusal && !refusal.onReopen ? (
+              <span
+                className="compact-row-refused"
+                role="status"
+                title={`${refusal.title} not applied: ${refusal.message}`}
+              >
+                <AlertTriangle size={16} aria-hidden="true" />
+                <span>edit not applied</span>
+              </span>
+            ) : null}
           </button>
         )}
+        {refusal?.onReopen && !renaming ? (
+          // Beside the row's button, as in the regular History: the row
+          // still opens the step, and this brings back the refused edit.
+          <button
+            type="button"
+            className="compact-row-refused is-reopen"
+            data-own-enter=""
+            title={`${refusal.title} not applied: ${refusal.message} Reopen the edit to see why and choose what to do.`}
+            aria-label={`${refusal.title}, edit not applied. Reopen it`}
+            onClick={refusal.onReopen}
+          >
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span>edit not applied</span>
+          </button>
+        ) : null}
         <button
           type="button"
           className="compact-icon-button compact-row-more"
@@ -590,6 +648,41 @@ function CompactHistoryRow({
           <MoreHorizontal size={20} aria-hidden="true" />
         </button>
       </div>
+    </li>
+  );
+}
+
+/**
+ * A step that is not in History: a new one refused (a tap reopens it, with
+ * the value tried and why it was refused) or one still being made.
+ */
+function PendingStepRow({ step }: { step: PendingHistoryStep }) {
+  return (
+    <li className="compact-row-marker is-pending">
+      {step.onReopen ? (
+        <button
+          type="button"
+          className="compact-menu-row"
+          data-own-enter=""
+          title={`${step.message} Reopen the edit to see why and choose what to do.`}
+          aria-label={`${step.title}, not built. Reopen it`}
+          onClick={step.onReopen}
+        >
+          <span className="compact-menu-icon" aria-hidden="true">
+            <AlertTriangle size={20} />
+          </span>
+          <span className="compact-menu-label">{step.title}</span>
+          <span className="compact-row-pending-state">not built</span>
+        </button>
+      ) : (
+        <div className="compact-menu-row" role="status" title={step.message}>
+          <span className="compact-menu-icon" aria-hidden="true">
+            <AlertTriangle size={20} />
+          </span>
+          <span className="compact-menu-label">{step.title}</span>
+          <span className="compact-row-pending-state">not built</span>
+        </div>
+      )}
     </li>
   );
 }

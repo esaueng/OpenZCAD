@@ -514,6 +514,77 @@ test(
   }
 );
 
+// U12 review: the compact workspace dropped both routes back to a refused
+// edit set aside, History's reopen and the top bar's "Edit not applied".
+test('the compact workspace reopens a set-aside refusal from History and its header', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  const canvas = await refusedGearDrag(page);
+  const notice = page.getByRole('button', { name: 'Edit not applied' });
+  const park = async () => {
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + 110);
+    await expect(page.locator('.edit-refusal')).toHaveCount(0);
+  };
+  const expectReopened = async () => {
+    await expect(page.locator('.edit-refusal')).toHaveCount(1);
+    await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+    await expect(page.getByTestId('direct-manipulation-value')).toContainText(
+      '⚠'
+    );
+  };
+  await park();
+  await expect(notice).toBeVisible();
+
+  // Into the compact workspace, by the layout setting.
+  await page.keyboard.press('ControlOrMeta+Comma');
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await settings.getByLabel('Find a setting').fill('Layout');
+  await settings
+    .getByRole('radiogroup', { name: 'Layout' })
+    .getByRole('radio', { name: 'Phone (preview)' })
+    .check();
+  await settings
+    .getByRole('button', { name: /^Close settings and go back/ })
+    .first()
+    .click();
+  await expect(page.locator('.app-shell[data-shell="compact"]')).toBeVisible();
+
+  // The header carries the top bar's chip.
+  const chip = page.getByRole('button', {
+    name: 'Edit not applied: reopen it'
+  });
+  await expect(chip).toBeVisible();
+
+  // History shows the step the refusal belongs to, which reopens it.
+  await page
+    .getByRole('button', { name: 'Open the command bar', exact: true })
+    .click();
+  await page.getByRole('combobox', { name: 'Search commands' }).fill('History');
+  await page
+    .getByRole('option', { name: /^History/ })
+    .first()
+    .click();
+  const sheet = page.locator('.compact-sheet');
+  const reopen = sheet.getByRole('button', {
+    name: /(edit not applied|not built)\. Reopen it$/
+  });
+  await expect(reopen).toBeVisible();
+  await reopen.click();
+  // The panel gives way to the refused edit: its pick, its handle and the
+  // value tried, marked refused. (The compact stage leaves out the guidance
+  // line the refusal's words sit in on the regular stage.)
+  await expect(sheet.locator('[data-page]')).toHaveCount(0);
+  await expectReopened();
+
+  // Set aside again, the header's chip brings it back the same way.
+  await park();
+  await expect(chip).toBeVisible();
+  await chip.click();
+  await expectReopened();
+});
+
 // Review: the chip reopened over a running in-place command, closing it and
 // what had been typed into it, because only the interaction was asked.
 test('the chip does not reopen a refused edit over a running command', async ({

@@ -1124,9 +1124,10 @@ import {
   togglePanelSheet,
   type CompactPanelId
 } from './components/compact/panelSheet';
-import type {
-  CompactSelectionAction,
-  CompactSelectionSheet
+import {
+  SHEET_INERT_ATTRIBUTE,
+  type CompactSelectionAction,
+  type CompactSelectionSheet
 } from './components/compact/compactSlots';
 import type CompactPanelBodyComponent from './components/compact/CompactPanels';
 import type { ModelPanelSource } from './components/modelPanels/modelPanelProps';
@@ -5282,6 +5283,17 @@ export function App() {
   /** Opens exact entry for the armed handle, as tapping its chip would. */
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
+  /**
+   * The History step a row menu was opened on (U12 review). Its items are
+   * drawn, and the chosen one runs, from the document as it is then, not as
+   * it was when the menu opened: an undo or redo while it stands open must
+   * not leave Delete checking dependents against an older document.
+   */
+  const featureMenuSourceRef = useRef<{
+    menu: ViewportMenuState;
+    featureId: FeatureId;
+    row?: HistoryRowActions;
+  } | null>(null);
   /** Counts tool launches, so a launch held for its panel's chunk can tell
    * whether another has superseded it. */
   const toolLaunchRef = useRef(0);
@@ -5292,7 +5304,8 @@ export function App() {
     handleDeleteFeature,
     handleDeleteImportedFace,
     toggleBodyVisibility,
-    isolateBody
+    isolateBody,
+    openFlatPattern
   });
   viewportMenuHandlersRef.current = {
     launchTool,
@@ -5301,7 +5314,23 @@ export function App() {
     handleDeleteFeature,
     handleDeleteImportedFace,
     toggleBodyVisibility,
-    isolateBody
+    isolateBody,
+    openFlatPattern
+  };
+  /**
+   * What a History row's own actions run, through the latest render (U12
+   * review): a row menu holds the row's actions from when it opened, and a
+   * delete or rollback must still check the document as it is when chosen.
+   */
+  const historyRowHandlersRef = useRef({
+    handleDeleteFeatures,
+    handleRollbackAfterFeature,
+    handleResumeHistory
+  });
+  historyRowHandlersRef.current = {
+    handleDeleteFeatures,
+    handleRollbackAfterFeature,
+    handleResumeHistory
   };
   const managerRef = useRef<CommandManager | null>(null);
   /** The latest patch Apply, by token (see patchApplyReport). */
@@ -8732,12 +8761,15 @@ export function App() {
           ? `${migrationEditReason}. This device’s version can’t replace the live one now.`
           : null;
 
-  // The panels are Build's: in the compact workspace a mode without them
-  // shuts the panel sheet, and the Comments it may hold (U12 slice 5).
+  // The model panels are Build's: in the compact workspace a mode without
+  // them shuts the panel sheet on one (U12 slice 5). Comments are not
+  // Build's: as the regular workspace's floating Comments panel stays open
+  // in every mode, so does their segment.
   useEffect(() => {
     if (!compactShell || !modelingLocked) return;
-    setCompactPanel(null);
-    setCommentsOpen(false);
+    setCompactPanel((open) =>
+      open === null || open === 'comments' ? open : null
+    );
   }, [compactShell, modelingLocked]);
 
   useEffect(() => {
@@ -36238,13 +36270,15 @@ export function App() {
     contextMenuActionsRef.current = Object.fromEntries(
       entries.map((entry) => [entry.item.id, entry.run])
     );
-    setContextMenu({
+    const menu: ViewportMenuState = {
       x,
       y,
       items: entries.map((entry) => entry.item),
       ...(heading ? { heading } : {}),
       ...(face ? { face } : {})
-    });
+    };
+    setContextMenu(menu);
+    return menu;
   }
 
   function handleViewportContextMenu(
@@ -36526,7 +36560,9 @@ export function App() {
                   icon: <SquareDashed size={13} aria-hidden="true" />,
                   section: true
                 },
-                run: () => openFlatPattern(sheetSource.featureId)
+                run: runCurrent((handlers) =>
+                  handlers.openFlatPattern(sheetSource.featureId)
+                )
               }
             ]
           : []),
@@ -36921,6 +36957,37 @@ export function App() {
     feature: FeatureNode,
     row?: HistoryRowActions
   ) {
+    // The heading names the feature these actions touch, and names the menu.
+    const menu = openContextMenu(
+      at.clientX,
+      at.clientY,
+      featureMenuEntries(feature, row),
+      feature.name
+    );
+    featureMenuSourceRef.current = { menu, featureId: feature.featureId, row };
+  }
+
+  /**
+   * A History row menu as this render's document gives it, or undefined
+   * for any other menu. Drawn on every render while it stands open, and
+   * read again when an item is chosen, so each item's checks (Delete's
+   * dependents, Duplicate's refusal) are the live document's. An empty list
+   * when the step is gone.
+   */
+  function liveFeatureMenu(menu: ViewportMenuState) {
+    const source = featureMenuSourceRef.current;
+    if (!source || source.menu !== menu) return undefined;
+    const feature = features.find(
+      (candidate) => candidate.featureId === source.featureId
+    );
+    return feature ? featureMenuEntries(feature, source.row) : [];
+  }
+
+  /** What a History row's menu (or a model feature's) offers for it. */
+  function featureMenuEntries(
+    feature: FeatureNode,
+    row?: HistoryRowActions
+  ): Parameters<typeof openContextMenu>[2] {
     const bodyId = feature.bodyId ?? null;
     const body = bodyId ? representations[bodyId] : null;
     const repair = staleDirectEditFaceRepair(feature, warnings);
@@ -37277,8 +37344,7 @@ export function App() {
             : handleDeleteFeature(feature.featureId, feature.name)
       }
     ];
-    // The heading names the feature these actions touch, and names the menu.
-    openContextMenu(at.clientX, at.clientY, entries, feature.name);
+    return entries;
   }
 
   // `previewDoc` renders geometry from a proposal nobody has applied, and only
@@ -37371,11 +37437,20 @@ export function App() {
   const workspaceKeyDownRef = useRef<(event: KeyboardEvent) => void>(() => {});
   useLayoutEffect(() => {
     workspaceKeyDownRef.current = function onKeyDown(event: KeyboardEvent) {
+      const inertHolder = workspaceRef.current?.closest('[inert]') ?? null;
+      // The compact sheet at full height holds the stage inert, and nothing
+      // else does (U12 review): the model's keys wait, but the global ones
+      // (Ctrl+\ for the panels, Ctrl+K, Undo, Save and the rest) still
+      // apply, as they do over the regular workspace's panels.
+      const sheetHoldsStage =
+        compactShell &&
+        inertHolder !== null &&
+        inertHolder.hasAttribute(SHEET_INERT_ATTRIBUTE) &&
+        !inertHolder.parentElement?.closest('[inert]');
       if (
         sharePage !== null ||
         !workspaceInputEnabled ||
-        (workspaceRef.current?.closest('[inert]') &&
-          !modalLendsWorkspaceKeys()) ||
+        (inertHolder && !sheetHoldsStage && !modalLendsWorkspaceKeys()) ||
         modalHoldsKeyboard()
       ) {
         return;
@@ -37399,6 +37474,9 @@ export function App() {
         chord && (!typing || chordLeavesTypingAlone(chord))
           ? keymap.commandFor(chord, ['global'])?.id
           : undefined;
+      // Over the full compact sheet only a global command goes on, through
+      // the same branches below as anywhere else.
+      if (sheetHoldsStage && !global) return;
 
       if (global === 'app-settings') {
         event.preventDefault();
@@ -39531,9 +39609,7 @@ export function App() {
           }
         ]
       : []),
-    ...(doc &&
-    (!shareSession || shareSession.comments) &&
-    !(compactShell && modelingLocked)
+    ...(doc && (!shareSession || shareSession.comments)
       ? [
           {
             id: 'panel-comments',
@@ -40252,10 +40328,14 @@ export function App() {
     onToggleSketchVisibility: toggleSketchVisibility,
     onFeatureContextMenu: handleFeatureContextMenu,
     onToggleFeatureSuppression: handleToggleFeatureSuppression,
-    onRollbackAfterFeature: handleRollbackAfterFeature,
-    onResumeHistory: handleResumeHistory,
+    onRollbackAfterFeature: (featureId, name) =>
+      historyRowHandlersRef.current.handleRollbackAfterFeature(featureId, name),
+    onResumeHistory: () => historyRowHandlersRef.current.handleResumeHistory(),
     onRenameFeature: handleRenameFeature,
-    onDeleteFeatures: editDisabledReason ? undefined : handleDeleteFeatures,
+    onDeleteFeatures: editDisabledReason
+      ? undefined
+      : (featureIds) =>
+          historyRowHandlersRef.current.handleDeleteFeatures(featureIds),
     onEditSketch: editDisabledReason ? undefined : editSketchFeatureInViewport,
     units: doc?.units ?? 'mm',
     onConfigureToggle: (name, bodyIds) => {
@@ -40566,6 +40646,24 @@ export function App() {
   // U12 slice 5: right-click and long-press menus are action sheets in the
   // compact workspace, with the same items.
   const ContextMenuHost = compactShell ? CompactActionSheet : ContextMenu;
+  // A History row's menu, drawn from the document as it is now; empty when
+  // its step has gone, when the old items stay drawn but none runs.
+  const liveRowMenu = contextMenuExit.rendered
+    ? liveFeatureMenu(contextMenuExit.rendered)
+    : undefined;
+  const shownContextMenu =
+    contextMenuExit.rendered && liveRowMenu
+      ? {
+          ...contextMenuExit.rendered,
+          items:
+            liveRowMenu.length > 0
+              ? liveRowMenu.map((entry) => entry.item)
+              : contextMenuExit.rendered.items.map((item) => ({
+                  ...item,
+                  disabled: true
+                }))
+        }
+      : contextMenuExit.rendered;
   /** What the compact selection sheet offers for the pick (U12 slice 5). */
   const compactSelectionSheet = (): CompactSelectionSheet => {
     const pick = selectedTopology;
@@ -40629,8 +40727,10 @@ export function App() {
   };
   // L08 review comments: a floating panel in the regular workspace, the
   // panel sheet's Comments segment in the compact one (U12 slice 5).
+  const commentsOffered =
+    Boolean(doc) && (!shareSession || shareSession.comments);
   const commentsPanel =
-    commentsOpen && doc && (!shareSession || shareSession.comments) ? (
+    commentsOpen && commentsOffered ? (
       <CommentsPanel
         comments={
           projectComments?.projectId === doc.projectId
@@ -40744,14 +40844,20 @@ export function App() {
               onClearSelection: clearSelection,
               reducedMotion: appSettings.appearance.reducedMotion,
               panels: {
-                open: modelingLocked ? null : compactPanel,
-                available: COMPACT_PANEL_ORDER.filter(
-                  (id) =>
-                    id !== 'comments' || !shareSession || shareSession.comments
+                // The model panels are Build's; Comments open in any mode,
+                // with the regular Comments panel's gate (a share link
+                // with comments on offers them to its visitor).
+                open:
+                  modelingLocked && compactPanel !== 'comments'
+                    ? null
+                    : compactPanel,
+                available: COMPACT_PANEL_ORDER.filter((id) =>
+                  id === 'comments' ? commentsOffered : !modelingLocked
                 ),
-                disabledReason: modelingLocked
-                  ? 'The panels are in Build mode.'
-                  : null,
+                disabledReason:
+                  modelingLocked && !commentsOffered
+                    ? 'The panels are in Build mode.'
+                    : null,
                 content:
                   compactPanel === 'comments' ? (
                     commentsPanel
@@ -40767,6 +40873,20 @@ export function App() {
                 warningCount: modelingLocked ? 0 : diagnostics.length
               },
               selection: compactSelectionSheet(),
+              // The top bar's "Edit not applied", on the same terms.
+              editRefusal:
+                !(
+                  isOperationState(interaction) &&
+                  interaction.phase === 'validating'
+                ) &&
+                ['local', 'synced', 'syncing'].includes(presentedSaveState) &&
+                lastDirectEditFailure?.projectId === doc.projectId &&
+                lastDirectEditFailure.version === doc.version
+                  ? {
+                      message: lastDirectEditFailure.message,
+                      onReview: reopenEditRefusal
+                    }
+                  : null,
               sheetKey: `${commandCardKey}|${inspectorKey}|${inPlaceKey}`
             }
           : null
@@ -43644,10 +43764,10 @@ export function App() {
               }}
             />
           )}
-          {contextMenuExit.rendered ? (
+          {shownContextMenu ? (
             <ContextMenuHost
               menu={withFaceVerbs(
-                contextMenuExit.rendered,
+                shownContextMenu,
                 renderedSelectedTopology?.kind === 'face'
                   ? renderedSelectedTopology
                   : null,
@@ -43672,6 +43792,17 @@ export function App() {
                   );
                 } else if (itemId === LOOK_AT_FACE_ITEM_ID) {
                   requestNormalToSelectedFace();
+                } else if (liveRowMenu) {
+                  // The item as the live document gives it, never as it was
+                  // when the menu opened (U12 review).
+                  const entry = liveRowMenu.find(
+                    (candidate) => candidate.item.id === itemId
+                  );
+                  if (entry && !entry.item.disabled) entry.run();
+                  else
+                    setStatus(
+                      'This step changed while its menu was open. Open the menu again.'
+                    );
                 } else {
                   contextMenuActionsRef.current[itemId]?.();
                 }

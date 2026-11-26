@@ -22,6 +22,7 @@ import {
   type SheetState
 } from './sheetState';
 import { OWN_ENTER_ATTRIBUTE } from '../../lib/exactEntryShortcut';
+import { SHEET_INERT_ATTRIBUTE } from './compactSlots';
 
 /** Holds the sheet's state; `hasRoot` is whether the workspace fills it. */
 export function useSheet(hasRoot: boolean) {
@@ -153,7 +154,10 @@ export function BottomSheet({
     const changed = elements.filter(
       (element) => !element.hasAttribute('inert')
     );
-    for (const element of changed) element.setAttribute('inert', '');
+    for (const element of changed) {
+      element.setAttribute('inert', '');
+      element.setAttribute(SHEET_INERT_ATTRIBUTE, '');
+    }
     const sheet = sheetRef.current;
     const active = document.activeElement;
     if (
@@ -164,7 +168,10 @@ export function BottomSheet({
       grabberRef.current?.focus({ preventScroll: true });
     }
     return () => {
-      for (const element of changed) element.removeAttribute('inert');
+      for (const element of changed) {
+        element.removeAttribute('inert');
+        element.removeAttribute(SHEET_INERT_ATTRIBUTE);
+      }
     };
   }, [detent]);
 

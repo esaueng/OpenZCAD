@@ -68,6 +68,15 @@ export function useCompactOverlayHost(): CompactOverlayHost {
 }
 
 /**
+ * Marks what the compact sheet made inert while it stands at full height
+ * (U12 slice 5). The workspace keymap reads it: a stage held behind the
+ * sheet is out of reach of the model's keys, but the global ones (Ctrl+\,
+ * Ctrl+K, Undo and the rest) still apply, as they do over the regular
+ * workspace's panels.
+ */
+export const SHEET_INERT_ATTRIBUTE = 'data-sheet-inert';
+
+/**
  * What the compact workspace's own controls need from the workspace: every
  * one runs a handler the regular workspace already has.
  */
@@ -98,6 +107,12 @@ export interface CompactChromeProps {
   panels: CompactPanels;
   /** What the selection sheet offers for the current pick (slice 5). */
   selection: CompactSelectionSheet | null;
+  /**
+   * The top bar's "Edit not applied": the latest refused edit, with the
+   * handler that brings it back (its message, its form and the value
+   * tried). Null while there is none.
+   */
+  editRefusal: { message: string; onReview(): void } | null;
 }
 
 /**

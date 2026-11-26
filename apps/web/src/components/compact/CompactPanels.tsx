@@ -59,8 +59,13 @@ export default function CompactPanelBody(props: CompactPanelBodyProps) {
 }
 
 function CompactHistory(props: CompactPanelBodyProps) {
-  const { onSelectFeature, onEditSketch, onLeave, selectedFeatureNodeId } =
-    props;
+  const {
+    onSelectFeature,
+    onEditSketch,
+    onLeave,
+    selectedFeatureNodeId,
+    pendingHistoryStep
+  } = props;
   const text = props.views.historyText;
   const editStep = (feature: FeatureNode) => {
     if (feature.data.featureKind === 'sketch' && onEditSketch) {
@@ -71,9 +76,22 @@ function CompactHistory(props: CompactPanelBodyProps) {
     }
     onLeave();
   };
+  // A refused edit reopened from its row takes the sheet, as an edit does.
+  const reopen = pendingHistoryStep?.onReopen;
+  const pending =
+    pendingHistoryStep && reopen
+      ? {
+          ...pendingHistoryStep,
+          onReopen: () => {
+            reopen();
+            onLeave();
+          }
+        }
+      : (pendingHistoryStep ?? null);
   return (
     <CompactHistoryList
       {...props}
+      pendingHistoryStep={pending}
       onEditStep={editStep}
       historyText={props.document ? text : null}
     />

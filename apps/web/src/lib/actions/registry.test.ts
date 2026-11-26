@@ -87,7 +87,7 @@ describe('action registry', () => {
     const builders: Record<ActionMenu, string> = {
       viewport: 'function handleViewportContextMenu(',
       selection: 'function openViewportSelectionContextMenu(',
-      'history-row': 'function handleFeatureContextMenu('
+      'history-row': 'function featureMenuEntries('
     };
     for (const [menu, start] of Object.entries(builders) as [
       ActionMenu,

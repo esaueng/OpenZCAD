@@ -244,4 +244,57 @@ describe('CompactHistoryList', () => {
     fireEvent.click(screen.getByRole('button', { name: 'History as text' }));
     expect(toggle).toHaveBeenCalledTimes(1);
   });
+
+  it('reopens a refused edit of a step from its row, as the regular History does', () => {
+    const onReopen = vi.fn();
+    const { container, props } = list({
+      pendingHistoryStep: {
+        title: 'Extrude',
+        message: 'The depth must be above zero.',
+        onReopen
+      },
+      editingHistoryFeatureId: 'feature-2'
+    });
+    const refused = within(row(container, 1)).getByRole('button', {
+      name: 'Extrude, edit not applied. Reopen it'
+    });
+    expect(refused).toHaveTextContent('edit not applied');
+    fireEvent.click(refused);
+    expect(onReopen).toHaveBeenCalledTimes(1);
+    // The row itself still opens the step; no other row carries the refusal.
+    expect(props.onEditStep).not.toHaveBeenCalled();
+    expect(container.querySelectorAll('.compact-row-refused')).toHaveLength(1);
+    expect(container.querySelector('.compact-row-marker.is-pending')).toBe(
+      null
+    );
+  });
+
+  it('trails the list with a new step that was not built, which reopens it', () => {
+    const onReopen = vi.fn();
+    const { container } = list({
+      pendingHistoryStep: {
+        title: 'Fillet',
+        message: 'The radius is too large for these edges.',
+        onReopen
+      },
+      editingHistoryFeatureId: null
+    });
+    const pending = screen.getByRole('button', {
+      name: 'Fillet, not built. Reopen it'
+    });
+    expect(container.querySelector('.compact-rows')?.lastElementChild).toBe(
+      pending.closest('li')
+    );
+    fireEvent.click(pending);
+    expect(onReopen).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a step still being made as not built, with nothing to reopen', () => {
+    list({
+      features: [],
+      pendingHistoryStep: { title: 'Box', message: 'Not built yet.' }
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Boxnot built');
+    expect(screen.queryByText('No steps yet')).toBeNull();
+  });
 });

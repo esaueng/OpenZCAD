@@ -48,6 +48,7 @@ function chrome(
       warningCount: 0
     },
     selection: null,
+    editRefusal: null,
     sheetKey: '',
     ...overrides
   };
@@ -139,6 +140,34 @@ describe('AppShell in the compact workspace', () => {
     await screen.findByRole('button', { name: 'Tweak' });
     expect(screen.queryByRole('button', { name: 'Build' })).toBeNull();
     expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
+  });
+
+  it('offers the top bar’s “Edit not applied” in the header, with its handler', async () => {
+    const onReview = vi.fn();
+    const { rerender } = render(shell(chrome()));
+    await screen.findByRole('group', { name: 'Workspace mode' });
+    expect(
+      screen.queryByRole('button', { name: /Edit not applied/ })
+    ).toBeNull();
+    rerender(
+      shell(
+        chrome({
+          editRefusal: {
+            message: 'Extrude was not applied: the depth must be above zero.',
+            onReview
+          }
+        })
+      )
+    );
+    const chip = screen.getByRole('button', {
+      name: 'Edit not applied: reopen it'
+    });
+    expect(chip).toHaveTextContent('Edit not applied');
+    expect(chip.getAttribute('title')).toContain(
+      'the depth must be above zero.'
+    );
+    fireEvent.click(chip);
+    expect(onReview).toHaveBeenCalledTimes(1);
   });
 
   it('puts the command card and the inspector in the sheet', async () => {

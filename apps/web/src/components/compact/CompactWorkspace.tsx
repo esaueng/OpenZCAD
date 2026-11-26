@@ -116,6 +116,7 @@ export default function CompactWorkspace({
   reducedMotion,
   panels,
   selection,
+  editRefusal,
   sheetContent,
   hasSheetContent,
   sheetKey,
@@ -214,12 +215,12 @@ export default function CompactWorkspace({
     if (panelOpen !== null && !panelsInStack) {
       dispatch({ type: 'push', page: { key: PANEL_SHEET_PAGE } });
     } else if (panelOpen === null && panelsInStack) {
-      const top = state.stack[state.stack.length - 1];
-      dispatch(
-        top?.key === PANEL_SHEET_PAGE ? { type: 'pop' } : { type: 'close' }
-      );
+      // Shut from outside the sheet: an edit, a tool or an inspector started
+      // from a panel (a History tap), or Ctrl+\. Every page goes with it, so
+      // More, under Panels, never covers the edit form that took its place.
+      dispatch({ type: 'leave' });
     }
-  }, [dispatch, onPanelOpen, panelOpen, panelsInStack, state.stack]);
+  }, [dispatch, onPanelOpen, panelOpen, panelsInStack]);
 
   // Each page is drawn from the workspace's state as it is now, so a row
   // disabled while the model was updating comes back when it finishes.
@@ -358,6 +359,25 @@ export default function CompactWorkspace({
             title={presentation.title}
           />
         </div>
+        {editRefusal ? (
+          // The top bar's "Edit not applied", with its handler: it brings
+          // back the refused edit, its value and why it was refused.
+          <button
+            type="button"
+            className="compact-refusal-chip"
+            aria-label="Edit not applied: reopen it"
+            title={`${editRefusal.message} Reopen the edit to see why and choose what to do.`}
+            onClick={() => {
+              // The edit comes back as the sheet's content: no page stays
+              // over it.
+              dispatch({ type: 'leave' });
+              editRefusal.onReview();
+            }}
+          >
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span className="compact-refusal-text">Edit not applied</span>
+          </button>
+        ) : null}
         {panels.warningCount > 0 ? (
           <button
             type="button"

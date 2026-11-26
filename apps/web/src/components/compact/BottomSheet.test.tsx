@@ -84,6 +84,29 @@ describe('sheet state', () => {
     ).toEqual(['more']);
   });
 
+  it('drops every page when the workspace takes the sheet for its content', () => {
+    // More › Panels, then an edit started from History: More must not be
+    // left standing over the edit form.
+    const drilled: SheetState = {
+      detent: 'half',
+      stack: [page('more'), page('panels')]
+    };
+    expect(reduce(drilled, true, { type: 'leave' })).toEqual({
+      detent: 'half',
+      stack: []
+    });
+    const full: SheetState = { ...drilled, detent: 'full' };
+    expect(reduce(full, true, { type: 'leave' })).toEqual({
+      detent: 'full',
+      stack: []
+    });
+    // With nothing of the workspace's to show, the sheet closes.
+    expect(reduce(drilled, false, { type: 'leave' })).toEqual(CLOSED_SHEET);
+    // No pages: nothing to leave.
+    const holding: SheetState = { detent: 'half', stack: [] };
+    expect(reduce(holding, true, { type: 'leave' })).toBe(holding);
+  });
+
   it('comes up for new content and leaves with it', () => {
     const arrived = reduce(CLOSED_SHEET, true, {
       type: 'root',

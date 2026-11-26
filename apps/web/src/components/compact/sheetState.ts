@@ -50,6 +50,12 @@ export type SheetAction =
   | { type: 'push'; page: SheetPage; detent?: SheetDetent }
   | { type: 'pop' }
   | { type: 'close' }
+  /**
+   * The workspace took the sheet for its own content (an edit, a tool or an
+   * inspector started from a page): every page goes, so nothing stands over
+   * that content, which keeps the height the pages stood at.
+   */
+  | { type: 'leave' }
   | { type: 'step-up' }
   | { type: 'step-down' }
   /** The workspace's own content arrived, changed or left. */
@@ -127,6 +133,17 @@ export function sheetReducer(
         stack: [],
         detent: hasRoot ? 'peek' : 'closed'
       };
+    case 'leave': {
+      if (state.stack.length === 0) return state;
+      return {
+        stack: [],
+        detent: !hasRoot
+          ? 'closed'
+          : state.detent === 'closed'
+            ? 'peek'
+            : state.detent
+      };
+    }
     case 'step-up': {
       if (state.detent === 'closed' && !hasRoot && state.stack.length === 0) {
         return state;

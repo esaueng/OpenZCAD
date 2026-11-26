@@ -330,10 +330,21 @@ test.describe('the compact workspace panels', () => {
       await expect(rows).toHaveCount(2);
       reached('feature-delete');
 
-      // A tap opens the step's edit: the panel gives way to its form.
+      // A tap opens the step's edit: the panel gives way to its form, and
+      // so does More, which Panels was opened from. Nothing covers it.
       await second.locator('.compact-row-main').tap();
-      await expect(sheet(page).locator('[data-page="panels"]')).toHaveCount(0);
+      await expect(sheet(page).locator('[data-page]')).toHaveCount(0);
       await expect(sheet(page)).toHaveAttribute('data-detent', /half|full/);
+      const form = sheet(page).locator('.compact-sheet-body:not([data-page])');
+      await expect(form).toBeVisible();
+      const inspector = form.getByRole('region', { name: 'Feature inspector' });
+      await expect(inspector).toBeVisible();
+      await expect(
+        inspector.getByRole('heading', { name: secondName })
+      ).toBeVisible();
+      await expect(
+        sheet(page).getByRole('heading', { name: 'More' })
+      ).toHaveCount(0);
       await expect(
         page.getByRole('button', { name: `Selection: ${secondName}` })
       ).toBeVisible();
