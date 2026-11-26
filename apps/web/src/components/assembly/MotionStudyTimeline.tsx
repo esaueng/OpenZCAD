@@ -26,6 +26,7 @@ import {
   type AssemblyCouplingEnd,
   type AssemblyMotionStudy,
   type AssemblySet,
+  type AssemblyTrack,
   type UnitSystem
 } from '@openzcad/shared';
 import { unitSymbol } from '../../lib/assembly/assemblyUi';
@@ -109,6 +110,43 @@ function timeAt(element: HTMLElement, clientX: number, durationS: number) {
   return Math.min(durationS, Math.max(0, u * durationS));
 }
 
+/**
+ * Touch (U12 slice 8): the key on `track` whose diamond is nearest a touch
+ * over its lane. A key's thumb-sized target covers its close neighbours',
+ * so the touch, not the topmost target, says which key it meant.
+ */
+function nearestKeyIndex(
+  lane: HTMLElement,
+  track: AssemblyTrack,
+  durationS: number,
+  clientX: number,
+  clientY: number,
+  fallback: number
+): number {
+  const rect = lane.getBoundingClientRect();
+  if (!(rect.width > 0) || !(durationS > 0)) return fallback;
+  let best = fallback;
+  let bestDistance = Infinity;
+  track.keys.forEach((key, index) => {
+    const x =
+      rect.left + rect.width * Math.min(1, Math.max(0, key.t / durationS));
+    const y = rect.top + (rect.height * keyValueY(track, key.value)) / 100;
+    const distance = Math.hypot(clientX - x, clientY - y);
+    if (distance < bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  });
+  return best;
+}
+
+/**
+ * Touch: a press on a lane or the ruler waits to see whether it is a tap,
+ * a sideways scrub or the page scrolling, and moves the playhead only for
+ * the first two.
+ */
+const TOUCH_SCRUB_SLOP_PX = 6;
+
 function percent(t: number, durationS: number): string {
   return `${(100 * Math.min(1, Math.max(0, t / durationS))).toFixed(3)}%`;
 }
@@ -162,6 +200,14 @@ export function MotionStudyTimeline({
   const [note, setNote] = useState<string | null>(null);
   const dragRef = useRef<KeyDrag | null>(null);
   const scrubRef = useRef<number | null>(null);
+  /** Touch: a lane press not yet known to be a tap or a scrub. */
+  const pendingScrubRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  /** Touch: the key the last press on a key meant, for its click. */
+  const pressedKeyRef = useRef<KeySelection | null>(null);
 
   const setRef = useRef(assembly);
   setRef.current = assembly;
@@ -459,17 +505,49 @@ export function MotionStudyTimeline({
   function onScrubDown(event: ReactPointerEvent<HTMLElement>) {
     if (event.button !== 0) return;
     const element = event.currentTarget;
+    // A finger on a lane may be starting to scroll the sheet: nothing
+    // moves (and playback keeps playing) until it is a tap or a scrub.
+    if (touch && event.pointerType !== 'mouse') {
+      pendingScrubRef.current = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY
+      };
+      return;
+    }
     scrubRef.current = event.pointerId;
     capture(element, event.pointerId);
     seek(timeAt(element, event.clientX, base.durationS));
   }
 
   function onScrubMove(event: ReactPointerEvent<HTMLElement>) {
+    const pending = pendingScrubRef.current;
+    if (pending && pending.pointerId === event.pointerId) {
+      const dx = Math.abs(event.clientX - pending.x);
+      const dy = Math.abs(event.clientY - pending.y);
+      if (dx < TOUCH_SCRUB_SLOP_PX || dx <= dy) return;
+      pendingScrubRef.current = null;
+      scrubRef.current = event.pointerId;
+      capture(event.currentTarget, event.pointerId);
+    }
     if (scrubRef.current !== event.pointerId) return;
     seek(timeAt(event.currentTarget, event.clientX, base.durationS));
   }
 
   function onScrubUp(event: ReactPointerEvent<HTMLElement>) {
+    const pending = pendingScrubRef.current;
+    if (pending && pending.pointerId === event.pointerId) {
+      pendingScrubRef.current = null;
+      // A tap: the playhead goes where it landed.
+      seek(timeAt(event.currentTarget, pending.x, base.durationS));
+    }
+    if (scrubRef.current === event.pointerId) scrubRef.current = null;
+  }
+
+  function onScrubCancel(event: ReactPointerEvent<HTMLElement>) {
+    // The page scrolled instead: the playhead and playback are untouched.
+    if (pendingScrubRef.current?.pointerId === event.pointerId)
+      pendingScrubRef.current = null;
     if (scrubRef.current === event.pointerId) scrubRef.current = null;
   }
 
@@ -480,10 +558,23 @@ export function MotionStudyTimeline({
   ) {
     event.stopPropagation();
     if (event.button !== 0) return;
+    const lane = event.currentTarget.parentElement;
+    if (touch && lane) {
+      const track = base.tracks[trackIndex];
+      if (track)
+        keyIndex = nearestKeyIndex(
+          lane,
+          track,
+          base.durationS,
+          event.clientX,
+          event.clientY,
+          keyIndex
+        );
+      pressedKeyRef.current = { trackIndex, keyIndex };
+    }
     setSelection({ trackIndex, keyIndex });
     setSelectedTrack(trackIndex);
     if (readOnly) return;
-    const lane = event.currentTarget.parentElement;
     if (!lane) return;
     capture(event.currentTarget, event.pointerId);
     dragRef.current = {
@@ -850,7 +941,7 @@ export function MotionStudyTimeline({
           onPointerDown={onScrubDown}
           onPointerMove={onScrubMove}
           onPointerUp={onScrubUp}
-          onPointerCancel={onScrubUp}
+          onPointerCancel={onScrubCancel}
         >
           {ticks.map((tick) => (
             <span
@@ -939,7 +1030,7 @@ export function MotionStudyTimeline({
                 onPointerDown={onScrubDown}
                 onPointerMove={onScrubMove}
                 onPointerUp={onScrubUp}
-                onPointerCancel={onScrubUp}
+                onPointerCancel={onScrubCancel}
               >
                 <svg
                   className="motion-curve"
@@ -974,9 +1065,17 @@ export function MotionStudyTimeline({
                       onPointerMove={onKeyPointerMove}
                       onPointerUp={onKeyPointerUp}
                       onPointerCancel={onKeyPointerUp}
-                      onClick={() => {
-                        setSelection({ trackIndex, keyIndex });
-                        setSelectedTrack(trackIndex);
+                      onClick={(event) => {
+                        // A tap selects the key its press meant (touch);
+                        // Enter or Space, this one.
+                        const pressed = pressedKeyRef.current;
+                        pressedKeyRef.current = null;
+                        const meant =
+                          pressed && event.detail > 0
+                            ? pressed
+                            : { trackIndex, keyIndex };
+                        setSelection(meant);
+                        setSelectedTrack(meant.trackIndex);
                       }}
                     />
                   );

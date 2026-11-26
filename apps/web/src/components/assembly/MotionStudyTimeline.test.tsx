@@ -61,6 +61,25 @@ function mount(manager: CommandManager = pivotProject()) {
   return { ...view, manager, executed, onClose };
 }
 
+/** The timeline as the compact sheet draws it (U12 slice 8). */
+function mountTouch(manager: CommandManager = pivotProject()) {
+  const executed: AnyCommand[] = [];
+  const element = () => (
+    <MotionStudyTimeline
+      assembly={manager.document.assembly}
+      execute={(command) => {
+        executed.push(command);
+        manager.execute(command);
+        view.rerender(element());
+        return true;
+      }}
+      touch
+    />
+  );
+  const view = render(element());
+  return { executed, manager };
+}
+
 function lastStudy(executed: AnyCommand[]) {
   const command = executed.at(-1);
   expect(command?.kind).toBe('assembly.study.set');
@@ -245,6 +264,153 @@ describe('MotionStudyTimeline', () => {
     expect(lastStudy(executed).tracks[0]?.keys).toEqual([
       { t: 0, value: 0, easing: 'linear' }
     ]);
+  });
+
+  it('with touch, a key goes to the key nearest the finger, not the target on top', () => {
+    const manager = pivotProject();
+    // Two keys at the same value 16 px apart on a 200 px lane: the later
+    // key's 44 px target covers the earlier key's diamond.
+    manager.execute(
+      commandFactories.setAssemblyStudy({
+        study: {
+          id: 'study_1',
+          name: 'Motion 1',
+          durationS: 2,
+          playback: 'loop',
+          tracks: [
+            {
+              jointId: 'j_pivot',
+              dof: 0,
+              keys: [
+                { t: 0, value: 0, easing: 'linear' },
+                { t: 1, value: 90, easing: 'linear' },
+                { t: 1.16, value: 90, easing: 'linear' }
+              ]
+            }
+          ]
+        }
+      })
+    );
+    const { executed } = mountTouch(manager);
+    const row = lane(screen.getByTestId('motion-lane-0'));
+    // Diamonds at x 100 and 116, y 3.6 (10% down the 36 px lane).
+    const later = () =>
+      screen.getByRole('button', { name: 'Key at 1.16 s, 90°' });
+    const earlier = () =>
+      screen.getByRole('button', { name: 'Key at 1.00 s, 90°' });
+    expect(row.contains(later())).toBe(true);
+    const tap = (x: number) => {
+      fireEvent.pointerDown(later(), {
+        clientX: x,
+        clientY: 4,
+        pointerId: 1,
+        pointerType: 'touch',
+        button: 0
+      });
+      fireEvent.pointerUp(later(), { pointerId: 1, pointerType: 'touch' });
+      fireEvent.click(later(), { detail: 1 });
+    };
+    // On the earlier diamond, under the later key's target: the earlier key.
+    tap(101);
+    expect(earlier()).toHaveAttribute('aria-pressed', 'true');
+    expect(later()).toHaveAttribute('aria-pressed', 'false');
+    // On the later diamond: the later key.
+    tap(115);
+    expect(later()).toHaveAttribute('aria-pressed', 'true');
+    expect(earlier()).toHaveAttribute('aria-pressed', 'false');
+    // Enter on a key's own button selects that key.
+    fireEvent.click(earlier(), { detail: 0 });
+    expect(earlier()).toHaveAttribute('aria-pressed', 'true');
+
+    // A drag from the earlier diamond moves the earlier key only.
+    fireEvent.pointerDown(later(), {
+      clientX: 101,
+      clientY: 4,
+      pointerId: 2,
+      pointerType: 'touch',
+      button: 0
+    });
+    fireEvent.pointerMove(later(), { clientX: 60, pointerId: 2 });
+    fireEvent.pointerUp(later(), { pointerId: 2 });
+    expect(lastStudy(executed).tracks[0]?.keys.map((k) => k.t)).toEqual([
+      0, 0.6, 1.16
+    ]);
+
+    // And from the later diamond, the later key only.
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: /^Key at 1\.16/ }),
+      {
+        clientX: 117,
+        clientY: 4,
+        pointerId: 3,
+        pointerType: 'touch',
+        button: 0
+      }
+    );
+    fireEvent.pointerMove(
+      screen.getByRole('button', { name: /^Key at 1\.16/ }),
+      { clientX: 160, pointerId: 3 }
+    );
+    fireEvent.pointerUp(screen.getByRole('button', { name: /^Key at 1\.6/ }), {
+      pointerId: 3
+    });
+    expect(lastStudy(executed).tracks[0]?.keys.map((k) => k.t)).toEqual([
+      0, 0.6, 1.6
+    ]);
+  });
+
+  it('with touch, a lane moves the playhead only for a tap or a sideways scrub', () => {
+    mountTouch();
+    const row = lane(screen.getByTestId('motion-lane-0'));
+    act(() => assemblyRuntime.startStudy('study_1', 1, 0.5));
+    const down = (x: number, y = 18, pointerId = 1) =>
+      fireEvent.pointerDown(row, {
+        clientX: x,
+        clientY: y,
+        pointerId,
+        pointerType: 'touch',
+        button: 0
+      });
+    // A swipe that the page takes as a scroll: nothing changes.
+    down(150);
+    fireEvent.pointerMove(row, {
+      clientX: 151,
+      clientY: 40,
+      pointerId: 1,
+      pointerType: 'touch'
+    });
+    fireEvent.pointerCancel(row, { pointerId: 1, pointerType: 'touch' });
+    expect(getAssemblyRuntime().playback).toMatchObject({
+      kind: 'study',
+      fromS: 0.5
+    });
+    expect(getAssemblyRuntime().studyTimeS).toBe(0);
+
+    // A tap moves the playhead where it landed.
+    down(100, 18, 2);
+    expect(getAssemblyRuntime().playback).not.toBeNull();
+    fireEvent.pointerUp(row, { pointerId: 2, pointerType: 'touch' });
+    expect(getAssemblyRuntime().playback).toBeNull();
+    expect(getAssemblyRuntime().studyTimeS).toBe(1);
+
+    // A sideways drag scrubs once it is clearly sideways.
+    down(20, 18, 3);
+    fireEvent.pointerMove(row, {
+      clientX: 23,
+      clientY: 18,
+      pointerId: 3,
+      pointerType: 'touch'
+    });
+    expect(getAssemblyRuntime().studyTimeS).toBe(1);
+    fireEvent.pointerMove(row, {
+      clientX: 60,
+      clientY: 20,
+      pointerId: 3,
+      pointerType: 'touch'
+    });
+    expect(getAssemblyRuntime().studyTimeS).toBeCloseTo(0.6);
+    fireEvent.pointerUp(row, { pointerId: 3, pointerType: 'touch' });
+    expect(getAssemblyRuntime().studyTimeS).toBeCloseTo(0.6);
   });
 
   it('offers no key-step buttons without touch: [ and ] step there', () => {

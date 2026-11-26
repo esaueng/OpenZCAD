@@ -1,5 +1,5 @@
 import { Boxes, Expand, Link2, MoveVertical, Play } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   assemblyRuntime,
   getAssemblyRuntime,
@@ -10,7 +10,7 @@ import {
   type AssemblyPanelProps,
   type AssemblyPanelSection
 } from '../assembly/AssemblyPanel';
-import { AssemblyPlayer } from '../assembly/AssemblyPlayer';
+import { AssemblyPlayer, playerStudies } from '../assembly/AssemblyPlayer';
 import { MotionStudyTimelineSlot } from '../assembly/MotionStudyTimelineSlot';
 import { useCompactTray } from './compactSlots';
 import {
@@ -148,9 +148,11 @@ export function CompactAssembleTray(props: CompactAssembleTrayProps) {
     }
   ];
   const assembly = panel.document.assembly;
-  const nothingToPlay =
-    !assembly ||
-    (assembly.studies.length === 0 && assembly.joints.length === 0);
+  // The player draws nothing then (only rigid joints, say): the note does.
+  const nothingToPlay = useMemo(
+    () => playerStudies(assembly).length === 0,
+    [assembly]
+  );
   const pagePanel = (key: Exclude<AssemblePage, 'play'>) => (
     <TrayPage page={key} onStageCovered={onStageCovered}>
       <div className="compact-assemble-page">

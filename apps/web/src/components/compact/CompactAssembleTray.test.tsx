@@ -102,8 +102,7 @@ async function trayButton(name: string) {
   return within(toolbar).getByRole('button', { name });
 }
 
-const sheetTitle = (name: string) =>
-  screen.getByRole('heading', { name });
+const sheetTitle = (name: string) => screen.getByRole('heading', { name });
 
 describe('Assemble’s compact tray', () => {
   it('rests at peek with its five verbs, each opening its page of the sidebar', async () => {
@@ -222,6 +221,41 @@ describe('Assemble’s compact tray', () => {
     await waitFor(() =>
       expect(getAssemblyRuntime().selectedStudyId).toBeNull()
     );
+  });
+
+  it('says there is nothing to play with only a rigid joint', async () => {
+    const fixture = scissorsManager({ components: true });
+    fixture.manager.execute(
+      commandFactories.addAssemblyJoint({
+        joint: {
+          id: 'joint_weld',
+          name: 'Weld',
+          kind: 'rigid',
+          parent: {
+            componentId: 'comp_a',
+            frame: {
+              origin: { x: 0, y: 0, z: 0 },
+              zAxis: { x: 0, y: 0, z: 1 },
+              xAxis: { x: 1, y: 0, z: 0 }
+            }
+          },
+          child: {
+            componentId: 'comp_b',
+            frame: {
+              origin: { x: 0, y: 0, z: 0 },
+              zAxis: { x: 0, y: 0, z: 1 },
+              xAxis: { x: 1, y: 0, z: 0 }
+            }
+          },
+          values: [],
+          limits: []
+        }
+      })
+    );
+    mount(fixture);
+    fireEvent.click(await trayButton('Player'));
+    expect(await screen.findByText('Nothing to play yet.')).toBeVisible();
+    expect(screen.queryByRole('group', { name: 'Motion player' })).toBeNull();
   });
 
   it('plays on the Player page, stopping a joint already playing', async () => {

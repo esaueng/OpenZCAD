@@ -498,8 +498,10 @@ export class AssemblyViewport {
   private beginDrag(press: Press) {
     const view = this.view;
     if (!view || !press.componentId || !press.grabPoint) return;
-    // Motion playing owns the values; a drag takes them over from rest.
-    if (getAssemblyRuntime().playback) assemblyRuntime.stop();
+    // Motion playing owns the values; a drag takes them over from rest. So
+    // does the player's preview, which is never saved (AS06).
+    const before = getAssemblyRuntime();
+    if (before.playback || before.previewId !== null) assemblyRuntime.stop();
     const runtime = getAssemblyRuntime();
     const solution = solveAssembly(
       view.set,

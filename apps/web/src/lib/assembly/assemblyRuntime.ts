@@ -131,6 +131,13 @@ export interface AssemblyRuntimeState {
   exploded: boolean;
   /** Exploded-view offsets shown instead of the saved ones during a drag. */
   explodeOverrides: ReadonlyMap<string, Vector3>;
+  /**
+   * The player's preview (AS06), while `overrides` are a pose it shows:
+   * the id `startPreview` handed out, or null. A preview's values are never
+   * saved nor carried into an edit; anything else that writes the
+   * transient values ends it.
+   */
+  previewId: number | null;
 }
 
 /** Commits the app performs on the store's behalf (registered by App). */
@@ -163,7 +170,8 @@ const INITIAL: AssemblyRuntimeState = {
   motionSetup: null,
   gearMesh: null,
   exploded: false,
-  explodeOverrides: new Map()
+  explodeOverrides: new Map(),
+  previewId: null
 };
 
 let state: AssemblyRuntimeState = INITIAL;
@@ -181,6 +189,7 @@ export type StudyPoseSink = (
   moved: readonly AssemblyCouplingEnd[]
 ) => boolean;
 let studyPoseSink: StudyPoseSink | null = null;
+let lastPreviewId = 0;
 
 function emit(next: AssemblyRuntimeState): void {
   if (next === state) return;
@@ -203,6 +212,14 @@ function patch(partial: Partial<AssemblyRuntimeState>): void {
     if (kept.length !== state.moved.length)
       partial = { ...partial, moved: kept };
   }
+  // New transient values from anything but the preview end the preview.
+  if (
+    state.previewId !== null &&
+    partial.overrides &&
+    partial.overrides !== state.overrides &&
+    !('previewId' in partial)
+  )
+    partial = { ...partial, previewId: null };
   emit({ ...state, ...partial });
 }
 
@@ -304,11 +321,13 @@ export const assemblyRuntime = {
     values: readonly number[] | null,
     dof?: number
   ): void {
-    const overrides = new Map(state.overrides);
+    // An edit starts from the saved pose, never from a preview's values.
+    const previewing = state.previewId !== null;
+    const overrides = previewing ? new Map() : new Map(state.overrides);
     if (values) overrides.set(jointId, [...values]);
     else overrides.delete(jointId);
     if (!values || dof === undefined) {
-      patch({ overrides });
+      patch(previewing ? { overrides, drivers: [], moved: [] } : { overrides });
       return;
     }
     const toFront = (
@@ -322,9 +341,38 @@ export const assemblyRuntime = {
           ];
     patch({
       overrides,
-      drivers: toFront(state.drivers),
-      moved: toFront(state.moved)
+      drivers: toFront(previewing ? [] : state.drivers),
+      moved: toFront(previewing ? [] : state.moved)
     });
+  },
+  /**
+   * Begins a player preview (AS06) and returns its id. The pose it then
+   * shows with `showPreview` is never saved: a drag or an edit starts from
+   * the saved pose instead, and anything else that writes the transient
+   * values ends the preview.
+   */
+  startPreview(): number {
+    lastPreviewId += 1;
+    patch({ previewId: lastPreviewId });
+    return lastPreviewId;
+  },
+  /**
+   * Shows a frame of the preview `previewId`; false, showing nothing, once
+   * that preview has ended.
+   */
+  showPreview(
+    previewId: number,
+    overrides: ReadonlyMap<string, readonly number[]>,
+    drivers: readonly AssemblyCouplingEnd[] = []
+  ): boolean {
+    if (state.previewId !== previewId) return false;
+    patch({ overrides, drivers, moved: [], previewId });
+    return true;
+  },
+  /** Ends the preview `previewId`, if it is still on, and drops its pose. */
+  endPreview(previewId: number): void {
+    if (state.previewId !== previewId) return;
+    patch({ overrides: new Map(), previewId: null });
   },
   /**
    * Replaces every transient joint value at once (playback frames, a
@@ -346,12 +394,25 @@ export const assemblyRuntime = {
     const placementOverrides = new Map(state.placementOverrides);
     if (placement) placementOverrides.set(componentId, placement);
     else placementOverrides.delete(componentId);
-    patch({ placementOverrides });
+    // Moving a part ends a preview: its pose is never saved with it.
+    patch(
+      state.previewId !== null
+        ? { placementOverrides, overrides: new Map(), previewId: null }
+        : { placementOverrides }
+    );
   },
   clearOverrides(): void {
-    if (state.overrides.size === 0 && state.placementOverrides.size === 0)
+    if (
+      state.overrides.size === 0 &&
+      state.placementOverrides.size === 0 &&
+      state.previewId === null
+    )
       return;
-    patch({ overrides: new Map(), placementOverrides: new Map() });
+    patch({
+      overrides: new Map(),
+      placementOverrides: new Map(),
+      previewId: null
+    });
   },
   /**
    * Saves the transient values as one undo step and clears them. While a
@@ -361,6 +422,8 @@ export const assemblyRuntime = {
   commitOverrides(): void {
     if (state.overrides.size === 0 && state.placementOverrides.size === 0)
       return;
+    // A preview's pose is only looked at (AS06).
+    if (state.previewId !== null) return;
     const values = Object.fromEntries(
       [...state.overrides].map(([id, v]) => [id, [...v]])
     );
@@ -415,8 +478,13 @@ export const assemblyRuntime = {
   },
   /** Stops playback; the parts return to their saved values. */
   stop(): void {
-    if (!state.playback && state.overrides.size === 0) return;
-    patch({ playback: null, overrides: new Map() });
+    if (
+      !state.playback &&
+      state.overrides.size === 0 &&
+      state.previewId === null
+    )
+      return;
+    patch({ playback: null, overrides: new Map(), previewId: null });
   },
   setStudyTime(t: number): void {
     patch({ studyTimeS: Math.max(0, t) });
