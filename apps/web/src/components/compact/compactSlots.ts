@@ -1,5 +1,15 @@
-import { createContext, useContext, useLayoutEffect } from 'react';
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  type ReactNode
+} from 'react';
 import type { WorkspaceMode } from '../../lib/panelState';
+import type {
+  SelectionCalloutVerb,
+  SelectionCalloutVerbId
+} from '../../lib/selectionCallout';
+import type { CompactPanelId } from './panelSheet';
 import type { WorkspaceSaveState } from '../../lib/cloudProjectAutosave';
 import type { PaletteCommand } from '../CommandBar';
 
@@ -84,4 +94,58 @@ export interface CompactChromeProps {
   selectionLabel: string | null;
   onClearSelection?(): void;
   reducedMotion: boolean;
+  /** The panel sheet (slice 5): History, Objects and the rest. */
+  panels: CompactPanels;
+  /** What the selection sheet offers for the current pick (slice 5). */
+  selection: CompactSelectionSheet | null;
+}
+
+/**
+ * The panel sheet (U12 slice 5): one segmented sheet page for the model
+ * panels and Comments. The workspace holds which panel is open, so every
+ * route to a panel (More, the command bar, Ctrl+\, the warning count)
+ * opens the same page.
+ */
+export interface CompactPanels {
+  /** The panel shown, or null while the sheet is shut. */
+  open: CompactPanelId | null;
+  /** The segments on offer, in order. */
+  available: readonly CompactPanelId[];
+  /** Why the panels cannot open now (a mode without them), or null. */
+  disabledReason: string | null;
+  /** The open panel's body, drawn from the workspace's current state. */
+  content: ReactNode;
+  /** Opens a panel, or shuts the sheet with null. */
+  onOpen(panel: CompactPanelId | null): void;
+  /** Warnings on the model; the header's count opens Diagnostics. */
+  warningCount: number;
+}
+
+/** One action the selection sheet offers. */
+export interface CompactSelectionAction {
+  id: string;
+  label: string;
+  icon?: ReactNode;
+  /** Why it cannot run now, shown in place of running it; null runs. */
+  disabledReason?: string | null;
+  run(): void;
+}
+
+/**
+ * The selection sheet (U12 slice 5): the pick's verbs as the verb rail
+ * offers them, the picks a double-click makes on the regular stage, and
+ * the selection filter.
+ */
+export interface CompactSelectionSheet {
+  /** The verb rail's verbs for the pick, as the rail draws them. */
+  verbs: readonly SelectionCalloutVerb[];
+  onVerb(id: SelectionCalloutVerbId): void;
+  /** Select body, Select connected: each only where it applies. */
+  picks: readonly CompactSelectionAction[];
+  filter: {
+    options: readonly { id: string; label: string }[];
+    /** The filter in force. */
+    current: string;
+    onChange(id: string): void;
+  } | null;
 }

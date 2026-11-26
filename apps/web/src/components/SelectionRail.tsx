@@ -70,7 +70,7 @@ const ACTION_ICONS: Record<SelectionActionId, ReactNode> = {
   'extrude-region': TOOL_META.extrude.icon
 };
 
-function verbIcon(verb: SelectionCalloutVerb): ReactNode {
+export function verbIcon(verb: SelectionCalloutVerb): ReactNode {
   if (verb.id === 'edit-face') {
     // One id, two verbs: an imported face with an edit of its own, and one
     // whose card only reads out what recognition found.

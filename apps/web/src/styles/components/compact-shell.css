@@ -611,3 +611,595 @@
   .in-place-command-recovery {
   display: none;
 }
+
+/* ── The header's warning count (slice 5) ──
+   The top bar's warning badge, which the compact header stands in for:
+   it opens Diagnostics in the panel sheet. */
+.compact-warning-badge {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: var(--compact-target);
+  height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-warning);
+  cursor: pointer;
+}
+
+.compact-warning-badge:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-warning-badge:focus-visible,
+.compact-segment:focus-visible,
+.compact-row-grip:focus-visible,
+.compact-row-main:focus-visible,
+.compact-row-action:focus-visible,
+.compact-verb:focus-visible,
+.compact-filter-option:focus-visible,
+.compact-action-sheet-item:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.compact-warning-count {
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+}
+
+/* ── The panel sheet (slice 5) ──
+   One segmented page for History, Objects, Parameters, Revisions,
+   Diagnostics and Comments: icons, with the active segment's word. */
+.compact-panel-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.compact-segments {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  border-radius: 999px;
+  background: var(--color-surface-raised);
+}
+
+.compact-segment {
+  flex: 1 1 0;
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.compact-segment.active {
+  flex: 2 1 auto;
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+.compact-segment-label {
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+
+.compact-panel-body {
+  min-width: 0;
+}
+
+/* The regular panels' bodies and the Comments panel sit in the sheet's
+   flow rather than floating. */
+.compact-panel-body > .comments-panel {
+  position: static;
+  width: auto;
+  max-height: none;
+  box-shadow: none;
+}
+
+.compact-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+  font-size: 17px;
+}
+
+.compact-panel-tools {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.compact-panel-empty {
+  margin: 0;
+  padding: var(--sp-4) var(--sp-2);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+/* ── History as touch rows ── */
+.compact-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.compact-row {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.compact-row.is-dragging {
+  z-index: 1;
+  box-shadow: var(--shadow-2);
+}
+
+/* The actions a swipe uncovers, under the row's face. */
+.compact-row-actions {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+}
+
+/* Put away, the actions are not drawn at all: their fill would show at
+   the face's rounded corners. */
+.compact-row-actions[aria-hidden='true'] {
+  visibility: hidden;
+}
+
+.compact-row-actions.is-start {
+  left: 0;
+}
+
+.compact-row-actions.is-end {
+  right: 0;
+}
+
+.compact-row-action {
+  width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  cursor: pointer;
+}
+
+.compact-row-action.is-suppress {
+  background: var(--color-text-muted);
+}
+
+.compact-row-action.is-delete {
+  background: var(--color-error);
+}
+
+.compact-row-action-label {
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+}
+
+.compact-row-face {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  background: var(--color-surface);
+  border-radius: 12px;
+  /* Vertical drags scroll the list; horizontal ones swipe the row. */
+  touch-action: pan-y;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.compact-row-face.is-swiping {
+  transition: none;
+}
+
+.compact-row.is-selected .compact-row-face {
+  background: var(--color-accent-dim);
+}
+
+.compact-row-grip {
+  flex: 0 0 auto;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-dim);
+  cursor: grab;
+  touch-action: none;
+}
+
+.compact-row-grip[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: var(--opacity-disabled);
+}
+
+.compact-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--compact-target);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-1);
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 17px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.compact-row-icon {
+  flex: 0 0 auto;
+  width: 24px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-muted);
+}
+
+.compact-row-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.compact-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Two lines, broken between words, rather than an ellipsis mid-word. */
+.compact-row-name {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  line-height: 1.25;
+}
+
+.compact-row-value {
+  flex: 0 1 auto;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: 15px;
+}
+
+.compact-row-alert {
+  flex: 0 0 auto;
+  color: var(--color-warning);
+}
+
+.compact-row.is-suppressed .compact-row-name,
+.compact-row.is-paused .compact-row-name {
+  color: var(--color-text-dim);
+}
+
+.compact-row.is-suppressed .compact-row-name {
+  text-decoration: line-through;
+}
+
+.compact-row.is-paused .compact-row-value,
+.compact-row.is-suppressed .compact-row-value {
+  color: var(--color-text-dim);
+}
+
+.compact-row-more {
+  color: var(--color-text-muted);
+}
+
+.compact-row-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--compact-target);
+  box-sizing: border-box;
+  padding: 0 var(--sp-2);
+  /* The no-zoom size: no field is drawn above it (touchContracts). */
+  font-size: 16px;
+  border-radius: var(--radius-md);
+}
+
+.compact-row-marker {
+  list-style: none;
+}
+
+/* ── The regular panels' bodies as touch rows ──
+   Objects, Parameters, Revisions and Diagnostics keep their own markup;
+   in the sheet their rows and buttons grow to a finger's size and names
+   wrap rather than cut off. */
+.compact-panel-list .feature-row,
+.compact-panel-list .object-row,
+.compact-panel-list .body-row {
+  min-height: var(--compact-target);
+}
+
+.compact-panel-list .body-row-main,
+.compact-panel-list .feature-row-main {
+  min-height: var(--compact-target);
+  font-size: 17px;
+  color: var(--color-text);
+}
+
+.compact-panel-list .feature-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.compact-panel-list .row-visibility,
+.compact-panel-list .disclosure-chevron,
+.compact-panel-list .object-folder-toggle,
+.compact-panel-list .object-folder-new,
+.compact-panel-list .consumed-toggle {
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+}
+
+/* ── The selection sheet (slice 5) ── */
+.compact-selection-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.compact-verb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: var(--sp-1);
+}
+
+.compact-verb {
+  min-height: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: var(--sp-1);
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.compact-verb:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-verb[aria-pressed='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+.compact-verb:disabled {
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+.compact-verb-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.compact-verb-label {
+  max-width: 100%;
+  font-size: 13px;
+  line-height: 1.2;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.compact-filter {
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  border-radius: 999px;
+  background: var(--color-surface-raised);
+}
+
+.compact-filter-option {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: var(--compact-target);
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.compact-filter-option[aria-checked='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+  font-weight: var(--fw-semibold);
+}
+
+/* ── Action sheets (slice 5) ──
+   A context menu in the compact workspace: a sheet of full-width rows over
+   the foot of the screen, opened by a long press. */
+.compact-action-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-context-menu);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: var(--sp-2) max(var(--sp-2), env(safe-area-inset-right))
+    max(var(--sp-2), env(safe-area-inset-bottom))
+    max(var(--sp-2), env(safe-area-inset-left));
+  background: color-mix(in srgb, var(--color-bg) 55%, transparent);
+  animation: compact-action-sheet-in var(--dur-base) var(--ease-out);
+}
+
+.compact-action-sheet-scrim.closing {
+  opacity: 0;
+  transition: opacity var(--dur-fast) ease-out;
+}
+
+.compact-action-sheet {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 480px;
+  max-height: calc(100dvh - var(--sp-4) * 2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  overflow: auto;
+  padding: var(--sp-2);
+  border-radius: 24px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-3);
+  color: var(--color-text);
+}
+
+.compact-action-sheet:focus {
+  outline: none;
+}
+
+.compact-action-sheet-heading {
+  padding: var(--sp-1) var(--sp-2) 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.compact-action-sheet-items {
+  display: flex;
+  flex-direction: column;
+}
+
+.compact-action-sheet-item {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 17px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.compact-action-sheet-item:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-action-sheet-item.is-section {
+  margin-top: var(--sp-1);
+}
+
+.compact-action-sheet-item.is-danger {
+  color: var(--color-error);
+}
+
+.compact-action-sheet-item:disabled {
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+.compact-action-sheet-item.is-cancel {
+  justify-content: center;
+  font-weight: var(--fw-semibold);
+  background: var(--color-surface-hover);
+}
+
+.compact-action-sheet-icon {
+  flex: 0 0 auto;
+  width: 24px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-muted);
+}
+
+.compact-action-sheet-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.compact-action-sheet-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.compact-action-sheet-item.is-cancel .compact-action-sheet-label {
+  flex: 0 1 auto;
+  align-items: center;
+}
+
+.compact-action-sheet-detail {
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+@keyframes compact-action-sheet-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compact-row-face,
+  .compact-action-sheet-scrim,
+  .compact-action-sheet-scrim.closing {
+    animation: none;
+    transition: none;
+  }
+}
+
+[data-reduced-motion='true'] .compact-row-face,
+[data-reduced-motion='true'] .compact-action-sheet-scrim,
+[data-reduced-motion='true'] .compact-action-sheet-scrim.closing {
+  animation: none;
+  transition: none;
+}

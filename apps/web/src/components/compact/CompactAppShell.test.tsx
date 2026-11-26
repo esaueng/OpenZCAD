@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AppShell } from '../AppShell';
 import { NumericKeypad } from '../NumericKeypad';
 import type { CompactChromeProps } from './compactSlots';
+import { COMPACT_PANEL_ORDER } from './panelSheet';
 
 function chrome(
   overrides: Partial<CompactChromeProps & { sheetKey: string }> = {}
@@ -38,6 +39,15 @@ function chrome(
     ],
     selectionLabel: null,
     reducedMotion: false,
+    panels: {
+      open: null,
+      available: COMPACT_PANEL_ORDER,
+      disabledReason: null,
+      content: null,
+      onOpen: vi.fn(),
+      warningCount: 0
+    },
+    selection: null,
     sheetKey: '',
     ...overrides
   };
@@ -278,5 +288,159 @@ describe('AppShell in the compact workspace', () => {
     expect(screen.getByRole('heading', { name: '2 faces' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
     expect(onClearSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the panel sheet from More, and shuts it with Back', async () => {
+    const onOpen = vi.fn();
+    const closed = chrome({
+      panels: { ...chrome().panels, onOpen }
+    });
+    const { rerender } = render(shell(closed));
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Panels' }));
+    expect(onOpen).toHaveBeenCalledWith('history');
+
+    // The workspace holds the open panel; the sheet follows it.
+    const open = chrome({
+      panels: {
+        ...chrome().panels,
+        open: 'bodies',
+        content: <p>Objects body</p>,
+        onOpen
+      }
+    });
+    rerender(shell(open));
+    expect(
+      await screen.findByRole('heading', { name: 'Objects' })
+    ).toBeVisible();
+    const tabs = screen.getByRole('tablist', { name: 'Panels' });
+    const active = within(tabs).getByRole('tab', { name: 'Objects' });
+    expect(active).toHaveAttribute('aria-selected', 'true');
+    // One word, on the active segment only.
+    expect(active).toHaveTextContent('Objects');
+    expect(
+      within(tabs).getByRole('tab', { name: 'History' })
+    ).toHaveTextContent('');
+    expect(screen.getByRole('tabpanel', { name: 'Objects' })).toHaveTextContent(
+      'Objects body'
+    );
+    fireEvent.click(within(tabs).getByRole('tab', { name: 'Revisions' }));
+    expect(onOpen).toHaveBeenLastCalledWith('revisions');
+    fireEvent.keyDown(active, { key: 'ArrowLeft' });
+    expect(onOpen).toHaveBeenLastCalledWith('history');
+
+    // Back leaves the panel sheet: the workspace hears it shut.
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await waitFor(() => expect(onOpen).toHaveBeenLastCalledWith(null));
+
+    // The workspace shuts it as asked, opens it again, then shuts it itself
+    // (Ctrl+\, a tap that opens a step's edit).
+    rerender(shell(chrome({ panels: { ...open.panels, open: null } })));
+    rerender(shell(open));
+    await screen.findByRole('tablist', { name: 'Panels' });
+    rerender(shell(chrome({ panels: { ...open.panels, open: null } })));
+    await waitFor(() =>
+      expect(screen.queryByRole('tablist', { name: 'Panels' })).toBeNull()
+    );
+  });
+
+  it('offers the panels only where the workspace has them', async () => {
+    render(
+      shell(
+        chrome({
+          panels: {
+            ...chrome().panels,
+            disabledReason: 'The panels are in Build mode.'
+          }
+        })
+      )
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    expect(screen.getByRole('button', { name: 'Panels' })).toBeDisabled();
+  });
+
+  it('opens Diagnostics from the header’s warning count', async () => {
+    const onOpen = vi.fn();
+    const { rerender } = render(shell(chrome()));
+    await screen.findByRole('group', { name: 'Workspace mode' });
+    expect(screen.queryByRole('button', { name: /warning/ })).toBeNull();
+    rerender(
+      shell(chrome({ panels: { ...chrome().panels, warningCount: 2, onOpen } }))
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: '2 warnings: show Diagnostics' })
+    );
+    expect(onOpen).toHaveBeenCalledWith('diagnostics');
+  });
+
+  it('offers the pick’s verbs, its whole body, the filter and its properties', async () => {
+    const onVerb = vi.fn();
+    const selectBody = vi.fn();
+    const onChange = vi.fn();
+    render(
+      shell(
+        chrome({
+          selectionLabel: 'Top face',
+          selection: {
+            verbs: [
+              {
+                id: 'action:offset-face',
+                label: 'Offset',
+                title: 'Push or pull the face',
+                disabled: false,
+                pressed: false
+              },
+              {
+                id: 'tool:hole',
+                label: 'Hole',
+                title: 'Not on a curved face',
+                disabled: true,
+                pressed: false
+              }
+            ],
+            onVerb,
+            picks: [
+              { id: 'select-body', label: 'Select body', run: selectBody }
+            ],
+            filter: {
+              options: [
+                { id: 'any', label: 'Any' },
+                { id: 'face', label: 'Face' }
+              ],
+              current: 'any',
+              onChange
+            }
+          }
+        }),
+        { inspector: <p>Face properties</p> }
+      )
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Selection: Top face' })
+    );
+    expect(screen.getByRole('heading', { name: 'Top face' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Hole' })).toBeDisabled();
+    const filter = screen.getByRole('radiogroup', { name: 'Selection filter' });
+    expect(within(filter).getByRole('radio', { name: 'Any' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    fireEvent.click(within(filter).getByRole('radio', { name: 'Face' }));
+    expect(onChange).toHaveBeenCalledWith('face');
+    fireEvent.click(screen.getByRole('button', { name: 'Offset' }));
+    expect(onVerb).toHaveBeenCalledWith('action:offset-face');
+
+    // Properties: the inspector, which is the sheet's own content.
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Selection: Top face' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Properties' }));
+    expect(screen.getByText('Face properties')).toBeVisible();
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Selection: Top face' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Select body' }));
+    expect(selectBody).toHaveBeenCalledTimes(1);
   });
 });

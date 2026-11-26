@@ -1,10 +1,11 @@
 import {
+  AlertTriangle,
   ChevronLeft,
-  ChevronRight,
   CircleHelp,
   Ellipsis,
   FileText,
   FolderOpen,
+  PanelsTopLeft,
   Redo2,
   Search,
   Settings,
@@ -23,7 +24,11 @@ import type { WorkspaceSaveState } from '../../lib/cloudProjectAutosave';
 import { OWN_ENTER_ATTRIBUTE } from '../../lib/exactEntryShortcut';
 import type { PaletteCommand } from '../CommandBar';
 import { BottomSheet, SHEET_OVERLAY_ATTRIBUTE, useSheet } from './BottomSheet';
+import { MenuList, type MenuRow } from './CompactMenuList';
+import { CompactPanelSheet } from './CompactPanelSheet';
+import { CompactSelectionPage } from './CompactSelectionPage';
 import type { CompactChromeProps } from './compactSlots';
+import { COMPACT_PANEL_TITLES, PANEL_SHEET_PAGE } from './panelSheet';
 
 /** The save dot's tone: settled, under way, or worth a look. */
 function saveTone(state: WorkspaceSaveState): 'ok' | 'busy' | 'local' | 'warn' {
@@ -39,53 +44,6 @@ function saveTone(state: WorkspaceSaveState): 'ok' | 'busy' | 'local' | 'warn' {
     default:
       return 'warn';
   }
-}
-
-interface MenuRow {
-  id: string;
-  label: string;
-  icon?: ReactNode;
-  disabledReason?: string | null;
-  /** Opens a page rather than running something. */
-  drillIn?: boolean;
-  run(): void;
-}
-
-function MenuList({
-  label,
-  rows
-}: {
-  label: string;
-  rows: readonly MenuRow[];
-}) {
-  return (
-    <ul className="compact-menu" aria-label={label}>
-      {rows.map((row) => (
-        <li key={row.id}>
-          <button
-            type="button"
-            className="compact-menu-row"
-            data-sheet-row={row.id}
-            disabled={Boolean(row.disabledReason)}
-            title={row.disabledReason ?? undefined}
-            onClick={row.run}
-          >
-            <span className="compact-menu-icon" aria-hidden="true">
-              {row.icon}
-            </span>
-            <span className="compact-menu-label">{row.label}</span>
-            {row.drillIn ? (
-              <ChevronRight
-                className="compact-menu-chevron"
-                size={18}
-                aria-hidden="true"
-              />
-            ) : null}
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 function fileRows(
@@ -128,7 +86,7 @@ export interface CompactWorkspaceProps extends CompactChromeProps {
 const OWN_ENTER = { [OWN_ENTER_ATTRIBUTE]: '' };
 
 /** The pages the compact chrome pushes onto the sheet, by id. */
-type CompactPage = 'more' | 'file' | 'selection';
+type CompactPage = 'more' | 'file' | 'selection' | typeof PANEL_SHEET_PAGE;
 
 /**
  * The compact workspace's chrome (U12 slice 2): a header, the mode tabs, the
@@ -156,6 +114,8 @@ export default function CompactWorkspace({
   selectionLabel,
   onClearSelection,
   reducedMotion,
+  panels,
+  selection,
   sheetContent,
   hasSheetContent,
   sheetKey,
@@ -236,6 +196,31 @@ export default function CompactWorkspace({
   const closePages = () => dispatch({ type: 'close' });
   const moreOpen = state.stack.some((page) => page.key === 'more');
 
+  // The panel sheet follows the workspace's open panel (every route to a
+  // panel sets it), and a sheet put away by Back, Close or Escape shuts it.
+  const panelsInStack = state.stack.some(
+    (page) => page.key === PANEL_SHEET_PAGE
+  );
+  const panelsWereInStack = useRef(false);
+  const panelOpen = panels.open;
+  const onPanelOpen = panels.onOpen;
+  useEffect(() => {
+    if (panelsWereInStack.current && !panelsInStack) {
+      panelsWereInStack.current = false;
+      if (panelOpen !== null) onPanelOpen(null);
+      return;
+    }
+    panelsWereInStack.current = panelsInStack;
+    if (panelOpen !== null && !panelsInStack) {
+      dispatch({ type: 'push', page: { key: PANEL_SHEET_PAGE } });
+    } else if (panelOpen === null && panelsInStack) {
+      const top = state.stack[state.stack.length - 1];
+      dispatch(
+        top?.key === PANEL_SHEET_PAGE ? { type: 'pop' } : { type: 'close' }
+      );
+    }
+  }, [dispatch, onPanelOpen, panelOpen, panelsInStack, state.stack]);
+
   // Each page is drawn from the workspace's state as it is now, so a row
   // disabled while the model was updating comes back when it finishes.
   const renderPage = (
@@ -275,6 +260,14 @@ export default function CompactWorkspace({
                   }
                 },
                 {
+                  id: 'panels',
+                  label: 'Panels',
+                  icon: <PanelsTopLeft size={18} />,
+                  drillIn: true,
+                  disabledReason: panels.disabledReason,
+                  run: () => panels.onOpen(panels.available[0] ?? 'history')
+                },
+                {
                   id: 'file',
                   label: 'File',
                   icon: <FileText size={18} />,
@@ -297,22 +290,34 @@ export default function CompactWorkspace({
       case 'selection':
         return {
           title: selectionLabel ?? 'Nothing picked',
-          content:
-            selectionLabel && onClearSelection ? (
-              <MenuList
-                label="Selection"
-                rows={[
-                  {
-                    id: 'clear',
-                    label: 'Clear selection',
-                    run: () => {
+          content: selectionLabel ? (
+            <CompactSelectionPage
+              selection={selection}
+              onDetails={
+                hasSheetContent
+                  ? () => {
+                      // The pick's inspector is the sheet's own content.
+                      closePages();
+                      dispatch({ type: 'set-detent', detent: 'half' });
+                    }
+                  : null
+              }
+              onClear={
+                onClearSelection
+                  ? () => {
                       closePages();
                       onClearSelection();
                     }
-                  }
-                ]}
-              />
-            ) : null
+                  : null
+              }
+              done={closePages}
+            />
+          ) : null
+        };
+      case PANEL_SHEET_PAGE:
+        return {
+          title: panels.open ? COMPACT_PANEL_TITLES[panels.open] : 'Panels',
+          content: <CompactPanelSheet panels={panels} />
         };
       default:
         return null;
@@ -320,12 +325,6 @@ export default function CompactWorkspace({
   };
 
   const openSelection = () => {
-    if (hasSheetContent) {
-      // The pick's inspector is the sheet's own content: bring it up.
-      dispatch({ type: 'close' });
-      dispatch({ type: 'set-detent', detent: 'half' });
-      return;
-    }
     if (!selectionLabel) return;
     push('selection');
   };
@@ -359,6 +358,21 @@ export default function CompactWorkspace({
             title={presentation.title}
           />
         </div>
+        {panels.warningCount > 0 ? (
+          <button
+            type="button"
+            className="compact-warning-badge"
+            aria-label={`${panels.warningCount} ${
+              panels.warningCount === 1 ? 'warning' : 'warnings'
+            }: show Diagnostics`}
+            onClick={() => panels.onOpen('diagnostics')}
+          >
+            <AlertTriangle size={18} aria-hidden="true" />
+            <span className="compact-warning-count mono">
+              {panels.warningCount}
+            </span>
+          </button>
+        ) : null}
         <button
           type="button"
           className="compact-icon-button"

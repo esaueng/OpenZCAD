@@ -207,6 +207,7 @@ import {
   SlidersHorizontal,
   SquareDashed,
   ListOrdered,
+  MessageSquare,
   Spline,
   Trash2,
   TriangleRight,
@@ -895,7 +896,10 @@ import {
   relocateMovePivot,
   translationForRoundedMove
 } from '@openzcad/viewport/move-transform';
-import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
+import {
+  closedCircleLoopSelections,
+  edgeRunSelections
+} from '@openzcad/viewport/edge-chain';
 import {
   faceBoundaryEdges,
   outlineChamferChain,
@@ -1115,6 +1119,17 @@ import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { useWorkspaceShell } from './hooks/useWorkspaceShell';
+import {
+  COMPACT_PANEL_ORDER,
+  togglePanelSheet,
+  type CompactPanelId
+} from './components/compact/panelSheet';
+import type {
+  CompactSelectionAction,
+  CompactSelectionSheet
+} from './components/compact/compactSlots';
+import type CompactPanelBodyComponent from './components/compact/CompactPanels';
+import type { ModelPanelSource } from './components/modelPanels/modelPanelProps';
 import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
@@ -1499,6 +1514,22 @@ const ModelPanel = createLazyPanel<ComponentProps<typeof ModelPanelComponent>>(
       default: module.ModelPanel
     }))
 );
+// U12 slice 5: the compact panel sheet's bodies and the compact workspace's
+// action sheets load only where the compact workspace is in force.
+const CompactPanelBody = createLazyPanel<
+  ComponentProps<typeof CompactPanelBodyComponent>
+>('Panels', () => import('./components/compact/CompactPanels'));
+const LazyCompactActionSheet = lazyWithStaleChunkNotice(
+  () => import('./components/compact/CompactActionSheet')
+);
+/** A context menu as the compact workspace draws one: an action sheet. */
+function CompactActionSheet(props: ComponentProps<typeof ContextMenu>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyCompactActionSheet {...props} />
+    </Suspense>
+  );
+}
 /**
  * Focuses a field inside a model panel once it exists. The panels' bodies
  * are lazy: on the first open the chunk loads and the panel mounts some
@@ -3438,6 +3469,19 @@ export function App() {
   // U12 slice 2: the compact workspace, where this device's layout
   // preference puts it in force (Settings › Appearance › Layout).
   const compactShell = useWorkspaceShell().shell === 'compact';
+  // U12 slice 5: the compact workspace's panel sheet, which panel it shows
+  // (null while shut) and the one shown last, for Ctrl+\ to bring back.
+  // Never stored: it is where this visit is, not the device's layout.
+  const [compactPanel, setCompactPanel] = useState<CompactPanelId | null>(null);
+  const lastCompactPanelRef = useRef<CompactPanelId | null>(null);
+  /** Opens the compact panel sheet on a panel, or shuts it with null. */
+  function openCompactPanel(id: CompactPanelId | null) {
+    if (id !== null) lastCompactPanelRef.current = id;
+    setCompactPanel(id);
+    // Comments load and pin while their segment shows, as while the
+    // regular workspace's Comments panel is open.
+    setCommentsOpen(id === 'comments');
+  }
   // The compact workspace reads the panels as the regular one does but never
   // stores what it changes: the regular layout taken as it comes into force
   // is put back as it leaves, and the state it left behind is never saved.
@@ -3459,6 +3503,7 @@ export function App() {
     const regular = regularPanelsRef.current;
     if (!regular) return;
     regularPanelsRef.current = null;
+    setCompactPanel(null);
     const left = latestPanelsRef.current;
     compactPanelsLeftRef.current = { state: left.state, layout: left.layout };
     setPanelLayout(regular.layout);
@@ -8683,6 +8728,14 @@ export function App() {
         : migrationEditReason
           ? `${migrationEditReason}. This device’s version can’t replace the live one now.`
           : null;
+
+  // The panels are Build's: in the compact workspace a mode without them
+  // shuts the panel sheet, and the Comments it may hold (U12 slice 5).
+  useEffect(() => {
+    if (!compactShell || !modelingLocked) return;
+    setCompactPanel(null);
+    setCommentsOpen(false);
+  }, [compactShell, modelingLocked]);
 
   useEffect(() => {
     if (compactShell) return;
@@ -23489,6 +23542,10 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [commentsOpen, doc?.projectId, commentsUnavailableReason]);
   function openComments() {
+    if (compactShell) {
+      openCompactPanel('comments');
+      return;
+    }
     setCommentsOpen(true);
   }
   /** Runs one comment change, then reloads the list; false when it failed. */
@@ -36823,7 +36880,11 @@ export function App() {
     const entries: Parameters<typeof openContextMenu>[2] = [
       {
         item: { id: 'edit', label: 'Edit properties' },
-        run: () => handleSelectFeatureFromTree(feature.id)
+        run: () => {
+          // In the compact workspace the edit form is the sheet's next page.
+          if (compactShell) openCompactPanel(null);
+          handleSelectFeatureFromTree(feature.id);
+        }
       },
       ...(featureEditsInPlace(feature)
         ? [
@@ -36833,7 +36894,10 @@ export function App() {
                 label: 'Measurements',
                 icon: <Ruler size={13} aria-hidden="true" />
               },
-              run: () => showFeatureMeasurements(feature)
+              run: () => {
+                if (compactShell) openCompactPanel(null);
+                showFeatureMeasurements(feature);
+              }
             }
           ]
         : []),
@@ -37334,6 +37398,16 @@ export function App() {
       // Tweak leave it as it is.
       if (global === 'panels-hide-all') {
         event.preventDefault();
+        // The compact workspace's panels are one sheet: the key opens it on
+        // the panel last shown, or shuts it.
+        if (compactShell) {
+          if (!modelingLocked) {
+            openCompactPanel(
+              togglePanelSheet(compactPanel, lastCompactPanelRef.current)
+            );
+          }
+          return;
+        }
         if (!modelingLocked) {
           // Showing the panels is asked for; hiding them leaves the drawer.
           if (panelLayout.options.hidden) {
@@ -38724,9 +38798,12 @@ export function App() {
    * and the top bar's warning count do: unpinned if it was closed, forward
    * if it was open.
    */
-  const showModelPanel = (
-    id: 'history' | 'parameters' | 'revisions' | 'diagnostics'
-  ) => {
+  const showModelPanel = (id: PanelId) => {
+    // The compact workspace has one panel sheet (U12 slice 5).
+    if (compactShell) {
+      if (!modelingLocked) openCompactPanel(id);
+      return;
+    }
     presentPanelChange(
       (current) => presentPanel(current, id, panelStageOrUndefined),
       id
@@ -38816,6 +38893,17 @@ export function App() {
     regionCount: selectedProfiles.length
   };
   const commandContext = commandContextFor(commandSelection);
+  /** A command-bar row that opens a model panel (U12 slice 5). */
+  const panelRow = (id: PanelId, keywords: string[]) => {
+    const Icon = PANEL_ICONS[id];
+    return {
+      label: PANEL_TITLES[id],
+      group: 'Panel',
+      keywords: ['panel', ...keywords],
+      icon: <Icon size={16} aria-hidden="true" />,
+      run: () => showModelPanel(id)
+    } satisfies Omit<PaletteCommand, 'id'>;
+  };
   // No two rows share a name: a repeated one is numbered.
   const paletteCommands = withDistinctLabels<PaletteCommand>([
     // Typed search reaches tools across modes, with the destination stated
@@ -39367,6 +39455,47 @@ export function App() {
       icon: <SettingsIcon size={16} aria-hidden="true" />,
       run: actionHandlers['app-settings']
     },
+    // The model panels and Comments by name (U12 slice 5): the compact
+    // workspace has no rail, and a search for "history" found nothing. Each
+    // opens its panel in either workspace; the panels are Build's.
+    ...(!modelingLocked
+      ? [
+          {
+            id: 'panel-history',
+            ...panelRow('history', ['timeline', 'steps', 'features', 'tree'])
+          },
+          {
+            id: 'panel-objects',
+            ...panelRow('bodies', ['bodies', 'parts', 'sketches', 'browser'])
+          },
+          {
+            id: 'panel-parameters',
+            ...panelRow('parameters', ['variables', 'configurations'])
+          },
+          {
+            id: 'panel-revisions',
+            ...panelRow('revisions', ['checkpoints', 'versions', 'saves'])
+          },
+          {
+            id: 'panel-diagnostics',
+            ...panelRow('diagnostics', ['warnings', 'errors', 'problems'])
+          }
+        ]
+      : []),
+    ...(doc &&
+    (!shareSession || shareSession.comments) &&
+    !(compactShell && modelingLocked)
+      ? [
+          {
+            id: 'panel-comments',
+            label: 'Comments',
+            group: 'Panel',
+            keywords: ['panel', 'review', 'notes', 'pins', 'discussion'],
+            icon: <MessageSquare size={16} aria-hidden="true" />,
+            run: openComments
+          } satisfies PaletteCommand
+        ]
+      : []),
     // What the model is made of: every feature and parameter by name, last,
     // so a search that names one lands on it in its panel.
     ...(!modelingLocked
@@ -39984,6 +40113,159 @@ export function App() {
         }}
       />
     ) : null;
+  /**
+   * Everything the model panels read and every action they offer, once for
+   * both homes: the regular workspace's docks and the compact panel sheet.
+   */
+  const modelPanelSource = (): ModelPanelSource => ({
+    parameters,
+    parameterValues: parameterScope.scope,
+    parameterMinimums: liveParameterMinimums,
+    features,
+    representations,
+    failedFeatureIds: failedHistoryFeatureIds,
+    geometryPending: panelGeometryPending,
+    geometryPendingShown: panelGeometryPendingShown,
+    previewPending: !currentGeometrySnapshot,
+    relatedFeatureIds: historyRelatedFeatureIds,
+    selectedFeatureNodeId,
+    localAppend:
+      latestLocalAppend?.projectId === doc?.projectId
+        ? latestLocalAppend
+        : null,
+    selectedSketchProfileId,
+    hiddenBodyIds,
+    hiddenSketchIds,
+    document: doc,
+    hiddenDatumIds,
+    onHiddenDatumIdsChange: setHiddenDatumIds,
+    hiddenReferenceImageIds,
+    onHiddenReferenceImageIdsChange: setHiddenReferenceImageIds,
+    selectedReferenceImageId:
+      tool === 'reference-image' ? openReferenceImageId : null,
+    onSelectReferenceImage: (imageId) =>
+      openReferenceImage(imageId as ReferenceImageId),
+    onPmiCommand: executeCommand,
+    warnings: diagnostics,
+    pendingHistoryStep:
+      pendingHistoryStepFor(commandSession) ??
+      (shownParkedRefusal
+        ? {
+            title: shownParkedRefusal.title,
+            message: shownParkedRefusal.message,
+            onReopen: reopenEditRefusal
+          }
+        : null),
+    editingHistoryFeatureId: shownParkedRefusal?.parked
+      ? editedFeatureIdFor(
+          shownParkedRefusal.parked.interaction,
+          offsetPlanEdit
+        )
+      : editedFeatureIdFor(interaction, offsetPlanEdit),
+    historyDetails: (
+      <FeatureHistoryPanel
+        document={doc}
+        scope={parameterScope.scope}
+        selectedId={selectedFeatureNodeId}
+        failedFeatureIds={failedHistoryFeatureIds}
+        failure={
+          historyFailure?.projectId === doc.projectId &&
+          historyFailure.version === doc.version
+            ? historyFailure.error
+            : null
+        }
+        onSelect={handleOpenHistoryFeature}
+        onDismissFailure={() => setHistoryFailure(null)}
+      />
+    ),
+    checkpoints: doc?.checkpoints ?? [],
+    projectId:
+      navigationBusyRef.current || shareSession ? undefined : doc.projectId,
+    documentVersion: doc?.version ?? 0,
+    restorableCheckpointIds,
+    accountCheckpointIds,
+    currentUserId: session?.userId ?? null,
+    onSelectFeature: handleSelectFeatureFromTree,
+    onSelectBody: handleSelectBodyFromTree,
+    selectedBodyIds,
+    onToggleBodyVisibility: toggleBodyVisibility,
+    onIsolateBody: isolateBody,
+    isolatedBodyId,
+    onRenameBody: editDisabledReason ? undefined : handleRenameBody,
+    bodyAppearancePreview,
+    onPreviewBodyAppearance: previewBodyAppearance,
+    onCommitBodyAppearance: editDisabledReason
+      ? undefined
+      : commitBodyAppearance,
+    objectFolderActions,
+    onToggleSketchVisibility: toggleSketchVisibility,
+    onFeatureContextMenu: handleFeatureContextMenu,
+    onToggleFeatureSuppression: handleToggleFeatureSuppression,
+    onRollbackAfterFeature: handleRollbackAfterFeature,
+    onResumeHistory: handleResumeHistory,
+    onRenameFeature: handleRenameFeature,
+    onDeleteFeatures: editDisabledReason ? undefined : handleDeleteFeatures,
+    onEditSketch: editDisabledReason ? undefined : editSketchFeatureInViewport,
+    units: doc?.units ?? 'mm',
+    onConfigureToggle: (name, bodyIds) => {
+      if (ensureCanEdit('configure an on/off parameter')) {
+        executeCommand(
+          commandFactories.configureParameterToggle({ name, bodyIds })
+        );
+      }
+    },
+    onPreviewParameter: handlePreviewParameter,
+    onSetParameter: (name, expression) => handleSetParameter(name, expression),
+    printClearance,
+    configurationTable: {
+      configurations: configurationView,
+      features,
+      onExportRow: handleExportConfigurationRow,
+      ...(editDisabledReason ? {} : { actions: configurationActions })
+    },
+    onSetPrintClearance: editDisabledReason
+      ? undefined
+      : handleSetPrintClearance,
+    onParameterAddRefused: (name, message) =>
+      setStatus(`Parameter ${name} was not added.`, { detail: message }),
+    onSetParameterQuantity: (name, quantity, expression) => {
+      const current = parameters.find((entry) => entry.name === name);
+      return current
+        ? handleSetParameter(
+            name,
+            expression ?? current.expression,
+            false,
+            quantity
+          )
+        : Promise.resolve(`Parameter ${name} does not exist.`);
+    },
+    parameterQuantitySuggestions,
+    onViewActivityLog: openActivityLog,
+    refusalReproductionFor: (name, message) =>
+      saveRefusalReproduction(`parameter:${name}`, message),
+    onDeleteParameter: (name) =>
+      executeCommand(commandFactories.deleteParameter({ name })),
+    onRenameParameter: handleRenameParameter,
+    onExposeParameter: (name, exposed) =>
+      executeCommand(commandFactories.setParameterExposed({ name, exposed })),
+    onDescribeParameter: (name, description) =>
+      executeCommand(
+        commandFactories.setParameterDescription({ name, description })
+      ),
+    exposedParameterNames,
+    onReorderFeature: handleReorderFeature,
+    reorderBusy: validatedBusy,
+    onRestoreCheckpoint: (checkpoint) =>
+      void handleRestoreSaveState(checkpoint),
+    onBranchCheckpoint: (checkpoint) => void handleBranchSaveState(checkpoint),
+    onPreviewCheckpoint: (checkpoint) =>
+      void handlePreviewSaveState(checkpoint),
+    onCompareCheckpoint: setComparingSave,
+    previewingCheckpointId: savePreviewActive
+      ? savePreview.checkpoint.checkpointId
+      : null,
+    onRenameCheckpoint: editDisabledReason ? undefined : handleRenameCheckpoint
+  });
   const renderModelPanel = (
     id: PanelId,
     placement: PanelPlacement,
@@ -39996,175 +40278,7 @@ export function App() {
         ...(dock ? { dock } : {})
       }}
       views={modelPanelViews}
-      parameters={parameters}
-      parameterValues={parameterScope.scope}
-      parameterMinimums={liveParameterMinimums}
-      features={features}
-      representations={representations}
-      failedFeatureIds={failedHistoryFeatureIds}
-      geometryPending={panelGeometryPending}
-      geometryPendingShown={panelGeometryPendingShown}
-      previewPending={!currentGeometrySnapshot}
-      relatedFeatureIds={historyRelatedFeatureIds}
-      selectedFeatureNodeId={selectedFeatureNodeId}
-      localAppend={
-        latestLocalAppend?.projectId === doc?.projectId
-          ? latestLocalAppend
-          : null
-      }
-      selectedSketchProfileId={selectedSketchProfileId}
-      hiddenBodyIds={hiddenBodyIds}
-      hiddenSketchIds={hiddenSketchIds}
-      document={doc}
-      hiddenDatumIds={hiddenDatumIds}
-      onHiddenDatumIdsChange={setHiddenDatumIds}
-      hiddenReferenceImageIds={hiddenReferenceImageIds}
-      onHiddenReferenceImageIdsChange={setHiddenReferenceImageIds}
-      selectedReferenceImageId={
-        tool === 'reference-image' ? openReferenceImageId : null
-      }
-      onSelectReferenceImage={(imageId) =>
-        openReferenceImage(imageId as ReferenceImageId)
-      }
-      onPmiCommand={executeCommand}
-      warnings={diagnostics}
-      pendingHistoryStep={
-        pendingHistoryStepFor(commandSession) ??
-        (shownParkedRefusal
-          ? {
-              title: shownParkedRefusal.title,
-              message: shownParkedRefusal.message,
-              onReopen: reopenEditRefusal
-            }
-          : null)
-      }
-      editingHistoryFeatureId={
-        shownParkedRefusal?.parked
-          ? editedFeatureIdFor(
-              shownParkedRefusal.parked.interaction,
-              offsetPlanEdit
-            )
-          : editedFeatureIdFor(interaction, offsetPlanEdit)
-      }
-      historyDetails={
-        <FeatureHistoryPanel
-          document={doc}
-          scope={parameterScope.scope}
-          selectedId={selectedFeatureNodeId}
-          failedFeatureIds={failedHistoryFeatureIds}
-          failure={
-            historyFailure?.projectId === doc.projectId &&
-            historyFailure.version === doc.version
-              ? historyFailure.error
-              : null
-          }
-          onSelect={handleOpenHistoryFeature}
-          onDismissFailure={() => setHistoryFailure(null)}
-        />
-      }
-      checkpoints={doc?.checkpoints ?? []}
-      projectId={
-        navigationBusyRef.current || shareSession ? undefined : doc.projectId
-      }
-      documentVersion={doc?.version ?? 0}
-      restorableCheckpointIds={restorableCheckpointIds}
-      accountCheckpointIds={accountCheckpointIds}
-      currentUserId={session?.userId ?? null}
-      onSelectFeature={handleSelectFeatureFromTree}
-      onSelectBody={handleSelectBodyFromTree}
-      selectedBodyIds={selectedBodyIds}
-      onToggleBodyVisibility={toggleBodyVisibility}
-      onIsolateBody={isolateBody}
-      isolatedBodyId={isolatedBodyId}
-      onRenameBody={editDisabledReason ? undefined : handleRenameBody}
-      bodyAppearancePreview={bodyAppearancePreview}
-      onPreviewBodyAppearance={previewBodyAppearance}
-      onCommitBodyAppearance={
-        editDisabledReason ? undefined : commitBodyAppearance
-      }
-      objectFolderActions={objectFolderActions}
-      onToggleSketchVisibility={toggleSketchVisibility}
-      onFeatureContextMenu={handleFeatureContextMenu}
-      onToggleFeatureSuppression={handleToggleFeatureSuppression}
-      onRollbackAfterFeature={handleRollbackAfterFeature}
-      onResumeHistory={handleResumeHistory}
-      onRenameFeature={handleRenameFeature}
-      onDeleteFeatures={editDisabledReason ? undefined : handleDeleteFeatures}
-      onEditSketch={
-        editDisabledReason ? undefined : editSketchFeatureInViewport
-      }
-      units={doc?.units ?? 'mm'}
-      onConfigureToggle={(name, bodyIds) => {
-        if (ensureCanEdit('configure an on/off parameter')) {
-          executeCommand(
-            commandFactories.configureParameterToggle({ name, bodyIds })
-          );
-        }
-      }}
-      onPreviewParameter={handlePreviewParameter}
-      onSetParameter={(name, expression) =>
-        handleSetParameter(name, expression)
-      }
-      printClearance={printClearance}
-      configurationTable={{
-        configurations: configurationView,
-        features,
-        onExportRow: handleExportConfigurationRow,
-        ...(editDisabledReason ? {} : { actions: configurationActions })
-      }}
-      onSetPrintClearance={
-        editDisabledReason ? undefined : handleSetPrintClearance
-      }
-      onParameterAddRefused={(name, message) =>
-        setStatus(`Parameter ${name} was not added.`, { detail: message })
-      }
-      onSetParameterQuantity={(name, quantity, expression) => {
-        const current = parameters.find((entry) => entry.name === name);
-        return current
-          ? handleSetParameter(
-              name,
-              expression ?? current.expression,
-              false,
-              quantity
-            )
-          : Promise.resolve(`Parameter ${name} does not exist.`);
-      }}
-      parameterQuantitySuggestions={parameterQuantitySuggestions}
-      onViewActivityLog={openActivityLog}
-      refusalReproductionFor={(name, message) =>
-        saveRefusalReproduction(`parameter:${name}`, message)
-      }
-      onDeleteParameter={(name) =>
-        executeCommand(commandFactories.deleteParameter({ name }))
-      }
-      onRenameParameter={handleRenameParameter}
-      onExposeParameter={(name, exposed) =>
-        executeCommand(commandFactories.setParameterExposed({ name, exposed }))
-      }
-      onDescribeParameter={(name, description) =>
-        executeCommand(
-          commandFactories.setParameterDescription({ name, description })
-        )
-      }
-      exposedParameterNames={exposedParameterNames}
-      onReorderFeature={handleReorderFeature}
-      reorderBusy={validatedBusy}
-      onRestoreCheckpoint={(checkpoint) =>
-        void handleRestoreSaveState(checkpoint)
-      }
-      onBranchCheckpoint={(checkpoint) =>
-        void handleBranchSaveState(checkpoint)
-      }
-      onPreviewCheckpoint={(checkpoint) =>
-        void handlePreviewSaveState(checkpoint)
-      }
-      onCompareCheckpoint={setComparingSave}
-      previewingCheckpointId={
-        savePreviewActive ? savePreview.checkpoint.checkpointId : null
-      }
-      onRenameCheckpoint={
-        editDisabledReason ? undefined : handleRenameCheckpoint
-      }
+      {...modelPanelSource()}
     />
   );
   const commandPaletteKey = commandPaletteShortcut(
@@ -40398,6 +40512,145 @@ export function App() {
     phoneStage && (commandCardKey || inspectorKey || inPlaceKey)
       ? `${commandCardKey}|${inspectorKey}|${inPlaceKey}`
       : null;
+  // U12 slice 5: right-click and long-press menus are action sheets in the
+  // compact workspace, with the same items.
+  const ContextMenuHost = compactShell ? CompactActionSheet : ContextMenu;
+  /** What the compact selection sheet offers for the pick (U12 slice 5). */
+  const compactSelectionSheet = (): CompactSelectionSheet => {
+    const pick = selectedTopology;
+    const picks: CompactSelectionAction[] = [];
+    // The picks a double-click makes on the regular stage.
+    if (pick && pick.kind !== 'body') {
+      picks.push({
+        id: 'select-body',
+        label: 'Select body',
+        icon: <Box size={18} aria-hidden="true" />,
+        run: () =>
+          handleSelectTopologyFromViewer(
+            { bodyId: pick.bodyId, kind: 'body' },
+            false
+          )
+      });
+    }
+    if (pick?.kind === 'edge' && pick.topologyId) {
+      const seed = pick.topologyId;
+      picks.push({
+        id: 'select-connected',
+        label: 'Select connected',
+        icon: <Spline size={18} aria-hidden="true" />,
+        run: () => {
+          const edges = viewerBodies.find((body) => body.bodyId === pick.bodyId)
+            ?.topology?.edges;
+          const run = edges ? edgeRunSelections(edges, seed, pick.bodyId) : [];
+          if (run.length > 1) handleViewportEdgeRun(run);
+          else setStatus('This edge has no smooth run to add.');
+        }
+      });
+    }
+    const verbs =
+      calloutWithOperation?.anchor === 'selection'
+        ? calloutWithOperation.verbs
+        : [];
+    return {
+      verbs,
+      onVerb: (id) => calloutWithOperation?.onVerb(id),
+      picks,
+      // Assemble picks whole parts, and a vertex repair picks edges only.
+      filter:
+        assembleMode || datumRepair?.vertices
+          ? null
+          : {
+              options: SELECTION_FILTERS.map((id) => ({
+                id,
+                label: SELECTION_FILTER_LABELS[id]
+              })),
+              current: selectionFilter,
+              onChange: (id) => {
+                const next = id as SelectionFilter;
+                setManualSelectionFilter(next);
+                setStatus(
+                  `Selecting ${SELECTION_FILTER_LABELS[next].toLowerCase()}.`,
+                  { unlogged: true }
+                );
+              }
+            }
+    };
+  };
+  // L08 review comments: a floating panel in the regular workspace, the
+  // panel sheet's Comments segment in the compact one (U12 slice 5).
+  const commentsPanel =
+    commentsOpen && doc && (!shareSession || shareSession.comments) ? (
+      <CommentsPanel
+        comments={
+          projectComments?.projectId === doc.projectId
+            ? projectComments.comments
+            : null
+        }
+        error={commentsError}
+        unavailableReason={commentsUnavailableReason}
+        currentUserId={session?.userId ?? null}
+        role={commentRole}
+        activeId={activeCommentId}
+        onSelect={setActiveCommentId}
+        placing={commentPlacing}
+        onStartPlacing={() => {
+          setCommentDraft(null);
+          setCommentPlacing(true);
+        }}
+        onCancelPlacing={() => setCommentPlacing(false)}
+        hasDraft={commentDraft !== null}
+        {...(shareSession
+          ? {
+              visitor: {
+                name: commentVisitorName,
+                onNameChange: setCommentVisitorName
+              }
+            }
+          : {})}
+        onPostThread={(text) =>
+          commentDraft
+            ? runCommentAction(async (projectId, api) => {
+                const created = await postComment(projectId, api, {
+                  anchor: commentDraft,
+                  text
+                });
+                setCommentDraft(null);
+                setActiveCommentId(created?.commentId ?? null);
+              })
+            : Promise.resolve(false)
+        }
+        onCancelDraft={() => setCommentDraft(null)}
+        onReply={(threadId, text) =>
+          runCommentAction((projectId, api) =>
+            postComment(projectId, api, {
+              parentId: threadId,
+              text
+            }).then(() => undefined)
+          )
+        }
+        onResolve={(threadId, resolved) =>
+          void runCommentAction((projectId, { memberComments }) =>
+            memberComments.resolve(
+              projectId,
+              commentContext(),
+              threadId,
+              resolved
+            )
+          )
+        }
+        onDelete={(commentId) =>
+          void runCommentAction((projectId, { memberComments }) =>
+            memberComments.remove(projectId, commentContext(), commentId)
+          )
+        }
+        onClose={() => {
+          if (compactShell) setCompactPanel(null);
+          setCommentsOpen(false);
+          setCommentPlacing(false);
+          setCommentDraft(null);
+        }}
+      />
+    ) : null;
   const workspace = (
     <WorkspaceAppShell
       covered={sharePage !== null}
@@ -40439,9 +40692,31 @@ export function App() {
                   : commandContextLabel(commandSelection),
               onClearSelection: clearSelection,
               reducedMotion: appSettings.appearance.reducedMotion,
-              sheetKey: `${commandCardKey}|${inspectorKey}|${inPlaceKey}|${
-                phonePanel ?? ''
-              }`
+              panels: {
+                open: modelingLocked ? null : compactPanel,
+                available: COMPACT_PANEL_ORDER.filter(
+                  (id) =>
+                    id !== 'comments' || !shareSession || shareSession.comments
+                ),
+                disabledReason: modelingLocked
+                  ? 'The panels are in Build mode.'
+                  : null,
+                content:
+                  compactPanel === 'comments' ? (
+                    commentsPanel
+                  ) : compactPanel !== null ? (
+                    <CompactPanelBody
+                      id={compactPanel}
+                      views={modelPanelViews}
+                      onLeave={() => openCompactPanel(null)}
+                      {...modelPanelSource()}
+                    />
+                  ) : null,
+                onOpen: openCompactPanel,
+                warningCount: modelingLocked ? 0 : diagnostics.length
+              },
+              selection: compactSelectionSheet(),
+              sheetKey: `${commandCardKey}|${inspectorKey}|${inPlaceKey}`
             }
           : null
       }
@@ -41968,7 +42243,11 @@ export function App() {
                   selectedEdges.length > 0 ||
                   selectedBodyIds.length > 0
                 }
-                historyOpen={panelShowing('history')}
+                historyOpen={
+                  compactShell
+                    ? compactPanel === 'history'
+                    : panelShowing('history')
+                }
                 exportSeen={tourExportSeen}
                 // The step reached, kept per device: the card unmounts while
                 // a command or a sketch runs, and a second empty project
@@ -42071,7 +42350,8 @@ export function App() {
         ) : null
       }
       panelLane={
-        !modelingLocked && !panelsHidden && phonePanel
+        // The compact workspace's panels are its panel sheet (slice 5).
+        !compactShell && !modelingLocked && !panelsHidden && phonePanel
           ? renderModelPanel(phonePanel, 'phone')
           : null
       }
@@ -43314,7 +43594,7 @@ export function App() {
             />
           )}
           {contextMenuExit.rendered ? (
-            <ContextMenu
+            <ContextMenuHost
               menu={withFaceVerbs(
                 contextMenuExit.rendered,
                 renderedSelectedTopology?.kind === 'face'
@@ -43348,77 +43628,7 @@ export function App() {
               onClose={() => setContextMenu(null)}
             />
           ) : null}
-          {commentsOpen && doc && (!shareSession || shareSession.comments) ? (
-            <CommentsPanel
-              comments={
-                projectComments?.projectId === doc.projectId
-                  ? projectComments.comments
-                  : null
-              }
-              error={commentsError}
-              unavailableReason={commentsUnavailableReason}
-              currentUserId={session?.userId ?? null}
-              role={commentRole}
-              activeId={activeCommentId}
-              onSelect={setActiveCommentId}
-              placing={commentPlacing}
-              onStartPlacing={() => {
-                setCommentDraft(null);
-                setCommentPlacing(true);
-              }}
-              onCancelPlacing={() => setCommentPlacing(false)}
-              hasDraft={commentDraft !== null}
-              {...(shareSession
-                ? {
-                    visitor: {
-                      name: commentVisitorName,
-                      onNameChange: setCommentVisitorName
-                    }
-                  }
-                : {})}
-              onPostThread={(text) =>
-                commentDraft
-                  ? runCommentAction(async (projectId, api) => {
-                      const created = await postComment(projectId, api, {
-                        anchor: commentDraft,
-                        text
-                      });
-                      setCommentDraft(null);
-                      setActiveCommentId(created?.commentId ?? null);
-                    })
-                  : Promise.resolve(false)
-              }
-              onCancelDraft={() => setCommentDraft(null)}
-              onReply={(threadId, text) =>
-                runCommentAction((projectId, api) =>
-                  postComment(projectId, api, {
-                    parentId: threadId,
-                    text
-                  }).then(() => undefined)
-                )
-              }
-              onResolve={(threadId, resolved) =>
-                void runCommentAction((projectId, { memberComments }) =>
-                  memberComments.resolve(
-                    projectId,
-                    commentContext(),
-                    threadId,
-                    resolved
-                  )
-                )
-              }
-              onDelete={(commentId) =>
-                void runCommentAction((projectId, { memberComments }) =>
-                  memberComments.remove(projectId, commentContext(), commentId)
-                )
-              }
-              onClose={() => {
-                setCommentsOpen(false);
-                setCommentPlacing(false);
-                setCommentDraft(null);
-              }}
-            />
-          ) : null}
+          {compactShell ? null : commentsPanel}
           {sharingOpen &&
             cloudFunctionsEnabled &&
             projectSharingPreferenceEnabled &&
