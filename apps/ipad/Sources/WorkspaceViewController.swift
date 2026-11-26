@@ -15,8 +15,11 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
     private var bootstrapGeneration = 0
     private var processRecoveries = 0
 
-    override var prefersStatusBarHidden: Bool { true }
+    private let idiom = WorkspaceIdiom.current
+
+    override var prefersStatusBarHidden: Bool { idiom.prefersStatusBarHidden }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { idiom.supportedOrientations }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -41,6 +44,11 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
             source: "localStorage.setItem('openzcad-cloud-functions-enabled:v1', 'false');",
             injectionTime: .atDocumentStart, forMainFrameOnly: true
         ))
+        for source in idiom.documentStartScripts {
+            configuration.userContentController.addUserScript(WKUserScript(
+                source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true
+            ))
+        }
         configuration.userContentController.addUserScript(WKUserScript(
             source: """
             const viewport = document.querySelector('meta[name="viewport"]');
