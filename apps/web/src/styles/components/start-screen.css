@@ -2576,7 +2576,7 @@
   padding: 0 8px;
   color: var(--color-accent);
   font-size: var(--fs-sm);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   background: transparent;
   border: 0;
   border-radius: var(--radius-sm);

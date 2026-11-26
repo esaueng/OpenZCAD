@@ -2039,7 +2039,7 @@ button.history-row-refused.is-reopen:focus-visible {
 
 .configuration-scroll thead th {
   color: var(--color-text-muted);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 
 .configuration-scroll tr.active th[scope='row'] {

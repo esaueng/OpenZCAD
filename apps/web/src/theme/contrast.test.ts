@@ -322,14 +322,26 @@ describe.each([
   });
 
   it('clears WCAG AA for text on every surface', () => {
+    // Dim is text here too (a suppressed History step's name and value), so
+    // the compact palette holds it to 4.5:1, not the 3:1 of a mark.
     const failures: string[] = [];
-    for (const fg of FOREGROUNDS) {
+    for (const fg of [...FOREGROUNDS, '--color-text-dim']) {
       for (const bg of SURFACES) {
         const ratio = contrastRatio(palette[fg]!, palette[bg]!);
         if (ratio < 4.5) failures.push(`${fg} on ${bg}: ${ratio.toFixed(2)}`);
       }
     }
     expect(failures).toEqual([]);
+  });
+
+  it('keeps dim quieter than muted, and muted quieter than text', () => {
+    for (const bg of SURFACES) {
+      const text = contrastRatio(palette['--color-text']!, palette[bg]!);
+      const muted = contrastRatio(palette['--color-text-muted']!, palette[bg]!);
+      const dim = contrastRatio(palette['--color-text-dim']!, palette[bg]!);
+      expect(muted, bg).toBeLessThan(text);
+      expect(dim, bg).toBeLessThan(muted);
+    }
   });
 
   it('clears 3:1 for the focus ring, dim marks and the cut hue on every surface', () => {

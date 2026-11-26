@@ -487,9 +487,9 @@
   --color-border: rgba(255, 255, 255, 0.06);
   --color-border-strong: #45464d;
   --color-text: #f2f2f4;
-  --color-text-muted: #a5a5ac;
+  --color-text-muted: #b6b6bd;
   --color-text-subtle: #a5a5ac;
-  --color-text-dim: #7f7f87;
+  --color-text-dim: #9d9da5;
   --color-accent: #8db0ff;
   --color-accent-hi: #a6c1ff;
   --color-accent-dim: rgba(141, 176, 255, 0.16);
@@ -530,9 +530,9 @@
   --color-border: rgba(30, 30, 40, 0.08);
   --color-border-strong: #c9c8c4;
   --color-text: #1d1d1f;
-  --color-text-muted: #626167;
+  --color-text-muted: #545359;
   --color-text-subtle: #626167;
-  --color-text-dim: #838288;
+  --color-text-dim: #68686e;
   --color-accent: #2860d0;
   --color-accent-hi: #2154bd;
   --color-accent-dim: rgba(47, 107, 228, 0.12);
@@ -560,9 +560,9 @@
     --color-border: rgba(30, 30, 40, 0.08);
     --color-border-strong: #c9c8c4;
     --color-text: #1d1d1f;
-    --color-text-muted: #626167;
+    --color-text-muted: #545359;
     --color-text-subtle: #626167;
-    --color-text-dim: #838288;
+    --color-text-dim: #68686e;
     --color-accent: #2860d0;
     --color-accent-hi: #2154bd;
     --color-accent-dim: rgba(47, 107, 228, 0.12);

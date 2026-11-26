@@ -141,6 +141,19 @@ describe('compact token scope', () => {
       '--tt-eyebrow': 'uppercase',
       '--ls-eyebrow-scale': '1'
     });
+    // No later plain `:root` rule anywhere may re-declare them either.
+    for (const { name, css } of stylesheets) {
+      for (const { selector, body } of rules(css)) {
+        if (selector !== ':root') continue;
+        for (const m of body.matchAll(
+          /(--(?:radius|fs|fw|ls|tt)-[\w-]+)\s*:\s*([^;]+);/g
+        )) {
+          if (m[1]! in regular) {
+            expect(m[2]!.trim(), `${name}: ${m[1]}`).toBe(regular[m[1]!]);
+          }
+        }
+      }
+    }
     const light = declarations(":root[data-theme='light'] {");
     for (const name of ['--radius-sm', '--radius-xl', '--tt-eyebrow']) {
       expect(light, name).not.toHaveProperty(name);
