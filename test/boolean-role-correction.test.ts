@@ -78,9 +78,11 @@ interface Fixture {
  * Fixture B, optionally with a third operand. `corner`: Core = 10 × 10 × 30
  * moved (−5,−5,0), cutting Block's corner [0,5] × [0,5] × [0,10] = 250.
  * `bore`: Core = 4 × 4 × 30 moved (3,3,0), a through bore
- * [3,7] × [3,7] × [0,10] = 160.
+ * [3,7] × [3,7] × [0,10] = 160. `pocket`: the same Core moved (3,3,5), a
+ * blind pocket [3,7] × [3,7] × [5,10] = 80. `boss`: Core = 4 × 4 × 3 moved
+ * (3,3,10), a boss [3,7] × [3,7] × [10,13] = 48 to unite onto the top.
  */
-function fixtureB(core?: 'corner' | 'bore'): Fixture {
+function fixtureB(core?: 'corner' | 'bore' | 'pocket' | 'boss'): Fixture {
   let document = createProjectDocument('Boolean roles', user);
   document = addPrimitiveFeature(document, {
     name: 'Block',
@@ -97,7 +99,7 @@ function fixtureB(core?: 'corner' | 'bore'): Fixture {
     document = addPrimitiveFeature(document, {
       name: 'Core',
       primitiveKind: 'box',
-      dimensions: { width: side, height: side, depth: 30 }
+      dimensions: { width: side, height: side, depth: core === 'boss' ? 3 : 30 }
     });
   }
   const [block, post, coreId] = document.bodyOrder;
@@ -111,7 +113,11 @@ function fixtureB(core?: 'corner' | 'bore'): Fixture {
     document = transformBody(document, {
       name: 'Place Core',
       targetBodyId: coreId!,
-      translation: { x: at, y: at, z: 0 }
+      translation: {
+        x: at,
+        y: at,
+        z: core === 'pocket' ? 5 : core === 'boss' ? 10 : 0
+      }
     }).document;
   }
   return {
@@ -785,11 +791,13 @@ describe('Cells 3–4: an offset of a wall a Subtract generated, then an upstrea
  * (15,5,10)–(15,10,10). The kernel cannot build it: its chamfer rebuilds the
  * top face's outer loop around the bore, then rejects the shell it assembled
  * (shared edges with inconsistent face orientations), at 0.5 and 0.1 mm too,
- * while the same rim without the bore builds. The kernel files that under
- * its catch-all `fillet-failed` code as `internal`, which was the Untyped
- * refusal gap. The adapter now files it as a typed `unsupported` refusal
- * with its own code and a sentence naming the remedy, and the remedy is
- * proved below: chamfer the rim before the bore is cut.
+ * while the same rim without the bore builds. A blind pocket or a boss in
+ * the same top face (one inner loop to the kernel) refuses the same way.
+ * The kernel files that under its catch-all `fillet-failed` code as
+ * `internal`, which was the Untyped refusal gap. The adapter now files it as
+ * a typed `unsupported` refusal with its own code and a sentence naming the
+ * remedy, and the remedy is proved for all three: chamfer the rim before
+ * the feature that makes the bore, pocket or boss.
  *
  * The setup is built once and asserted by a passing test, so the refusal
  * is asserted on its own.
@@ -841,77 +849,242 @@ describe('Cell 4b: a rim chamfer beside a through bore', () => {
   });
 
   it('refuses with a typed `unsupported` record and says what to do, keeping the cut', () => {
-    const refused = refusal(chamfer!, 'chamfer');
-    expect(refused?.state, refused?.evidence).toBe('typed-refusal');
-    const warning = (chamfer!.featureWarnings ?? []).find(
-      (entry) => entry.featureName === 'Chamfer'
+    expectInnerLoopRefusal(chamfer!, chamferBodyId!, BLOCK - SHARED - 160);
+  });
+
+  it('the advice holds: chamfered before the bore is cut, the same rim builds exactly', async () => {
+    await expectChamferFirstBuilds('bore', BLOCK - SHARED - 160 - 2.5);
+  });
+});
+
+const INNER_LOOP_ADVICE =
+  "A flat face beside this edge has a hole, pocket or boss inside it, which the modeling engine can't chamfer next to yet. Smaller distances failed too. If a feature made that shape, add the chamfer before it.";
+
+/** The Chamfer feature's warning in `derived`. */
+function chamferWarning(derived: DerivedState) {
+  return (derived.featureWarnings ?? []).find(
+    (entry) => entry.featureName === 'Chamfer'
+  );
+}
+
+/**
+ * The typed inner-loop refusal, with the body kept at `kept` and no bevel:
+ * not a silent no-op.
+ */
+function expectInnerLoopRefusal(
+  derived: DerivedState,
+  bodyId: BodyId,
+  kept: number
+) {
+  const refused = refusal(derived, 'chamfer');
+  expect(refused?.state, refused?.evidence).toBe('typed-refusal');
+  const warning = chamferWarning(derived);
+  expect(warning?.kind).toBe('build-failed');
+  expect(warning?.kernelRefusal).toEqual({
+    family: 'blend',
+    operation: 'chamfer',
+    category: 'unsupported',
+    code: 'chamfer_face_inner_loop',
+    reason: 'fillet-failed'
+  });
+  expect(warning?.blendAdvice).toEqual({
+    operation: 'chamfer',
+    edges: 1,
+    reason: INNER_LOOP_ADVICE,
+    kind: 'structural',
+    cause: 'face-inner-loop'
+  });
+  near(derived.bodyRepresentations[bodyId]?.volume, kept, 'kept');
+  expect(chamferFaces(derived.bodyRepresentations[bodyId]!)).toEqual([]);
+}
+
+type InnerFeature = 'bore' | 'pocket' | 'boss';
+const INNER_OPERATION: Record<InnerFeature, BooleanOperation> = {
+  bore: 'subtract',
+  pocket: 'subtract',
+  boss: 'union'
+};
+
+/** Subtract [Block, Post], then the inner feature as its own Boolean. */
+function notchThen(inner: InnerFeature) {
+  const fixture = fixtureB(inner);
+  const notch = booleanBodies(fixture.document, {
+    name: 'Subtract',
+    operation: 'subtract',
+    targetBodyIds: [fixture.block, fixture.post]
+  });
+  const shaped = booleanBodies(notch.document, {
+    name: 'Inner',
+    operation: INNER_OPERATION[inner],
+    targetBodyIds: [notch.bodyId, fixture.core!]
+  });
+  return { fixture, notch, shaped };
+}
+
+/** The sentence's remedy: chamfer the rim, then apply the inner feature. */
+async function expectChamferFirstBuilds(inner: InnerFeature, volume: number) {
+  const { fixture, notch } = notchThen(inner);
+  const built = expectBuilt(
+    await outcome(notch.document, [notch.bodyId]),
+    'notch'
+  );
+  const rim = rimEdge(built.bodyRepresentations[notch.bodyId]!, 15);
+  const chamfered = chamferEdges(notch.document, {
+    name: 'Chamfer',
+    targetBodyId: notch.bodyId,
+    edgeHashes: [rim.hash],
+    ...(rim.reference ? { edgeReferences: [rim.reference] } : {}),
+    size: 1
+  });
+  const shaped = booleanBodies(chamfered.document, {
+    name: 'Inner',
+    operation: INNER_OPERATION[inner],
+    targetBodyIds: [chamfered.bodyId, fixture.core!]
+  });
+  const after = expectBuilt(
+    await outcome(shaped.document, [shaped.bodyId]),
+    inner
+  );
+  near(after.bodyRepresentations[shaped.bodyId]?.volume, volume, inner);
+  expect(chamferFaces(after.bodyRepresentations[shaped.bodyId]!)).toEqual([
+    '14.5'
+  ]);
+}
+
+/** A straight edge of `body` from `a` to `b`, either way round. */
+function lineEdge(
+  body: BodyRepresentation,
+  a: readonly number[],
+  b: readonly number[]
+): EdgeTopology {
+  const at = (p: readonly number[], q: readonly number[]) =>
+    p.every((value, index) => Math.abs(value - q[index]!) < 1e-6);
+  const match = (body.topology?.edges ?? []).filter((edge) => {
+    const p = edge.points;
+    const n = p.length;
+    if (edge.curve?.type !== 'LINE' || n < 6) return false;
+    const start = [p[0]!, p[1]!, p[2]!];
+    const end = [p[n - 3]!, p[n - 2]!, p[n - 1]!];
+    return (at(start, a) && at(end, b)) || (at(start, b) && at(end, a));
+  });
+  expect(match, `one edge ${a.join(',')}–${b.join(',')}`).toHaveLength(1);
+  return match[0]!;
+}
+
+/**
+ * The same refusal is typed only for what its sentence says. Pocket and
+ * boss: the face has something inside it that is not a hole through, and
+ * the sentence and remedy hold for both. Mixed: the bore's own corner edge
+ * exists only because of the bore, so "chamfer before it" cannot hold for
+ * the selection, and the kernel's record is kept. Tiny: no smaller distance
+ * can be tried below 1.5e-9 mm, so "smaller distances failed too" would be
+ * unproved, and the kernel's record is kept.
+ */
+describe('Cell 4b: the inner-loop refusal is typed only where its sentence holds', () => {
+  for (const [inner, before] of [
+    ['pocket', BLOCK - SHARED - 80],
+    ['boss', BLOCK - SHARED + 48]
+  ] as const) {
+    it(`${inner}: refuses the rim chamfer with the same typed record and sentence`, async () => {
+      const { shaped } = notchThen(inner);
+      const built = expectBuilt(
+        await outcome(shaped.document, [shaped.bodyId]),
+        inner
+      );
+      near(built.bodyRepresentations[shaped.bodyId]?.volume, before, inner);
+      const rim = rimEdge(built.bodyRepresentations[shaped.bodyId]!, 15);
+      const chamfered = chamferEdges(shaped.document, {
+        name: 'Chamfer',
+        targetBodyId: shaped.bodyId,
+        edgeHashes: [rim.hash],
+        size: 1
+      });
+      expectInnerLoopRefusal(
+        await adapter.syncDocument(chamfered.document),
+        chamfered.bodyId,
+        before
+      );
+    });
+
+    it(`${inner}: the advice holds, chamfered before the ${inner} the rim builds exactly`, async () => {
+      await expectChamferFirstBuilds(inner, before - 2.5);
+    });
+  }
+
+  it("keeps the kernel's record when one selected edge is the bore's own", async () => {
+    const { shaped } = notchThen('bore');
+    const built = expectBuilt(
+      await outcome(shaped.document, [shaped.bodyId]),
+      'bore'
+    );
+    const body = built.bodyRepresentations[shaped.bodyId]!;
+    const chamfered = chamferEdges(shaped.document, {
+      name: 'Chamfer',
+      targetBodyId: shaped.bodyId,
+      edgeHashes: [
+        rimEdge(body, 15).hash,
+        lineEdge(body, [3, 3, 0], [3, 3, 10]).hash
+      ],
+      size: 1
+    });
+    const warning = chamferWarning(
+      await adapter.syncDocument(chamfered.document)
     );
     expect(warning?.kind).toBe('build-failed');
     expect(warning?.kernelRefusal).toEqual({
       family: 'blend',
       operation: 'chamfer',
-      category: 'unsupported',
-      code: 'chamfer_face_with_hole',
-      reason: 'fillet-failed'
+      category: 'internal',
+      code: 'fillet-failed'
     });
     expect(warning?.blendAdvice).toMatchObject({
       kind: 'structural',
-      cause: 'face-with-hole',
-      edges: 1
+      cause: 'unknown',
+      edges: 2
     });
-    expect(warning?.blendAdvice?.reason).toContain(
-      'Add the chamfer before the hole is cut'
-    );
-    // Not a silent no-op: the body is the cut, unchamfered.
-    near(
-      chamfer!.bodyRepresentations[chamferBodyId!]?.volume,
-      BLOCK - SHARED - 160,
-      'kept'
-    );
-    expect(chamferFaces(chamfer!.bodyRepresentations[chamferBodyId!]!)).toEqual(
-      []
-    );
   });
 
-  it('the advice holds: chamfered before the bore is cut, the same rim builds exactly', async () => {
-    const fixture = fixtureB('bore');
-    const notch = booleanBodies(fixture.document, {
-      name: 'Subtract',
-      operation: 'subtract',
-      targetBodyIds: [fixture.block, fixture.post]
-    });
+  it("keeps the kernel's record when no smaller distance could be tried", async () => {
+    const { shaped } = notchThen('bore');
     const built = expectBuilt(
-      await outcome(notch.document, [notch.bodyId]),
-      'notch'
+      await outcome(shaped.document, [shaped.bodyId]),
+      'bore'
     );
-    const rim = rimEdge(built.bodyRepresentations[notch.bodyId]!, 15);
-    const chamfered = chamferEdges(notch.document, {
+    const chamfered = chamferEdges(shaped.document, {
       name: 'Chamfer',
-      targetBodyId: notch.bodyId,
-      edgeHashes: [rim.hash],
-      ...(rim.reference ? { edgeReferences: [rim.reference] } : {}),
-      size: 1
+      targetBodyId: shaped.bodyId,
+      edgeHashes: [rimEdge(built.bodyRepresentations[shaped.bodyId]!, 15).hash],
+      size: 1.5e-9
     });
-    const bored = booleanBodies(chamfered.document, {
-      name: 'Bore',
-      operation: 'subtract',
-      targetBodyIds: [chamfered.bodyId, fixture.core!]
+    const warning = chamferWarning(
+      await adapter.syncDocument(chamfered.document)
+    );
+    expect(warning?.kind).toBe('build-failed');
+    expect(warning?.kernelRefusal).toEqual({
+      family: 'blend',
+      operation: 'chamfer',
+      category: 'internal',
+      code: 'fillet-failed'
     });
-    const after = expectBuilt(
-      await outcome(bored.document, [bored.bodyId]),
-      'bored'
-    );
-    // 2000 − 250 − 160 − 1 × 1 / 2 × 5 = 1587.5
-    near(
-      after.bodyRepresentations[bored.bodyId]?.volume,
-      BLOCK - SHARED - 160 - 2.5,
-      'bored'
-    );
-    expect(chamferFaces(after.bodyRepresentations[bored.bodyId]!)).toEqual([
-      '14.5'
-    ]);
+    expect(warning?.blendAdvice).not.toMatchObject({
+      cause: 'face-inner-loop'
+    });
   });
 });
+
+/** Planar faces whose normal is on no axis, as `nx,ny,nz@cx`, rounded. */
+function obliqueFaces(body: BodyRepresentation): string[] {
+  const r = (value: number) => Math.round(value * 1e6) / 1e6 + 0;
+  return (body.topology?.faces ?? []).flatMap((face) => {
+    const g = face.geometry;
+    const n = g?.normal;
+    if (g?.surfaceType !== 'plane' || !n) return [];
+    const onAxis = [n.x, n.y, n.z].some(
+      (value) => Math.abs(Math.abs(value) - 1) < 1e-9
+    );
+    return onAxis ? [] : [`${r(n.x)},${r(n.y)},${r(n.z)}@${r(g.center.x)}`];
+  });
+}
 
 /**
  * Class Wrong result (K10 kernel), Remus 2026.1.171 (`f210583`), found while
@@ -920,20 +1093,28 @@ describe('Cell 4b: a rim chamfer beside a through bore', () => {
  * The body is symmetric top to bottom and the top rim removes 2.5, but the
  * bottom one builds with a bevel face whose normal leans in Y
  * (≈ 0.68, 0.27, −0.68) and removes 0.8333. Counts as fixed: 1747.5 with one
- * 45° (+X, −Z) bevel at x = 14.5, or a typed refusal.
+ * 45° (+X, −Z) bevel at x = 14.5 and no other oblique face, or a typed
+ * refusal. The setup is asserted by a passing test, and a missing setup
+ * makes the pin itself pass, which `it.fails` reports, so neither can stand
+ * in for the bug.
  */
 describe('Cell 4c: the same rim chamfer on the notch floor', () => {
-  it.fails('removes 2.5 like the top rim', async () => {
+  let cut: DerivedState | undefined;
+  let cutBodyId: BodyId | undefined;
+  let floorRimFound = false;
+  let floor: DerivedState | undefined;
+  let floorBodyId: BodyId | undefined;
+  beforeAll(async () => {
     const fixture = fixtureB();
-    const cut = booleanBodies(fixture.document, {
+    const notch = booleanBodies(fixture.document, {
       name: 'Subtract',
       operation: 'subtract',
       targetBodyIds: [fixture.block, fixture.post]
     });
-    const built = expectBuilt(await outcome(cut.document, [cut.bodyId]), 'cut');
-    const floorRim = (
-      built.bodyRepresentations[cut.bodyId]!.topology?.edges ?? []
-    ).find((edge) => {
+    cutBodyId = notch.bodyId;
+    cut = await adapter.syncDocument(notch.document);
+    const body = cut.bodyRepresentations[notch.bodyId];
+    const floorRim = (body?.topology?.edges ?? []).find((edge) => {
       const p = edge.points;
       const n = p.length;
       if (edge.curve?.type !== 'LINE' || n < 6) return false;
@@ -949,19 +1130,43 @@ describe('Cell 4c: the same rim chamfer on the notch floor', () => {
         ends.some(([, ey]) => Math.abs(ey! - 10) < 1e-6)
       );
     });
-    expect(floorRim, 'floor rim').toBeDefined();
-    const chamfered = chamferEdges(cut.document, {
+    floorRimFound = floorRim !== undefined;
+    if (!floorRim) return;
+    const chamfered = chamferEdges(notch.document, {
       name: 'Chamfer',
-      targetBodyId: cut.bodyId,
-      edgeHashes: [floorRim!.hash],
+      targetBodyId: notch.bodyId,
+      edgeHashes: [floorRim.hash],
       size: 1
     });
-    const result = await outcome(chamfered.document, [chamfered.bodyId]);
-    if (result.kind === 'typed') return;
-    near(
-      result.derived.bodyRepresentations[chamfered.bodyId]?.volume,
-      BLOCK - SHARED - 2.5,
-      'floor'
-    );
+    floorBodyId = chamfered.bodyId;
+    floor = await adapter.syncDocument(chamfered.document);
+  }, 120_000);
+
+  it('builds the notch, finds its floor rim, and the chamfer builds closed and exact', () => {
+    expect(cut?.warnings).toEqual([]);
+    near(cut?.bodyRepresentations[cutBodyId!]?.volume, BLOCK - SHARED, 'cut');
+    expect(floorRimFound).toBe(true);
+    expect(floor, 'chamfer build ran').toBeDefined();
+    const refused = refusal(floor!, 'floor');
+    if (refused) {
+      expect(refused.state, refused.evidence).toBe('typed-refusal');
+      return;
+    }
+    const body = floor!.bodyRepresentations[floorBodyId!];
+    expect(body?.exportableStep).toBe(true);
+    expect(
+      isClosedConsistentlyOrientedMesh(
+        inspectTriangleMeshClosure(body!.mesh.vertices, body!.mesh.indices)
+      )
+    ).toBe(true);
+  });
+
+  it.fails('removes 2.5 with one 45° bevel, like the top rim', () => {
+    const body = floor?.bodyRepresentations[floorBodyId!];
+    // Missing setup passes here, which fails this pin loudly.
+    if (!body) return;
+    if (refusal(floor!, 'floor')) return;
+    near(body.volume, BLOCK - SHARED - 2.5, 'floor');
+    expect(obliqueFaces(body)).toEqual(['0.707107,0,-0.707107@14.5']);
   });
 });

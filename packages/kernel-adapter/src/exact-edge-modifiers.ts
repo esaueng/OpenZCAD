@@ -16,6 +16,7 @@ import { GEOMETRY_EPSILON, errorText } from './exact-math';
 import {
   blendOutcome,
   blendRefusalOf,
+  blendRefusalOfDetailed,
   blendReportIsVertexBlend,
   reportBlendRefusal,
   type BlendOperation,
@@ -210,7 +211,21 @@ export function applyEdgeModifier(
                 chamferAngleRadians,
                 true
               );
-      if (detailed.status !== 'ok' || detailed.details?.quality !== 'exact') {
+      if (detailed.status === 'error') {
+        // A probe's sink learns which code refused it, so a diagnosis can
+        // say "smaller sizes failed too" only of the failure it explains.
+        const refusal = blendRefusalOfDetailed(
+          featureKind === 'fillet'
+            ? 'fillet'
+            : chamferAngleRadians === undefined
+              ? 'chamfer'
+              : 'chamferDistanceAngle',
+          detailed
+        );
+        reportRefusal?.(reportBlendRefusal(refusal), refusal);
+        return null;
+      }
+      if (detailed.details?.quality !== 'exact') {
         return null;
       }
       modified = detailed.value;
@@ -679,7 +694,14 @@ export function acceptedEdgeModifierProbe(
   size: number,
   ceiling: number | null = null,
   /** Chamfer only: the bevel angle in radians the refused request carried. */
-  chamferAngleRadians?: number
+  chamferAngleRadians?: number,
+  /**
+   * Called once for each rung that actually ran and was not accepted, with
+   * the kernel's typed refusal of it, or `null` when the kernel built it but
+   * the result was not accepted (or the call threw). A rung too small to
+   * run is never reported.
+   */
+  reportRungRefused?: (refusal: BlendRefusal | null) => void
 ): number | null {
   const angle = featureKind === 'chamfer' ? chamferAngleRadians : undefined;
   const bounded = ceiling === null ? size : Math.min(size, ceiling);
@@ -689,6 +711,7 @@ export function acceptedEdgeModifierProbe(
     if (!Number.isFinite(probe) || probe <= GEOMETRY_EPSILON) {
       continue;
     }
+    let refusal: BlendRefusal | null = null;
     try {
       if (
         applyEdgeModifier(
@@ -697,7 +720,9 @@ export function acceptedEdgeModifierProbe(
           selected,
           featureKind,
           probe,
-          undefined,
+          (_message, typed) => {
+            refusal = typed ?? null;
+          },
           undefined,
           angle,
           undefined,
@@ -709,7 +734,9 @@ export function acceptedEdgeModifierProbe(
       }
     } catch {
       // A throw is a refusal like any other; keep walking the ladder.
+      refusal = null;
     }
+    reportRungRefused?.(refusal);
   }
   return null;
 }
@@ -1058,32 +1085,33 @@ function trimmingFailureAdvice(
 const CATCH_ALL_BLEND_CODE = 'fillet-failed';
 
 /**
- * Whether a chamfer the kernel refused with {@link CATCH_ALL_BLEND_CODE} at
- * every probed distance re-trims a flat face with a hole through it, on an
- * edge of that face's outer boundary.
+ * Whether every selected edge lies on the outline of a flat face that has
+ * something inside it — a hole, a pocket's mouth or a boss's foot, all one
+ * inner loop to the kernel — for a chamfer the kernel refused with
+ * {@link CATCH_ALL_BLEND_CODE} at the requested distance and at a smaller
+ * one.
  *
  * Measured on the pin (`f210583`): a 20 × 10 × 10 block with a 5 × 5 notch
- * cut from its +X/+Y corner and a 4 × 4 square bore through its top face
- * refuses a 1 mm chamfer on the notch's x = 15 top rim at 1, 0.5 and 0.1 mm,
- * and at a 45° distance-angle and equal two-distance chamfer too. The
- * kernel's symmetric chamfer rebuilds the top face's outer loop, copies its
- * hole loop as it was, and then rejects the shell it assembled (shared edges
- * with inconsistent face orientations). Without the bore the same edge
- * chamfers; bores at other places in the top face refuse the same way; the
- * notch's y = 5 rim on the bored body chamfers; and chamfering the rim
- * before the bore is cut, then cutting it, builds the exact result. A fillet
- * on the same edge builds.
+ * cut from its +X/+Y corner refuses a 1 mm chamfer on the notch's x = 15
+ * top rim, at every rung of the ladder, once its top face carries a 4 × 4
+ * through bore, a 5 mm deep pocket or a 3 mm tall boss; the 45° distance-
+ * angle chamfer refuses the same way. The kernel's symmetric chamfer
+ * rebuilds the top face's outer loop, carries the inner loop over unchanged
+ * and then rejects the shell it assembled (shared edges with inconsistent
+ * face orientations). Without the inner loop the same rim chamfers; and
+ * chamfering it before the feature that makes the bore, pocket or boss, then
+ * applying that feature, builds the exact result for all three. A fillet on
+ * the same edge builds.
  *
  * The kernel classifies the failure as `internal` with its catch-all code,
- * which a person cannot act on. A chamfer refused that way at every size
- * beside a holed flat face is a configuration the kernel cannot build yet —
- * `unsupported` — and the advice that helped (chamfer before the hole is
- * cut) is what the sentence says. It is deliberately narrow: an edge on a
- * hole's own rim (an inner loop) is excluded, since that edge does not exist
- * before the hole does, and any other catch-all refusal keeps the kernel's
- * classification.
+ * which a person cannot act on, so a refusal matching this shape is filed
+ * as `unsupported`. Every selected edge must qualify on its own: an edge on
+ * the inner loop itself (a hole's rim) or on a face the inner feature made
+ * (a bore's wall, a boss's side) exists only because of that feature, so
+ * "chamfer before it" cannot apply to it, and a selection with any such edge
+ * keeps the kernel's classification.
  */
-export function holedFaceBesideSelection(
+export function innerLoopFaceBesideEveryEdge(
   kernel: RemusKernel,
   target: number,
   selected: readonly number[]
@@ -1099,20 +1127,20 @@ export function holedFaceBesideSelection(
       bordering.set(edge, faces);
     }
   }
-  let besideHole = false;
-  for (const edge of selected) {
+  return selected.every((edge) => {
     const faces = bordering.get(edge);
     if (!faces || faces.length === 0) return false;
+    let besideInnerLoop = false;
     for (const face of faces) {
       const wires = Array.from(kernel.getFaceWires(face));
       if (wires.length === 0) return false;
       if (!kernel.getWireEdges(wires[0]!).includes(edge)) return false;
       if (wires.length > 1 && surfaceTypeOf(kernel, face) === 'plane') {
-        besideHole = true;
+        besideInnerLoop = true;
       }
     }
-  }
-  return besideHole;
+    return besideInnerLoop;
+  });
 }
 
 /**
@@ -1144,25 +1172,25 @@ export class EdgeModifierRefusalError extends KernelRefusal {
     kernelRefusal: BlendRefusal | null = null
   ) {
     const adapter = ADAPTER_REFUSALS.edge_modifier_refused;
-    // A chamfer beside a holed face: the kernel's catch-all `internal`
-    // record is refiled under the adapter's typed code, with the kernel's
-    // code kept as the cause (see `holedFaceBesideSelection`).
-    const besideHole =
+    // A chamfer beside a face's inner loop: the kernel's catch-all
+    // `internal` record is refiled under the adapter's typed code, with the
+    // kernel's code kept as the cause (see `innerLoopFaceBesideEveryEdge`).
+    const besideInnerLoop =
       blendAdvice?.kind === 'structural' &&
-      blendAdvice.cause === 'face-with-hole' &&
+      blendAdvice.cause === 'face-inner-loop' &&
       kernelRefusal?.category === 'internal';
     super({
       family: 'blend',
-      category: besideHole
-        ? ADAPTER_REFUSALS.chamfer_face_with_hole.category
+      category: besideInnerLoop
+        ? ADAPTER_REFUSALS.chamfer_face_inner_loop.category
         : (kernelRefusal?.category ?? adapter.category),
-      kernelCode: besideHole
-        ? 'chamfer_face_with_hole'
+      kernelCode: besideInnerLoop
+        ? 'chamfer_face_inner_loop'
         : (kernelRefusal?.kernelCode ?? 'edge_modifier_refused'),
       kernelMessage: kernelRefusal?.kernelMessage ?? message,
       reason: message,
       message,
-      ...(besideHole ? { kernelReason: kernelRefusal.kernelCode } : {}),
+      ...(besideInnerLoop ? { kernelReason: kernelRefusal.kernelCode } : {}),
       ...(kernelRefusal ? { cause: kernelRefusal } : {})
     });
     this.name = 'EdgeModifierRefusalError';
@@ -1252,6 +1280,9 @@ export function edgeModifierRefusal(
   // Set once every rung of the ladder has refused, so a later diagnosis that
   // throws still cannot fall back to advising a smaller size.
   let smallerSizesRefused = false;
+  // Whether a smaller rung actually ran and the kernel refused it with the
+  // same catch-all code as the requested size.
+  let smallerRungCatchAll = false;
   try {
     const laddered = acceptedEdgeModifierProbe(
       kernel,
@@ -1260,7 +1291,12 @@ export function edgeModifierRefusal(
       featureKind,
       size,
       cliffLimit,
-      chamferAngleRadians
+      chamferAngleRadians,
+      (refusal) => {
+        if (refusal?.kernelCode === CATCH_ALL_BLEND_CODE) {
+          smallerRungCatchAll = true;
+        }
+      }
     );
     const banded =
       featureKind === 'fillet'
@@ -1371,13 +1407,14 @@ export function edgeModifierRefusal(
     }
     if (
       featureKind === 'chamfer' &&
+      smallerRungCatchAll &&
       reported?.startsWith(`${CATCH_ALL_BLEND_CODE}:`) &&
-      holedFaceBesideSelection(kernel, target, selected)
+      innerLoopFaceBesideEveryEdge(kernel, target, selected)
     ) {
       const what = named.count === 1 ? 'this edge' : 'these edges';
       return structural(
-        'face-with-hole',
-        `The modeling engine can't chamfer ${what} yet because a flat face beside ${named.count === 1 ? 'it' : 'them'} has a hole through it, and smaller distances failed too. Add the chamfer before the hole is cut: make the hole in a separate, later step.`
+        'face-inner-loop',
+        `A flat face beside ${what} has a hole, pocket or boss inside it, which the modeling engine can't chamfer next to yet. Smaller distances failed too. If a feature made that shape, add the chamfer before it.`
       );
     }
   } catch {

@@ -172,7 +172,7 @@ describe('a refused fillet or chamfer carries its classification', () => {
     });
   });
 
-  describe('a chamfer beside a holed face', () => {
+  describe('a chamfer beside a face with an inner loop', () => {
     const catchAll = (operation: 'chamfer' | 'chamferDistanceAngle') =>
       new BlendRefusal({
         operation,
@@ -181,10 +181,10 @@ describe('a refused fillet or chamfer carries its classification', () => {
         kernelMessage: 'the shell the chamfer assembled failed validation'
       });
     const reason =
-      "The modeling engine can't chamfer this edge yet because a flat face beside it has a hole through it, and smaller distances failed too. Add the chamfer before the hole is cut: make the hole in a separate, later step.";
+      "A flat face beside this edge has a hole, pocket or boss inside it, which the modeling engine can't chamfer next to yet. Smaller distances failed too. If a feature made that shape, add the chamfer before it.";
     const message = `Chamfer could not be created on 1 selected edge with distance 1. ${reason}`;
     const advice = (
-      cause: 'face-with-hole' | 'neighbor-faces'
+      cause: 'face-inner-loop' | 'neighbor-faces'
     ): ConstructorParameters<typeof EdgeModifierRefusalError>[1] => ({
       operation: 'chamfer',
       edges: 1,
@@ -197,14 +197,14 @@ describe('a refused fillet or chamfer carries its classification', () => {
       for (const operation of ['chamfer', 'chamferDistanceAngle'] as const) {
         const error = new EdgeModifierRefusalError(
           message,
-          advice('face-with-hole'),
+          advice('face-inner-loop'),
           catchAll(operation)
         );
         expect(kernelRefusalRecordOf(error)).toEqual({
           family: 'blend',
           operation,
           category: 'unsupported',
-          code: 'chamfer_face_with_hole',
+          code: 'chamfer_face_inner_loop',
           reason: 'fillet-failed'
         });
       }
@@ -233,7 +233,7 @@ describe('a refused fillet or chamfer carries its classification', () => {
       });
       const error = new EdgeModifierRefusalError(
         message,
-        advice('face-with-hole'),
+        advice('face-inner-loop'),
         typed
       );
       expect(kernelRefusalRecordOf(error)).toEqual({
@@ -247,13 +247,13 @@ describe('a refused fillet or chamfer carries its classification', () => {
     it('reaches the card as the adapter sentence, not a category line', () => {
       const error = new EdgeModifierRefusalError(
         message,
-        advice('face-with-hole'),
+        advice('face-inner-loop'),
         catchAll('chamfer')
       );
       expect(plainRefusal(message, kernelRefusalRecordOf(error))).toEqual({
         message,
         category: 'unsupported',
-        code: 'chamfer_face_with_hole'
+        code: 'chamfer_face_inner_loop'
       });
     });
   });

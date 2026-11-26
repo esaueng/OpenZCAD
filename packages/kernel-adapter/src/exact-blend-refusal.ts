@@ -196,18 +196,26 @@ export function blendOutcome(
       quality: blendQualityOf(detailed.details)
     };
   }
-  const details = detailed.details ?? {};
   return {
     status: 'refused',
-    refusal: new BlendRefusal({
-      operation,
-      category: detailed.category,
-      kernelCode: kernelDetailString(details, 'kernelCode') ?? detailed.code,
-      kernelMessage:
-        kernelDetailString(details, 'message') ??
-        'the exact modeling engine gave no further detail'
-    })
+    refusal: blendRefusalOfDetailed(operation, detailed)
   };
+}
+
+/** The typed refusal a constant blend's refused typed-twin result carries. */
+export function blendRefusalOfDetailed(
+  operation: BlendOperation,
+  detailed: Extract<SolidOperationDetailedResult, { status: 'error' }>
+): BlendRefusal {
+  const details = detailed.details ?? {};
+  return new BlendRefusal({
+    operation,
+    category: detailed.category,
+    kernelCode: kernelDetailString(details, 'kernelCode') ?? detailed.code,
+    kernelMessage:
+      kernelDetailString(details, 'message') ??
+      'the exact modeling engine gave no further detail'
+  });
 }
 
 /**

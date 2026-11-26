@@ -5193,7 +5193,7 @@ export type BlendRefusalAdvice = {
         | 'edge-groups'
         | 'partial-revolve'
         | 'smooth-boundary'
-        | 'face-with-hole'
+        | 'face-inner-loop'
         | 'neighbor-faces'
         | 'unknown';
     }
