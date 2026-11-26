@@ -1,5 +1,11 @@
 import type { Locator, Page } from '@playwright/test';
-import { expect, pickPlanarFace, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  pickPlanarFace,
+  stubApi,
+  test,
+  waitForSurfacesToSettle
+} from './openzcad-fixtures';
 
 /**
  * The compact workspace's frame (U12 slice 2): a header, the mode tabs, the
@@ -223,6 +229,73 @@ test.describe('the compact workspace frame', () => {
       }
     );
   }
+
+  test('keeps the undo pair clear of the sheet on every frame', async ({
+    page
+  }) => {
+    // The undo pair rides the sheet's top edge. It once eased its own
+    // `bottom` behind the sheet's height, so it stood inside the sheet as
+    // the sheet came up at load, for as long as a busy main thread
+    // stalled that transition: a settled read could still catch it there.
+    // Sample every drawn frame instead, through a raise and a lower. A
+    // frame's state is final once its resize observers have run (the sheet
+    // publishes its height from one), so the sample follows each of them:
+    // a read between frames would see the sheet's height eased ahead of the
+    // frame that publishes it, which is never drawn.
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(() => {
+      const record = { samples: 0, worst: -Infinity, at: '' };
+      (
+        window as unknown as { __undoOverSheet: typeof record }
+      ).__undoOverSheet = record;
+      const sample = () => {
+        const sheet = document.querySelector('.compact-sheet:not([hidden])');
+        const history = document.querySelector('.compact-history');
+        if (sheet && history) {
+          const over =
+            history.getBoundingClientRect().bottom -
+            sheet.getBoundingClientRect().top;
+          record.samples += 1;
+          if (over > record.worst) {
+            record.worst = over;
+            record.at = sheet.getAttribute('data-detent') ?? '';
+          }
+        }
+      };
+      const Native = window.ResizeObserver;
+      window.ResizeObserver = class extends Native {
+        constructor(callback: ResizeObserverCallback) {
+          super((entries, observer) => {
+            callback(entries, observer);
+            sample();
+          });
+        }
+      };
+    });
+    await openCompactProject(page, 'Compact frames');
+    const sheet = page.locator('.compact-sheet');
+    const grabber = sheet.getByRole('slider', { name: 'Sheet height' });
+    for (const detent of ['half', 'peek']) {
+      await grabber.focus();
+      await page.keyboard.press('Enter');
+      await expect(sheet).toHaveAttribute('data-detent', detent);
+      await waitForSurfacesToSettle(page, ['.compact-sheet']);
+    }
+    const record = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __undoOverSheet: { samples: number; worst: number; at: string };
+          }
+        ).__undoOverSheet
+    );
+    expect(record.samples).toBeGreaterThan(10);
+    expect(
+      record.worst,
+      `the undo pair stood ${record.worst}px into the sheet at ${record.at}`
+    ).toBeLessThanOrEqual(1);
+  });
 
   test(
     'runs Box to Done through the sheet, then undoes and redoes it',

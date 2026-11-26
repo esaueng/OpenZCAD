@@ -284,7 +284,12 @@
   justify-content: space-between;
   gap: var(--sp-2);
   pointer-events: none;
-  transition: bottom var(--dur-base) var(--ease-out);
+  /* No transition of its own: `--compact-sheet-h` already follows the
+     sheet's drawn height every frame, through its spring and a drag, so the
+     controls ride its top edge. Easing `bottom` as well left them inside
+     the sheet for the transition's length whenever the sheet came up at
+     once (out of `hidden`), and for as long as a busy main thread
+     stalled that transition. */
 }
 
 .compact-history {
@@ -442,10 +447,6 @@
 
   .compact-sheet.fade-b {
     animation: compact-sheet-fade-b var(--dur-base) ease-out;
-  }
-
-  .compact-stage-controls {
-    transition: none;
   }
 }
 
