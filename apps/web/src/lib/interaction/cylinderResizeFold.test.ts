@@ -235,6 +235,36 @@ describe('cylinder resize fold', () => {
     expect(cylinderResizeFold(document, span(9, 12), 2.5)).toBeNull();
   });
 
+  it("never folds a parallel bore that a long bore's axis band would reach", () => {
+    // Two R0.02 bores 0.06 apart: the longer, 100 m, was just resized by an
+    // older pick that stored no name. A length-scaled band (0.1 mm) would
+    // put the shorter bore on the longer one's axis line and rewrite the
+    // longer bore's edit.
+    const { document, bodyId } = resized({
+      kind: 'resize-through-hole',
+      sourceDiameter: 0.04,
+      sourceAxisStart: { x: 0, y: 0, z: 0 },
+      sourceAxisEnd: { x: 0, y: 0, z: 100_000 },
+      diameter: 0.042
+    });
+    const bore = (x: number, length: number) => ({
+      bodyId,
+      radius: 0.021,
+      axisStart: { x, y: 0, z: 0 },
+      axisEnd: { x, y: 0, z: length },
+      concavity: 'hole' as const,
+      reference: {
+        producingFeatureId: 'feature_short',
+        lineageName: 'bore-wall'
+      } as unknown as FaceTopologyReferenceV5
+    });
+    expect(cylinderResizeFold(document, bore(0.06, 90_000), 0.022)).toBeNull();
+    // The long bore itself still folds.
+    expect(
+      cylinderResizeFold(document, bore(0, 100_000), 0.022)?.featureId
+    ).toBe(document.featureOrder.at(-1));
+  });
+
   it('keeps a moved-end wall resize as a new edit when it may be partial', () => {
     // The generic wall resize also covers partial turns, which can sit
     // beside a sibling over the same range: only the recorded ends prove it.

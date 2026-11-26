@@ -157,6 +157,12 @@ export function cylinderResizeFold(
     wall.radius * 1e-6,
     recordedLength * 1e-6
   );
+  // Off the axis line, never more than a small part of the radius: two
+  // separate bores of one radius stand at least a radius apart, so a band
+  // that grows with a long bore's length must not reach a parallel
+  // neighbour. A real repeat drag whose recorded axis drifted further
+  // appends a second edit, which is safe.
+  const lineTolerance = Math.min(axisTolerance, wall.radius * 0.01);
   const [producedRadius, sourceRadius] =
     operation.kind === 'resize-cylindrical-face'
       ? [operation.radius, operation.sourceRadius]
@@ -178,9 +184,9 @@ export function cylinderResizeFold(
       wall.axisStart,
       sourceAxisStart,
       sourceAxisEnd,
-      axisTolerance
+      lineTolerance
     ) ||
-    !onAxisLine(wall.axisEnd, sourceAxisStart, sourceAxisEnd, axisTolerance) ||
+    !onAxisLine(wall.axisEnd, sourceAxisStart, sourceAxisEnd, lineTolerance) ||
     !sameResizedFace(wall, operation, axisTolerance)
   )
     return null;
