@@ -570,6 +570,12 @@ export function useInPlaceCommand(
     []
   );
   const entryRefusal = entryRefusals.at(-1) ?? null;
+  /**
+   * Whether a refusal is on screen, as the last render said it: a frame of
+   * a superseded request is never drawn under one.
+   */
+  const refusalShown = useRef(false);
+  refusalShown.current = refusal !== null || entryRefusal !== null;
   /** Refuses an entry of one value, replacing only that value's refusal. */
   const refuseEntry = useCallback((refused: EntryRefusal) => {
     setEntryRefusals((current) => [
@@ -860,6 +866,12 @@ export function useInPlaceCommand(
       ProjectDocument,
       {
         key: string;
+        /**
+         * The request generation the frame was built for: what makes it the
+         * current request's frame. Its key alone does not, since a value
+         * typed away and back (A, B, A) is a new request with A's key.
+         */
+        generation: number;
         bodyId: BodyId | undefined;
         /** The base version the frame was built on. */
         base: number | null | undefined;
@@ -873,14 +885,23 @@ export function useInPlaceCommand(
   /**
    * The last request that built in this session, and the base it built on:
    * what a refusal is measured against, and, for a tool that names the
-   * refused input, the frame left on screen under it.
+   * refused input, the frame left on screen under it. Only the frame of
+   * the request current when it landed is recorded, never a superseded one.
    */
   const lastBuilt = useRef<{
     session: number | undefined;
     base: number | null | undefined;
     request: InPlaceRequest;
     values: Readonly<Record<string, number>>;
+    /** The frame as it was published, to put back under a refusal. */
+    preview: ProjectDocument;
   } | null>(null);
+  /**
+   * True while a superseded request's frame is what the viewport shows, in
+   * place of {@link lastBuilt}'s: a refusal that keeps the last frame then
+   * puts that frame back.
+   */
+  const supersededDrawn = useRef(false);
   /**
    * A refused request: a tool that names what changed keeps the last frame
    * that built on screen (it is no longer this request's, and the bar says
@@ -903,6 +924,9 @@ export function useInPlaceCommand(
     // being edited rather than that far along the arrow, off the model.
     setKeptValues(inputs.length > 0 && kept ? kept.values : null);
     if (inputs.length === 0) optionsRef.current.publishPreview(null);
+    else if (kept && supersededDrawn.current)
+      optionsRef.current.publishPreview(kept.preview);
+    supersededDrawn.current = false;
   };
   /**
    * The request the frame or refusal now on screen was published for. A
@@ -911,6 +935,10 @@ export function useInPlaceCommand(
    * already shown), a frame of the value passed on the way says nothing.
    */
   const shownKey = useRef<string | null>(null);
+  // Every change of what would be built previews at once, as a request of
+  // its own generation: the solid is on screen the frame after the pick
+  // that completes it.
+  const generation = useRef(0);
   /** The last frame published as valid; see {@link InPlacePreviewedFrame}. */
   const lastValidFrame = useRef<
     (InPlacePreviewedFrame & { key: string }) | null
@@ -918,7 +946,7 @@ export function useInPlaceCommand(
 
   const preview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
-      build: () => {
+      build: (requested) => {
         const current = requestRef.current;
         const base = optionsRef.current.baseDocument();
         const title =
@@ -934,6 +962,7 @@ export function useInPlaceCommand(
         builtFrames.set(built, {
           base: optionsRef.current.baseVersion,
           key: JSON.stringify(current),
+          generation: requested,
           bodyId: command.resultBodyId,
           built: command,
           request: current,
@@ -1005,26 +1034,27 @@ export function useInPlaceCommand(
           !fresh
         );
         // A frame of a request since replaced (a value typed over, an axis
-        // picked again, a handle dragged on) is not the verdict on the
-        // request now on screen, whose own frame is still building. It says
-        // no refusal, takes nothing down, and leaves a frame kept under a
-        // refusal where it is: the current request's frame decides those.
-        // One that built is still drawn, so a handle drag keeps following
-        // the hand, but it neither enables Done (gated on the key) nor
-        // becomes the frame Done commits.
-        if (frame && frame.key !== requestKeyRef.current) {
-          if (!valid || !result || shownKey.current === requestKeyRef.current)
+        // picked again, a handle dragged on, or a value typed away and back,
+        // which is a new request with the old key) is not the verdict on the
+        // request now on screen, whose own frame is still building. It sets
+        // and clears no refusal, takes nothing down, enables no Done, and is
+        // never the frame kept under a refusal: the current request's own
+        // frame decides all of those. One that built is still drawn while no
+        // refusal is shown, so a handle drag keeps following the hand.
+        if (
+          frame &&
+          (frame.generation !== generation.current ||
+            frame.key !== requestKeyRef.current)
+        ) {
+          if (
+            !valid ||
+            !result ||
+            refusalShown.current ||
+            shownKey.current === requestKeyRef.current
+          )
             return;
           shownKey.current = frame.key;
-          lastBuilt.current = {
-            session: sessionRef.current?.id,
-            base: frame.base,
-            request: frame.request,
-            values: frame.values
-          };
-          setRefusal(null);
-          setRefusalInputs([]);
-          setKeptValues(null);
+          supersededDrawn.current = true;
           optionsRef.current.publishPreview({
             ...result.document,
             derived: result.derived
@@ -1045,15 +1075,19 @@ export function useInPlaceCommand(
               }
             : null;
         if (!result) return;
+        const shown = { ...result.document, derived: result.derived };
         if (valid && frame) {
           lastBuilt.current = {
             session: sessionRef.current?.id,
             base: frame.base,
             request: frame.request,
-            values: frame.values
+            values: frame.values,
+            preview: shown
           };
         }
         if (valid) {
+          supersededDrawn.current = false;
+          refusalShown.current = false;
           setRefusal(null);
           setRefusalInputs([]);
           setKeptValues(null);
@@ -1075,11 +1109,9 @@ export function useInPlaceCommand(
               warning.message.replace(/^Feature "[^"]+":\s*/, '')
             );
           setPreviewAdvisory(notes.length ? notes.join(' · ') : null);
-          optionsRef.current.publishPreview({
-            ...result.document,
-            derived: result.derived
-          });
+          optionsRef.current.publishPreview(shown);
         } else {
+          refusalShown.current = true;
           setPreviewAdvisory(null);
           // The last frame that built is not this request: left on screen
           // under a bare refusal, it reads as the value that was refused, so
@@ -1103,6 +1135,7 @@ export function useInPlaceCommand(
       onFailure: ({ error }) => {
         // LivePreview reports only the current request's failure.
         shownKey.current = requestKeyRef.current;
+        refusalShown.current = true;
         lastValidFrame.current = null;
         setPreviewValid(false);
         setPreviewAdvisory(null);
@@ -1115,9 +1148,6 @@ export function useInPlaceCommand(
     })
   ).current;
 
-  // Every change of what would be built previews at once: the solid is on
-  // screen the frame after the pick that completes it.
-  const generation = useRef(0);
   const editIdentity = session?.edit ?? null;
   // A refused entry belongs to the edit it was typed in: one re-armed from
   // a changed feature (a Linear pattern made Grid) starts without it.

@@ -46,11 +46,21 @@ const RECTANGLE = [
 ];
 
 /** A frame that builds the body, or one the kernel refused. */
-function frame(builds: boolean): ProjectDocument {
+/**
+ * A frame that builds (`true`), or one the kernel refused: `false`, or the
+ * refusal's own sentence, so two refusals can be told apart.
+ */
+function frame(builds: boolean | string): ProjectDocument {
+  const refused =
+    builds === true
+      ? null
+      : builds === false
+        ? 'A line is not a closed profile.'
+        : builds;
   return {
     derived: {
-      bodyRepresentations: builds ? { [BODY]: {} } : {},
-      warnings: builds ? [] : ['A line is not a closed profile.']
+      bodyRepresentations: refused === null ? { [BODY]: {} } : {},
+      warnings: refused === null ? [] : [refused]
     }
   } as unknown as ProjectDocument;
 }
@@ -60,7 +70,7 @@ function frame(builds: boolean): ProjectDocument {
  * decides, build by build, whether the frame builds; each derive waits in
  * `replies` until released.
  */
-function delayedWorker(outcomes: boolean[]) {
+function delayedWorker(outcomes: (boolean | string)[]) {
   const replies: (() => void)[] = [];
   const built: InPlaceRequest[] = [];
   const documents: ProjectDocument[] = [];
@@ -278,12 +288,13 @@ describe('U11 cell 2: a delayed reply for a superseded value', () => {
   // refused value has had its say, so the frame of the value passed on the
   // way neither replaces the kept fillet nor takes its refusal away.
   it('a late frame does not replace the kept fillet once the refused value is typed again', async () => {
-    // The default radius builds, 30 is refused, 3 builds late, 30 again is refused.
+    // The default radius builds, 30 is refused, 3 builds late, 30 again is
+    // refused, each refusal in its own words.
     const { hook, replies, documents, publishPreview } = delayedWorker([
       true,
-      false,
+      'The first 30 mm is refused.',
       true,
-      false
+      'The second 30 mm is refused.'
     ]);
     act(() =>
       hook.result.current.start('fillet', [], [], [], {
@@ -325,10 +336,181 @@ describe('U11 cell 2: a delayed reply for a superseded value', () => {
     expect(hook.result.current.keptValues?.radius).toBe(2);
 
     act(() => replies[3]!());
-    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    // The current request's own refusal lands, not the first one left over.
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toBe('The second 30 mm is refused.')
+    );
     expect(hook.result.current.refusalInput).toBe('R');
     expect(hook.result.current.keptValues?.radius).toBe(2);
     expect(hook.result.current.canFinish).toBe(false);
+    expect(publishPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ derived: kept.derived })
+    );
+  });
+
+  // Review of #2176, finding 1: a superseded frame that built is not drawn
+  // over the fillet kept under a refusal, and does not become that kept
+  // frame, nor clear the refusal or move its arrow.
+  it('a late built frame does not replace the kept fillet or clear its refusal', async () => {
+    // The default radius builds, 30 is refused, 3 builds late, 40 is refused.
+    const { hook, replies, documents, publishPreview } = delayedWorker([
+      true,
+      'Radius 30 is refused.',
+      true,
+      'Radius 40 is refused.'
+    ]);
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], {
+        edges: [
+          {
+            bodyId: 'body_a' as BodyId,
+            hash: 1,
+            topologyId: 'e1',
+            middle: { x: 0, y: 0, z: 10 },
+            outward: { x: 1, y: 0, z: 0 }
+          }
+        ]
+      })
+    );
+    await waitFor(() => expect(replies).toHaveLength(1));
+    act(() => replies[0]!());
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    const kept = documents[0]!;
+    act(() => {
+      void hook.result.current.setValue('radius', 30);
+    });
+    await waitFor(() => expect(replies).toHaveLength(2));
+    act(() => replies[1]!());
+    await waitFor(() => expect(hook.result.current.refusalInput).toBe('R'));
+
+    // 3 is typed, and 40 while 3 is still building; 3's frame builds.
+    act(() => {
+      void hook.result.current.setValue('radius', 3);
+    });
+    await waitFor(() => expect(replies).toHaveLength(3));
+    act(() => {
+      void hook.result.current.setValue('radius', 40);
+    });
+    act(() => replies[2]!());
+    await buildsStarted(replies, 4);
+    expect(publishPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ derived: kept.derived })
+    );
+    expect(hook.result.current.refusal).toBe('Radius 30 is refused.');
+    expect(hook.result.current.refusalInput).toBe('R');
+    expect(hook.result.current.keptValues?.radius).toBe(2);
+    expect(hook.result.current.canFinish).toBe(false);
+
+    // 40's own refusal keeps the 2 mm fillet, not the 3 mm frame.
+    act(() => replies[3]!());
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toBe('Radius 40 is refused.')
+    );
+    expect(hook.result.current.refusalInput).toBe('R');
+    expect(hook.result.current.keptValues?.radius).toBe(2);
+    expect(publishPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ derived: kept.derived })
+    );
+  });
+
+  // Review of #2176, finding 2: a value typed away and back (90, 180, 90)
+  // is a new request with the old key. The first 90's reply is not its
+  // verdict: built, it does not enable Done; refused, it says nothing.
+  it.each([
+    ['built', true],
+    ['refused', 'The first 90° is refused.']
+  ] as const)(
+    "the first reply of a value typed away and back, %s, is not the new request's",
+    async (_label, firstReply) => {
+      // Frame 0 builds, the first 90 replies late, the second 90 builds.
+      const { hook, replies, built, publishPreview } = delayedWorker([
+        true,
+        firstReply,
+        true
+      ]);
+      act(() => hook.result.current.start('revolve', [PICK]));
+      act(() => hook.result.current.pickAxis('sketch-vertical'));
+      await waitFor(() => expect(replies).toHaveLength(1));
+      act(() => replies[0]!());
+      await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+
+      act(() => {
+        void hook.result.current.setValue('angle', 90);
+      });
+      await waitFor(() => expect(replies).toHaveLength(2));
+      act(() => {
+        void hook.result.current.setValue('angle', 180);
+      });
+      act(() => {
+        void hook.result.current.setValue('angle', 90);
+      });
+      expect(hook.result.current.canFinish).toBe(false);
+
+      act(() => replies[1]!());
+      await buildsStarted(replies, 3);
+      // The new 90 is building its own frame: the first one decides nothing.
+      expect(JSON.stringify(built[2])).toBe(JSON.stringify(built[1]));
+      expect(hook.result.current.canFinish).toBe(false);
+      act(() => {
+        expect(hook.result.current.done()).toBe(false);
+      });
+      expect(hook.result.current.refusal).toBeNull();
+      expect(publishPreview).not.toHaveBeenLastCalledWith(null);
+
+      act(() => replies[2]!());
+      await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+      expect(hook.result.current.refusal).toBeNull();
+    }
+  );
+
+  // A superseded frame that built is drawn while nothing is refused (so a
+  // drag follows the hand), but it is never the kept frame: the current
+  // request's refusal puts the last current frame back under it.
+  it('a refusal after a drawn superseded frame keeps the last current fillet', async () => {
+    // The default radius builds, 3 builds late, 30 is refused.
+    const { hook, replies, documents, publishPreview } = delayedWorker([
+      true,
+      true,
+      'Radius 30 is refused.'
+    ]);
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], {
+        edges: [
+          {
+            bodyId: 'body_a' as BodyId,
+            hash: 1,
+            topologyId: 'e1',
+            middle: { x: 0, y: 0, z: 10 },
+            outward: { x: 1, y: 0, z: 0 }
+          }
+        ]
+      })
+    );
+    await waitFor(() => expect(replies).toHaveLength(1));
+    act(() => replies[0]!());
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    const kept = documents[0]!;
+    act(() => {
+      void hook.result.current.setValue('radius', 3);
+    });
+    await waitFor(() => expect(replies).toHaveLength(2));
+    act(() => {
+      void hook.result.current.setValue('radius', 30);
+    });
+    act(() => replies[1]!());
+    await buildsStarted(replies, 3);
+    // Drawn, but not Done's and not kept.
+    expect(publishPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ derived: documents[1]!.derived })
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+
+    act(() => replies[2]!());
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toBe('Radius 30 is refused.')
+    );
+    expect(hook.result.current.refusalInput).toBe('R');
+    expect(hook.result.current.keptValues?.radius).toBe(2);
     expect(publishPreview).toHaveBeenLastCalledWith(
       expect.objectContaining({ derived: kept.derived })
     );
