@@ -41,6 +41,14 @@ const WORKSPACE_STAGE_OBSTACLES = '.assistant-panel:not(.assistant-off-screen)';
 const FOOT_GUIDE = '.workspace-tour';
 
 /**
+ * The compact workspace's sheet (U12) across the stage's foot, below full
+ * height (at full the stage under it is inert, and nothing is framed). It
+ * stands outside the viewer area, in the shell's own chrome. Measure's page
+ * in it (I47) asks for the model to be framed above it.
+ */
+const COMPACT_SHEET = ".compact-sheet:not([hidden]):not([data-detent='full'])";
+
+/**
  * Whether the modeling guide's card changes the clear stage on `canvas`: a
  * phone's across it, a wider stage's over its corner. The card asks for
  * the model to be framed clear of it only then; where it changes nothing
@@ -177,6 +185,25 @@ export function measureClearStage(
     }
     top = nextTop;
     bottom = nextBottom;
+  }
+  // The compact sheet across the foot takes its band, above the same
+  // minimum the guide keeps: there is no side to frame beside it. A phone
+  // held landscape stands the sheet at the stage's side instead (U12 slice
+  // 4), clear of its middle: the model is framed beside it.
+  for (const sheet of panelsOver(
+    canvas,
+    COMPACT_SHEET,
+    throughCover,
+    '.app-shell'
+  )) {
+    if (Math.max(sheet.left, bounds.left) >= middle - 1) {
+      sides.push(sheet);
+      continue;
+    }
+    const nextBottom = Math.max(sheet.top, bounds.top) - STAGE_FRAME_GAP_PX;
+    if (nextBottom < bottom && nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX) {
+      bottom = nextBottom;
+    }
   }
   // The guide across the middle takes its band off the foot, however little
   // it leaves above a minimum: there is no side to frame beside it.
@@ -411,6 +438,7 @@ export function cornersClearOfStage(
     ...panelsOver(canvas, FOOT_GUIDE),
     ...panelsOver(canvas, CLEAR_STAGE_OBSTACLES),
     ...panelsOver(canvas, WORKSPACE_STAGE_OBSTACLES, false, '.workspace'),
+    ...panelsOver(canvas, COMPACT_SHEET, false, '.app-shell'),
     // The lane is a transparent full-width column; what it holds (the
     // command's bar, the search row) is centred and as wide as it reads.
     ...panelsOver(canvas, '.command-bar-lane > *', false, '.workspace')

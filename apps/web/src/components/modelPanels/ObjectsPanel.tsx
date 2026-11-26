@@ -100,6 +100,7 @@ export type ObjectsPanelProps = ObjectsSource &
     | 'onPreviewBodyAppearance'
     | 'onCommitBodyAppearance'
     | 'objectFolderActions'
+    | 'pickOnlyBodyIds'
   > & { view: ObjectsView };
 
 /**
@@ -330,6 +331,7 @@ export function ObjectsPanel({
   onPreviewBodyAppearance,
   onCommitBodyAppearance,
   objectFolderActions,
+  pickOnlyBodyIds,
   view
 }: ObjectsPanelProps) {
   const foldersEditable = objectFolderActions?.editable ?? false;
@@ -369,7 +371,9 @@ export function ObjectsPanel({
   // Every live body, searched for or not: a search narrows the rows, never
   // the selection that New folder and a drag act on.
   const allLiveBodyIds = new Set(
-    bodies.filter((body) => !body.consumed).map((body) => body.bodyId)
+    bodies
+      .filter((body) => !body.consumed && !pickOnlyBodyIds?.has(body.bodyId))
+      .map((body) => body.bodyId)
   );
   // Only true sources go behind the disclosure; an earlier state of a body
   // still listed is a step in History, not another body.
@@ -661,12 +665,14 @@ export function ObjectsPanel({
     const selected = selectedBodyIds.includes(body.bodyId);
     const isolated = isolatedBodyId === body.bodyId;
     // A consumed body is history's input, not a thing the user still has:
-    // it keeps the name it had when it was combined.
-    const renamable = Boolean(onRenameBody) && !body.consumed;
+    // it keeps the name it had when it was combined. A row a command lists
+    // only to pick from (U11) acts on nothing either.
+    const live = !body.consumed && !pickOnlyBodyIds?.has(body.bodyId);
+    const renamable = Boolean(onRenameBody) && live;
     const appearanceOpen =
       appearanceBodyId === body.bodyId &&
       Boolean(onPreviewBodyAppearance && onCommitBodyAppearance) &&
-      !body.consumed;
+      live;
     const preview =
       bodyAppearancePreview?.bodyId === body.bodyId
         ? bodyAppearancePreview
@@ -674,7 +680,7 @@ export function ObjectsPanel({
     const color = preview?.color ?? body.color ?? DEFAULT_BODY_COLOR;
     const draggable =
       foldersEditable &&
-      !body.consumed &&
+      live &&
       renamingBodyId !== body.bodyId &&
       !appearanceOpen;
     return (
@@ -743,7 +749,7 @@ export function ObjectsPanel({
                 <span className="feature-name">{body.name}</span>
               </button>
             )}
-            {!body.consumed && (
+            {live && (
               <button
                 type="button"
                 className="object-color-swatch"
@@ -776,7 +782,7 @@ export function ObjectsPanel({
                 {expanded && RENAME_ICON}
               </button>
             )}
-            {!body.consumed && onIsolateBody && (
+            {live && onIsolateBody && (
               <button
                 type="button"
                 className={`row-visibility${isolated ? ' is-active' : ''}`}
@@ -792,7 +798,7 @@ export function ObjectsPanel({
                 {expanded && ISOLATE_ICON}
               </button>
             )}
-            {!body.consumed && (
+            {live && (
               <button
                 type="button"
                 className={`row-visibility ${hidden ? 'is-hidden' : ''}`}

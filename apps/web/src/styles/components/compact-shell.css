@@ -40,9 +40,13 @@
 /* ── What the compact frame does not draw ── */
 
 .app-shell[data-shell='compact'] > .topbar,
-.app-shell[data-shell='compact'] .instrument-rail,
 .app-shell[data-shell='compact']
-  .workspace-column-float:has(> .workspace-column),
+  .instrument-rail:not(:has(> .sketch-relations)),
+.app-shell[data-shell='compact']
+  .instrument-rail:has(> .sketch-relations)
+  > :not(.sketch-relations),
+.app-shell[data-shell='compact']
+  .workspace-column-float:has(> .workspace-column):not(:has(.sketch-rail)),
 .app-shell[data-shell='compact'] .panel-resizer,
 .app-shell[data-shell='compact'] .panels-hidden-pill {
   display: none;
@@ -182,6 +186,7 @@
 .compact-tab:focus-visible,
 .compact-float-button:focus-visible,
 .compact-selection-chip:focus-visible,
+.compact-analysis-chip:focus-visible,
 .compact-menu-row:focus-visible,
 .compact-sheet-grabber:focus-visible {
   outline: 2px solid var(--color-accent);
@@ -272,6 +277,9 @@
   right: max(var(--sp-2), env(safe-area-inset-right));
   bottom: calc(var(--compact-sheet-h, 0px) + var(--sp-2));
   display: flex;
+  /* A chip that does not fit beside the undo pair takes a row of its own
+     above it, rather than squeezing another chip below its 44 px target. */
+  flex-wrap: wrap-reverse;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
@@ -285,7 +293,8 @@
 }
 
 .compact-float-button,
-.compact-selection-chip {
+.compact-selection-chip,
+.compact-analysis-chip {
   pointer-events: auto;
   box-sizing: border-box;
   min-height: var(--compact-target);
@@ -310,12 +319,40 @@
 }
 
 .compact-selection-chip {
-  min-width: 0;
+  min-width: var(--compact-target);
   max-width: 60%;
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: 0 var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: 22px;
+  font-size: 15px;
+  text-align: start;
+}
+
+/* A long name wraps between words onto a second line, never cut mid-word. */
+.compact-selection-chip .compact-selection-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: 1.25;
+}
+
+/* An analysis left on, away from View's Display page: its name and Off,
+   beside the undo pair, clear of the view cube's corner on a short
+   landscape stage; the selection chip keeps the right. */
+.compact-analysis-chip {
+  flex: 0 0 auto;
+  min-width: var(--compact-target);
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
   border-radius: 999px;
   font-size: 15px;
 }
@@ -335,6 +372,11 @@
   white-space: nowrap;
 }
 
+/* An analysis's name is one word, shown whole: the chip does not shrink. */
+.compact-analysis-chip .compact-selection-text {
+  overflow: visible;
+}
+
 /* ── The bottom sheet ── */
 
 .compact-sheet {
@@ -343,7 +385,9 @@
   right: 0;
   bottom: 0;
   box-sizing: border-box;
-  height: 88px;
+  /* Peek: the grabber's row over one tray row of 44px targets
+     (SHEET_PEEK_PX). */
+  height: 104px;
   max-height: 100%;
   display: flex;
   flex-direction: column;
@@ -610,4 +654,1265 @@
 .app-shell[data-shell='compact']:has(.keypad-section-recovery)
   .in-place-command-recovery {
   display: none;
+}
+
+/* ── Build's tray (U12 slice 4) ──────────────────────────────
+   The sheet at peek is one row: Build's verbs and All tools at rest, or a
+   running tool's icon, step chip, Options, Cancel and Done. The row is
+   pinned at the top of the sheet's flow, so Cancel and Done stay in view
+   however far the content under it scrolls. Build's tray at rest stands in
+   the one tray slot every mode's tray shares, which pins it (below). */
+
+.compact-tray {
+  display: flex;
+  flex-direction: column;
+}
+
+.compact-tray-row {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  min-height: calc(var(--compact-target) + var(--sp-1) * 2);
+  padding: var(--sp-1) 0;
+}
+
+.compact-tray-verbs {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.compact-tray-verbs::-webkit-scrollbar {
+  display: none;
+}
+
+.compact-tray-button {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: var(--compact-target);
+  height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.compact-tray-button svg,
+.compact-tray-tool svg,
+.compact-tool-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.compact-tray-button:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-tray-button.active,
+.compact-tray-button[aria-pressed='true'],
+.compact-tray-button[aria-expanded='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+.compact-tray-button[aria-disabled='true'] {
+  color: var(--color-text-dim);
+}
+
+.compact-tray-button:focus-visible,
+.compact-tool-tile:focus-visible,
+.compact-search-input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.compact-tray-label {
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+}
+
+.compact-tray-reason {
+  margin: 0;
+  padding: 0 var(--sp-2) var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+/* ── A running tool in the tray ──
+   The bar's own markup, laid out as the tray: its row pinned, and the
+   step's wording, a refusal, its recovery and the Options in one column
+   under it, never beside it. */
+
+.app-shell[data-shell='compact']
+  .compact-command-row
+  > .in-place-command.is-tray {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: var(--sp-2);
+  left: 0;
+  width: auto;
+  max-width: none;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: 15px;
+}
+
+.app-shell[data-shell='compact']
+  .compact-command-row
+  > .in-place-command.is-tray
+  > * {
+  order: 0;
+  grid-column: auto;
+  grid-row: auto;
+  min-width: 0;
+}
+
+.app-shell[data-shell='compact']
+  .compact-command-row
+  > .in-place-command.is-tray
+  > .compact-tray-row {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-surface);
+}
+
+.compact-tray-tool {
+  flex: 0 0 auto;
+  width: 32px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-muted);
+}
+
+.compact-step-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-right: auto;
+  padding: 6px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+}
+
+.in-place-command.refused .compact-step-chip {
+  color: var(--color-warning);
+}
+
+.app-shell[data-shell='compact']
+  .compact-tray-row
+  > :is(.in-place-command-cancel, .in-place-command-done) {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+  justify-content: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-3);
+  border-radius: 999px;
+  font-size: 15px;
+}
+
+.app-shell[data-shell='compact'] .compact-tray-row > .in-place-command-cancel {
+  width: var(--compact-target);
+  padding: 0;
+  background: var(--color-surface-2);
+}
+
+/* What the chip says shortly is said in full for assistive technology:
+   the bar's title, its state and the step's sentence stay in the tree. */
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  > :is(
+    .in-place-command-title,
+    .in-place-command-state,
+    .in-place-command-hint
+  ) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* A refusal is read in the sheet, whole, in one column under the row. */
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray.refused
+  > .in-place-command-hint {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0 var(--sp-2);
+  overflow: visible;
+  clip-path: none;
+  display: block;
+  -webkit-line-clamp: unset;
+  max-height: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  > :is(
+    .in-place-command-cancel,
+    .in-place-command-more,
+    .move-two-points,
+    .move-pivot-toggle
+  ) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--compact-target);
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 15px;
+}
+
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  > .in-place-command-options
+  > summary[aria-hidden='true'] {
+  display: none;
+}
+
+.app-shell[data-shell='compact']
+  .compact-sheet
+  .in-place-command.is-tray
+  > .in-place-command-options[open] {
+  order: 0;
+  flex: 0 0 auto;
+}
+
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  > .in-place-command-options
+  > summary:not([aria-hidden]) {
+  min-height: var(--compact-target);
+  padding-inline: var(--sp-2);
+}
+
+/* A blend's picked edges are read whole: each wraps rather than clips. */
+.app-shell[data-shell='compact'] .in-place-command.is-tray .edge-pick-list {
+  max-height: none;
+  margin: 0 0 var(--sp-2);
+  overflow: visible;
+}
+
+.app-shell[data-shell='compact'] .in-place-command.is-tray .edge-pick-row {
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact'] .in-place-command.is-tray .edge-pick-name {
+  flex-wrap: wrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.app-shell[data-shell='compact'] .in-place-command.is-tray .edge-pick-remove {
+  flex: 0 0 auto;
+  width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+/* ── Targets in the compact flow: every one at least 44px ── */
+
+.app-shell[data-shell='compact']
+  :is(
+    .in-place-option-choice,
+    .in-place-param-segments [role='radio'],
+    .in-place-param-select,
+    .move-pivot-reset
+  ) {
+  min-height: var(--compact-target);
+}
+
+/* Each row of a command's Options in one column: its name over its
+   choices or fields, which take the sheet's width; a vector's fields wrap
+   rather than shrink under a finger's width. */
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  :is(.in-place-param-row, .in-place-params-grid) {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-1);
+}
+
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  .in-place-param-fields {
+  flex-wrap: wrap;
+}
+
+/* A value the keypad opens is a full-width row of its own. */
+.app-shell[data-shell='compact']
+  .in-place-command.is-tray
+  .in-place-params-grid
+  > .in-place-param-row
+  > .in-place-option-value {
+  flex: 0 0 auto;
+  min-height: var(--compact-target);
+  padding: 0 var(--sp-2);
+}
+
+.app-shell[data-shell='compact'] .in-place-param-field {
+  flex: 1 1 72px;
+  min-height: calc(var(--compact-target) + 2px);
+}
+
+.app-shell[data-shell='compact'] .in-place-param-field input {
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+  font-size: 17px;
+}
+
+.app-shell[data-shell='compact'] .numeric-keypad .keypad-value {
+  min-height: var(--compact-target);
+  font-size: 17px;
+}
+
+/* Fields and menus in the sheet (a Move's numbers and body, a feature
+   form's values) take a finger's height. */
+.app-shell[data-shell='compact']
+  .compact-sheet
+  :is(input:not([type='checkbox'], [type='radio'], [type='range']), select) {
+  box-sizing: border-box;
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact'] .palette-row {
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact'] .workspace-toast-undo {
+  min-width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact'] .numeric-keypad .keypad-value-row {
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact']
+  .numeric-keypad
+  :is(.keypad-grid-toggle, .keypad-commit) {
+  width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact']
+  .numeric-keypad
+  :is(.keypad-unit-help, .keypad-operation) {
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact']
+  .numeric-keypad
+  :is(.keypad-key, .keypad-units button) {
+  min-height: var(--compact-target);
+}
+
+/* ── The keypad as the sheet's content ──
+   Under the tray row, in the sheet's flow, rather than fixed over the
+   foot of the screen. */
+.compact-keypad-host:empty {
+  display: none;
+}
+
+.app-shell[data-shell='compact']
+  .compact-keypad-host
+  > .numeric-keypad[data-placement] {
+  position: static;
+  inset: auto;
+  z-index: auto;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  padding: var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-2);
+  box-shadow: none;
+}
+
+/* ── Sketching (a stopgap until slice 6 draws the compact sketch) ──
+   The frame hides the column and the instrument rail, which is where a
+   sketch keeps its tools, its relations and Finish. While a sketch is open
+   both come back as compact rails: the tools and Finish down the stage's
+   left edge, the relations down its right under the cube, each above the
+   floating undo pair and the sheet, scrolling when the stage is short,
+   with 44px targets. Finish is the column's foot, which stays while the
+   tools scroll. */
+
+.app-shell[data-shell='compact']
+  .workspace.has-column
+  .viewer-area
+  .workspace-column-float:has(.sketch-rail) {
+  top: var(--sp-2);
+  left: max(var(--sp-2), env(safe-area-inset-left));
+  bottom: calc(
+    var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2
+  );
+  width: auto;
+  max-height: none;
+  align-items: flex-start;
+  /* Still a containing block, for the polygon's sides error. */
+  transform: translateY(0);
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column-float:has(.sketch-rail)
+  > .workspace-column {
+  flex: 0 0 auto;
+  max-height: 100%;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column-float:has(.sketch-rail)
+  .workspace-column-tools {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  button:not(.sketch-type-tile, .sketch-type-cycle),
+.app-shell[data-shell='compact']
+  .workspace-column-footer
+  .workspace-column-finish {
+  width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column-float:has(.sketch-rail)
+  .workspace-column-footer {
+  padding: var(--sp-1);
+}
+
+/* The stage's notices stand between the two rails, not over Finish. */
+.app-shell[data-shell='compact']
+  .workspace.column-layout:has(.sketch-rail)
+  :is(.workspace-toast, .activity-lane) {
+  left: calc(
+    max(var(--sp-2), env(safe-area-inset-left)) + var(--compact-target) +
+      var(--sp-2) * 3
+  );
+  right: calc(
+    max(var(--sp-2), env(safe-area-inset-right)) + var(--compact-target) +
+      var(--sp-2) * 3
+  );
+}
+
+/* The scale bar steps right of the rail. */
+.app-shell[data-shell='compact']:has(.sketch-rail)
+  .workspace.column-layout
+  .viewport-scale-indicator {
+  left: calc(
+    max(var(--sp-2), env(safe-area-inset-left)) + var(--compact-target) +
+      var(--sp-2) * 3
+  );
+}
+
+.app-shell[data-shell='compact']
+  .workspace.column-layout
+  .viewer-area
+  .instrument-rail:has(> .sketch-relations) {
+  top: calc(var(--sp-2) * 2 + var(--cube-size, 88px));
+  right: max(var(--sp-2), env(safe-area-inset-right));
+  bottom: calc(
+    var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2
+  );
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+  /* The relations are the one island left in it. */
+  background: none;
+  border: 0;
+  box-shadow: none;
+  transform: none;
+}
+
+.app-shell[data-shell='compact']
+  .workspace.column-layout
+  .viewer-area
+  .instrument-rail:has(> .sketch-relations)
+  > :not(.sketch-relations) {
+  display: none;
+}
+
+.app-shell[data-shell='compact']
+  .workspace.column-layout
+  .viewer-area
+  .instrument-rail
+  > .sketch-relations {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  width: auto;
+  min-height: 0;
+  max-height: 100%;
+  padding: var(--sp-1);
+  overflow-y: auto;
+  scrollbar-width: none;
+  direction: ltr;
+}
+
+/* The point relations' menu takes the rail's island as its box, outside the
+   scroller, so the scroll does not clip it. */
+.app-shell[data-shell='compact']
+  .instrument-rail
+  > .sketch-relations
+  .sketch-relation-slot.sketch-point-relations-anchor {
+  position: static;
+}
+
+.app-shell[data-shell='compact']
+  .instrument-rail
+  > .sketch-relations
+  :is(.sketch-relation, .sketch-point-relation) {
+  min-width: var(--compact-target);
+  height: var(--compact-target);
+  flex: 0 0 auto;
+}
+
+.app-shell[data-shell='compact']
+  .instrument-rail
+  > .sketch-relations
+  .sketch-relation-name {
+  display: none;
+}
+
+/* A tool's type strip (and Offset's and a pattern's options) stands in the
+   rail under its tool, inside the rail's scroller. Beside the rail it lay
+   over the canvas, where the first drawing tap chose a type instead of
+   placing a point, and on a short stage it ran past the stage's foot, out
+   of reach of the rail's scroll. Each choice is a 44px icon tile; its name
+   stays in the tree for assistive technology and the tool's own button
+   names the type in use. */
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  :is(.sketch-circle-tool, .sketch-modify-tool) {
+  flex-direction: column;
+  align-items: center;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column-float:has(.sketch-rail)
+  .sketch-rail
+  .sketch-type-strip {
+  position: static;
+  width: auto;
+  max-width: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+  padding: 2px;
+  box-shadow: none;
+  animation: none;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  .sketch-offset-joins {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  :is(.sketch-type-tile, .sketch-type-cycle) {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  padding: 0;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  :is(.sketch-type-tile, .sketch-type-sides)
+  > span:not([role]) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  .sketch-type-sides {
+  height: auto;
+  padding: 0;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  .sketch-type-sides
+  input {
+  width: var(--compact-target);
+  height: var(--compact-target);
+  padding: 0 4px;
+  text-align: center;
+}
+
+/* A refused side count is said beside the rail, outside its scroller. */
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  .sketch-type-sides-error {
+  position: fixed;
+  top: auto;
+  right: auto;
+  left: calc(100% + var(--sp-2));
+  width: max-content;
+  max-width: 60vw;
+  white-space: normal;
+}
+
+/* ── Feature forms and operation cards in the sheet ── */
+
+.app-shell[data-shell='compact'] .compact-sheet .feature-form .form-actions {
+  position: sticky;
+  bottom: calc(-1 * var(--sp-3));
+  z-index: 1;
+  padding: var(--sp-2) 0;
+  background: var(--color-surface);
+}
+
+.app-shell[data-shell='compact']
+  .compact-sheet
+  :is(
+    .feature-form .form-actions button,
+    .tool-card button,
+    .panel-close,
+    .sketch-plane-prompt button
+  ) {
+  min-height: var(--compact-target);
+}
+
+.app-shell[data-shell='compact'] .compact-sheet .panel-close {
+  min-width: var(--compact-target);
+}
+
+/* The plane chooser's Cancel, a finger's width as well as height. */
+.app-shell[data-shell='compact'] .compact-sheet .sketch-plane-dismiss {
+  min-width: var(--compact-target);
+  justify-content: center;
+}
+
+/* ── All tools ── */
+
+.compact-all-tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.compact-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  min-height: var(--compact-target);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border-radius: 999px;
+}
+
+.compact-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--compact-target);
+  padding: 0;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  outline: none;
+  /* The compact touch field size (touch.css) applies. */
+  font: inherit;
+}
+
+.compact-tool-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.compact-tool-group-title {
+  margin: 0;
+  padding: 0 var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+}
+
+.compact-tool-grid {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: var(--sp-1);
+}
+
+.compact-tool-tile {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: var(--sp-1);
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-lg, 16px);
+  cursor: pointer;
+}
+
+.compact-tool-tile:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-tool-tile.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+
+.compact-tool-tile[aria-disabled='true'] {
+  color: var(--color-text-dim);
+}
+
+.compact-tool-icon {
+  display: inline-grid;
+  place-items: center;
+}
+
+.compact-tool-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.compact-all-tools-empty {
+  margin: 0;
+  padding: var(--sp-3);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+/* ── A phone held landscape: the sheet at the stage's side ──
+   Half height left about 140px of a 390px-tall stage. Beside the stage
+   instead, the sheet stands its full height at half and the model keeps
+   the rest of the width; full still covers the stage. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .app-shell[data-shell='compact'] {
+    --compact-side-sheet-w: min(400px, 50vw);
+  }
+
+  .app-shell[data-shell='compact'] .compact-sheet {
+    --compact-side-sheet: 1;
+    left: auto;
+    width: var(--compact-side-sheet-w);
+    border-radius: var(--compact-sheet-radius) 0 0 0;
+  }
+
+  .app-shell[data-shell='compact'] .compact-sheet[data-detent='half'] {
+    height: 100%;
+  }
+
+  .app-shell[data-shell='compact'] .compact-sheet[data-detent='full'] {
+    width: 100%;
+    border-radius: 0;
+  }
+
+  .app-shell[data-shell='compact']:has(.compact-sheet:not([hidden]))
+    .compact-stage-controls {
+    bottom: var(--sp-2);
+    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
+  }
+
+  .app-shell[data-shell='compact']:has(.compact-sheet[data-detent='half'])
+    .workspace.column-layout
+    .viewer-rail-stack {
+    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
+  }
+
+  .app-shell[data-shell='compact']
+    .workspace.column-layout
+    .viewport-scale-indicator {
+    bottom: calc(var(--compact-target) + var(--sp-2) * 2);
+  }
+
+  .app-shell[data-shell='compact'] .command-bar-lane {
+    bottom: var(--sp-2);
+  }
+
+  /* A sketch's rails keep the stage's height: the sheet stands beside
+     them, not under them, so they reserve its width rather than its
+     height (at half, its height is the stage's, which left the rails
+     none). The tools are on the stage's left, clear of the sheet; the
+     relations step left of it. */
+  .app-shell[data-shell='compact']
+    .workspace.has-column
+    .viewer-area
+    .workspace-column-float:has(.sketch-rail) {
+    bottom: calc(var(--compact-target) + var(--sp-2) * 2);
+  }
+
+  .app-shell[data-shell='compact']:has(.compact-sheet:not([hidden]))
+    .workspace.column-layout
+    .viewer-area
+    .instrument-rail:has(> .sketch-relations) {
+    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
+    bottom: calc(var(--compact-target) + var(--sp-2) * 2);
+  }
+}
+
+/* ── A mode's tray (U12 slice 7) ──
+   View's and Tweak's verbs as one row of 44 px icons: the sheet at peek.
+   Resting on the tray alone, the sheet is that row and a grip: its head
+   (Back, the height slider, Close) returns with a page, which a verb opens.
+   The slot holds whichever mode's tray is up (Build's too, which keeps its
+   head: its grabber is how its sheet is dragged): pinned at the top of the
+   sheet's flow, as a running tool's row is. */
+.compact-sheet[data-detent='peek']:has(
+    > .compact-sheet-body:not([hidden]) > .compact-tray-slot.is-alone
+  )
+  > .compact-sheet-head {
+  display: none;
+}
+
+.compact-tray-slot {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-width: 0;
+  background: var(--color-surface);
+}
+
+.compact-sheet[data-detent='peek'] .compact-tray-slot.is-alone {
+  padding-top: var(--sp-3);
+}
+
+.compact-sheet[data-detent='peek'] .compact-tray-slot.is-alone::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 36px;
+  height: 5px;
+  margin-left: -18px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+}
+
+.compact-tray.is-mode {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-around;
+  gap: var(--sp-1);
+  min-height: var(--compact-target);
+}
+
+/* Icons alone, on the sheet itself: no pill under them, unlike Build's. */
+.compact-tray.is-mode .compact-tray-button {
+  position: relative;
+  width: var(--compact-target);
+  min-width: 0;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+}
+
+.compact-tray.is-mode .compact-tray-button:hover {
+  background: var(--color-surface-hover);
+}
+
+.compact-tray.is-mode .compact-tray-button[aria-pressed='true'],
+.compact-tray.is-mode .compact-tray-button[aria-expanded='true'] {
+  background: var(--color-accent-dim);
+}
+
+/* Its subject is on (a cut, hidden parts): a dot on the icon. */
+.compact-tray-button.is-on::after {
+  content: '';
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-accent);
+}
+
+.compact-tray-button:disabled {
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+.compact-tray-button:focus-visible,
+.compact-round-button:focus-visible,
+.compact-choice:focus-visible,
+.compact-param-value:focus-visible,
+.compact-switch:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ── A tray's page ── */
+
+.compact-tray-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.compact-page-note {
+  margin: 0;
+  font-size: 15px;
+  color: var(--color-text-muted);
+}
+
+.compact-page-note.is-error,
+.compact-param-error {
+  color: var(--color-error-text);
+}
+
+.compact-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--sp-2);
+}
+
+.compact-choice {
+  box-sizing: border-box;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.compact-choice.is-wide {
+  grid-column: 1 / -1;
+}
+
+.compact-choice[aria-pressed='true'],
+.compact-menu-row[aria-pressed='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+.compact-menu-check {
+  flex: 0 0 auto;
+  color: var(--color-accent);
+}
+
+.compact-stepper-row {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-4);
+}
+
+.compact-round-button {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.compact-round-button:disabled {
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+.compact-analysis-host:empty {
+  display: none;
+}
+
+.compact-saved-views {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+/* The workspace's panels, which float as islands on the regular stage,
+   sit in the page's flow here: their placement and frames are reset. */
+.compact-tray-page > .measurement-dock,
+.compact-tray-page > .view-mode-rail,
+.compact-tray-page > .rail-section-panel,
+.compact-analysis-host > .analysis-panel {
+  position: static;
+  inset: auto;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  overflow: visible;
+  transform: none;
+  translate: none;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.compact-tray-page > .measurement-dock .measurement-dock-body,
+.compact-tray-page > .view-mode-rail .view-mode-rail-list {
+  max-height: none;
+  overflow: visible;
+}
+
+/* The sheet's title names the page; the panel's own heading repeats it. */
+.compact-tray-page > .measurement-dock > .measurement-dock-head > h2,
+.compact-tray-page > .view-mode-rail > .view-mode-rail-head {
+  display: none;
+}
+
+/* Every control in a page takes a thumb. */
+.compact-tray-page button,
+.compact-tray-page select,
+.compact-tray-page input {
+  min-height: var(--compact-target);
+}
+
+/* The cut's slider: a thumb-high strip around its thin track, and a
+   thumb a finger can find. */
+.compact-tray-page .rail-section-slider {
+  height: var(--compact-target);
+}
+
+.compact-tray-page .rail-section-slider::-webkit-slider-thumb {
+  width: 22px;
+  height: 22px;
+  margin-top: -9px;
+}
+
+.compact-tray-page .rail-section-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+}
+
+.compact-tray-page
+  :is(
+    .view-mode-rail-action,
+    .rail-section-icon,
+    .rail-section-flip,
+    .analysis-panel-off,
+    .measurement-row-actions button
+  ) {
+  min-width: var(--compact-target);
+}
+
+/* A part's Show only and Hide stand in its row: there is no hover to
+   bring them up on a touch screen. */
+.compact-tray-page .view-mode-rail-action {
+  height: var(--compact-target);
+  opacity: 1;
+}
+
+.compact-tray-page .view-mode-rail-action > svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* The cut's switch: a larger pill in a thumb-high strip. */
+.compact-tray-page .rail-section-switch {
+  box-sizing: border-box;
+  width: 60px;
+  height: var(--compact-target);
+  padding: 6px 0;
+  background-clip: content-box;
+}
+
+.compact-tray-page .rail-section-switch > span {
+  top: 10px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+}
+
+.compact-tray-page .rail-section-switch[aria-checked='false'] > span {
+  right: auto;
+  left: 4px;
+}
+
+/* ── Tweak's parameters ── */
+
+.compact-param-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.compact-param {
+  box-sizing: border-box;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.compact-param-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 17px;
+  color: var(--color-text);
+}
+
+.compact-param-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.compact-param-value {
+  box-sizing: border-box;
+  min-width: 72px;
+  min-height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.compact-param-value[aria-busy='true'] {
+  color: var(--color-text-muted);
+}
+
+.compact-param-number {
+  font-variant-numeric: tabular-nums;
+}
+
+.compact-param-unit {
+  font-size: 15px;
+  color: var(--color-text-muted);
+}
+
+.compact-param-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 13px;
+}
+
+/* An on/off parameter: one switch, a thumb's width. */
+.compact-switch {
+  box-sizing: border-box;
+  width: 60px;
+  height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  cursor: pointer;
+}
+
+.compact-switch > span {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-1, 0 1px 2px rgb(0 0 0 / 0.2));
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.compact-switch[aria-checked='true'] {
+  background: var(--color-accent);
+}
+
+.compact-switch[aria-checked='true'] > span {
+  transform: translateX(20px);
 }

@@ -26,6 +26,7 @@ import { useAssemblyView } from '../lib/assembly/useAssemblyView';
 import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 import {
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -34,6 +35,8 @@ import {
   type MutableRefObject,
   type ReactNode
 } from 'react';
+import { createPortal } from 'react-dom';
+import { CompactAnalysisSlotContext } from './compact/compactSlots';
 import {
   ModelViewer,
   type BodyAppearancePreview,
@@ -914,6 +917,19 @@ export function ViewerShell({
     measurementCloudSync[2].has(cloudProjectId) &&
     measurementCloudSync[3] === cloudProjectId;
 
+  const compactAnalysis = useContext(CompactAnalysisSlotContext);
+  const analysisPanel =
+    !hideViewerToolbar && analysisRequest && analysis.state ? (
+      <AnalysisPanel
+        request={analysisRequest}
+        run={analysis.state}
+        previewing={analysisPreviewing}
+        lengthUnit={units === 'inch' ? 'in' : units}
+        nameOf={(bodyId) => analysisNames.get(bodyId) ?? 'A body'}
+        onChange={analysisRuntime.update}
+        onOff={analysisRuntime.off}
+      />
+    ) : null;
   const viewerToolbar = (
     <ViewerToolbar
       // Its panel can stay up on the last cut after the cut is switched off;
@@ -1279,17 +1295,15 @@ export function ViewerShell({
       {modeOverlay}
       {/* M09: the analysis the Display menu switched on, with its legend,
           provenance and limits; its own island over the stage's foot. */}
-      {!hideViewerToolbar && analysisRequest && analysis.state ? (
-        <AnalysisPanel
-          request={analysisRequest}
-          run={analysis.state}
-          previewing={analysisPreviewing}
-          lengthUnit={units === 'inch' ? 'in' : units}
-          nameOf={(bodyId) => analysisNames.get(bodyId) ?? 'A body'}
-          onChange={analysisRuntime.update}
-          onOff={analysisRuntime.off}
-        />
-      ) : null}
+      {analysisPanel === null
+        ? null
+        : compactAnalysis
+          ? // The compact workspace (U12 slice 7) draws it in View's Display
+            // page, not over the stage's foot where its sheet stands.
+            compactAnalysis.host
+            ? createPortal(analysisPanel, compactAnalysis.host)
+            : null
+          : analysisPanel}
       {/* Upright in the stage's bottom-left corner at every window size. */}
       <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
       {frameRateOverlay && (
