@@ -28,18 +28,23 @@ import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../../lib/workspaceSaveStateP
 import type { WorkspaceSaveState } from '../../lib/cloudProjectAutosave';
 import { OWN_ENTER_ATTRIBUTE } from '../../lib/exactEntryShortcut';
 import type { PaletteCommand } from '../CommandBar';
-import { BottomSheet, SHEET_OVERLAY_ATTRIBUTE, useSheet } from './BottomSheet';
+import { AllToolsSheet } from './AllToolsSheet';
+import { BottomSheet, useSheet } from './BottomSheet';
 import {
   ANALYSIS_LABELS,
   analysisRuntime,
   useAnalysisRuntime
 } from '../../lib/analysis/analysisRuntime';
 import {
+  COMPACT_SHEET_RAISE_EVENT,
   CompactAnalysisSlotContext,
   CompactTrayContext,
+  SHEET_OVERLAY_ATTRIBUTE,
   type CompactChromeProps,
+  type CompactSheetRaise,
   type CompactTraySlot
 } from './compactSlots';
+import { ContextTray } from './ContextTray';
 
 /** The save dot's tone: settled, under way, or worth a look. */
 function saveTone(state: WorkspaceSaveState): 'ok' | 'busy' | 'local' | 'warn' {
@@ -128,10 +133,20 @@ export interface CompactWorkspaceProps extends CompactChromeProps {
   /** Changes when different content arrives, so the sheet comes up. */
   sheetKey: string;
   /**
+   * A running command's bar is in the sheet (it carries its own tray row,
+   * which then stands in for the mode's tray).
+   */
+  commandRowPresent?: boolean;
+  /**
+   * That bar is all the sheet holds: it comes up at peek, the model in view
+   * to pick on, and its Options raise it.
+   */
+  rowOnly?: boolean;
+  /**
    * The mode's tray (U12 slice 7: View's and Tweak's verbs), the sheet's
    * row at peek; its pages open over it through `CompactTrayContext`. A
    * tray keeps the sheet at peek rather than closed, and arriving does not
-   * raise it: only a page does.
+   * raise it: only a page does. Build's tray comes from `build` instead.
    */
   tray?: ReactNode;
   /** The host the in-place command bar is portalled into. */
@@ -151,7 +166,7 @@ export interface CompactWorkspaceProps extends CompactChromeProps {
 const OWN_ENTER = { [OWN_ENTER_ATTRIBUTE]: '' };
 
 /** The pages the compact chrome pushes onto the sheet, by id. */
-type CompactPage = 'more' | 'file' | 'selection';
+type CompactPage = 'more' | 'file' | 'selection' | 'all-tools';
 
 /** A tray's page in the back stack: this prefix, then the tray's own key. */
 const TRAY_PAGE = 'tray:';
@@ -183,9 +198,12 @@ export default function CompactWorkspace({
   onClearSelection,
   onMakeCopy,
   reducedMotion,
+  build = null,
   sheetContent,
   hasSheetContent,
   sheetKey,
+  commandRowPresent = false,
+  rowOnly = false,
   tray = null,
   onCommandRowHost,
   onOverlayHost
@@ -194,7 +212,11 @@ export default function CompactWorkspace({
   const headerRef = useRef<HTMLElement | null>(null);
   const tabsRef = useRef<HTMLElement | null>(null);
   const floatRef = useRef<HTMLDivElement | null>(null);
-  const hasTray = tray !== null && tray !== undefined && tray !== false;
+  // Build's tray stands at peek while nothing runs (U12 slice 4); View's
+  // and Tweak's trays come from the workspace (U12 slice 7). One mode has
+  // one tray, so at most one of them is up.
+  const hasModeTray = tray !== null && tray !== undefined && tray !== false;
+  const trayShown = build !== null || hasModeTray;
   // An analysis left on (M09) keeps colouring the model in every mode, as in
   // the regular workspace, where its panel with Off stays over the stage.
   // Here the panel lives in View's Display page; wherever that page is not
@@ -203,26 +225,76 @@ export default function CompactWorkspace({
   const analysisPanelShown = Boolean(
     useContext(CompactAnalysisSlotContext)?.host
   );
+  // The keypad is Build's sheet's content while it is open (U12 slice 4):
+  // it lands in a host in the sheet's flow, under the tray row.
+  const [keypadHost, setKeypadHost] = useState<HTMLElement | null>(null);
+  const [keypadUp, setKeypadUp] = useState(false);
+  // Up in either of its sheet hosts: this one, or a running command's bar.
+  useEffect(() => {
+    const chrome = chromeRef.current;
+    if (!chrome) return;
+    const read = () =>
+      setKeypadUp(
+        chrome.querySelector('.compact-sheet .numeric-keypad') !== null
+      );
+    read();
+    const observer = new MutationObserver(read);
+    observer.observe(chrome, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
   // A tray is the sheet's own root too: the sheet rests at peek on it.
-  const hasRoot = hasSheetContent || hasTray;
+  const hasRoot = hasSheetContent || trayShown || keypadUp;
   const { state, dispatch } = useSheet(hasRoot);
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // Content arriving brings the sheet up to half; content leaving closes a
-  // sheet that holds nothing else, or lowers it to a tray's peek.
+  // Content arriving brings the sheet up to half (a running tool's row
+  // alone to peek); content leaving closes a sheet that holds nothing else,
+  // and brings one that keeps a tray back down to its peek (under an open
+  // page, once the page goes).
   const lastKey = useRef('');
-  const hadContent = useRef(false);
   useEffect(() => {
-    const arrived = hasSheetContent && sheetKey !== lastKey.current;
-    lastKey.current = hasSheetContent ? sheetKey : '';
-    const left = hadContent.current && !hasSheetContent;
-    hadContent.current = hasSheetContent;
-    dispatch({ type: 'root', present: hasRoot, arrived });
-    if (left && hasTray && stateRef.current.stack.length === 0) {
-      dispatch({ type: 'set-detent', detent: 'peek' });
+    const key = hasSheetContent ? sheetKey : '';
+    const arrived = key !== '' && key !== lastKey.current;
+    const left = key === '' && lastKey.current !== '';
+    lastKey.current = key;
+    if (left && trayShown) {
+      dispatch({ type: 'settle' });
+      return;
     }
-  }, [dispatch, hasSheetContent, hasRoot, hasTray, sheetKey]);
+    dispatch({
+      type: 'root',
+      present: hasRoot,
+      arrived,
+      at: rowOnly ? 'peek' : 'half'
+    });
+  }, [dispatch, hasRoot, hasSheetContent, rowOnly, sheetKey, trayShown]);
+
+  // The keypad needs the room of half height at least.
+  useEffect(() => {
+    if (keypadUp) dispatch({ type: 'raise', detent: 'half' });
+  }, [dispatch, keypadUp]);
+
+  // What in the sheet asks for room (a tool's Options, a refusal) raises it.
+  useEffect(() => {
+    const chrome = chromeRef.current;
+    if (!chrome) return;
+    const onRaise = (event: Event) => {
+      const detent = (event as CustomEvent<CompactSheetRaise>).detail;
+      dispatch({ type: 'raise', detent: detent === 'full' ? 'full' : 'half' });
+    };
+    chrome.addEventListener(COMPACT_SHEET_RAISE_EVENT, onRaise);
+    return () => chrome.removeEventListener(COMPACT_SHEET_RAISE_EVENT, onRaise);
+  }, [dispatch]);
+
+  // The keypad's host: in the sheet while Build's tray holds it up, so the
+  // keypad is the sheet's content; elsewhere (View's and Tweak's trays too)
+  // outside the stage, where it stands over the sheet at any height.
+  const keypadInSheet = build !== null;
+  const overlayHostRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    onOverlayHost(keypadInSheet ? keypadHost : overlayHostRef.current);
+  }, [keypadHost, keypadInSheet, onOverlayHost]);
 
   // The tray's open page, wherever it is in the stack (a page such as More
   // can stand over it), and the element its content is drawn into while it
@@ -265,13 +337,13 @@ export default function CompactWorkspace({
     lastTrayPage.current = trayPage;
     if (
       left &&
-      hasTray &&
+      hasModeTray &&
       !hasSheetContent &&
       stateRef.current.stack.length === 0
     ) {
       dispatch({ type: 'set-detent', detent: 'peek' });
     }
-  }, [dispatch, hasSheetContent, hasTray, trayPage]);
+  }, [dispatch, hasModeTray, hasSheetContent, trayPage]);
 
   const shell = () => chromeRef.current?.closest('.app-shell') ?? null;
   const background = useCallback(
@@ -315,12 +387,15 @@ export default function CompactWorkspace({
       }
       const body = details.closest<HTMLElement>('.compact-sheet-body');
       if (!body) return;
-      // Its top into view when it opened below the sheet's fold, leaving
-      // the bar above it in reach where there is room.
+      // Its top into view when it opened below the sheet's fold, just
+      // under the tray row pinned over it.
       const room = body.getBoundingClientRect();
+      const pinned =
+        body.querySelector('.compact-tray-row')?.getBoundingClientRect()
+          .bottom ?? room.top;
       const top = details.getBoundingClientRect().top;
       if (top > room.bottom - 96) {
-        body.scrollTop += top - room.top - 8;
+        body.scrollTop += top - Math.max(room.top, pinned) - 8;
       }
     };
     // `toggle` does not bubble.
@@ -328,9 +403,25 @@ export default function CompactWorkspace({
     return () => chrome.removeEventListener('toggle', onToggle, true);
   }, []);
 
-  const push = (key: CompactPage) => dispatch({ type: 'push', page: { key } });
+  // A disabled verb's reason stands under the tray row: tapped at peek,
+  // the sheet comes up to half to show it, and goes back to the height the
+  // person chose with it (sheetState's temporary raise), even when All
+  // tools opened and closed meanwhile.
+  const onTrayReason = useCallback(
+    (shown: boolean) =>
+      dispatch(
+        shown
+          ? { type: 'raise', detent: 'half', temporary: true }
+          : { type: 'lower' }
+      ),
+    [dispatch]
+  );
+
+  const push = (key: CompactPage, detent?: 'half' | 'full') =>
+    dispatch({ type: 'push', page: { key }, ...(detent ? { detent } : {}) });
   const closePages = () => dispatch({ type: 'close' });
   const moreOpen = state.stack.some((page) => page.key === 'more');
+  const allToolsOpen = state.stack.some((page) => page.key === 'all-tools');
 
   // Each page is drawn from the workspace's state as it is now, so a row
   // disabled while the model was updating comes back when it finishes.
@@ -413,6 +504,21 @@ export default function CompactWorkspace({
             />
           )
         };
+      case 'all-tools':
+        return build
+          ? {
+              title: 'All tools',
+              content: (
+                <AllToolsSheet
+                  build={build}
+                  onLaunch={(tool) => {
+                    closePages();
+                    build.onLaunchTool(tool);
+                  }}
+                />
+              )
+            }
+          : null;
       case 'selection':
         return {
           title: selectionLabel ?? 'Nothing picked',
@@ -555,21 +661,46 @@ export default function CompactWorkspace({
           background={background}
           onHeight={onHeight}
         >
-          {/* The mode's tray first: the row the sheet shows at peek. */}
-          {hasTray ? (
+          {/* The mode's tray first: the row the sheet shows at peek. A
+              running command's bar brings its own row, which stands in for
+              it: Build's tray goes, and View's or Tweak's waits, hidden,
+              with its state, until the command ends. */}
+          {trayShown ? (
             <CompactTrayContext.Provider value={traySlot}>
               <div
                 className={`compact-tray-slot${
-                  hasSheetContent ? '' : ' is-alone'
+                  hasModeTray && !hasSheetContent && !commandRowPresent
+                    ? ' is-alone'
+                    : ''
                 }`}
+                hidden={commandRowPresent}
               >
-                <Suspense fallback={null}>{tray}</Suspense>
+                {build ? (
+                  commandRowPresent ? null : (
+                    <ContextTray
+                      build={build}
+                      allToolsOpen={allToolsOpen}
+                      onAllTools={() =>
+                        allToolsOpen ? closePages() : push('all-tools', 'full')
+                      }
+                      onReason={onTrayReason}
+                    />
+                  )
+                ) : (
+                  <Suspense fallback={null}>{tray}</Suspense>
+                )}
               </div>
             </CompactTrayContext.Provider>
           ) : null}
           {/* The in-place command bar lands here (WorkspaceReadout), first:
               its step and Done are what a running command needs in reach. */}
           <div ref={onCommandRowHost} className="compact-command-row" />
+          {/* The keypad, as the sheet's content under the tray row. */}
+          <div
+            ref={setKeypadHost}
+            className="compact-keypad-host"
+            {...{ [SHEET_OVERLAY_ATTRIBUTE]: '' }}
+          />
           {sheetContent}
         </BottomSheet>
       </div>
@@ -617,7 +748,7 @@ export default function CompactWorkspace({
           keypad) stays live while the sheet stands at full over an inert
           stage. */}
       <div
-        ref={onOverlayHost}
+        ref={overlayHostRef}
         className="compact-overlay-host"
         {...{ [SHEET_OVERLAY_ATTRIBUTE]: '' }}
       />

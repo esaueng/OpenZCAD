@@ -1,6 +1,12 @@
-import { createContext, useContext, useLayoutEffect } from 'react';
+import { createContext, useCallback, useContext, useLayoutEffect } from 'react';
 import type { WorkspaceMode } from '../../lib/panelState';
 import type { WorkspaceSaveState } from '../../lib/cloudProjectAutosave';
+import type {
+  SelectionCalloutVerb,
+  SelectionCalloutVerbId
+} from '../../lib/selectionCallout';
+import type { CommandContext } from '../../lib/commandContext';
+import type { ToolAvailability, ToolId } from '../../lib/tools';
 import type { PaletteCommand } from '../CommandBar';
 
 /**
@@ -13,10 +19,24 @@ import type { PaletteCommand } from '../CommandBar';
 export interface CompactCommandRowSlot {
   host: HTMLElement | null;
   report(present: boolean): void;
+  /**
+   * Where a running command's bar, drawn as the tray, takes the keypad: in
+   * the bar under its pinned row (U12 slice 4), so the keypad scrolls under
+   * Cancel and Done rather than pushing them out of the sheet. Null when the
+   * bar goes.
+   */
+  keypadSlot?(element: HTMLElement | null): void;
 }
 
 export const CompactCommandRowContext =
   createContext<CompactCommandRowSlot | null>(null);
+
+/**
+ * Marks what owns its own keys and focus inside or over the compact sheet
+ * (the numeric keypad's hosts): the sheet neither pulls focus out of it
+ * nor takes its Escape.
+ */
+export const SHEET_OVERLAY_ATTRIBUTE = 'data-sheet-overlay';
 
 /** The compact sheet's command-row host, or null in the regular workspace. */
 export function useCompactCommandRowHost(present: boolean): HTMLElement | null {
@@ -28,6 +48,53 @@ export function useCompactCommandRowHost(present: boolean): HTMLElement | null {
     return () => report(false);
   }, [report, present]);
   return slot?.host ?? null;
+}
+
+/**
+ * Whether a running command's bar is drawn as the compact sheet's tray (U12
+ * slice 4): one pinned row of the tool's icon, its step, Options, Cancel and
+ * Done, with everything else in the sheet's flow under it. False on the
+ * regular stage, where the bar keeps its own layout.
+ */
+export const CompactCommandTrayContext = createContext(false);
+
+export function useCompactCommandTray(): boolean {
+  return useContext(CompactCommandTrayContext);
+}
+
+/** The tray bar's ref for its keypad slot; a no-op outside the tray. */
+export function useCompactKeypadSlot(): (element: HTMLElement | null) => void {
+  const slot = useContext(CompactCommandRowContext);
+  const tray = useContext(CompactCommandTrayContext);
+  const keypadSlot = slot?.keypadSlot;
+  return useCallback(
+    (element: HTMLElement | null) => {
+      if (tray) keypadSlot?.(element);
+    },
+    [keypadSlot, tray]
+  );
+}
+
+/**
+ * Asks the compact sheet holding `from` to stand at least this high: a
+ * bar's Options, a refusal or the keypad need room the tray row has not.
+ * A DOM event, so a command drawn anywhere in the sheet can ask without
+ * knowing the sheet; outside one it goes nowhere.
+ */
+export const COMPACT_SHEET_RAISE_EVENT = 'openzcad:compact-sheet-raise';
+
+export type CompactSheetRaise = 'half' | 'full';
+
+export function raiseCompactSheet(
+  from: Element | null,
+  detent: CompactSheetRaise = 'half'
+): void {
+  from?.dispatchEvent(
+    new CustomEvent<CompactSheetRaise>(COMPACT_SHEET_RAISE_EVENT, {
+      bubbles: true,
+      detail: detent
+    })
+  );
 }
 
 /**
@@ -90,6 +157,37 @@ export interface CompactChromeProps {
    */
   onMakeCopy?(): void;
   reducedMotion: boolean;
+  /**
+   * Build's tray at rest (U12 slice 4): the suggested verbs and the All
+   * tools sheet. Null outside Build, while a sketch is open and while
+   * modeling is locked, where the tray has nothing of Build's to offer.
+   */
+  build?: CompactBuildProps | null;
+}
+
+/** What Build's tray and its All tools sheet need from the workspace. */
+export interface CompactBuildProps {
+  /** What is picked, as the verb rail reads it: the tray suggests for it. */
+  context: CommandContext;
+  /**
+   * The pick's own verbs, which take the tools' place while something is
+   * picked, as on the verb rail; null with nothing picked.
+   */
+  pick: {
+    verbs: readonly SelectionCalloutVerb[];
+    /** Whether the verb can run now (the rail's hold rule). */
+    enabled(verb: SelectionCalloutVerb): boolean;
+    onVerb(id: SelectionCalloutVerbId): void;
+  } | null;
+  availability: ToolAvailability;
+  /** The tool running now, lit in the All tools sheet. */
+  activeTool: ToolId | null;
+  /** Recently launched tools, newest first: they lead the suggestions. */
+  recentTools: readonly ToolId[];
+  /** The verb rail's pins, which lead All tools before anything is used. */
+  pinnedTools: readonly ToolId[];
+  /** Launches a tool through the workspace's own launch path. */
+  onLaunchTool(tool: ToolId): void;
 }
 
 /**

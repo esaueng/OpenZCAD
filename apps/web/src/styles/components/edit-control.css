@@ -446,11 +446,12 @@
 }
 
 /* The compact workspace (U12) draws the keypad outside the stage, in its
-   overlay host: the stage's tag steps aside all the same, so one switch is
-   seen and focused. A rule of its own, so every selector naming the shell
-   stays scoped to it. */
+   overlay host or as the sheet's content: the stage's tag steps aside all
+   the same, so one switch is seen and focused. A rule of its own, so every
+   selector naming the shell stays scoped to it. */
 .app-shell[data-shell='compact']:has(
-    .compact-overlay-host .numeric-keypad[data-operation]
+    :is(.compact-overlay-host, .compact-keypad-host)
+      .numeric-keypad[data-operation]
   )
   .viewer-area
   .handle-label-chip {

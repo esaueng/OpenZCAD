@@ -690,7 +690,10 @@ import {
   type ToolAvailability,
   type ToolId
 } from './lib/tools';
-import { selectionRailToolHoldReason } from './lib/selectionRailHold';
+import {
+  selectionRailToolHoldReason,
+  selectionRailVerbEnabled
+} from './lib/selectionRailHold';
 import {
   commandContextFor,
   commandContextLabel,
@@ -40630,6 +40633,38 @@ export function App() {
               // draw: the More page carries it for every share visitor.
               ...(shareSession ? { onMakeCopy: requestShareCopy } : {}),
               reducedMotion: appSettings.appearance.reducedMotion,
+              // U12 slice 4: Build's tray and its All tools sheet, which
+              // launch through the verb rail's own path.
+              build:
+                resolvedWorkspaceMode === 'build' &&
+                interaction.mode !== 'sketch' &&
+                !modelingLocked
+                  ? {
+                      context: commandContextFor(commandSelection),
+                      pick: railPick
+                        ? {
+                            verbs: railPick.verbs,
+                            enabled: (verb) =>
+                              selectionRailVerbEnabled(railPick, verb),
+                            onVerb: railPick.onVerb
+                          }
+                        : null,
+                      availability: shownAvailability,
+                      activeTool: tool ?? inPlace.tool,
+                      recentTools: panelState.recentTools,
+                      pinnedTools: panelState.pinnedTools,
+                      onLaunchTool: (nextTool) => {
+                        setPanelState((current) => ({
+                          ...current,
+                          recentTools: recordRecentTool(
+                            current.recentTools,
+                            nextTool
+                          )
+                        }));
+                        launchTool(nextTool);
+                      }
+                    }
+                  : null,
               sheetKey: `${commandCardKey}|${inspectorKey}|${inPlaceKey}|${
                 phonePanel ?? ''
               }`
@@ -42897,6 +42932,7 @@ export function App() {
                       ? `Edit ${inPlace.editing.name}`
                       : inPlaceSpec.title
                   }
+                  icon={inPlace.tool ? TOOL_META[inPlace.tool].icon : null}
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
                   refusalClassification={inPlace.refusalClassification}

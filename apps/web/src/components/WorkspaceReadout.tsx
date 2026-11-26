@@ -7,7 +7,10 @@ import {
 } from 'react';
 import { Info, Magnet } from 'lucide-react';
 import { createPortal } from 'react-dom';
-import { useCompactCommandRowHost } from './compact/compactSlots';
+import {
+  CompactCommandTrayContext,
+  useCompactCommandRowHost
+} from './compact/compactSlots';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
 import { usePacedStatus } from '../hooks/usePacedStatus';
@@ -464,7 +467,13 @@ export function WorkspaceReadout({
   return (
     <>
       {compactRowHost && givenCommandRow !== null
-        ? createPortal(givenCommandRow, compactRowHost)
+        ? createPortal(
+            // Drawn as the sheet's tray: one pinned row (U12 slice 4).
+            <CompactCommandTrayContext.Provider value={true}>
+              {givenCommandRow}
+            </CompactCommandTrayContext.Provider>,
+            compactRowHost
+          )
         : null}
       {/* The foot of the stage: one line of guidance over the search bar,
           led by what is picked. The guidance is the prompt the summary below
