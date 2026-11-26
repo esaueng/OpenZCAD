@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import {
   addPrimitiveFeature,
+  booleanBodies,
   createProjectDocument,
   listFeaturesInOrder,
   transformBody
@@ -14,6 +15,7 @@ import {
 import {
   clickWorldPoint,
   createProject,
+  enterCommandValue,
   expect,
   expectBodyCount,
   finishInPlaceCommand,
@@ -212,10 +214,50 @@ test(
   }
 );
 
-test('a click on the previewed moving face takes it back, as a click on the face itself does (M10 review)', async ({
+/**
+ * Holds every message the page posts to its workers (the geometry worker's
+ * preview requests among them) until released, so a frame stays on screen
+ * while the command's request has already moved on.
+ */
+async function holdableWorkers(page: Page) {
+  await page.addInitScript(() => {
+    const post = Worker.prototype.postMessage;
+    const held: [Worker, unknown[]][] = [];
+    const flags = window as unknown as {
+      __ozHoldWorkers?: boolean;
+      __ozReleaseWorkers?: () => void;
+    };
+    Worker.prototype.postMessage = function (this: Worker, ...args: unknown[]) {
+      if (flags.__ozHoldWorkers) {
+        held.push([this, args]);
+        return;
+      }
+      return (post as (...a: unknown[]) => void).apply(this, args);
+    } as typeof Worker.prototype.postMessage;
+    flags.__ozReleaseWorkers = () => {
+      flags.__ozHoldWorkers = false;
+      for (const [worker, args] of held.splice(0)) {
+        (post as (...a: unknown[]) => void).apply(worker, args);
+      }
+    };
+  });
+}
+
+/** Starts Align with Flip chosen. */
+async function startFlippedAlign(page: Page) {
+  await pressTool(page, /^Align/);
+  const bar = page.getByRole('group', { name: 'Align command' });
+  await bar.locator('summary').click();
+  await bar.getByRole('radio', { name: 'Flip' }).check();
+  await bar.locator('summary').click();
+  return bar;
+}
+
+test('a click on the moving face drawn by the frame on screen takes it back, while a newer Offset is still building (M10 review)', async ({
   page
 }) => {
   test.setTimeout(120_000);
+  await holdableWorkers(page);
   const document = twoBoxes();
   const [, blockId] = document.bodyOrder;
   await openDocument(page, document);
@@ -228,29 +270,130 @@ test('a click on the previewed moving face takes it back, as a click on the face
   await page.keyboard.press('f');
   await waitForStillViewport(page);
 
-  await pressTool(page, /^Align/);
-  const bar = page.getByRole('group', { name: 'Align command' });
   // Flip: the block's top lands in the target's top plane, still facing up,
   // so the previewed face stays in view beside the target.
-  await bar.locator('summary').click();
-  await bar.getByRole('radio', { name: 'Flip' }).check();
-  await bar.locator('summary').click();
+  const bar = await startFlippedAlign(page);
   await clickWorldPoint(page, [65, 9, 26]);
   await expect(bar).toContainText('Click a flat face on the target body');
   await clickWorldPoint(page, [20, 15, 10]);
+  const drawn: Box = [60, 5, 4, 70, 13, 10];
   await expect
     .poll(() => boxOf(page, blockId!), { timeout: 30_000 })
-    .toEqual([60, 5, 4, 70, 13, 10] satisfies Box);
+    .toEqual(drawn);
   await waitForStillViewport(page);
 
-  // The moved preview renames every face; the click still means the
-  // block's top, the moving face, and takes both picks back.
+  // Offset 5 is asked for, but its frame cannot build: the Offset 0 frame
+  // stays on screen, and a click on the block's top there means that top.
+  await page.evaluate(() => {
+    (window as unknown as { __ozHoldWorkers: boolean }).__ozHoldWorkers = true;
+  });
+  await enterCommandValue(page, 'offset', '5');
+  expect(await boxOf(page, blockId!)).toEqual(drawn);
   await clickWorldPoint(page, [65, 9, 10]);
   await expect(bar).toContainText('Click a flat face on the body to move');
+  await page.evaluate(() =>
+    (
+      window as unknown as { __ozReleaseWorkers: () => void }
+    ).__ozReleaseWorkers()
+  );
   await expect
     .poll(() => boxOf(page, blockId!), { timeout: 30_000 })
     .toEqual(MOVING);
   await page.keyboard.press('Escape');
   await expect(bar).toHaveCount(0);
   expect(await savedMoves(page)).toEqual(['Place the block']);
+});
+
+/**
+ * A 40 × 20 × 10 block with a 10 wide, 5 deep slot across its top (two
+ * coplanar tops, x 0–15 and 25–40), and a 40 × 30 × 20 target beside it.
+ */
+function slottedBlockAndTarget(): ProjectDocument {
+  let document = createProjectDocument(NAME, toUserId('user_e2e'));
+  document = addPrimitiveFeature(document, {
+    name: 'Block',
+    bodyName: 'Block',
+    primitiveKind: 'box',
+    dimensions: { width: 40, height: 20, depth: 10 }
+  });
+  const blockId = document.bodyOrder.at(-1) as BodyId;
+  document = addPrimitiveFeature(document, {
+    name: 'Slot',
+    bodyName: 'Slot',
+    primitiveKind: 'box',
+    dimensions: { width: 10, height: 24, depth: 7 }
+  });
+  const slotId = document.bodyOrder.at(-1) as BodyId;
+  document = transformBody(document, {
+    name: 'Place the slot',
+    targetBodyId: slotId,
+    translation: { x: 15, y: -2, z: 5 },
+    rotationDeg: { x: 0, y: 0, z: 0 }
+  }).document;
+  document = booleanBodies(document, {
+    name: 'Cut the slot',
+    operation: 'subtract',
+    targetBodyIds: [blockId, slotId]
+  }).document;
+  document = addPrimitiveFeature(document, {
+    name: 'Target',
+    bodyName: 'Target',
+    primitiveKind: 'box',
+    dimensions: { width: 40, height: 30, depth: 20 }
+  });
+  return transformBody(document, {
+    name: 'Place the target',
+    targetBodyId: document.bodyOrder.at(-1) as BodyId,
+    translation: { x: 60, y: 0, z: 0 },
+    rotationDeg: { x: 0, y: 0, z: 0 }
+  }).document;
+}
+
+test('a click on either coplanar top of a slotted block, in the preview, is that top (M10 review)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await openDocument(page, slottedBlockAndTarget());
+  await expectBodyCount(page, 2);
+  await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+    'data-e2e-rendered-bodies',
+    '2',
+    { timeout: 30_000 }
+  );
+  await page.keyboard.press('f');
+  await waitForStillViewport(page);
+  // Each top in turn is the moving face; Flip and Offset 2 lift the block
+  // so its tops stand 2 over the target's top, at z = 22.
+  for (const x of [7.5, 32.5]) {
+    const bar = await startFlippedAlign(page);
+    await clickWorldPoint(page, [x, 10, 10]);
+    await expect(bar).toContainText('Click a flat face on the target body');
+    await clickWorldPoint(page, [80, 15, 20]);
+    await expect(bar).toContainText('Drag the offset');
+    await enterCommandValue(page, 'offset', '2');
+    await expect
+      .poll(
+        async () => {
+          const boxes = await drawnBoxes(page);
+          return Object.values(boxes)
+            .map((box) => box.map(round))
+            .some((box) => box[2] === 12 && box[5] === 22);
+        },
+        { timeout: 30_000 }
+      )
+      .toBe(true);
+    await waitForStillViewport(page);
+    // The same top, clicked where the preview draws it: the moving face
+    // itself, so both picks come back out. (The other top shares its
+    // plane; a match by plane alone would take that one, and refuse it as
+    // a second face of the moving body.)
+    await clickWorldPoint(page, [x, 10, 22]);
+    await expect(bar).toContainText('Click a flat face on the body to move');
+    await page.keyboard.press('Escape');
+    await expect(bar).toHaveCount(0);
+  }
+  expect(await savedMoves(page)).toEqual([
+    'Place the slot',
+    'Place the target'
+  ]);
 });

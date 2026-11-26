@@ -9,8 +9,12 @@ import {
   placeDirection,
   placePoint,
   rotationFromDegrees,
+  committedFaceForPreviewPick,
+  previewedMove,
   smallestTurn,
-  unmovedFaceGeometry
+  unmovedFaceGeometry,
+  type MatchableFace,
+  type PlainMove
 } from './faceAlign';
 import {
   IN_PLACE_TOOL_SPECS,
@@ -430,7 +434,115 @@ describe('the Align command', () => {
 
 describe('a click on the previewed moving body (M10 review)', () => {
   const MOVING = 'body_moving' as BodyId;
-  it('finds where the previewed face stood before the Move', () => {
+  const move: PlainMove = {
+    translation: { x: 0, y: 0, z: 22 },
+    rotationDeg: { x: 0, y: 0, z: 0 },
+    pivot: { x: 0, y: 0, z: 0 }
+  };
+  /** A face record as a body's topology lists it. */
+  const record = (
+    id: string,
+    normal: Vector3,
+    centroid: Vector3,
+    area: number
+  ): MatchableFace => ({
+    topologyId: id,
+    hash: id.length,
+    geometry: { normal, centroid, center: centroid, area }
+  });
+  const shifted = (face: MatchableFace, by: Vector3, id: string) => ({
+    ...face,
+    topologyId: id,
+    geometry: {
+      ...face.geometry!,
+      centroid: {
+        x: face.geometry!.centroid!.x + by.x,
+        y: face.geometry!.centroid!.y + by.y,
+        z: face.geometry!.centroid!.z + by.z
+      },
+      center: {
+        x: face.geometry!.center.x + by.x,
+        y: face.geometry!.center.y + by.y,
+        z: face.geometry!.center.z + by.z
+      }
+    }
+  });
+  // A slotted block's two coplanar tops, its floor and its bottom.
+  const committed = [
+    record('bottom', neg(Z), { x: 20, y: 10, z: 0 }, 800),
+    record('top-left', Z, { x: 7.5, y: 10, z: 10 }, 300),
+    record('floor', Z, { x: 20, y: 10, z: 5 }, 200),
+    record('top-right', Z, { x: 32.5, y: 10, z: 10 }, 300)
+  ];
+  const preview = committed.map((face) =>
+    shifted(face, move.translation, `moved-${face.topologyId}`)
+  );
+
+  it('finds the clicked face by its place in the body, not the first coplanar one', () => {
+    expect(
+      committedFaceForPreviewPick(move, preview, committed, preview[3]!)
+    ).toBe(committed[3]);
+    expect(
+      committedFaceForPreviewPick(move, preview, committed, preview[1]!)
+    ).toBe(committed[1]);
+  });
+
+  it('refuses a match whose plane, moved back, is not the clicked one', () => {
+    // The Move on screen is not this one: the plane is 5 off.
+    const other = { ...move, translation: { x: 0, y: 0, z: 27 } };
+    expect(
+      committedFaceForPreviewPick(other, preview, committed, preview[3]!)
+    ).toBeNull();
+  });
+
+  it('tells coplanar faces apart by centre and area when the lists differ', () => {
+    const fewer = preview.slice(1);
+    expect(committedFaceForPreviewPick(move, fewer, committed, fewer[2]!)).toBe(
+      committed[3]
+    );
+    expect(committedFaceForPreviewPick(move, fewer, committed, fewer[0]!)).toBe(
+      committed[1]
+    );
+  });
+
+  it('takes the Move from the frame on screen, not a newer request', () => {
+    // The preview drawn was built with Offset 0; the request has since
+    // become Offset 5. Only the preview's own step says where it is drawn.
+    const committedDoc = { featureOrder: ['f_place'] };
+    const drawn = {
+      featureOrder: ['f_place', 'f_align'],
+      nodes: {
+        n_align: {
+          id: 'n_align',
+          kind: 'feature',
+          featureId: 'f_align',
+          featureKind: 'transform',
+          data: {
+            featureKind: 'transform',
+            targetBodyId: MOVING,
+            transform: {
+              translation: { x: 0, y: 0, z: 22 },
+              rotationDeg: { x: 0, y: 0, z: 0 }
+            }
+          }
+        }
+      }
+    } as unknown as Parameters<typeof previewedMove>[0];
+    expect(previewedMove(drawn, committedDoc as never, MOVING)).toEqual(move);
+    expect(
+      previewedMove(drawn, committedDoc as never, 'body_other')
+    ).toBeNull();
+    // Nothing previewed beyond what is committed: no Move to undo.
+    expect(
+      previewedMove(
+        drawn,
+        { featureOrder: ['f_place', 'f_align'] } as never,
+        MOVING
+      )
+    ).toBeNull();
+  });
+
+  it('moves a face back through a turned Move exactly', () => {
     const placement = faceAlignPlacement({
       moving: {
         normal: unit({ x: 1, y: 2, z: 2 }),
@@ -441,60 +553,14 @@ describe('a click on the previewed moving body (M10 review)', () => {
         point: { x: 10, y: 20, z: -3 }
       }
     })!;
-    const request = {
-      tool: 'transform' as const,
-      targetBodyId: MOVING,
-      translation: placement.translation,
-      rotationDeg: placement.rotationDeg,
-      pivot: placement.pivot
-    };
-    // Any face of the moving body: where the preview draws it, and back.
     const normal = unit({ x: 0.3, y: -0.9, z: 0.2 });
     const at = { x: 7, y: 3, z: -2 };
-    const shown = {
-      normal: placeDirection(placement, normal),
-      at: placePoint(placement, at)
-    };
-    const back = unmovedFaceGeometry(request, MOVING, shown.normal, shown.at)!;
+    const back = unmovedFaceGeometry(
+      placement,
+      placeDirection(placement, normal),
+      placePoint(placement, at)
+    );
     expectVector(back.normal, normal);
     expectVector(back.at, at);
-    // A pure translation (no turn stored) maps back too.
-    expect(
-      unmovedFaceGeometry(
-        {
-          tool: 'transform',
-          targetBodyId: MOVING,
-          translation: { x: 70, y: 0, z: 0 }
-        },
-        MOVING,
-        { x: 1, y: 0, z: 0 },
-        { x: 100, y: 5, z: 5 }
-      )
-    ).toEqual({ normal: { x: 1, y: 0, z: 0 }, at: { x: 30, y: 5, z: 5 } });
-  });
-
-  it('maps nothing back for another body, a copy, a scale or a turn about an axis', () => {
-    const at = { x: 1, y: 2, z: 3 };
-    const move = {
-      tool: 'transform' as const,
-      targetBodyId: MOVING,
-      translation: Z
-    };
-    expect(unmovedFaceGeometry(move, 'body_other', Z, at)).toBeNull();
-    expect(
-      unmovedFaceGeometry({ ...move, copy: true }, MOVING, Z, at)
-    ).toBeNull();
-    expect(
-      unmovedFaceGeometry({ ...move, scale: 2 }, MOVING, Z, at)
-    ).toBeNull();
-    expect(
-      unmovedFaceGeometry(
-        { ...move, translation: { x: 'a', y: 0, z: 0 } },
-        MOVING,
-        Z,
-        at
-      )
-    ).toBeNull();
-    expect(unmovedFaceGeometry(null, MOVING, Z, at)).toBeNull();
   });
 });

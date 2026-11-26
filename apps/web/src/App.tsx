@@ -490,7 +490,10 @@ import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
 import { loneBodyFor } from './lib/inPlace/loneBody';
-import { unmovedFaceGeometry } from './lib/inPlace/faceAlign';
+import {
+  committedFaceForPreviewPick,
+  previewedMove
+} from './lib/inPlace/faceAlign';
 import {
   presentedDiagnostics,
   shownFeatureWarnings
@@ -14537,30 +14540,43 @@ export function App() {
       // While a preview shows, a click lands on the preview's body, which the
       // document does not have. The face meant is the edited body's face in
       // the same plane: clicking the face again is how a hole moves.
-      const shown =
-        previewDoc?.derived.bodyRepresentations[
-          resolvedBodyId
-        ]?.topology?.faces.find(matches)?.geometry;
+      const shownFaces =
+        previewDoc?.derived.bodyRepresentations[resolvedBodyId]?.topology
+          ?.faces;
+      const shownFace = shownFaces?.find(matches);
+      const shown = shownFace?.geometry;
       const target = editTarget ?? inPlaceRef.current.slots.faces[0]?.bodyId;
-      if (target) {
-        // A body the command is moving (Align's) was renamed face by face
-        // with the move: its face is found where it stood before it.
-        const unmoved =
-          target === resolvedBodyId
-            ? unmovedFaceGeometry(
-                inPlaceRef.current.request,
-                target,
-                shown?.normal,
-                shown?.centroid ?? shown?.center
-              )
+      const committed = managerRef.current?.document;
+      if (
+        target &&
+        inPlaceRef.current.tool === 'align' &&
+        target === resolvedBodyId
+      ) {
+        // Align's moving body, drawn where the Move on screen puts it: the
+        // move renamed every face, so the face meant is the committed one
+        // in the same place in the body, moved back by that frame's own
+        // Move (never a newer request still building).
+        const move =
+          previewDoc && committed
+            ? previewedMove(previewDoc, committed, target)
             : null;
+        face =
+          (move && shownFaces && shownFace
+            ? committedFaceForPreviewPick(
+                move,
+                shownFaces,
+                representations[target]?.topology?.faces ?? [],
+                shownFace
+              )
+            : null) ?? undefined;
+      } else if (target) {
         face = coplanarFace(
           target,
-          unmoved?.normal ?? shown?.normal,
-          unmoved?.at ?? shown?.centroid ?? shown?.center
+          shown?.normal,
+          shown?.centroid ?? shown?.center
         );
-        if (face) resolvedBodyId = target;
       }
+      if (target && face) resolvedBodyId = target;
     }
     if (!face) return null;
     const geometry = face.geometry;

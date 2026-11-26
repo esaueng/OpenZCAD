@@ -23,8 +23,10 @@ import {
   type Vector3
 } from '@openzcad/shared';
 import {
+  committedFaceForPreviewPick,
   faceAlignFromPicks,
   faceAlignSpec,
+  previewedMove,
   placePoint,
   rotationFromDegrees
 } from '../apps/web/src/lib/inPlace/faceAlign';
@@ -343,6 +345,113 @@ describe(
         MOVING_VOLUME,
         6
       );
+    });
+
+    it("keeps a slotted block's faces one for one under the Move, so a preview pick finds its own face", async () => {
+      // A 40 × 20 × 10 block with a 10 wide, 5 deep slot across its top:
+      // two coplanar top faces. Aligned with Flip and an Offset, as the
+      // preview draws it, each moved face maps back to its own face.
+      const manager = new CommandManager(
+        createProjectDocument('Slotted align', user)
+      );
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Block',
+          primitiveKind: 'box',
+          dimensions: { width: 40, height: 20, depth: 10 }
+        })
+      );
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Slot',
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 24, depth: 7 }
+        })
+      );
+      const [blockId, slotId] = manager.document.bodyOrder;
+      manager.execute(
+        commandFactories.transformBody({
+          name: 'Place slot',
+          targetBodyId: slotId!,
+          translation: { x: 15, y: -2, z: 5 }
+        })
+      );
+      manager.execute(
+        commandFactories.booleanBodies({
+          name: 'Cut slot',
+          operation: 'subtract',
+          targetBodyIds: [blockId!, slotId!]
+        })
+      );
+      // The subtract's result is a body of its own; the inputs are used up.
+      const slottedId = manager.document.bodyOrder.at(-1)!;
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Target',
+          primitiveKind: 'box',
+          dimensions: TARGET_SIZE
+        })
+      );
+      const targetId = manager.document.bodyOrder.at(-1)!;
+      manager.execute(
+        commandFactories.transformBody({
+          name: 'Place target',
+          targetBodyId: targetId,
+          translation: { x: 60, y: 0, z: 0 }
+        })
+      );
+      const committed = await build(manager.document);
+      const block = committed.bodyRepresentations[slottedId]!;
+      expect(block.consumed).not.toBe(true);
+      const tops = block.topology!.faces.filter(
+        (face) =>
+          face.geometry?.normal?.z !== undefined &&
+          face.geometry.normal.z > 0.999 &&
+          Math.abs((face.geometry.centroid ?? face.geometry.center).z - 10) <
+            1e-9
+      );
+      expect(tops).toHaveLength(2);
+      const target = facePick(committed, targetId, (n, c) => n.z * 1e3 + c.z);
+      const before = { ...manager.document, derived: committed };
+      for (const top of tops) {
+        const pick: FacePick = {
+          bodyId: slottedId,
+          hash: top.hash,
+          topologyId: top.topologyId,
+          surfaceType: top.geometry!.surfaceType,
+          normal: top.geometry!.normal!,
+          ...(top.geometry!.centroid
+            ? { centroid: top.geometry!.centroid }
+            : {}),
+          center: top.geometry!.center
+        };
+        const shown = new CommandManager(before);
+        shown.execute(alignCommand([pick, target], { flip: true, offset: 3 }));
+        const drawn = await build(shown.document);
+        const moved = drawn.bodyRepresentations[slottedId]!.topology!.faces;
+        const faces = block.topology!.faces;
+        // Every face renamed, none added or lost, in the same order.
+        expect(moved).toHaveLength(faces.length);
+        expect(
+          moved.filter((face) =>
+            faces.some((other) => other.topologyId === face.topologyId)
+          )
+        ).toEqual([]);
+        const move = previewedMove(shown.document, before, slottedId);
+        expect(move).not.toBeNull();
+        for (const [index, face] of moved.entries()) {
+          expect(
+            committedFaceForPreviewPick(move!, moved, faces, face),
+            `face ${index}`
+          ).toBe(faces[index]);
+        }
+        // The picked top, clicked in the preview, is itself: not the other
+        // top in its plane.
+        const index = faces.indexOf(top);
+        expect(
+          committedFaceForPreviewPick(move!, moved, faces, moved[index]!)
+        ).toBe(top);
+      }
     });
   }
 );

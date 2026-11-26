@@ -1,11 +1,10 @@
-import type { ParametricVector3, Vector3 } from '@openzcad/shared';
-import { eulerDegrees } from './primitives';
 import type {
-  FacePick,
-  InPlaceContext,
-  InPlaceRequest,
-  InPlaceToolSpec
-} from './tools';
+  ParametricVector3,
+  ProjectDocument,
+  Vector3
+} from '@openzcad/shared';
+import { eulerDegrees } from './primitives';
+import type { FacePick, InPlaceContext, InPlaceToolSpec } from './tools';
 
 /**
  * M10 (slice 5b): Align, face to face. The body of the first picked flat
@@ -406,55 +405,149 @@ export const faceAlignSpec: InPlaceToolSpec = {
   }
 };
 
+/** A Move by numbers alone: what Align stores, and what it can undo. */
+export interface PlainMove {
+  translation: Vector3;
+  rotationDeg: Vector3;
+  pivot: Vector3;
+}
+
+function numeric(v: ParametricVector3 | undefined): Vector3 | null {
+  if (!v) return { x: 0, y: 0, z: 0 };
+  const { x, y, z } = v;
+  return typeof x === 'number' && typeof y === 'number' && typeof z === 'number'
+    ? { x, y, z }
+    : null;
+}
+
 /**
- * Where a face of a body an in-place Move is previewing stood before the
- * move: the previewed face's normal and a point on it, taken back through
- * the request's inverse. A click on the moved preview lands on faces the
- * committed body does not have (a rigid move renames every face), so this
- * is how such a click finds the committed face it came from. Null unless
- * the request moves this very body by numbers alone (a rotation, a pivot
- * and a translation, as Align stores them).
+ * The Move a previewed document applies to `bodyId` that the committed one
+ * does not: read from the preview's own features, so it is the Move of the
+ * frame on screen, never a newer request still building. Null unless there
+ * is exactly one such step and it moves this body in place by numbers alone
+ * (a rotation, a pivot and a translation, as Align stores them).
  */
-export function unmovedFaceGeometry(
-  request: InPlaceRequest | null | undefined,
-  bodyId: string,
-  normal: Vector3 | undefined,
-  at: Vector3 | undefined
-): { normal: Vector3; at: Vector3 } | null {
+export function previewedMove(
+  preview: Pick<ProjectDocument, 'featureOrder' | 'nodes'>,
+  committed: Pick<ProjectDocument, 'featureOrder'>,
+  bodyId: string
+): PlainMove | null {
+  const known = new Set(committed.featureOrder);
+  const added = preview.featureOrder.filter((id) => !known.has(id));
+  if (added.length !== 1) return null;
+  const node = Object.values(preview.nodes).find(
+    (candidate) =>
+      candidate.kind === 'feature' && candidate.featureId === added[0]
+  );
+  if (node?.kind !== 'feature') return null;
+  const data = node.data;
   if (
-    !request ||
-    request.tool !== 'transform' ||
-    request.targetBodyId !== bodyId ||
-    request.copy ||
-    request.scale !== undefined ||
-    request.axisRotation ||
-    !normal ||
-    !at
+    data.featureKind !== 'transform' ||
+    data.targetBodyId !== bodyId ||
+    data.copy ||
+    data.transform.scale !== undefined ||
+    data.axisRotation ||
+    data.csysAlign
   )
     return null;
-  const numbers = (v: ParametricVector3 | undefined): Vector3 | null => {
-    if (!v) return { x: 0, y: 0, z: 0 };
-    const { x, y, z } = v;
-    return typeof x === 'number' &&
-      typeof y === 'number' &&
-      typeof z === 'number'
-      ? { x, y, z }
-      : null;
-  };
-  const translation = numbers(request.translation);
-  const turn = numbers(request.rotationDeg);
-  const pivot = numbers(request.pivot);
-  if (!translation || !turn || !pivot) return null;
-  const rotation = rotationFromDegrees(turn);
+  const translation = numeric(data.transform.translation);
+  const rotationDeg = numeric(data.transform.rotationDeg);
+  const pivot = numeric(data.transform.pivot);
+  return translation && rotationDeg && pivot
+    ? { translation, rotationDeg, pivot }
+    : null;
+}
+
+/** Where a moved face's normal and point stood before `move`. */
+export function unmovedFaceGeometry(
+  move: PlainMove,
+  normal: Vector3,
+  at: Vector3
+): { normal: Vector3; at: Vector3 } {
+  const rotation = rotationFromDegrees(move.rotationDeg);
   // x' = R(x − p) + p + t, so x = Rᵀ(x' − p − t) + p; a normal turns by Rᵀ.
   const back = (v: Vector3): Vector3 => ({
     x: rotation[0].x * v.x + rotation[1].x * v.y + rotation[2].x * v.z,
     y: rotation[0].y * v.x + rotation[1].y * v.y + rotation[2].y * v.z,
     z: rotation[0].z * v.x + rotation[1].z * v.y + rotation[2].z * v.z
   });
-  const local = back(minus(minus(at, pivot), translation));
+  const local = back(minus(minus(at, move.pivot), move.translation));
   return {
     normal: back(normal),
-    at: { x: local.x + pivot.x, y: local.y + pivot.y, z: local.z + pivot.z }
+    at: {
+      x: local.x + move.pivot.x,
+      y: local.y + move.pivot.y,
+      z: local.z + move.pivot.z
+    }
   };
+}
+
+/** A face as a body's topology lists it, as far as matching needs. */
+export interface MatchableFace {
+  topologyId: string;
+  hash: number;
+  geometry?: {
+    normal?: Vector3;
+    centroid?: Vector3;
+    center: Vector3;
+    area: number;
+  };
+}
+
+/** The plane check: within 1e-6 in direction and in mm. */
+const SAME_PLANE = 1e-6;
+
+/**
+ * The committed face a click on the moved preview of the same body means.
+ * A rigid Move renames every face but keeps the body's faces and their
+ * order, so when both lists hold the same number of faces the clicked
+ * face's ordinal names it; that face must then lie, moved back, in the
+ * clicked face's plane, or the match is refused. Should the counts differ,
+ * the face is told apart from coplanar neighbours by its moved-back centre
+ * and its area. Null when nothing matches.
+ */
+export function committedFaceForPreviewPick<F extends MatchableFace>(
+  move: PlainMove,
+  previewFaces: readonly F[],
+  committedFaces: readonly F[],
+  clicked: F
+): F | null {
+  const shown = clicked.geometry;
+  if (!shown?.normal) return null;
+  const back = unmovedFaceGeometry(
+    move,
+    shown.normal,
+    shown.centroid ?? shown.center
+  );
+  const inPlane = (face: F) => {
+    const g = face.geometry;
+    const at = g?.centroid ?? g?.center;
+    if (!g?.normal || !at) return false;
+    return (
+      dot(g.normal, back.normal) > 1 - SAME_PLANE &&
+      Math.abs(dot(minus(at, back.at), back.normal)) < SAME_PLANE
+    );
+  };
+  const index = previewFaces.indexOf(clicked);
+  if (index >= 0 && previewFaces.length === committedFaces.length) {
+    const same = committedFaces[index]!;
+    return inPlane(same) ? same : null;
+  }
+  // Not one for one: the coplanar face whose centre and area agree.
+  let best: F | null = null;
+  let nearest = Infinity;
+  for (const face of committedFaces) {
+    const g = face.geometry;
+    if (!g || !inPlane(face)) continue;
+    if (Math.abs(g.area - shown.area) > SAME_PLANE * Math.max(1, shown.area))
+      continue;
+    const at = g.centroid ?? g.center;
+    const d = minus(at, back.at);
+    const distance = Math.hypot(d.x, d.y, d.z);
+    if (distance < nearest) {
+      nearest = distance;
+      best = face;
+    }
+  }
+  return best !== null && nearest < SAME_PLANE * 1e3 ? best : null;
 }
