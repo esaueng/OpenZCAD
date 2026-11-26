@@ -173,8 +173,10 @@ type NativeRequest =
   | { v: 1; op: 'session.signIn' }
   | { v: 1; op: 'session.signOut' }
   | { v: 1; op: 'session.prepare' }
-  | { v: 1; op: 'passkey.create' }
-  | { v: 1; op: 'passkey.get'; allowCredential?: string }; // base64url raw id
+  | { v: 1; op: 'passkey.create'; ceremony: string }
+  | { v: 1; op: 'passkey.get'; ceremony: string; allowCredential?: string } // base64url raw id
+  | { v: 1; op: 'passkey.cancel'; ceremony: string };
+// ceremony: an id the adapter makes per call, 16–64 base64url characters.
 ```
 
 Reply (resolved by the `postMessage` promise):
@@ -188,15 +190,17 @@ type NativeReply =
 //                   realm: 'beta' | 'stable', apiHost: string }
 // session.status, signIn, signOut → { signedIn: boolean } (no token, no email)
 // session.prepare → { handle: string | null } (opaque single-send handle, never a token)
-// passkey.*     → { rawId: string /* base64url */, prf: number[] /* 32 */,
+// passkey.create, passkey.get → { rawId: string /* base64url */, prf: number[] /* 32 */,
 //                   label?: string /* create only */ }
+// passkey.cancel → { cancelled: boolean } (no secret; cancelling an unknown or
+//                   finished ceremony answers false)
 ```
 
 The rules for these messages:
 
 - **Validation.** Native validates every field. It refuses an unknown `v`,
-  an unknown `op`, extra keys, and any `allowCredential` that is not
-  1–1023 bytes of base64url. A refusal is
+  an unknown `op`, extra keys, any `ceremony` outside its format, and any
+  `allowCredential` that is not 1–1023 bytes of base64url. A refusal is
   `{ ok: false, error: { name: 'NotSupportedError', … } }`.
 - **Error names.** Errors use the WebAuthn `DOMException` names that
   `ceremonyFailure` in `passkeys.ts` already maps to messages:
@@ -393,6 +397,16 @@ Its requirements:
   (`sendNativeProjectRequest`) becomes a request header
   (`x-openzcad-prepared`), obtained from a `session.prepare` bridge call.
   Native strips that header before forwarding.
+- **A project request always carries the header.** As on the desktop, which
+  sends `prepared: ''` when no credential was readied
+  (`sendNativeProjectRequest` in `desktopBridge.ts`), the adapter sends
+  `x-openzcad-prepared` on every project request, empty when
+  `session.prepare` returned `null`. The header's **presence** marks a
+  project request; an empty or unusable value sends nothing and answers a
+  local 401. Only a request without the header at all is an ordinary
+  request, and native refuses an ordinary request to a project-write path
+  on the allowlist, so a project write cannot reach the current credential
+  by omitting the header.
 - **Prepared sends keep the desktop contract** (`send_authenticated` in
   `apps/desktop/src-tauri/src/desktop_auth.rs`):
   - `session.prepare` readies one credential, the access token and the
@@ -406,8 +420,8 @@ Its requirements:
   - A 401 on a prepared send drops that credential. Native never retries a
     prepared send. The page readies a new handle and runs
     `checkProjectRequest` again before any retry (`desktopBridge.ts`).
-  - Only requests without a handle may refresh an expiring credential and,
-    after a 401, refresh and send once more.
+  - Only ordinary requests (no header) may refresh an expiring credential
+    and, after a 401, refresh and send once more.
 - **Methods and paths.** The proxy accepts `GET`, `HEAD`, `POST`, `PUT`,
   `PATCH` and `DELETE` only under `/api/`. It mirrors the Rust
   `renderer_api_destination` allowlist and its share-token header
@@ -423,7 +437,11 @@ Its requirements:
   request from an explicit header allowlist (content type, accept,
   conditional-request headers, the share-token header and the web app's own
   `x-openzcad-*` headers, enumerated in PR 3 against
-  `renderer_api_destination`), then adds the bearer. It never forwards
+  `renderer_api_destination`), then adds the bearer **only where the desktop
+  does**. Public and share-token reads stay bearer-free whether or not
+  someone is signed in, as the desktop withholds its credential there, so a
+  signed-out share read still works and a signed-in one does not attach an
+  account to the link. It never forwards
   `Origin`, `Referer`, `Cookie` or `Sec-Fetch-*`. The Worker's
   `assertSameOrigin` (`apps/web/worker/index.ts`) rejects a foreign
   `Origin`, and like the desktop's native client the proxy sends none: the
@@ -491,9 +509,18 @@ expired access token must not both refresh:
 - One refresh is in flight at a time, shared by every request that needs
   it, as the desktop's `refresh_guard` does. Requests that waited use the
   credential it produced.
-- Each sign-in starts a new session generation. A refresh that completes
-  after its session ended (sign-out, revocation or another sign-in) is
-  discarded: its tokens are never stored in the Keychain or used.
+- Each sign-in starts a new session generation. Every refresh records the
+  generation it started under, and **any** completion is checked against
+  the current generation before it changes session state, success or
+  failure:
+  - a stale success is discarded: its tokens are never stored in the
+    Keychain or used;
+  - a stale failure (a 401, a revocation, a network error) is discarded
+    too: it never deletes the Keychain item or clears the access token,
+    because those now belong to the newer session. The request that waited
+    on it is answered 401 and the page retries under the current session.
+- The revocation path below runs only for a failure of the current
+  generation.
 
 #### Sign-out and revocation
 
@@ -556,6 +583,16 @@ expired access token must not both refresh:
   - A reply that still reaches the adapter for a cancelled ceremony, or
     after the generation changed, is zeroed at once and never delivered to
     a caller.
+  - **Settling.** Cancelling settles the caller at once: the adapter
+    rejects the ceremony's promise with `AbortError`, as the browser wrapper
+    does, and does not wait for native's reply. A native reply that arrives
+    later is zeroed and dropped. No caller waits indefinitely.
+  - **Delivery check after the async work.** `nativePasskeys` runs inside
+    the same `ceremony()` wrapper as `browserPasskeys` (`passkeys.ts`). The
+    adapter's own steps after the reply (`prfBytes`, then the awaited
+    `selected()` digest) finish before the wrapper checks the signal again,
+    and a lock during them aborts and zeroes the copied secret there. The
+    adapter never returns a secret from outside that wrapper.
   - Test: locking during an open system prompt delivers no PRF bytes, and
     the late array is zeroed.
 - **Other frames.** There are none: `frame-src 'none'` plus the main-frame
