@@ -268,6 +268,7 @@ test('an earlier sketch refuses a later face, survives a view round trip, and ke
   await expect(circle).toHaveAttribute('aria-pressed', 'true');
   const normal = await planeSteps(canvas);
   const target = (await sketchState(canvas)).target;
+  const original = (await sketchState(canvas)).objects[0]!.data;
   const [center, rim] = (
     await sketchState(canvas, [
       { x: 0, y: -15 },
@@ -312,6 +313,8 @@ test('an earlier sketch refuses a later face, survives a view round trip, and ke
     centerY: number;
     radius: number;
   };
+  // The view round trip left Boss's own circle exactly where it was.
+  expect((await sketchState(canvas)).objects[0]!.data).toEqual(original);
   expect(drawn.centerX).toBeCloseTo(0, 0);
   expect(drawn.centerY).toBeCloseTo(-15, 0);
   expect(drawn.radius).toBeCloseTo(3, 0);
@@ -372,12 +375,17 @@ test('an earlier sketch refuses a later face, survives a view round trip, and ke
   await page.reload();
   await expectPartBuilt(page);
   await expectStored();
-  await revealModelPanel(page, 'Objects');
+  // The live workspace, not only the saved verdict, holds the link current.
   await expect(
-    page
-      .getByRole('list', { name: 'Objects' })
-      .getByRole('listitem', { name: /^Projected line: Linked from Base/ })
-  ).toHaveCount(1);
+    page.locator('.feature-row', { hasText: 'Boss profile' })
+  ).not.toContainText('broken projection');
+  await revealModelPanel(page, 'Objects');
+  const projected = page
+    .getByRole('list', { name: 'Objects' })
+    .getByRole('listitem', { name: /^Projected line: Linked from Base/ });
+  await expect(projected).toHaveCount(1);
+  await expect(projected.locator('.feature-flag')).toHaveText('linked');
+  await expect(projected.locator('.feature-flag')).not.toHaveClass(/\berror\b/);
   expect(errors).toEqual([]);
 });
 

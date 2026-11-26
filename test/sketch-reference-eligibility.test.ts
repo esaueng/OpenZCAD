@@ -189,15 +189,28 @@ describe('earlier-sketch reference eligibility (S06 / I01)', () => {
   // refusal says why but not how to recover. Only the no-verdict branch of
   // assertProjectionsResolve offers the unlinked route; the broken branch
   // forwards the build's reason alone. Expected: the sentence also offers
-  // projecting the face unlinked, which the case above shows is legal.
-  it.fails(
-    'offers the unlinked route when it refuses the later face',
-    async () => {
+  // projecting the face unlinked, which the case above shows is legal. The
+  // refusal itself is taken in a hook outside the expected failure, so a
+  // setup error cannot pass as the finding.
+  describe('the later-face refusal', () => {
+    let refusal: unknown;
+    beforeAll(async () => {
       const face = capTopFace(built.derived, part.capBodyId);
       const { objectIds, derived } = await candidate(face, 'linked');
-      expect(() => assertProjectionsResolve(derived, objectIds)).toThrow(
-        /unlinked/
-      );
-    }
-  );
+      try {
+        assertProjectionsResolve(derived, objectIds);
+      } catch (error) {
+        refusal = error;
+      }
+    });
+
+    it('refuses, naming the later feature', () => {
+      expect(refusal).toBeInstanceOf(Error);
+      expect((refusal as Error).message).toContain('"Cap"');
+    });
+
+    it.fails('offers the unlinked route', () => {
+      expect((refusal as Error).message).toMatch(/unlinked/);
+    });
+  });
 });
