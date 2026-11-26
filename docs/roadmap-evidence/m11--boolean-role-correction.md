@@ -28,12 +28,17 @@ that Post cut, named `boolean.face.operand.1…x-min`, is offset 2 mm (1850)
 through the app's planner as a local offset, not as an edit of Post. When
 Post moves to x = 13 in History, the offset follows the wall to x = 15
 (1750) with no warning, no repair prompt and no retarget onto Block's end at
-x = 20, both in the browser and on a cold reopen. A three-operand Subtract
-still names every face, so the offset follows there too. It names no edges
-(two operands name all 18), so a chamfer on a generated rim holds only a
-hash. After the same move it stops with a typed `invalid_input` refusal and
-leaves the cut unchamfered (1400), never moving to another edge; the
-two-operand chamfer follows to x = 13. This is the K05 limit. An `it.fails`
+x = 20, both in the browser and on a cold reopen. A three-operand Subtract (a
+third box cutting Block's corner) still names Post's x-min wall, so that
+offset follows too. It leaves three of its ten faces unnamed: Block's bottom,
+plus Post's y-min wall and the third box's y-max wall, which both lie on the
+plane y = 5. An offset of that unnamed Post wall holds only a hash. After the
+same move it stops with a typed `invalid_input` refusal and the app's
+repair prompt, and keeps the cut (1400) with no retarget. The three-operand
+cut names no edges (two operands name all 18), so a chamfer on a generated
+rim also holds only a hash. After the move it stops the same way and leaves
+the cut unchamfered (1400), never moving to another edge; the two-operand
+chamfer follows to x = 13. This is the K05 limit. An `it.fails`
 pins an incidental Untyped-refusal gap: that rim chamfer refuses with category
 `internal` once a through bore sits in the same top face. In a Subtract
 picked from Objects, the canvas and Objects name the same operands. History

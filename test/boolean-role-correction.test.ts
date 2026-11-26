@@ -268,6 +268,17 @@ function chamferFaces(body: BodyRepresentation): string[] {
   });
 }
 
+/** A planar face as `±axis@(centre)`, for naming the faces lineage skips. */
+function faceLabel(face: FaceTopology): string {
+  const g = face.geometry!;
+  const n = g.normal!;
+  const axis = (['x', 'y', 'z'] as const).find(
+    (key) => Math.abs(Math.abs(n[key]) - 1) < 1e-9
+  )!;
+  const r = (value: number) => Math.round(value * 1e6) / 1e6;
+  return `${n[axis] > 0 ? '+' : '-'}${axis}@(${r(g.center.x)},${r(g.center.y)},${r(g.center.z)})`;
+}
+
 /** Rebuilds `document` on a fresh adapter, as a reopen does. */
 async function reopened(document: ProjectDocument): Promise<DerivedState> {
   const fresh = await createExactKernelAdapter();
@@ -426,20 +437,25 @@ describe('Cells 3–4: an offset of a wall a Subtract generated, then an upstrea
       label: 'two operands',
       core: undefined,
       operandVolume: 0,
-      cornerWall: [] as string[]
+      cornerWall: [] as string[],
+      unnamed: [] as string[]
     },
     {
-      // K05: a multi-operand Subtract names every face by operand (verified
-      // below) but publishes no edge lineage.
+      // K05: a multi-operand Subtract names most faces by operand, but not
+      // all (below), and publishes no edge lineage.
       label: 'three operands (Core cuts Block’s corner)',
       core: 'corner' as const,
       operandVolume: 250,
       // Core's x-max face cuts the corner wall at x = 5 (−X), so no new +X wall.
-      cornerWall: [] as string[]
+      cornerWall: [] as string[],
+      // Observed on this pin: Block's bottom, and the two walls that lie on
+      // the shared plane y = 5 (Post's y-min, facing +Y, and Core's y-max,
+      // facing −Y), carry no lineage name.
+      unnamed: ['+y@(17.5,5,5)', '-y@(2.5,5,5)', '-z@(10,5,0)']
     }
   ];
 
-  for (const { label, core, operandVolume, cornerWall } of CASES) {
+  for (const { label, core, operandVolume, cornerWall, unnamed } of CASES) {
     it(`${label}: the offset follows the wall, with no repair and no retarget`, async () => {
       const fixture = fixtureB(core);
       const operands = [
@@ -459,6 +475,27 @@ describe('Cells 3–4: an offset of a wall a Subtract generated, then an upstrea
       const body = built.bodyRepresentations[cut.bodyId]!;
       near(body.volume, BLOCK - SHARED - operandVolume, 'cut');
       expect(plusXWalls(body)).toEqual(['15:50', '20:50', ...cornerWall]);
+      // Each named face is named for the operand it came from, and exactly
+      // the faces listed in `unnamed` carry no name.
+      const faces = body.topology!.faces;
+      const named = faces.flatMap((face) =>
+        face.reference?.lineageName ? [face.reference.lineageName] : []
+      );
+      for (const name of named) {
+        expect(name).toMatch(
+          /^boolean\.face\.operand\.\d+\.primitive\.box\.face\./
+        );
+      }
+      expect(
+        new Set(named.map((name) => name.split('.')[3])),
+        'operands named'
+      ).toEqual(new Set(operands.map((_, index) => String(index))));
+      expect(
+        faces
+          .filter((face) => !face.reference?.lineageName)
+          .map(faceLabel)
+          .sort()
+      ).toEqual(unnamed);
       const wall = postWall(body, 15);
       // The wall is named for the operand that generated it, not by hash.
       expect(wall.reference?.lineageName).toBe(
@@ -554,6 +591,77 @@ describe('Cells 3–4: an offset of a wall a Subtract generated, then an upstrea
       ]);
     });
   }
+
+  it('three operands: an offset of an unnamed generated wall asks for a repair after the upstream edit, and keeps the cut', async () => {
+    // Post's y-min wall (y = 5, facing +Y, x 15…20) is one the three-operand
+    // cut leaves unnamed, so its offset holds a hash only. Offset 2: the
+    // notch narrows in Y, +2 × 5 × 10 = 100 (1600).
+    const fixture = fixtureB('corner');
+    const cut = booleanBodies(fixture.document, {
+      name: 'Subtract',
+      operation: 'subtract',
+      targetBodyIds: [fixture.block, fixture.post, fixture.core!]
+    });
+    const built = expectBuilt(await outcome(cut.document, [cut.bodyId]), 'cut');
+    const wall = built.bodyRepresentations[cut.bodyId]!.topology!.faces.find(
+      (face) => faceLabel(face) === '+y@(17.5,5,5)'
+    )!;
+    expect(wall.reference?.lineageName).toBeUndefined();
+    const plan = planFaceOffset({
+      document: { ...cut.document, derived: built },
+      bodyId: cut.bodyId,
+      face: wall,
+      faceHash: wall.hash,
+      offset: 2
+    });
+    expect(plan?.kind).toBe('direct-edit');
+    const manager = new CommandManager(cut.document);
+    manager.execute(plan!.command);
+    const resultId = manager.document.bodyOrder.at(-1)!;
+    const plusY = (derived: DerivedState) =>
+      derived.bodyRepresentations[resultId]!.topology!.faces.flatMap((face) =>
+        faceLabel(face).startsWith('+y') ? [faceLabel(face)] : []
+      ).sort();
+    const offset = expectBuilt(
+      await outcome(manager.document, [resultId]),
+      'offset'
+    );
+    near(
+      offset.bodyRepresentations[resultId]?.volume,
+      BLOCK - SHARED - 250 + 100,
+      'offset'
+    );
+    expect(plusY(offset)).toEqual(['+y@(17.5,7,5)', '+y@(7.5,10,5)']);
+
+    // Post moves to x = 13. The hash no longer resolves: a typed refusal
+    // and the app's repair prompt for this offset, never a silent move to
+    // another wall. The cut stands without the offset: 2000 − 350 − 250.
+    const moved = movePost(manager.document, 13);
+    const after = await adapter.syncDocument(moved);
+    const stopped = refusal(after, 'moved');
+    expect(stopped?.state, stopped?.evidence).toBe('typed-refusal');
+    const warning = (after.featureWarnings ?? []).find(
+      (entry) => entry.featureName === 'Offset face'
+    );
+    expect(warning?.kind).toBe('build-failed');
+    expect(warning?.kernelRefusal?.category).toBe('invalid_input');
+    expect(
+      staleDirectEditFaceRepair(
+        listFeaturesInOrder(moved).at(-1)!,
+        after.warnings
+      )
+    ).toMatchObject({
+      featureName: 'Offset face',
+      operationKind: 'offset-face'
+    });
+    near(
+      after.bodyRepresentations[resultId]?.volume,
+      BLOCK - 7 * 5 * 10 - 250,
+      'moved'
+    );
+    // Post's wall is back at y = 5 (now x 13…20); nothing moved to y = 7.
+    expect(plusY(after)).toEqual(['+y@(16.5,5,5)', '+y@(6.5,10,5)']);
+  });
 
   it('edge lineage: two operands name every result edge, three name none (K05 limit)', async () => {
     for (const [core, named] of [
@@ -668,53 +776,80 @@ describe('Cells 3–4: an offset of a wall a Subtract generated, then an upstrea
       '12.5'
     ]);
   });
+});
 
-  /**
-   * FAILS — class Untyped refusal (K10 adapter / kernel), Remus 2026.1.171
-   * (`f210583`). Smallest failing prefix: Block, Post and a 4 × 4 × 30 Core
-   * moved (3,3,0) to bore Block through; Subtract [Block, Post, Core];
-   * Chamfer 1 mm on the rim edge (15,5,10)–(15,10,10). The chamfer refuses
-   * with category `internal` (code `fillet-failed`), at 0.5 and 0.1 mm too,
-   * where the same rim on the two-operand cut (no bore) builds. Two
-   * sequential two-operand Subtracts name the rim and still refuse, so the
-   * bore beside the notch, not the operand count, is the trigger. Expected:
-   * the chamfer builds (1590 − 2.5 = 1587.5) or refuses with a typed,
-   * non-internal category.
-   */
-  it.fails(
-    'a body with a through bore chamfers the generated rim edge',
-    async () => {
-      const fixture = fixtureB('bore');
-      const cut = booleanBodies(fixture.document, {
-        name: 'Subtract',
-        operation: 'subtract',
-        targetBodyIds: [fixture.block, fixture.post, fixture.core!]
-      });
-      const built = expectBuilt(
-        await outcome(cut.document, [cut.bodyId]),
-        'cut'
-      );
-      near(
-        built.bodyRepresentations[cut.bodyId]?.volume,
-        BLOCK - SHARED - 160,
-        'cut'
-      );
-      const rim = rimEdge(built.bodyRepresentations[cut.bodyId]!, 15);
-      const chamfered = chamferEdges(cut.document, {
-        name: 'Chamfer',
-        targetBodyId: cut.bodyId,
-        edgeHashes: [rim.hash],
-        size: 1
-      });
-      const derived = expectBuilt(
-        await outcome(chamfered.document, [chamfered.bodyId]),
-        'chamfer'
-      );
-      near(
-        derived.bodyRepresentations[chamfered.bodyId]?.volume,
-        BLOCK - SHARED - 160 - 2.5,
-        'chamfer'
-      );
-    }
-  );
+/**
+ * Class Untyped refusal (K10 adapter / kernel), Remus 2026.1.171
+ * (`f210583`). Smallest failing prefix: Block, Post and a 4 × 4 × 30 Core
+ * moved (3,3,0) to bore Block through; Subtract [Block, Post, Core];
+ * Chamfer 1 mm on the rim edge (15,5,10)–(15,10,10). The chamfer refuses
+ * with category `internal` (code `fillet-failed`), at 0.5 and 0.1 mm too,
+ * where the same rim on the two-operand cut (no bore) builds. Two
+ * sequential two-operand Subtracts name the rim and still refuse, so the
+ * bore beside the notch, not the operand count, is the trigger.
+ *
+ * The setup is built once and asserted by a passing test, so only the gap
+ * itself is pinned. Counts as fixed (and flips the `it.fails`): the chamfer
+ * builds (expected 1590 − 2.5 = 1587.5), or it refuses with a typed
+ * `kernelRefusal` whose category is not `internal`. A prose refusal with no
+ * typed record is still the gap.
+ */
+describe('Cell 4b: a rim chamfer beside a through bore', () => {
+  let cutVolume: number | undefined;
+  let rimFound = false;
+  let cutWarnings: readonly string[] = [];
+  let chamfer: DerivedState | undefined;
+  let chamferBodyId: BodyId | undefined;
+  beforeAll(async () => {
+    const fixture = fixtureB('bore');
+    const cut = booleanBodies(fixture.document, {
+      name: 'Subtract',
+      operation: 'subtract',
+      targetBodyIds: [fixture.block, fixture.post, fixture.core!]
+    });
+    const built = await adapter.syncDocument(cut.document);
+    cutWarnings = built.warnings;
+    const body = built.bodyRepresentations[cut.bodyId];
+    cutVolume = body?.volume;
+    const rim = body ? rimEdge(body, 15) : undefined;
+    rimFound = rim !== undefined;
+    if (!rim) return;
+    const chamfered = chamferEdges(cut.document, {
+      name: 'Chamfer',
+      targetBodyId: cut.bodyId,
+      edgeHashes: [rim.hash],
+      size: 1
+    });
+    chamferBodyId = chamfered.bodyId;
+    chamfer = await adapter.syncDocument(chamfered.document);
+  }, 120_000);
+
+  it('builds the bored cut and finds its rim edge', () => {
+    expect(cutWarnings).toEqual([]);
+    near(cutVolume, BLOCK - SHARED - 160, 'cut');
+    expect(rimFound).toBe(true);
+    expect(chamfer, 'chamfer build ran').toBeDefined();
+    // Whatever the chamfer does, nothing else in the history refused.
+    expect(
+      (chamfer!.featureWarnings ?? []).filter(
+        (warning) =>
+          warning.featureName !== 'Chamfer' &&
+          (warning.kind === 'build-failed' || warning.kind === 'refusal')
+      )
+    ).toEqual([]);
+    expect(chamfer!.bodyRepresentations[chamferBodyId!]).toBeDefined();
+  });
+
+  it.fails('the chamfer does not refuse as `internal`', () => {
+    const warning = (chamfer?.featureWarnings ?? []).find(
+      (entry) =>
+        entry.featureName === 'Chamfer' &&
+        (entry.kind === 'build-failed' || entry.kind === 'refusal')
+    );
+    const fixed =
+      warning === undefined ||
+      (warning.kernelRefusal !== undefined &&
+        warning.kernelRefusal.category !== 'internal');
+    expect(fixed, JSON.stringify(warning?.kernelRefusal)).toBe(true);
+  });
 });

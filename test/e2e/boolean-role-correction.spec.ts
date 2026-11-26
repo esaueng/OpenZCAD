@@ -92,6 +92,26 @@ declare global {
       requests: string[];
       /** Delivers every held reply of the request at `index`, in order. */
       deliver(index: number): void;
+      /**
+       * The held replies of the request at `index`: each one's type, and for
+       * a build result whether it built and its unconsumed bodies' volumes.
+       */
+      replies(index: number): {
+        type?: string;
+        ok?: boolean;
+        volumes?: number[];
+      }[];
+    };
+    __frames?: {
+      phase: 'stale' | 'current';
+      stop: boolean;
+      samples: {
+        phase: 'stale' | 'current';
+        source: 'frame' | 'mutation';
+        doneFound: boolean;
+        done: boolean;
+        volumes: number[];
+      }[];
     };
   }
 }
@@ -105,6 +125,7 @@ declare global {
 async function holdBuildReplies(page: Page) {
   await page.addInitScript(() => {
     const held = new Map<string, (() => void)[]>();
+    const payloads = new Map<string, unknown[]>();
     const released = new Set<string>();
     window.__heldBuilds = {
       hold: false,
@@ -113,6 +134,32 @@ async function holdBuildReplies(page: Page) {
         const id = window.__heldBuilds!.requests[index]!;
         released.add(id);
         for (const send of held.get(id)?.splice(0) ?? []) send();
+      },
+      replies(index) {
+        const id = window.__heldBuilds!.requests[index]!;
+        return (payloads.get(id) ?? []).map((data) => {
+          const reply = data as {
+            type?: string;
+            ok?: boolean;
+            derived?: {
+              bodyRepresentations?: Record<
+                string,
+                { volume?: number; consumed?: boolean }
+              >;
+            };
+          };
+          return {
+            type: reply.type,
+            ok: reply.ok,
+            ...(reply.derived?.bodyRepresentations
+              ? {
+                  volumes: Object.values(reply.derived.bodyRepresentations)
+                    .filter((body) => !body.consumed)
+                    .map((body) => body.volume ?? Number.NaN)
+                }
+              : {})
+          };
+        });
       }
     };
     const descriptor = Object.getOwnPropertyDescriptor(
@@ -131,8 +178,10 @@ async function holdBuildReplies(page: Page) {
           }
           if (!held.has(id)) {
             held.set(id, []);
+            payloads.set(id, []);
             gate.requests.push(id);
           }
+          payloads.get(id)!.push(event.data);
           held.get(id)!.push(() => listener.call(this, event));
         });
       }
@@ -150,6 +199,68 @@ const settleFrames = (page: Page) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
       )
   );
+
+/**
+ * Records the Done state and the drawn volumes on every animation frame and
+ * on every `disabled` change in the command bar, until stopped, so a flash
+ * that lasts one frame is still seen.
+ */
+async function startFrameSampler(page: Page, title: string) {
+  await page.evaluate((title) => {
+    const frames: NonNullable<Window['__frames']> = {
+      phase: 'stale',
+      stop: false,
+      samples: []
+    };
+    window.__frames = frames;
+    const canvas = document.querySelector('.viewer-host canvas')!;
+    const take = (source: 'frame' | 'mutation') => {
+      const done = document.querySelector<HTMLButtonElement>(
+        `[aria-label="${title} command"] .in-place-command-done`
+      );
+      let volumes: number[] = [];
+      canvas.dispatchEvent(
+        new CustomEvent('openzcad:e2e-render-policy', {
+          detail: {
+            includeBodies: true,
+            resolve: (state: {
+              bodies?: { volume?: number; consumed?: boolean }[];
+            }) => {
+              volumes = (state.bodies ?? [])
+                .filter((body) => !body.consumed)
+                .map(
+                  (body) => Math.round((body.volume ?? Number.NaN) * 100) / 100
+                );
+            }
+          }
+        })
+      );
+      frames.samples.push({
+        phase: frames.phase,
+        source,
+        doneFound: done !== null,
+        done: done !== null && !done.disabled,
+        volumes
+      });
+    };
+    const observer = new MutationObserver(() => take('mutation'));
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['disabled']
+    });
+    const tick = () => {
+      if (frames.stop) {
+        observer.disconnect();
+        return;
+      }
+      take('frame');
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }, title);
+}
 
 /** The live bodies the viewport draws, preview results included. */
 function drawnBodies(page: Page) {
@@ -187,8 +298,8 @@ function drawnBodies(page: Page) {
 }
 
 async function drawnVolumes(page: Page): Promise<number[]> {
-  return (await drawnBodies(page)).map((body) =>
-    Math.round(body.volume ?? Number.NaN)
+  return (await drawnBodies(page)).map(
+    (body) => Math.round((body.volume ?? Number.NaN) * 100) / 100
   );
 }
 
@@ -267,26 +378,76 @@ test('Cell 1: Subtract roles reverse in two Objects clicks, and only the B − A
   await expect.poll(() => heldRequests(page), { timeout: 30_000 }).toBe(2);
   await expect(done).toBeDisabled();
 
-  // The A − B reply lands late, in the order the worker sent it. It answers
-  // a superseded request, so it enables no Done. (By design a superseded
-  // frame that built may still be drawn until the current one lands, so a
-  // handle drag keeps following the hand: useInPlaceCommand.ts.)
+  // The held replies are the two builds: the superseded order built
+  // Block − Post (1750), the current one Post − Block (2750).
+  const built = (index: number) =>
+    page.evaluate(
+      (index) =>
+        window
+          .__heldBuilds!.replies(index)
+          .filter((reply) => reply.type === 'sync')
+          .map((reply) => ({ ok: reply.ok, volumes: reply.volumes })),
+      index
+    );
+  const roundAll = (replies: { ok?: boolean; volumes?: number[] }[]) =>
+    replies.map((reply) => ({
+      ok: reply.ok,
+      volumes: reply.volumes?.map((v) => Math.round(v * 100) / 100)
+    }));
+  await expect
+    .poll(async () => roundAll(await built(0)))
+    .toEqual([{ ok: true, volumes: [BLOCK_MINUS_POST] }]);
+  await expect
+    .poll(async () => roundAll(await built(1)))
+    .toEqual([{ ok: true, volumes: [POST_MINUS_BLOCK] }]);
+
+  // Every frame from here on is sampled. The A − B reply lands late, in the
+  // order the worker sent it. It answers a superseded request, so it enables
+  // no Done; and it is not drawn either, since a frame contradicting the
+  // operands now listed (Base · Post) would be a Display finding. (By
+  // design a superseded frame that built may be drawn until the current one
+  // lands, so a handle drag keeps following the hand: useInPlaceCommand.ts.)
+  await startFrameSampler(page, 'Subtract');
   await page.evaluate(() => window.__heldBuilds!.deliver(0));
-  await settleFrames(page);
-  await settleFrames(page);
+  // Give the stale reply time to be adopted, if it were going to be.
+  await page.waitForTimeout(1_000);
   await expect(done).toBeDisabled();
-  // Nor is it drawn: a frame that contradicted the operands now listed
-  // (Base · Post) would be a Display finding. Observed: the two whole
-  // bodies stay drawn until the B − A frame lands.
-  expect(await drawnVolumes(page)).not.toContain(BLOCK_MINUS_POST);
 
   // The current B − A reply enables Done and draws 3000 − 250.
   await page.evaluate(() => {
+    window.__frames!.phase = 'current';
     window.__heldBuilds!.hold = false;
     window.__heldBuilds!.deliver(1);
   });
   await expect(done).toBeEnabled({ timeout: 30_000 });
   await expect.poll(() => drawnVolumes(page)).toEqual([POST_MINUS_BLOCK]);
+  await settleFrames(page);
+  const samples = await page.evaluate(() => {
+    window.__frames!.stop = true;
+    return window.__frames!.samples;
+  });
+  const stale = samples.filter((sample) => sample.phase === 'stale');
+  expect(
+    stale.filter((sample) => sample.source === 'frame').length
+  ).toBeGreaterThan(10);
+  expect(stale.every((sample) => sample.doneFound)).toBe(true);
+  // While only the stale reply had landed: Done never enabled, and the two
+  // whole bodies drawn on every frame.
+  expect(stale.filter((sample) => sample.done)).toEqual([]);
+  expect(
+    stale.filter(
+      (sample) =>
+        JSON.stringify(sample.volumes) !== JSON.stringify([2000, 3000])
+    )
+  ).toEqual([]);
+  // At no sample, before or after the current reply, was A − B drawn.
+  expect(
+    samples.filter((sample) => sample.volumes.includes(BLOCK_MINUS_POST))
+  ).toEqual([]);
+  // Done enabled only once the current reply was delivered.
+  expect(
+    samples.some((sample) => sample.phase === 'current' && sample.done)
+  ).toBe(true);
   // Nothing was written while the roles were wrong.
   await expect(historyRows).toHaveCount(3);
   expect(await featureCount(page)).toBe(features);
