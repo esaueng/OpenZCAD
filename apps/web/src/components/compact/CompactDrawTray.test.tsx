@@ -141,7 +141,7 @@ describe('CompactDrawTray (U12 slice 9)', () => {
       expect(await within(panel()).findByText(text)).toBeTruthy();
       expect(detent()).toBe('half');
       fireEvent.click(
-        within(panel()).getByRole('button', { name: 'Back', exact: true })
+        within(panel()).getByRole('button', { name: 'Back' })
       );
       await waitFor(() => expect(detent()).toBe('peek'));
     }
@@ -155,8 +155,7 @@ describe('CompactDrawTray (U12 slice 9)', () => {
     );
     fireEvent.click(
       await within(panel()).findByRole('button', {
-        name: 'Vertical',
-        exact: true
+        name: 'Vertical'
       })
     );
     expect(sheet.annotate.onTool).toHaveBeenCalledWith('vertical');

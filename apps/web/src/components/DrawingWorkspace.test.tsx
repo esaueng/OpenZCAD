@@ -3616,8 +3616,7 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
     for (const kind of ANNOTATION_TOOLS) {
       expect(
         page.getByRole('button', {
-          name: ANNOTATION_TOOL_LABELS[kind],
-          exact: true
+          name: ANNOTATION_TOOL_LABELS[kind]
         }),
         kind
       ).toBeTruthy();
@@ -3625,8 +3624,7 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
     // Auto-dimension, with its preview, is reachable from the same page.
     expect(page.getByText('Dimension check')).toBeTruthy();
     const horizontal = page.getByRole('button', {
-      name: 'Horizontal',
-      exact: true
+      name: 'Horizontal'
     });
     await waitFor(() =>
       expect(horizontal).toHaveAttribute('aria-disabled', 'false')
@@ -3652,7 +3650,7 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
       within(await tray()).getByRole('button', { name: 'Annotate' })
     );
     fireEvent.click(
-      within(sheetPanel()).getByRole('button', { name: 'Radius', exact: true })
+      within(sheetPanel()).getByRole('button', { name: 'Radius' })
     );
     const radius = await screen.findByRole('group', {
       name: 'Radius placement'
@@ -3666,7 +3664,7 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
   it('says why a tool is refused when it is tapped', async () => {
     compactSetup({ sheet: starter(fingerprint()) });
     const page = await openPage('Annotate');
-    const image = page.getByRole('button', { name: 'Image', exact: true });
+    const image = page.getByRole('button', { name: 'Image' });
     expect(image).toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(image);
     expect(page.getByRole('status').textContent).toMatch(/^Image: /);
