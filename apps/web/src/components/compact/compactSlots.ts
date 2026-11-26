@@ -31,6 +31,22 @@ export function useCompactCommandRowHost(present: boolean): HTMLElement | null {
 }
 
 /**
+ * Where what must stay usable over the compact sheet at any height goes (U12
+ * slice 2): the numeric keypad. The stage is inert while the sheet stands at
+ * full, so a keypad drawn on it could be neither focused nor tapped; the
+ * compact chrome provides a host outside the stage instead. Null in the
+ * regular workspace, where the keypad stays on the stage.
+ */
+export const CompactOverlayHostContext = createContext<HTMLElement | null>(
+  null
+);
+
+/** The compact overlay host, or null in the regular workspace. */
+export function useCompactOverlayHost(): HTMLElement | null {
+  return useContext(CompactOverlayHostContext);
+}
+
+/**
  * What the compact workspace's own controls need from the workspace: every
  * one runs a handler the regular workspace already has.
  */

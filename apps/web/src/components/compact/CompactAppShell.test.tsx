@@ -154,6 +154,45 @@ describe('AppShell in the compact workspace', () => {
     expect(props.onSettings).toHaveBeenCalledTimes(1);
   });
 
+  it('marks the document compact while it is up, for portalled dialogs', async () => {
+    const root = document.documentElement;
+    const { rerender, unmount } = render(shell(chrome()));
+    await screen.findByRole('group', { name: 'Workspace mode' });
+    expect(root).toHaveAttribute('data-shell', 'compact');
+    // Back to Full: the regular frame leaves the document unmarked.
+    rerender(shell(null));
+    expect(root).not.toHaveAttribute('data-shell');
+    rerender(shell(chrome()));
+    expect(root).toHaveAttribute('data-shell', 'compact');
+    unmount();
+    expect(root).not.toHaveAttribute('data-shell');
+  });
+
+  it('draws an open File page from the commands as they are now', async () => {
+    const pending = chrome({
+      fileCommands: [
+        {
+          id: 'file-export-step',
+          label: 'Export STEP',
+          group: 'File',
+          disabledReason: 'Waiting for the model to update',
+          run: vi.fn()
+        }
+      ]
+    });
+    const { rerender } = render(shell(pending));
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('button', { name: 'File' }));
+    expect(screen.getByRole('button', { name: 'Export STEP' })).toBeDisabled();
+    // The update finishes while File is open.
+    const ready = chrome();
+    rerender(shell(ready));
+    const exportStep = screen.getByRole('button', { name: 'Export STEP' });
+    expect(exportStep).toBeEnabled();
+    fireEvent.click(exportStep);
+    expect(ready.fileCommands[0]!.run).toHaveBeenCalledTimes(1);
+  });
+
   it('names the pick on a chip that opens it in the sheet', async () => {
     const onClearSelection = vi.fn();
     render(shell(chrome({ selectionLabel: '2 faces', onClearSelection })));

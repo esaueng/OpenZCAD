@@ -21,6 +21,7 @@ import {
   type SheetDetent,
   type SheetState
 } from './sheetState';
+import { OWN_ENTER_ATTRIBUTE } from '../../lib/exactEntryShortcut';
 
 /** Holds the sheet's state; `hasRoot` is whether the workspace fills it. */
 export function useSheet(hasRoot: boolean) {
@@ -43,6 +44,30 @@ function focusables(root: HTMLElement): HTMLElement[] {
   );
 }
 
+/**
+ * Marks what stands over the sheet and owns its own keys and focus (the
+ * numeric keypad's host): the sheet neither pulls focus out of it nor
+ * takes its Escape.
+ */
+export const SHEET_OVERLAY_ATTRIBUTE = 'data-sheet-overlay';
+
+/** What opened a page, to give focus back to when the page goes. */
+interface PageOpener {
+  element: HTMLElement | null;
+  /** The menu row it was, found again when its page was drawn anew. */
+  rowId: string | null;
+}
+
+/** Whether focus can land on the element now. */
+function canFocus(element: HTMLElement | null): element is HTMLElement {
+  return Boolean(
+    element &&
+    element.isConnected &&
+    !element.closest('[hidden], [inert]') &&
+    !(element as HTMLButtonElement).disabled
+  );
+}
+
 interface BottomSheetProps {
   /** The sheet's accessible name. */
   label: string;
@@ -52,6 +77,11 @@ interface BottomSheetProps {
   hasRoot: boolean;
   /** The root page: what the workspace puts in the sheet. */
   children?: ReactNode;
+  /**
+   * A pushed page's title and content, drawn from current state on every
+   * render; null draws it empty.
+   */
+  renderPage(key: string): { title: string; content: ReactNode } | null;
   /** A cross-fade in place of the spring between heights. */
   reducedMotion?: boolean;
   /**
@@ -67,8 +97,10 @@ interface BottomSheetProps {
  * The compact workspace's one bottom sheet (U12 slice 2). Peek, half and
  * full heights, reached by dragging the grabber or with its arrow keys; a
  * back stack for drill-in pages; at full a focus trap over an inert stage.
- * Escape steps back or down (`sheetEscape`). The height is announced as it
- * changes.
+ * Escape steps back or down (`sheetEscape`); while a page is open it is
+ * the page's wherever focus is. Opening a page moves focus into it, and
+ * closing one gives focus back to what opened it. The height is announced
+ * as it changes.
  */
 export function BottomSheet({
   label,
@@ -76,6 +108,7 @@ export function BottomSheet({
   dispatch,
   hasRoot,
   children,
+  renderPage,
   reducedMotion = false,
   background,
   onHeight
@@ -94,6 +127,7 @@ export function BottomSheet({
   const [fadeTurn, setFadeTurn] = useState(false);
   const { detent, stack } = state;
   const page = stack.length > 0 ? stack[stack.length - 1]! : null;
+  const drawn = page ? renderPage(page.key) : null;
   const backgroundRef = useRef(background);
   backgroundRef.current = background;
   const onHeightRef = useRef(onHeight);
@@ -118,13 +152,117 @@ export function BottomSheet({
     );
     for (const element of changed) element.setAttribute('inert', '');
     const sheet = sheetRef.current;
-    if (sheet && !sheet.contains(document.activeElement)) {
+    const active = document.activeElement;
+    if (
+      sheet &&
+      !sheet.contains(active) &&
+      !active?.closest(`[${SHEET_OVERLAY_ATTRIBUTE}]`)
+    ) {
       grabberRef.current?.focus({ preventScroll: true });
     }
     return () => {
       for (const element of changed) element.removeAttribute('inert');
     };
   }, [detent]);
+
+  // Where focus last was, so a page knows what opened it even when that
+  // control (a row on the page below) is gone by the time it is drawn.
+  const lastFocusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const remember = (event: FocusEvent) => {
+      if (event.target instanceof HTMLElement) {
+        lastFocusRef.current = event.target;
+      }
+    };
+    document.addEventListener('focusin', remember);
+    return () => document.removeEventListener('focusin', remember);
+  }, []);
+
+  // Opening a page moves focus to its first control; closing one gives
+  // focus back to what opened it (the row it was drilled from, the header's
+  // More), unless focus has already gone somewhere outside the sheet.
+  const openersRef = useRef(new Map<string, PageOpener>());
+  const previousStackRef = useRef<readonly string[]>([]);
+  const stackKeys = stack.map((entry) => entry.key).join('\u0000');
+  useLayoutEffect(() => {
+    const previous = previousStackRef.current;
+    const current = stackKeys === '' ? [] : stackKeys.split('\u0000');
+    previousStackRef.current = current;
+    const sheet = sheetRef.current;
+    if (!sheet) return;
+    const top = current[current.length - 1];
+    if (top !== undefined && !previous.includes(top)) {
+      const opener = lastFocusRef.current;
+      openersRef.current.set(top, {
+        element: opener,
+        rowId:
+          opener?.closest<HTMLElement>('[data-sheet-row]')?.dataset.sheetRow ??
+          null
+      });
+      const body = sheet.querySelector<HTMLElement>(
+        '.compact-sheet-body[data-page]'
+      );
+      const target = body ? focusables(body)[0] : undefined;
+      (target ?? grabberRef.current)?.focus({ preventScroll: true });
+      return;
+    }
+    // Popped or closed: the lowest page that left is the one whose opener
+    // still stands.
+    const left = previous.filter((key) => !current.includes(key));
+    if (left.length === 0) return;
+    const lowest = previous.find((key) => left.includes(key))!;
+    const opener = openersRef.current.get(lowest);
+    for (const key of left) openersRef.current.delete(key);
+    const active = document.activeElement;
+    const lost = !active || active === document.body || !active.isConnected;
+    if (!lost && !sheet.contains(active)) return;
+    const visibleBody = sheet.querySelector<HTMLElement>(
+      '.compact-sheet-body:not([hidden])'
+    );
+    const row = opener?.rowId
+      ? ([
+          ...(visibleBody?.querySelectorAll<HTMLElement>('[data-sheet-row]') ??
+            [])
+        ].find((element) => element.dataset.sheetRow === opener.rowId) ?? null)
+      : null;
+    const candidates = [
+      opener?.element ?? null,
+      row,
+      visibleBody && !sheet.hidden
+        ? (focusables(visibleBody)[0] ?? null)
+        : null,
+      sheet.hidden ? null : grabberRef.current
+    ];
+    candidates.find(canFocus)?.focus({ preventScroll: true });
+  }, [stackKeys]);
+
+  // While a page is open, Escape is the page's wherever focus is (the
+  // header's More, the stage): it steps back rather than reaching the
+  // workspace, where it would cancel the tool under the page. Inside the
+  // sheet the sheet's own handler has it first; a dialog or the command
+  // bar that takes Escape for itself keeps it.
+  const hasPages = stack.length > 0;
+  useEffect(() => {
+    if (!hasPages) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const sheet = sheetRef.current;
+      if (target && sheet?.contains(target)) return;
+      if (
+        target?.closest(
+          `[role="dialog"], [role="alertdialog"], .command-bar, [${SHEET_OVERLAY_ATTRIBUTE}]`
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      dispatch({ type: 'pop' });
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [dispatch, hasPages]);
 
   // Publishes the drawn height for what floats above the sheet.
   useLayoutEffect(() => {
@@ -283,7 +421,9 @@ export function BottomSheet({
         onKeyDown={onKeyDown}
         {...(detent === 'full' ? { role: 'dialog', 'aria-modal': true } : {})}
       >
-        <div className="compact-sheet-head">
+        {/* The sheet's own controls and pages keep their Enter; the
+          workspace's content under them keeps the workspace's keys. */}
+        <div className="compact-sheet-head" {...{ [OWN_ENTER_ATTRIBUTE]: '' }}>
           {page ? (
             <button
               type="button"
@@ -315,7 +455,7 @@ export function BottomSheet({
           >
             <span className="compact-sheet-grip" aria-hidden="true" />
             {page ? (
-              <h2 className="compact-sheet-title">{page.title}</h2>
+              <h2 className="compact-sheet-title">{drawn?.title ?? ''}</h2>
             ) : null}
           </div>
           <button
@@ -333,8 +473,13 @@ export function BottomSheet({
           {children}
         </div>
         {page ? (
-          <div className="compact-sheet-body" key={page.key}>
-            {page.content}
+          <div
+            className="compact-sheet-body"
+            key={page.key}
+            data-page={page.key}
+            {...{ [OWN_ENTER_ATTRIBUTE]: '' }}
+          >
+            {drawn?.content}
           </div>
         ) : null}
       </section>

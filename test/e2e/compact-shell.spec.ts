@@ -1,5 +1,5 @@
-import type { Page } from '@playwright/test';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import type { Locator, Page } from '@playwright/test';
+import { expect, pickPlanarFace, stubApi, test } from './openzcad-fixtures';
 
 /**
  * The compact workspace's frame (U12 slice 2): a header, the mode tabs, the
@@ -44,6 +44,54 @@ async function openCompactProject(page: Page, name: string) {
   await expect(page.locator('.viewer-host canvas')).toBeVisible({
     timeout: 60_000
   });
+}
+
+/** Runs a command from the header's search, as a phone does. */
+async function startCommand(page: Page, name: string) {
+  await page
+    .getByRole('button', { name: 'Open the command bar', exact: true })
+    .click();
+  const field = page.getByRole('combobox', { name: 'Search commands' });
+  await expect(field).toBeFocused();
+  await field.fill(name);
+  await page
+    .getByRole('option', { name: new RegExp(`^${name}`) })
+    .first()
+    .click();
+  const bar = page
+    .locator('.compact-sheet')
+    .getByRole('group', { name: `${name} command` });
+  await expect(bar).toBeVisible();
+  return bar;
+}
+
+/**
+ * On screen and the topmost thing at its middle: a control the sheet
+ * clips, or something stands over, is not reachable.
+ */
+async function expectReachable(control: Locator) {
+  await control.scrollIntoViewIfNeeded();
+  await expect(control).toBeInViewport({ ratio: 1 });
+  await expect
+    .poll(() =>
+      control.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2
+        );
+        return hit !== null && element.contains(hit);
+      })
+    )
+    .toBe(true);
+}
+
+async function placeBox(page: Page) {
+  const bar = await startCommand(page, 'Box');
+  const done = bar.getByRole('button', { name: /Done/ });
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  await done.click();
+  await expect(bar).toHaveCount(0);
 }
 
 interface FrameReport {
@@ -217,6 +265,194 @@ test.describe('the compact workspace frame', () => {
       await expect(redo).toBeDisabled();
     }
   );
+
+  test(
+    "keeps a command's Options in the sheet, reachable and editable",
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(120_000);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openCompactProject(page, 'Compact options');
+      const bar = await startCommand(page, 'Box');
+      const sheet = page.locator('.compact-sheet');
+      await expect(sheet).toHaveAttribute('data-detent', 'half');
+      await bar.getByLabel('Box options').click();
+      await expect(
+        bar.locator('details.in-place-command-options')
+      ).toHaveAttribute('open', '');
+      // Every value the Options hold can be reached in the sheet and typed.
+      for (const name of ['Width', 'Depth', 'Height']) {
+        await expectReachable(bar.getByRole('textbox', { name, exact: true }));
+      }
+      const width = bar.getByRole('textbox', { name: 'Width', exact: true });
+      await width.fill('32');
+      await width.press('Enter');
+      await expect(width).not.toHaveAttribute('aria-invalid', 'true');
+      await expect(width).toHaveValue('32');
+      // The panel lies in the sheet, not over the stage above it.
+      const inside = await bar
+        .locator('.in-place-command-options-panel')
+        .evaluate((panel) => {
+          const sheetBox = panel
+            .closest('.compact-sheet')!
+            .getBoundingClientRect();
+          const box = panel.getBoundingClientRect();
+          return (
+            box.left >= sheetBox.left - 1 && box.right <= sheetBox.right + 1
+          );
+        });
+      expect(inside).toBe(true);
+      const done = bar.getByRole('button', { name: /Done/ });
+      await expectReachable(done);
+      await expect(done).toBeEnabled({ timeout: 30_000 });
+      await done.click();
+      await expect(bar).toHaveCount(0);
+    }
+  );
+
+  test(
+    'opens the keypad over a full-height sheet, usable there',
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(180_000);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openCompactProject(page, 'Compact keypad');
+      await placeBox(page);
+      const bar = await startCommand(page, 'Hole');
+      await expect
+        .poll(() => pickPlanarFace(page, { x: 0, y: 0, z: 1 }), {
+          timeout: 60_000
+        })
+        .not.toBeNull();
+      await expect(bar).toContainText('drag the diameter');
+
+      // Raised to full, the stage under the sheet is inert.
+      const sheet = page.locator('.compact-sheet');
+      const grabber = sheet.getByRole('slider', { name: 'Sheet height' });
+      await grabber.focus();
+      await grabber.press('End');
+      await expect(sheet).toHaveAttribute('data-detent', 'full');
+      await expect(page.locator('.app-shell > .workspace')).toHaveAttribute(
+        'inert',
+        ''
+      );
+
+      // The bar's exact entry opens the keypad on the diameter.
+      const precise = bar.getByRole('button', { name: 'Precise values…' });
+      await expectReachable(precise);
+      await precise.click();
+      const keypad = page.getByRole('dialog', { name: 'Diameter value' });
+      await expect(keypad).toBeVisible();
+      // Drawn outside the inert stage, so its field and Apply take focus
+      // and taps.
+      expect(
+        await keypad.evaluate((element) => element.closest('[inert]') === null)
+      ).toBe(true);
+      const field = keypad.getByRole('textbox', {
+        name: 'Diameter',
+        exact: true
+      });
+      await expect(field).toBeFocused();
+      await expect(field).toHaveValue('6');
+      await expectReachable(field);
+      await field.fill('7');
+      const apply = keypad.getByRole('button', { name: /^Apply/ });
+      await expectReachable(apply);
+      await apply.click();
+      await expect(keypad).toHaveCount(0);
+      await bar.getByLabel('Hole options').click();
+      await expect(
+        bar.getByRole('textbox', { name: 'Diameter', exact: true })
+      ).toHaveValue('7');
+      await expect(sheet).toHaveAttribute('data-detent', 'full');
+    }
+  );
+
+  test('Escape with More open steps back the page and leaves the tool running', async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openCompactProject(page, 'Compact escape');
+    const bar = await startCommand(page, 'Box');
+    const sheet = page.locator('.compact-sheet');
+    const more = page.getByRole('button', { name: 'More', exact: true });
+    await more.focus();
+    await page.keyboard.press('Enter');
+    await expect(more).toHaveAttribute('aria-expanded', 'true');
+    // Focus moved into the page as it opened.
+    await expect(
+      sheet.getByRole('button', { name: 'Open settings', exact: true })
+    ).toBeFocused();
+
+    // Focus back on the header's More: Escape still closes the page first,
+    // and the Box under it keeps running.
+    await more.focus();
+    await page.keyboard.press('Escape');
+    await expect(more).toHaveAttribute('aria-expanded', 'false');
+    await expect(bar).toBeVisible();
+    await expect(sheet.getByRole('heading', { name: 'More' })).toHaveCount(0);
+
+    // From inside the page as well.
+    await more.click();
+    await expect(more).toHaveAttribute('aria-expanded', 'true');
+    await page.keyboard.press('Escape');
+    await expect(more).toHaveAttribute('aria-expanded', 'false');
+    await expect(bar).toBeVisible();
+
+    // With no page open, Escape is the tool's again: it cancels the Box.
+    await bar.focus();
+    await page.keyboard.press('Escape');
+    await expect(bar).toHaveCount(0);
+  });
+
+  test('gives focus back inside the sheet as a page steps back', async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openCompactProject(page, 'Compact focus');
+    const sheet = page.locator('.compact-sheet');
+    await page.getByRole('button', { name: 'More', exact: true }).click();
+    const grabber = sheet.getByRole('slider', { name: 'Sheet height' });
+    await grabber.focus();
+    await grabber.press('End');
+    await expect(sheet).toHaveAttribute('data-detent', 'full');
+    await sheet.getByRole('button', { name: 'File', exact: true }).click();
+    await expect(sheet.getByRole('heading', { name: 'File' })).toBeVisible();
+    const action = sheet.getByRole('button', { name: /Export STEP/ }).first();
+    await action.focus();
+    await page.keyboard.press('Escape');
+    await expect(sheet.getByRole('heading', { name: 'More' })).toBeVisible();
+    // Not dropped on the body: back on the row that opened File.
+    await expect(
+      sheet.getByRole('button', { name: 'File', exact: true })
+    ).toBeFocused();
+  });
+
+  test('marks the document compact for portalled dialogs, and unmarks it for Full', async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openCompactProject(page, 'Compact document');
+    await expect(page.locator('html')).toHaveAttribute('data-shell', 'compact');
+    await page.getByRole('button', { name: 'More', exact: true }).click();
+    await page
+      .locator('.compact-sheet')
+      .getByRole('button', { name: 'Open settings', exact: true })
+      .click();
+    const settings = page.getByRole('dialog', {
+      name: 'Settings',
+      exact: true
+    });
+    await settings.getByLabel('Find a setting').fill('Layout');
+    await settings
+      .getByRole('radiogroup', { name: 'Layout' })
+      .getByRole('radio', { name: 'Full' })
+      .check();
+    await expect(page.locator('html')).not.toHaveAttribute('data-shell');
+  });
 
   test('switches modes from the tabs', async ({ page }) => {
     test.setTimeout(120_000);

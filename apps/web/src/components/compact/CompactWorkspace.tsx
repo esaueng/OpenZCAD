@@ -20,10 +20,10 @@ import {
 import { WORKSPACE_MODE_OPTIONS } from '../../lib/topBarPresentation';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../../lib/workspaceSaveStatePresentation';
 import type { WorkspaceSaveState } from '../../lib/cloudProjectAutosave';
+import { OWN_ENTER_ATTRIBUTE } from '../../lib/exactEntryShortcut';
 import type { PaletteCommand } from '../CommandBar';
-import { BottomSheet, useSheet } from './BottomSheet';
+import { BottomSheet, SHEET_OVERLAY_ATTRIBUTE, useSheet } from './BottomSheet';
 import type { CompactChromeProps } from './compactSlots';
-import type { SheetPage } from './sheetState';
 
 /** The save dot's tone: settled, under way, or worth a look. */
 function saveTone(state: WorkspaceSaveState): 'ok' | 'busy' | 'local' | 'warn' {
@@ -65,6 +65,7 @@ function MenuList({
           <button
             type="button"
             className="compact-menu-row"
+            data-sheet-row={row.id}
             disabled={Boolean(row.disabledReason)}
             title={row.disabledReason ?? undefined}
             onClick={row.run}
@@ -112,7 +113,22 @@ export interface CompactWorkspaceProps extends CompactChromeProps {
   sheetKey: string;
   /** The host the in-place command bar is portalled into. */
   onCommandRowHost(element: HTMLElement | null): void;
+  /**
+   * The host for what must stand over the sheet at any height (the numeric
+   * keypad): outside the stage, which is inert while the sheet is full.
+   */
+  onOverlayHost(element: HTMLElement | null): void;
 }
+
+/**
+ * The chrome's own controls keep their Enter: pressed on More or a tab while
+ * a command runs, it presses that control rather than the workspace taking
+ * it as the command's Done.
+ */
+const OWN_ENTER = { [OWN_ENTER_ATTRIBUTE]: '' };
+
+/** The pages the compact chrome pushes onto the sheet, by id. */
+type CompactPage = 'more' | 'file' | 'selection';
 
 /**
  * The compact workspace's chrome (U12 slice 2): a header, the mode tabs, the
@@ -143,7 +159,8 @@ export default function CompactWorkspace({
   sheetContent,
   hasSheetContent,
   sheetKey,
-  onCommandRowHost
+  onCommandRowHost,
+  onOverlayHost
 }: CompactWorkspaceProps) {
   const chromeRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLElement | null>(null);
@@ -185,60 +202,122 @@ export default function CompactWorkspace({
     []
   );
 
-  const push = (page: SheetPage) => dispatch({ type: 'push', page });
+  // A command's Options open in the sheet's flow, under the bar: brought
+  // into view as they open, rather than left below the sheet's fold.
+  useEffect(() => {
+    const chrome = chromeRef.current;
+    if (!chrome) return;
+    const onToggle = (event: Event) => {
+      const details = event.target;
+      if (
+        !(details instanceof HTMLDetailsElement) ||
+        !details.open ||
+        !details.classList.contains('in-place-command-options') ||
+        !details.closest('.compact-sheet')
+      ) {
+        return;
+      }
+      const body = details.closest<HTMLElement>('.compact-sheet-body');
+      if (!body) return;
+      // Its top into view when it opened below the sheet's fold, leaving
+      // the bar above it in reach where there is room.
+      const room = body.getBoundingClientRect();
+      const top = details.getBoundingClientRect().top;
+      if (top > room.bottom - 96) {
+        body.scrollTop += top - room.top - 8;
+      }
+    };
+    // `toggle` does not bubble.
+    chrome.addEventListener('toggle', onToggle, true);
+    return () => chrome.removeEventListener('toggle', onToggle, true);
+  }, []);
+
+  const push = (key: CompactPage) => dispatch({ type: 'push', page: { key } });
   const closePages = () => dispatch({ type: 'close' });
   const moreOpen = state.stack.some((page) => page.key === 'more');
 
-  const filePage = (): SheetPage => ({
-    key: 'file',
-    title: 'File',
-    content: <MenuList label="File" rows={fileRows(fileCommands, closePages)} />
-  });
-  const morePage = (): SheetPage => ({
-    key: 'more',
-    title: 'More',
-    content: (
-      <MenuList
-        label="More"
-        rows={[
-          {
-            id: 'settings',
-            label: 'Open settings',
-            icon: <Settings size={18} />,
-            run: () => {
-              closePages();
-              onSettings();
-            }
-          },
-          {
-            id: 'help',
-            label: 'Help & keyboard shortcuts',
-            icon: <CircleHelp size={18} />,
-            run: () => {
-              closePages();
-              onHelp();
-            }
-          },
-          {
-            id: 'file',
-            label: 'File',
-            icon: <FileText size={18} />,
-            drillIn: true,
-            run: () => push(filePage())
-          },
-          {
-            id: 'home',
-            label: 'Back to projects',
-            icon: <FolderOpen size={18} />,
-            run: () => {
-              closePages();
-              onHome();
-            }
-          }
-        ]}
-      />
-    )
-  });
+  // Each page is drawn from the workspace's state as it is now, so a row
+  // disabled while the model was updating comes back when it finishes.
+  const renderPage = (
+    key: string
+  ): { title: string; content: ReactNode } | null => {
+    switch (key as CompactPage) {
+      case 'file':
+        return {
+          title: 'File',
+          content: (
+            <MenuList label="File" rows={fileRows(fileCommands, closePages)} />
+          )
+        };
+      case 'more':
+        return {
+          title: 'More',
+          content: (
+            <MenuList
+              label="More"
+              rows={[
+                {
+                  id: 'settings',
+                  label: 'Open settings',
+                  icon: <Settings size={18} />,
+                  run: () => {
+                    closePages();
+                    onSettings();
+                  }
+                },
+                {
+                  id: 'help',
+                  label: 'Help & keyboard shortcuts',
+                  icon: <CircleHelp size={18} />,
+                  run: () => {
+                    closePages();
+                    onHelp();
+                  }
+                },
+                {
+                  id: 'file',
+                  label: 'File',
+                  icon: <FileText size={18} />,
+                  drillIn: true,
+                  run: () => push('file')
+                },
+                {
+                  id: 'home',
+                  label: 'Back to projects',
+                  icon: <FolderOpen size={18} />,
+                  run: () => {
+                    closePages();
+                    onHome();
+                  }
+                }
+              ]}
+            />
+          )
+        };
+      case 'selection':
+        return {
+          title: selectionLabel ?? 'Nothing picked',
+          content:
+            selectionLabel && onClearSelection ? (
+              <MenuList
+                label="Selection"
+                rows={[
+                  {
+                    id: 'clear',
+                    label: 'Clear selection',
+                    run: () => {
+                      closePages();
+                      onClearSelection();
+                    }
+                  }
+                ]}
+              />
+            ) : null
+        };
+      default:
+        return null;
+    }
+  };
 
   const openSelection = () => {
     if (hasSheetContent) {
@@ -248,25 +327,7 @@ export default function CompactWorkspace({
       return;
     }
     if (!selectionLabel) return;
-    push({
-      key: 'selection',
-      title: selectionLabel,
-      content: onClearSelection ? (
-        <MenuList
-          label="Selection"
-          rows={[
-            {
-              id: 'clear',
-              label: 'Clear selection',
-              run: () => {
-                closePages();
-                onClearSelection();
-              }
-            }
-          ]}
-        />
-      ) : null
-    });
+    push('selection');
   };
 
   // A shared link's visitor sees only the modes the link opens, as on the
@@ -280,7 +341,7 @@ export default function CompactWorkspace({
 
   return (
     <div ref={chromeRef} className="compact-chrome">
-      <header ref={headerRef} className="compact-header">
+      <header ref={headerRef} className="compact-header" {...OWN_ENTER}>
         <button
           type="button"
           className="compact-icon-button"
@@ -311,14 +372,14 @@ export default function CompactWorkspace({
           className="compact-icon-button"
           aria-label="More"
           aria-expanded={moreOpen}
-          onClick={() => (moreOpen ? closePages() : push(morePage()))}
+          onClick={() => (moreOpen ? closePages() : push('more'))}
         >
           <Ellipsis size={22} aria-hidden="true" />
         </button>
       </header>
 
       <div className="compact-stage-layer">
-        <div ref={floatRef} className="compact-stage-controls">
+        <div ref={floatRef} className="compact-stage-controls" {...OWN_ENTER}>
           <div className="compact-history" role="group" aria-label="History">
             <button
               type="button"
@@ -356,6 +417,7 @@ export default function CompactWorkspace({
           state={state}
           dispatch={dispatch}
           hasRoot={hasSheetContent}
+          renderPage={renderPage}
           reducedMotion={reducedMotion}
           background={background}
           onHeight={onHeight}
@@ -371,6 +433,7 @@ export default function CompactWorkspace({
         <nav
           ref={tabsRef}
           className="compact-tabs"
+          {...OWN_ENTER}
           role="group"
           aria-label="Workspace mode"
         >
@@ -404,6 +467,15 @@ export default function CompactWorkspace({
           aria-hidden="true"
         />
       )}
+
+      {/* Outside the stage and the sheet, so what lands here (the numeric
+          keypad) stays live while the sheet stands at full over an inert
+          stage. */}
+      <div
+        ref={onOverlayHost}
+        className="compact-overlay-host"
+        {...{ [SHEET_OVERLAY_ATTRIBUTE]: '' }}
+      />
     </div>
   );
 }

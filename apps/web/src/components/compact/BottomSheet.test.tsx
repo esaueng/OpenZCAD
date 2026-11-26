@@ -13,11 +13,16 @@ import {
   type SheetState
 } from './sheetState';
 
-const page = (key: string, title = key): SheetPage => ({
-  key,
-  title,
-  content: <button type="button">{`${title} item`}</button>
-});
+const page = (key: string): SheetPage => ({ key });
+
+/** Each harness page: a title and one button, drawn from its key. */
+const renderPage = (key: string) => {
+  const title = key.charAt(0).toUpperCase() + key.slice(1);
+  return {
+    title,
+    content: <button type="button">{`${title} item`}</button>
+  };
+};
 
 describe('sheet state', () => {
   const reduce = (
@@ -152,13 +157,14 @@ function Harness({
         state={state}
         dispatch={dispatch}
         hasRoot={hasRoot}
+        renderPage={renderPage}
         background={background}
       >
         {children}
       </BottomSheet>
       <button
         type="button"
-        onClick={() => dispatch({ type: 'push', page: page('more', 'More') })}
+        onClick={() => dispatch({ type: 'push', page: page('more') })}
       >
         Open more
       </button>
@@ -226,6 +232,96 @@ describe('BottomSheet', () => {
     const event = fireEvent.keyDown(item, { key: 'Escape' });
     expect(event).toBe(false);
     expect(screen.queryByRole('heading', { name: 'More' })).toBeNull();
+  });
+
+  it('takes Escape for an open page wherever focus is', () => {
+    const onWindowKey = vi.fn();
+    window.addEventListener('keydown', onWindowKey);
+    render(
+      <Harness hasRoot initial={[{ type: 'set-detent', detent: 'half' }]}>
+        <button type="button">Done</button>
+      </Harness>
+    );
+    const opener = screen.getByRole('button', { name: 'Open more' });
+    opener.focus();
+    fireEvent.click(opener);
+    // Opening the page moves focus into it.
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'More item' })
+    );
+    // Focus back outside the sheet (the header's More, say): Escape still
+    // steps the page back and never reaches the workspace behind it.
+    const outside = screen.getByRole('button', { name: 'Outside' });
+    outside.focus();
+    fireEvent.keyDown(outside, { key: 'Escape' });
+    expect(screen.queryByRole('heading', { name: 'More' })).toBeNull();
+    expect(onWindowKey).not.toHaveBeenCalled();
+    // With the page gone, Escape is the running tool's again.
+    fireEvent.keyDown(outside, { key: 'Escape' });
+    expect(onWindowKey).toHaveBeenCalledTimes(1);
+    window.removeEventListener('keydown', onWindowKey);
+  });
+
+  it('gives focus back to what opened a page as it goes', () => {
+    function Drill() {
+      const { state, dispatch } = useSheet(false);
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => dispatch({ type: 'push', page: page('more') })}
+          >
+            Open more
+          </button>
+          <BottomSheet
+            label="Workspace sheet"
+            state={state}
+            dispatch={dispatch}
+            hasRoot={false}
+            renderPage={(key) =>
+              key === 'more'
+                ? {
+                    title: 'More',
+                    content: (
+                      <button
+                        type="button"
+                        data-sheet-row="file"
+                        onClick={() =>
+                          dispatch({ type: 'push', page: page('file') })
+                        }
+                      >
+                        File
+                      </button>
+                    )
+                  }
+                : {
+                    title: 'File',
+                    content: <button type="button">Export STEP</button>
+                  }
+            }
+          />
+        </>
+      );
+    }
+    render(<Drill />);
+    const opener = screen.getByRole('button', { name: 'Open more' });
+    opener.focus();
+    fireEvent.click(opener);
+    const file = screen.getByRole('button', { name: 'File' });
+    file.focus();
+    fireEvent.click(file);
+    const action = screen.getByRole('button', { name: 'Export STEP' });
+    expect(document.activeElement).toBe(action);
+    // Back from File: the action is gone, and focus lands on the row that
+    // opened it, drawn anew on the page below, not on the body.
+    fireEvent.keyDown(action, { key: 'Escape' });
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'File' })
+    );
+    // Back from More, which closes the sheet: focus returns to its opener.
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(sheet()).toHaveAttribute('hidden');
+    expect(document.activeElement).toBe(opener);
   });
 
   it('lets Escape through to a running tool at half', () => {

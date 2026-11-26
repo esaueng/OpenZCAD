@@ -80,7 +80,9 @@
 /* The scale bar stands over the undo pair in the stage's bottom-left
    corner, placed here rather than measured (`--viewport-scale-pinned`), and
    steps out while the sheet is above peek. */
-.app-shell[data-shell='compact'] .workspace.column-layout .viewport-scale-indicator {
+.app-shell[data-shell='compact']
+  .workspace.column-layout
+  .viewport-scale-indicator {
   --viewport-scale-pinned: 1;
   top: auto;
   right: auto;
@@ -566,4 +568,46 @@
 .compact-menu-chevron {
   flex: 0 0 auto;
   color: var(--color-text-dim);
+}
+
+/* ── A command's Options in the sheet ──
+   On the stage the Options open as a flyout above the bar. In the sheet the
+   bar is the first row of a scrolling body, so a flyout above it would be
+   cut off by the sheet's top: open, the Options take a row of their own
+   under the bar and scroll with the sheet's content. */
+.app-shell[data-shell='compact']
+  .compact-sheet
+  .in-place-command-options[open] {
+  order: 2;
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+.app-shell[data-shell='compact']
+  .compact-sheet
+  .in-place-command-options[open]
+  > .in-place-command-options-panel {
+  position: static;
+  inset: auto;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  margin-top: var(--sp-2);
+  overflow: visible;
+  box-shadow: none;
+}
+
+/* ── What stands over the sheet ──
+   The numeric keypad lands here, outside the stage that is inert while the
+   sheet stands at full; it lays itself out as the phone's sheet (fixed to
+   the foot of the screen). */
+.compact-overlay-host {
+  display: contents;
+}
+
+/* The keypad's own recovery stands in for the bar's, as on the stage. */
+.app-shell[data-shell='compact']:has(.keypad-section-recovery)
+  .in-place-command-recovery {
+  display: none;
 }

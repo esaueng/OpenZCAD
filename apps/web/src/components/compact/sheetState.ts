@@ -1,5 +1,3 @@
-import type { ReactNode } from 'react';
-
 /**
  * The compact workspace's one bottom sheet (U12 slice 2): where it stands
  * and the pages drilled into it. Pure, so the rules are testable without a
@@ -30,11 +28,14 @@ export const SHEET_DETENT_NAMES: Record<SheetDetent, string> = {
 /** The peek row's height in CSS pixels. */
 export const SHEET_PEEK_PX = 88;
 
+/**
+ * A page in the back stack, by id only: its title and content are drawn
+ * from the workspace's current state each render (`BottomSheet`'s
+ * `renderPage`), so a page left open never shows rows as they once were.
+ */
 export interface SheetPage {
   /** Unique within the stack; pushing a key already there pops back to it. */
   readonly key: string;
-  readonly title: string;
-  readonly content: ReactNode;
 }
 
 export interface SheetState {
