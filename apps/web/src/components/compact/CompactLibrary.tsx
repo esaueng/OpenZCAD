@@ -71,6 +71,15 @@ interface Press {
   hold: number | null;
 }
 
+/** A finger or pen on a revealed action, which runs when it lifts. */
+interface ActionPress {
+  pointerId: number;
+  projectId: string;
+  key: string;
+  startX: number;
+  startY: number;
+}
+
 /**
  * Swipe and hold on the library's rows (U12 slice 10). A finger dragged
  * left across a project reveals its shelf actions (Archive and Trash on
@@ -112,8 +121,12 @@ function SwipeLayer({
     const root = rootRef.current;
     if (!root) return;
     let press: Press | null = null;
-    // The click a swipe or a hold ends with is not a tap on the row.
-    let swallowClick = false;
+    let actionPress: ActionPress | null = null;
+    // The click a swipe or a hold ends with is not a tap on the row, and the
+    // one after an action already run on release is not a second tap on
+    // anything. Each press starts clear: a click the browser never sent must
+    // not eat the next tap.
+    let swallowClick: 'none' | 'row' | 'all' = 'none';
 
     const width = (projectId: string) =>
       actionsRef.current(projectId).length * ACTION_PX;
@@ -124,17 +137,34 @@ function SwipeLayer({
     };
 
     const onPointerDown = (event: PointerEvent) => {
-      if (event.pointerType === 'mouse' || !event.isPrimary) return;
+      if (!event.isPrimary) return;
+      swallowClick = 'none';
+      actionPress = null;
+      if (event.pointerType === 'mouse') return;
       const target = event.target instanceof Element ? event.target : null;
       const current = openRef.current;
-      // A press anywhere but on the open row's actions puts it back.
+      // A revealed action answers its finger when it lifts, not on the
+      // click the browser may make of it: Chromium on Linux and ChromeOS
+      // drops the tap that stops a fling, and the swipe's release flings.
+      const action = target?.closest<HTMLElement>(
+        '.compact-swipe-action[data-action]'
+      );
+      if (current && action && current.tile.contains(action)) {
+        actionPress = {
+          pointerId: event.pointerId,
+          projectId: current.projectId,
+          key: action.dataset.action!,
+          startX: event.clientX,
+          startY: event.clientY
+        };
+        return;
+      }
+      // A press anywhere but on the open row's actions puts it back, and
+      // only that: its click opens nothing.
       if (current && !target?.closest('.compact-swipe-actions')) {
-        const sameRow = current.tile.contains(target);
         close();
-        if (sameRow) {
-          swallowClick = true;
-          return;
-        }
+        swallowClick = 'row';
+        if (current.tile.contains(target)) return;
       }
       if (!target || target.closest(NOT_A_SWIPE)) return;
       const tile = target.closest<HTMLElement>(
@@ -153,7 +183,7 @@ function SwipeLayer({
         hold: window.setTimeout(() => {
           if (!press || press.mode !== 'pending') return;
           press.hold = null;
-          swallowClick = true;
+          swallowClick = 'row';
           holdRef.current(projectId);
           press.mode = 'scroll';
         }, HOLD_MS)
@@ -188,11 +218,27 @@ function SwipeLayer({
     };
 
     const onPointerUp = (event: PointerEvent) => {
+      if (actionPress && event.pointerId === actionPress.pointerId) {
+        const { projectId, key, startX, startY } = actionPress;
+        actionPress = null;
+        const still =
+          Math.abs(event.clientX - startX) < SLOP_PX &&
+          Math.abs(event.clientY - startY) < SLOP_PX;
+        const action = actionsRef
+          .current(projectId)
+          .find((entry) => entry.key === key);
+        if (!still || openRef.current?.projectId !== projectId) return;
+        if (!action || action.disabled) return;
+        swallowClick = 'all';
+        close();
+        action.run();
+        return;
+      }
       if (!press || event.pointerId !== press.pointerId) return;
       const { tile, projectId, mode, startX } = press;
       end();
       if (mode !== 'swipe') return;
-      swallowClick = true;
+      swallowClick = 'row';
       tile.classList.remove('is-swiping');
       const room = width(projectId);
       if (event.clientX - startX < -room / 2) {
@@ -204,6 +250,7 @@ function SwipeLayer({
     };
 
     const onPointerCancel = (event: PointerEvent) => {
+      if (actionPress?.pointerId === event.pointerId) actionPress = null;
       if (!press || event.pointerId !== press.pointerId) return;
       const { tile, mode } = press;
       end();
@@ -211,10 +258,11 @@ function SwipeLayer({
     };
 
     const onClick = (event: MouseEvent) => {
-      if (!swallowClick) return;
-      swallowClick = false;
+      if (swallowClick === 'none') return;
+      const all = swallowClick === 'all';
+      swallowClick = 'none';
       const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest('.compact-swipe-actions')) return;
+      if (!all && target?.closest('.compact-swipe-actions')) return;
       event.preventDefault();
       event.stopPropagation();
     };
@@ -260,7 +308,9 @@ function SwipeLayer({
             action.tone === 'danger' ? ' is-danger' : ''
           }`}
           aria-label={action.label}
+          data-action={action.key}
           disabled={action.disabled}
+          // A mouse or the keyboard; a finger's lift has already run it.
           onClick={() => {
             close();
             action.run();

@@ -98,8 +98,16 @@ const tileOf = (name: string) =>
     }"]`
   )!;
 
-/** A finger dragged across the row by `dx` pixels. */
-function swipe(target: HTMLElement, dx: number, pointerType = 'touch') {
+/**
+ * A finger dragged across the row by `dx` pixels; `clicks: false` is a
+ * browser that sends no click for it.
+ */
+function swipe(
+  target: HTMLElement,
+  dx: number,
+  pointerType = 'touch',
+  clicks = true
+) {
   const at = { clientX: 300, clientY: 200, pointerId: 7, isPrimary: true };
   fireEvent.pointerDown(target, { ...at, pointerType, button: 0 });
   for (const step of [0.25, 0.5, 0.75, 1]) {
@@ -115,7 +123,7 @@ function swipe(target: HTMLElement, dx: number, pointerType = 'touch') {
     clientX: at.clientX + dx
   });
   // The click a released press makes.
-  fireEvent.click(target);
+  if (clicks) fireEvent.click(target);
 }
 
 describe('the compact library', () => {
@@ -197,6 +205,88 @@ describe('the compact library', () => {
     const menu = within(screen.getByRole('menu', { name: 'Actions for Gear' }));
     expect(menu.getByRole('menuitem', { name: 'Archive' })).toBeVisible();
     expect(menu.getByRole('menuitem', { name: 'Move to trash' })).toBeVisible();
+  });
+
+  it('runs a revealed action when the finger lifts, with or without the click', async () => {
+    const { props: shown } = await renderCompact();
+    const row = tileOf('Bracket');
+    swipe(row.querySelector('.start-tile-open')!, -200);
+    const archive = within(
+      await within(row).findByRole('group', { name: 'Row actions' })
+    ).getByRole('button', { name: 'Archive Bracket' });
+    const finger = {
+      pointerType: 'touch',
+      isPrimary: true,
+      pointerId: 11,
+      clientX: 320,
+      clientY: 210
+    };
+    fireEvent.pointerDown(archive, finger);
+    fireEvent.pointerUp(window, { ...finger, clientX: 323 });
+    // Chromium on Linux sends no click for a tap that stops a fling: the
+    // lift alone archives.
+    expect(shown.onMoveToShelf).toHaveBeenCalledTimes(1);
+    expect(shown.onMoveToShelf).toHaveBeenCalledWith(bracket, 'archived');
+    await waitFor(() =>
+      expect(
+        within(row).queryByRole('group', { name: 'Row actions' })
+      ).toBeNull()
+    );
+    // Where the click does come, it lands on the row slid back under the
+    // finger: it opens nothing and archives nothing twice.
+    fireEvent.click(row.querySelector('.start-tile-open')!);
+    expect(shown.onOpen).not.toHaveBeenCalled();
+    expect(shown.onMoveToShelf).toHaveBeenCalledTimes(1);
+
+    // A click that never came eats nothing: the next tap opens its row.
+    const gear = tileOf('Gear').querySelector<HTMLElement>('.start-tile-open')!;
+    swipe(row.querySelector('.start-tile-open')!, -200);
+    fireEvent.pointerDown(
+      within(
+        await within(row).findByRole('group', { name: 'Row actions' })
+      ).getByRole('button', { name: 'Move Bracket to trash' }),
+      finger
+    );
+    fireEvent.pointerUp(window, finger);
+    expect(shown.onMoveToShelf).toHaveBeenLastCalledWith(bracket, 'deleted');
+    fireEvent.pointerDown(gear, { ...finger, pointerId: 12 });
+    fireEvent.pointerUp(window, { ...finger, pointerId: 12 });
+    fireEvent.click(gear);
+    expect(shown.onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs a revealed action a screen reader clicks, with no press before it', async () => {
+    const { props: shown } = await renderCompact();
+    const row = tileOf('Bracket');
+    swipe(row.querySelector('.start-tile-open')!, -200, 'touch', false);
+    fireEvent.click(
+      within(
+        await within(row).findByRole('group', { name: 'Row actions' })
+      ).getByRole('button', { name: 'Archive Bracket' })
+    );
+    expect(shown.onMoveToShelf).toHaveBeenCalledWith(bracket, 'archived');
+  });
+
+  it('runs nothing when the finger slides off a revealed action', async () => {
+    const { props: shown } = await renderCompact();
+    const row = tileOf('Bracket');
+    swipe(row.querySelector('.start-tile-open')!, -200);
+    const archive = within(
+      await within(row).findByRole('group', { name: 'Row actions' })
+    ).getByRole('button', { name: 'Archive Bracket' });
+    const finger = {
+      pointerType: 'touch',
+      isPrimary: true,
+      pointerId: 13,
+      clientX: 320,
+      clientY: 210
+    };
+    fireEvent.pointerDown(archive, finger);
+    fireEvent.pointerUp(window, { ...finger, clientY: 260 });
+    expect(shown.onMoveToShelf).not.toHaveBeenCalled();
+    expect(
+      within(row).getByRole('group', { name: 'Row actions' })
+    ).toBeVisible();
   });
 
   it('puts a swiped row back on a tap elsewhere, and opens nothing', async () => {
