@@ -420,22 +420,53 @@ export function projectionAddCommand(input: {
 }
 
 /**
+ * The exact build's reason when a linked projection's source body does not
+ * exist yet at the sketch's place in the history: the edge belongs to a
+ * feature after the sketch (packages/kernel-adapter's
+ * exact-sketch-projection.ts). The picked geometry is real in the model the
+ * user clicked, so an unlinked copy of it builds.
+ */
+const SOURCE_UNAVAILABLE =
+  /^its source body is unavailable at the sketch's place in the history \(source feature "(.*)"\)\.$/;
+
+/**
+ * The refusal for a later feature's edge, recovery first: the workspace
+ * toast is one line on desktop and cuts the rest off, so the Project tool's
+ * Unlinked mode leads and the cause, naming the feature, follows.
+ */
+export function laterSourceRefusal(featureName: string): string {
+  return `Switch Project to Unlinked and pick again: "${featureName}" is after this sketch, so it can't stay linked.`;
+}
+
+/**
  * Refuses a candidate unless the exact build re-found every new linked
  * projection at the sketch's place in the history (current, or moved, which
  * the build follows). Broken — an edge made by a later feature, say — is
  * refused naming why; no verdict at all (the sketch is suppressed, or its
  * plane failed before projection ran) is refused too, since nothing then
  * proved the edge exists there.
+ *
+ * A source that is unavailable at the sketch's place (a later feature's
+ * edge) leads with the unlinked route, which builds. A re-pick does not:
+ * it replaces a linked source on an existing object, and stepping Project
+ * to Unlinked disarms it, so that route would add a copy rather than
+ * repair the object.
  */
 export function assertProjectionsResolve(
   derived: Pick<DerivedState, 'sketchProjections'>,
-  objectIds: readonly string[]
+  objectIds: readonly string[],
+  options: { repick?: boolean } = {}
 ): void {
   for (const objectId of objectIds) {
     const state = derived.sketchProjections?.[objectId];
     if (state?.status === 'broken') {
+      const later = options.repick
+        ? null
+        : SOURCE_UNAVAILABLE.exec(state.reason);
       throw new Error(
-        `That edge cannot be projected linked here: ${state.reason.replace(/^its /, 'the ')}`
+        later
+          ? laterSourceRefusal(later[1]!)
+          : `That edge cannot be projected linked here: ${state.reason.replace(/^its /, 'the ')}`
       );
     }
     if (!state) {

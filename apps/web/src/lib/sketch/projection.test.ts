@@ -22,6 +22,7 @@ import {
 } from '@openzcad/shared';
 import {
   assertProjectionsResolve,
+  laterSourceRefusal,
   projectionAddCommand,
   projectionFromPick,
   projectionFromPickWithLineage,
@@ -546,6 +547,57 @@ describe('repair, unlink and the words for each', () => {
         ['ent_a']
       )
     ).toThrow(/the sketch did not build/);
+  });
+
+  it('leads with the unlinked route only when a later feature owns the source', () => {
+    const verdict = (reason: string) => ({
+      sketchProjections: { ent_a: { status: 'broken' as const, reason } }
+    });
+    const refusal = (
+      derived: ReturnType<typeof verdict>,
+      options?: { repick?: boolean }
+    ) => {
+      try {
+        assertProjectionsResolve(derived, ['ent_a'], options);
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error('expected a refusal');
+    };
+    const later = verdict(
+      `its source body is unavailable at the sketch's place in the history (source feature "Cap").`
+    );
+    // Recovery first, naming the Project tool's Unlinked mode (an unlinked
+    // copy of the pick builds), then the cause, naming the later feature:
+    // the desktop toast is one line and cuts off whatever does not fit.
+    expect(refusal(later)).toBe(
+      `Switch Project to Unlinked and pick again: "Cap" is after this sketch, so it can't stay linked.`
+    );
+    expect(refusal(later)).toBe(laterSourceRefusal('Cap'));
+    // A feature name with quotes or parentheses is taken whole.
+    expect(
+      refusal(
+        verdict(
+          `its source body is unavailable at the sketch's place in the history (source feature "Cap (2) "top"").`
+        )
+      )
+    ).toBe(laterSourceRefusal('Cap (2) "top"'));
+    // A re-pick replaces an existing object's linked source; stepping to
+    // Unlinked disarms it, so the route would add a copy, not repair.
+    expect(refusal(later, { repick: true })).toBe(
+      `That edge cannot be projected linked here: the source body is unavailable at the sketch's place in the history (source feature "Cap").`
+    );
+    // Every other broken reason keeps its own recovery, or none, unchanged.
+    for (const reason of [
+      `its source body was consumed by a feature before the sketch (source feature "Base"); re-pick the edge on the body that replaced it.`,
+      `its source edge from "Base" was deleted or no longer exists.`,
+      `its source edge from "Base" matched only by fingerprint; a linked projection follows verified lineage alone.`,
+      `its source edge from "Base" now projects to an arc, not a line.`
+    ]) {
+      expect(refusal(verdict(reason))).toBe(
+        `That edge cannot be projected linked here: ${reason.replace(/^its /, 'the ')}`
+      );
+    }
   });
 
   it('describes each projection for History and Objects', () => {

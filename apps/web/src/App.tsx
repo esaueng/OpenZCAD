@@ -25360,7 +25360,9 @@ export function App() {
             label: 'Re-pick projection source',
             targets,
             validateDerived: (derived) =>
-              assertProjectionsResolve(derived, [repair.objectId]),
+              assertProjectionsResolve(derived, [repair.objectId], {
+                repick: true
+              }),
             successMessage: `The projected ${data.objectKind} follows the re-picked edge.`,
             onSuccess: () => {
               setProjectionRepair(null);
