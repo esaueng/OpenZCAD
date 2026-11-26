@@ -9,6 +9,7 @@ import {
   PencilLine,
   PencilRuler,
   Plus,
+  RefreshCw,
   Scissors,
   SlidersHorizontal,
   SquareArrowOutUpRight,
@@ -97,6 +98,12 @@ export interface CompactDrawSheet {
   exports: {
     /** Why export is refused now, or null. */
     reason: string | null;
+    /** Each export's title, as the regular export buttons have it. */
+    title(format: CompactDrawExportFormat): string;
+    /** The sheet is drawn from an earlier model and exports as such. */
+    outdatedWarning: string | null;
+    /** The Update a changed model asks for, or null. */
+    update: { disabledReason: string | null; onUpdate(): void } | null;
     onExport(format: CompactDrawExportFormat): void;
     /** Annotations that lost what they measure. */
     broken: number;
@@ -490,7 +497,34 @@ function ExportPage({ sheet }: { sheet: CompactDrawSheet }) {
   const { exports } = sheet;
   return (
     <div className="compact-draw-page">
+      {exports.outdatedWarning ? (
+        <p className="compact-page-note" role="status">
+          {exports.outdatedWarning}
+        </p>
+      ) : null}
       <ul className="compact-menu" aria-label="Export">
+        {exports.update ? (
+          <li>
+            <button
+              type="button"
+              className="compact-menu-row"
+              aria-label="Update"
+              disabled={exports.update.disabledReason !== null}
+              title={
+                exports.update.disabledReason ??
+                'Redraw this sheet from the current model'
+              }
+              onClick={exports.update.onUpdate}
+            >
+              <span className="compact-menu-icon" aria-hidden="true">
+                <RefreshCw size={18} />
+              </span>
+              <span className="compact-menu-label" aria-hidden="true">
+                Update
+              </span>
+            </button>
+          </li>
+        ) : null}
         {EXPORTS.map(({ format, word }) => (
           <li key={format}>
             <button
@@ -498,6 +532,7 @@ function ExportPage({ sheet }: { sheet: CompactDrawSheet }) {
               className="compact-menu-row"
               aria-label={`Export ${word}`}
               disabled={exports.reason !== null}
+              title={exports.title(format)}
               onClick={() => exports.onExport(format)}
             >
               <span className="compact-menu-icon" aria-hidden="true">

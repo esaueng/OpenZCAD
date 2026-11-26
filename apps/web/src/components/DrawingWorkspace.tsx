@@ -571,6 +571,18 @@ let retainedProjections: {
  */
 const KEPT_DRAWINGS_PER_SHEET = 2;
 
+/** The export buttons' titles, and the same while the sheet is outdated. */
+const EXPORT_TITLES = {
+  pdf: 'Export this sheet as a vector PDF',
+  svg: 'Export this sheet as SVG',
+  dxf: 'Export this sheet as DXF (R12, paper millimetres, a layer per line kind)'
+} as const;
+const OUTDATED_EXPORT_TITLES = {
+  pdf: 'Export this sheet as drawn, before the latest model change',
+  svg: 'Export this sheet as SVG, as drawn before the latest model change',
+  dxf: 'Export this sheet as DXF, as drawn before the latest model change'
+} as const;
+
 /** How far a finger may drift and still tap an annotation tool's pick. */
 const PICK_TAP_SLOP_PX = 10;
 
@@ -6486,6 +6498,24 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         ? 'Drawing the views…'
         : 'Drawing up to date';
   const canUpdate = status.kind === 'stale' || status.kind === 'replaced';
+  const onUpdateSheet = () => {
+    if (status.kind !== 'stale' && status.kind !== 'replaced') return;
+    updateSheet({
+      source: { fingerprint: status.fingerprint },
+      ...(status.kind === 'replaced'
+        ? { bodyReplacements: status.replacements }
+        : {})
+    });
+  };
+  /** Each export button's title: why it is refused, or what it writes. */
+  const exportTitle = (format: 'pdf' | 'svg' | 'dxf') =>
+    exportReason ??
+    (outdated ? OUTDATED_EXPORT_TITLES[format] : EXPORT_TITLES[format]);
+  /** An export now writes the drawing of an earlier model: say so. */
+  const outdatedExportWarning =
+    outdated && exportReason === null
+      ? `${message ?? ''} Export now writes this sheet as drawn, before the latest model change.`.trim()
+      : null;
   const exportBlocked =
     (!message || keptDrawing !== null) &&
     (brokenCount > 0 ||
@@ -7345,6 +7375,16 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         hasSelection: selection !== null,
         exports: {
           reason: exportReason,
+          title: exportTitle,
+          outdatedWarning: outdatedExportWarning,
+          update: canUpdate
+            ? {
+                disabledReason: editable
+                  ? null
+                  : (editDisabledReason ?? 'Drawing edits are unavailable.'),
+                onUpdate: onUpdateSheet
+              }
+            : null,
           onExport: (format) => void exportSheet(format),
           broken: brokenCount,
           canDeleteBroken,
@@ -7364,14 +7404,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           aria-label="Update"
           disabled={!editable}
           title={editDisabledReason ?? 'Redraw this sheet from the current model'}
-          onClick={() =>
-            updateSheet({
-              source: { fingerprint: status.fingerprint },
-              ...(status.kind === 'replaced'
-                ? { bodyReplacements: status.replacements }
-                : {})
-            })
-          }
+          onClick={onUpdateSheet}
         >
           <RefreshCw size={18} aria-hidden="true" />
           <span aria-hidden="true">Update</span>
@@ -7549,14 +7582,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     editDisabledReason ??
                     'Redraw this sheet from the current model'
                   }
-                  onClick={() =>
-                    updateSheet({
-                      source: { fingerprint: status.fingerprint },
-                      ...(status.kind === 'replaced'
-                        ? { bodyReplacements: status.replacements }
-                        : {})
-                    })
-                  }
+                  onClick={onUpdateSheet}
                 >
                   <RefreshCw size={12} aria-hidden="true" /> Update
                 </button>
@@ -7626,12 +7652,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 type="button"
                 className="primary"
                 disabled={exportReason !== null}
-                title={
-                  exportReason ??
-                  (outdated
-                    ? 'Export this sheet as drawn, before the latest model change'
-                    : 'Export this sheet as a vector PDF')
-                }
+                title={exportTitle('pdf')}
                 onClick={() => void exportSheet('pdf')}
               >
                 <FileDown size={13} aria-hidden="true" /> Export PDF
@@ -7641,12 +7662,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 className="secondary"
                 aria-label="Export SVG"
                 disabled={exportReason !== null}
-                title={
-                  exportReason ??
-                  (outdated
-                    ? 'Export this sheet as SVG, as drawn before the latest model change'
-                    : 'Export this sheet as SVG')
-                }
+                title={exportTitle('svg')}
                 onClick={() => void exportSheet('svg')}
               >
                 SVG
@@ -7656,12 +7672,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 className="secondary"
                 aria-label="Export DXF"
                 disabled={exportReason !== null}
-                title={
-                  exportReason ??
-                  (outdated
-                    ? 'Export this sheet as DXF, as drawn before the latest model change'
-                    : 'Export this sheet as DXF (R12, paper millimetres, a layer per line kind)')
-                }
+                title={exportTitle('dxf')}
                 onClick={() => void exportSheet('dxf')}
               >
                 DXF

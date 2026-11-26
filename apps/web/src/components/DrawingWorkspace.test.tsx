@@ -3596,19 +3596,28 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
    * workspace portals its own tray into it.
    */
   function compactSetup(
-    options: { sheet?: DrawingSheet; sheets?: DrawingSheet[] } = {}
+    options: {
+      sheet?: DrawingSheet;
+      sheets?: DrawingSheet[];
+      /** The cube's size: another than the sheet's makes it outdated. */
+      size?: number;
+      /** Keep the drawings an earlier render of this project drew. */
+      keepProjections?: boolean;
+      /** The project, to show again (its drawings are kept by its id). */
+      document?: ProjectDocument;
+    } = {}
   ) {
-    resetRetainedProjections();
+    if (!options.keepProjections) resetRetainedProjections();
     const sheets = options.sheets ?? (options.sheet ? [options.sheet] : []);
-    const document: ProjectDocument = {
+    const document: ProjectDocument = options.document ?? {
       ...createProjectDocument('Bracket', toUserId('test')),
       bodyOrder: [bodyId],
       ...(sheets.length > 0 ? { drawings: { sheets } } : {})
     };
-    const bodies = { [bodyId]: cube() };
+    const bodies = { [bodyId]: cube(options.size) };
     const onCommand = vi.fn((_command: AnyCommand) => true);
     const onStatus = vi.fn();
-    render(
+    const rendered = render(
       <AppShell
         topBar={<header className="topbar">top</header>}
         toolBar={null}
@@ -3653,7 +3662,7 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
         }
       />
     );
-    return { onCommand, onStatus };
+    return { onCommand, onStatus, document, unmount: rendered.unmount };
   }
   const fingerprint = () =>
     drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!;
@@ -3836,6 +3845,39 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
         expect(page.getByRole('button', { name })).toBeEnabled()
       );
     }
+  });
+
+  it('warns that an outdated sheet exports as drawn, and offers its Update on Export', async () => {
+    const first = compactSetup({ sheet: starter(fingerprint()) });
+    const drawn = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        drawn.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    // Leave Draw, change the model in Build, come back.
+    first.unmount();
+    const { onCommand } = compactSetup({
+      document: first.document,
+      size: 12,
+      keepProjections: true
+    });
+    const page = await openPage('Export');
+    expect(
+      page.getByText(
+        'The model changed since this sheet was drawn. Update it to redraw the views. Export now writes this sheet as drawn, before the latest model change.'
+      )
+    ).toBeTruthy();
+    // It exports the earlier drawing, as the regular buttons do, and says so.
+    const pdf = page.getByRole('button', { name: 'Export PDF' });
+    expect(pdf).toBeEnabled();
+    expect(pdf).toHaveAttribute(
+      'title',
+      'Export this sheet as drawn, before the latest model change'
+    );
+    fireEvent.click(page.getByRole('button', { name: 'Update' }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    expect(onCommand.mock.calls[0]![0].kind).toBe('drawing.sheet.update');
   });
 
   it('offers only a new sheet before the first one', async () => {

@@ -59,6 +59,9 @@ function content(overrides: Partial<CompactDrawSheet> = {}): CompactDrawSheet {
     hasSelection: false,
     exports: {
       reason: null,
+      title: (format) => `Export this sheet as ${format}`,
+      outdatedWarning: null,
+      update: null,
       onExport: vi.fn(),
       broken: 0,
       canDeleteBroken: false,
@@ -209,6 +212,9 @@ describe('CompactDrawTray (U12 slice 9)', () => {
     const sheet = content({
       exports: {
         reason: 'An annotation has lost what it measures.',
+        title: () => 'An annotation has lost what it measures.',
+        outdatedWarning: null,
+        update: null,
         onExport: vi.fn(),
         broken: 1,
         canDeleteBroken: true,
@@ -228,6 +234,37 @@ describe('CompactDrawTray (U12 slice 9)', () => {
     ).toBeTruthy();
     fireEvent.click(page.getByRole('button', { name: 'Delete all broken' }));
     expect(sheet.exports.onDeleteBroken).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns that an outdated sheet exports as drawn, and offers its Update', async () => {
+    const onUpdate = vi.fn();
+    const onExport = vi.fn();
+    const warning =
+      'The model changed since this sheet was drawn. Update it to redraw the views. Export now writes this sheet as drawn, before the latest model change.';
+    const sheet = content({
+      exports: {
+        reason: null,
+        title: (format) => `${format} as drawn before the model change`,
+        outdatedWarning: warning,
+        update: { disabledReason: null, onUpdate },
+        onExport,
+        broken: 0,
+        canDeleteBroken: false,
+        onDeleteBroken: vi.fn()
+      }
+    });
+    render(shell({ sheets: sheets(), sheet, run: null }));
+    fireEvent.click(
+      within(await tray()).getByRole('button', { name: 'Export' })
+    );
+    const page = within(panel());
+    expect(await page.findByText(warning)).toBeTruthy();
+    const pdf = page.getByRole('button', { name: 'Export PDF' });
+    expect(pdf).toHaveAttribute('title', 'pdf as drawn before the model change');
+    fireEvent.click(page.getByRole('button', { name: 'Update' }));
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    fireEvent.click(pdf);
+    expect(onExport).toHaveBeenCalledWith('pdf');
   });
 
   it('keeps a rename to itself until it is saved', async () => {
