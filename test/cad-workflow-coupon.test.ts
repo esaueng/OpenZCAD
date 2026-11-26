@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addDatumPlane,
+  addPrimitiveFeature,
   addSketchFeature,
   addSplitFeature,
   createProjectDocument,
@@ -622,6 +623,18 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
           'unsupported'
         ],
         ['S4', edgePlane, 'unsupported'],
+        // S4 shallow (review of #2074, finding 2): x + k·y = 0 touches only
+        // the vertical edge at x = y = 0. The x = 0 face's centroid is 5e-7
+        // off the plane, its far edge 1e-6: past the kernel's 1e-7 slack,
+        // so the face is not in the plane.
+        [
+          'S4 shallow',
+          {
+            origin: { x: 0, y: 0, z: 0 },
+            normal: { x: 1, y: 1e-6 / 36, z: 0 }
+          },
+          'unsupported'
+        ],
         ['S5', vertexPlane, 'invalid_input']
       ] as const) {
         const { document, coupon } = blank();
@@ -647,6 +660,7 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
         'S3',
         'S3 reversed',
         'S4',
+        'S4 shallow',
         'S5'
       ]);
     });
@@ -677,10 +691,12 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
     });
 
     it('Wording, S4: a plane along an edge keeps the edge sentence', () => {
-      expect(cells.get('S4')).toMatchObject({
-        reason: 'plane_on_edge',
-        bar: SPLIT_PLANE_ON_EDGE
-      });
+      for (const cell of ['S4', 'S4 shallow']) {
+        expect(cells.get(cell), cell).toMatchObject({
+          reason: 'plane_on_edge',
+          bar: SPLIT_PLANE_ON_EDGE
+        });
+      }
     });
 
     it('never falls back to the generic sentence', () => {
@@ -688,6 +704,83 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
         expect(typed.bar, cell).not.toBe(GENERIC_REFUSAL);
       }
     });
+  });
+
+  // S7 (review of #2074, finding 1): the kernel judges "entirely on one
+  // side" from the body's edges alone. An R5 sphere at the origin is two
+  // hemispheres meeting on the z = 0 equator, so z = 1, which cuts it, gets
+  // the same refusal as z = 6, which misses it. The adapter cannot prove a
+  // miss on a curved body, records no cause, and the bar claims none.
+  describe('S7: a Split through a sphere', () => {
+    function sphere() {
+      const document = addPrimitiveFeature(
+        createProjectDocument('K10 sphere', user),
+        { name: 'Ball', primitiveKind: 'sphere', dimensions: { radius: 5 } }
+      );
+      const ball = Object.values(document.nodes).find(
+        (node) => node.kind === 'body'
+      ) as { bodyId: BodyId };
+      return { document, ball: ball.bodyId };
+    }
+    const zPlane = (z: number) => ({
+      origin: { x: 0, y: 0, z },
+      normal: { x: 0, y: 0, z: 1 }
+    });
+
+    it.each([
+      ['z = 1, through the sphere', 1],
+      ['z = 6, clear of it', 6]
+    ])('%s: no cause is claimed', async (label, z) => {
+      const { document, ball } = sphere();
+      const split = addSplitFeature(document, {
+        name: 'Split',
+        targetBodyId: ball,
+        plane: zPlane(z)
+      });
+      const refused = expectTyped(
+        await outcome(split.document, 'Split'),
+        'invalid_input',
+        label
+      );
+      expect(refused.reason, label).toBeUndefined();
+      expect(refused.bar, label).toBe(
+        'Split could not cut the body along this plane. Check that the plane passes through the body.'
+      );
+    });
+
+    // K10 finding, class Capability boundary (mis-typed as invalid_input),
+    // owner Remus split: a plane through a curved body that crosses none of
+    // its edges is refused as "entirely on one side". Expected: two
+    // spherical caps, π·h²·(3R − h)/3 above (h = R − 1) and the rest below. The
+    // kernel is not changed here; this passes while the refusal stands.
+    it.fails(
+      'z = 1 splits the sphere into two caps (kernel refuses)',
+      async () => {
+        const { document, ball } = sphere();
+        const split = addSplitFeature(document, {
+          name: 'Split',
+          targetBodyId: ball,
+          plane: zPlane(1)
+        });
+        const derived = expectBuilt(
+          await outcome(split.document, 'Split'),
+          'S7'
+        );
+        const R = 5;
+        const h = R - 1;
+        const above = (PI * h * h * (3 * R - h)) / 3;
+        expectVolume(
+          derived.bodyRepresentations[split.bodyId]?.volume,
+          above,
+          'S7 above'
+        );
+        expectVolume(
+          derived.bodyRepresentations[split.secondBodyId]?.volume,
+          (4 / 3) * PI * R ** 3 - above,
+          'S7 below'
+        );
+      }
+    );
   });
 
   it('S6: a typed zero normal makes no Split request', () => {

@@ -545,8 +545,10 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
       'The cutting plane only touches the body, along an edge or a face. Slide the plane into the body.'
     ],
     [
+      // Untyped, not claimed as a miss: the kernel says this of a plane
+      // through a sphere too.
       'invalid input: cutting plane does not split the solid (entirely on one side)',
-      'The cutting plane does not pass through the body. Move the plane so it cuts through the body.'
+      'Split could not cut the body along this plane. Check that the plane passes through the body.'
     ],
     [
       'Remus solid offset refused: assembly failed: wire loop walk: no unvisited edge from vertex 2685 (40 visited, 3 in loop)',
@@ -625,14 +627,20 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
       expect(SPLIT_PLANE_ON_EDGE).not.toMatch(/\bface\b/i);
     });
 
-    it('reads the miss without a cause, and never as the generic sentence', () => {
-      expect(plainRefusal(MISS).message).toBe(SPLIT_PLANE_MISSES);
-      expect(plainRefusal(MISS, 'invalid_input').message).toBe(
-        SPLIT_PLANE_MISSES
-      );
-      expect(plainRefusal(MISS, split('invalid_input')).message).not.toBe(
-        GENERIC_REFUSAL
-      );
+    it('claims a miss only when the cause proves one, and never reads as the generic sentence', () => {
+      // The adapter records no cause for a plane through a sphere, which the
+      // kernel refuses with this same text (review of #2074, finding 1).
+      for (const plain of [
+        plainRefusal(MISS),
+        plainRefusal(MISS, 'invalid_input'),
+        plainRefusal(MISS, split('invalid_input'))
+      ]) {
+        expect(plain.message).toBe(
+          'Split could not cut the body along this plane. Check that the plane passes through the body.'
+        );
+        expect(plain.message).not.toBe(SPLIT_PLANE_MISSES);
+        expect(plain.message).not.toBe(GENERIC_REFUSAL);
+      }
     });
 
     it('falls back to the prose table for a cause it has no sentence for', () => {

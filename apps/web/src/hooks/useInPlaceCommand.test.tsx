@@ -3601,6 +3601,69 @@ describe('useInPlaceCommand: a late Split reply', () => {
     expect(hook.result.current.refusalClassification).toBeNull();
   });
 
+  // Review of #2074, finding 3: a stored Split that already fails (an
+  // upstream change put its plane on a face) reopens on that same failure.
+  // The preview repeats the stored warning, so it is not new; the edit's own
+  // refusal is reported without its `Feature "…":` lead, and its typed
+  // record must still come with it.
+  it("keeps the typed record of an edited Split's repeated failure", async () => {
+    const stored = ON_FACE.featureWarnings![0]!;
+    const base = {
+      derived: {
+        bodyRepresentations: { [COUPON.bodyId]: {} },
+        warnings: [stored.message],
+        featureWarnings: [stored]
+      }
+    } as unknown as ProjectDocument;
+    const { hook } = setup({
+      baseDocument: () => base,
+      derive: async () => ON_FACE
+    });
+    act(() =>
+      hook.result.current.edit('split', {
+        featureId: stored.featureId,
+        nodeId: 'node_split',
+        name: 'Split',
+        data: {
+          featureKind: 'split',
+          targetBodyId: COUPON.bodyId,
+          secondBodyId: 'body_second' as BodyId,
+          plane: {
+            origin: { x: 90, y: 18, z: 7 },
+            normal: { x: 1, y: 0, z: 0 }
+          }
+        } as unknown as InPlaceEditSeed['data'],
+        resultBodyId: BODY,
+        ownBodyIds: [BODY, 'body_second' as BodyId],
+        slots: {
+          profiles: [],
+          axisId: null,
+          path: [],
+          guide: [],
+          faces: [],
+          bodies: [COUPON],
+          plane: END_FACE,
+          edges: []
+        },
+        values: {},
+        raws: {},
+        touched: [],
+        options: { planeMode: 'picked', keepOriginal: 'no' },
+        axes: [],
+        choices: {},
+        lockedOptions: [],
+        notice: null
+      })
+    );
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toMatch(/^split: unsupported/)
+    );
+    expect(hook.result.current.refusalClassification).toEqual(
+      record('unsupported', 'plane_on_face')
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
   it('shows the typed sentence in the bar', () => {
     render(
       <InPlaceCommandBar

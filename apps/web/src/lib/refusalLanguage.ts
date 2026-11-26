@@ -175,8 +175,10 @@ const BLEND_RESIZE_SENTENCES: Readonly<Record<string, string>> = {
  * Split by plane (M11). A plane with no edge of the body across it has three
  * stories: it misses the body (or meets one corner), it lies flat on one of
  * the body's faces, or it runs along one edge. The kernel words the last two
- * alike; the adapter tells them apart from the target's exact planar faces
- * and records which on `kernelRefusal.reason` (`exact-split-contact.ts`).
+ * alike, and words a plane through a curved body like the first. The adapter
+ * records a cause on `kernelRefusal.reason` only where the target's exact
+ * B-rep proves it (`exact-split-contact.ts`); without one the sentence names
+ * no cause.
  *
  * A Split begun by picking the body's own face always opens on the face
  * story, at offset 0, so that sentence says to slide the plane into the body
@@ -189,6 +191,13 @@ export const SPLIT_PLANE_ON_FACE =
   'The cutting plane lies on a face of the body and only touches it. Slide the plane into the body.';
 export const SPLIT_PLANE_ON_EDGE =
   'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.';
+/**
+ * The kernel's "entirely on one side", where nothing proved a miss. The
+ * kernel judges the side from the body's edges alone, so it says this of a
+ * plane through a sphere too (K10): the sentence must not claim a miss.
+ */
+const SPLIT_PLANE_NOT_CUT =
+  'Split could not cut the body along this plane. Check that the plane passes through the body.';
 /** A plane that only touches the body, where nothing said how. */
 const SPLIT_PLANE_TOUCHES =
   'The cutting plane only touches the body, along an edge or a face. Slide the plane into the body.';
@@ -399,9 +408,10 @@ const TRANSLATIONS: readonly Translation[] = [
   },
   {
     // "invalid input: cutting plane does not split the solid (entirely on
-    // one side)": the plane misses the body, or meets only a corner of it.
+    // one side)". A miss, a corner touch, or a curved body the kernel judged
+    // by its edges alone: untyped, the sentence names none of them.
     pattern: /cutting plane does not split the solid/i,
-    sentence: SPLIT_PLANE_MISSES
+    sentence: SPLIT_PLANE_NOT_CUT
   },
   {
     // A face move beside a fillet: the kernel can carry the blend along only

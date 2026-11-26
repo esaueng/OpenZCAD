@@ -255,7 +255,10 @@ import {
   probeBooleanEntityEvolution,
   type BooleanEvolutionOperation
 } from './exact-boolean-evolution';
-import { modelingOperationRefusal } from './remus-operation-refusal';
+import {
+  modelingOperationRefusal,
+  operationErrorCategory
+} from './remus-operation-refusal';
 import {
   remusHashOnlyLineage,
   createRemusImportedStepLineage,
@@ -2617,7 +2620,7 @@ function buildSplitFeature(
         targetSolid,
         planePoint,
         planeNormal,
-        kernelMessage
+        operationErrorCategory(kernelMessage)
       )
     );
   }

@@ -7,20 +7,26 @@ Remus 2026.1.171 pin (`f210583`). Slice 0's coupon found two wrong sentences
 for a plane that crosses no edge of the body. A strict miss showed the generic
 "The exact kernel could not build this result.", and a plane lying flat on a
 face was told it "lies exactly along an existing edge". Every Split begun from
-a face pick starts on that face at offset 0. The pinned kernel gives the
-face touch and the edge touch the same text ("only touches the body and
-contains edge N"). So the adapter (`exact-split-contact.ts`) checks the
-target's exact planar faces, using each face's analytic normal and plane
-equation, never the display mesh. It records the cause on
-`kernelRefusal.reason` as `plane_misses_body`, `plane_on_face` or
-`plane_on_edge`, and records none when a freeform face or a NURBS-backed
-plane could be the face in question. `refusalLanguage.ts` gives each cause
-its own sentence and keeps the edge one. Untyped text gets a miss sentence
-and a neutral touch sentence. The in-place command bar now translates by the
-typed record, as the diagnostics card already did. The coupon's
-`wording` cases now assert these sentences: x = 98 and the vertex touch, x = 90
-from both sides, and x + y = 0 (`test/cad-workflow-coupon.test.ts`).
+a face pick starts on that face at offset 0. The pinned kernel judges this
+from edges alone. It gives the face touch and the edge touch the same
+refusal, and it refuses a plane through an R5 sphere at z = 1 as "entirely on
+one side", just as it refuses z = 6. The adapter (`exact-split-contact.ts`)
+reads no kernel prose. It takes the typed category and records a cause on
+`kernelRefusal.reason` only where the target's exact B-rep proves it:
+`plane_misses_body`, `plane_on_face` or `plane_on_edge`. A proof needs a body
+of one shell and analytic planar faces, with every vertex on one side within
+the kernel's own slack, max(1e-7, span·1e-10). A face counts as on the plane
+only when all of its vertices are within that slack and its normal matches.
+Any other body gets no cause. `refusalLanguage.ts` gives each cause its own
+sentence and keeps the edge one. Without a cause, the miss and the touch get
+neutral sentences that claim neither. The in-place command bar now
+translates by the typed record, including for an edited Split that repeats
+its stored failure. The coupon's `wording` cases assert these sentences
+(`test/cad-workflow-coupon.test.ts`): x = 98 and the vertex touch, x = 90
+from both sides, x + y = 0, and x + k·y = 0, an edge touch whose face lies
+1e-6 off. The sphere cells claim no cause. An `it.fails` pins the refused
+z = 1 sphere split as a K10 capability boundary.
 `test/e2e/split-recovery.spec.ts` asserts the face sentence at offset 0 and
 the miss at +8. `useInPlaceCommand.test.tsx` holds Split preview replies out
 of order and shows that a late frame for an earlier offset never enables
-Done. Only the current offset's own frame decides the verdict.
+Done.
