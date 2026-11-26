@@ -70,6 +70,12 @@ export interface InPlaceBuiltCommand {
    */
   check?(derived: ProjectDocument['derived']): void;
   /**
+   * M11 (D4): `check` names which of several inputs refused (a Mirror of
+   * many bodies names the body), so its sentence is shown in place of the
+   * kernel's, which names only the feature.
+   */
+  namesRefusedInput?: boolean;
+  /**
    * The host's own command behind this frame, handed back to `commit` with
    * the frame (see {@link InPlacePreviewedFrame}). The hook never reads it.
    */
@@ -1170,13 +1176,18 @@ export function useInPlaceCommand(
           // under a bare refusal, it reads as the value that was refused, so
           // only a tool that names the changed input keeps it.
           showRefused(frame?.request ?? null);
+          const named =
+            frame?.built.namesRefusedInput && unresolved !== null
+              ? unresolved
+              : null;
           setTypedRefusal(
             fresh && freshRecord
-              ? { message: fresh, record: freshRecord }
+              ? { message: named ?? fresh, record: freshRecord }
               : null
           );
           setRefusal(
-            fresh ??
+            named ??
+              fresh ??
               unresolved ??
               (result.derived.featureWarnings === undefined
                 ? result.derived.warnings.at(-1)
@@ -1863,7 +1874,11 @@ export function useInPlaceCommand(
     if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
-    const bodyMode = inPlaceBodyMode(toolSpec, current?.options);
+    const bodyMode = inPlaceBodyMode(
+      toolSpec,
+      current?.options,
+      editRef.current !== null
+    );
     if (!current || !bodyMode) return false;
     setSession((latest) => {
       if (!latest) return latest;

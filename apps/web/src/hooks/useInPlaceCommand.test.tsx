@@ -3783,3 +3783,174 @@ describe('useInPlaceCommand: a late Split reply', () => {
     );
   });
 });
+
+describe('useInPlaceCommand: M11 Mirror of several bodies', () => {
+  const box = (id: string, x: number) => ({
+    bodyId: id as BodyId,
+    min: { x, y: 0, z: 0 },
+    max: { x: x + 10, y: 10, z: 10 }
+  });
+  const LEFT = box('body_left', 0);
+  const RIGHT = box('body_right', 20);
+  const PLANE = {
+    kind: 'principal' as const,
+    plane: 'YZ' as const,
+    origin: { x: 0, y: 0, z: 0 },
+    normal: { x: 1, y: 0, z: 0 }
+  };
+  const REFUSED =
+    'Right block cannot be mirrored: The plane is not finite. Remove it from the picks, or pick another plane.';
+
+  /** A host whose mirror of `body_right` refuses, as the kernel would. */
+  function harness() {
+    const built: InPlaceRequest[] = [];
+    const targets = (request: InPlaceRequest): string[] =>
+      request.tool === 'modeling-each'
+        ? request.states.map((state) =>
+            'targetBodyId' in state.value ? state.value.targetBodyId : ''
+          )
+        : request.tool === 'modeling' && 'targetBodyId' in request.state.value
+          ? [request.state.value.targetBodyId]
+          : [];
+    const refuses = new WeakSet<object>();
+    const { hook, commit } = setup({
+      buildCommand: (request) => {
+        built.push(request);
+        const refused = targets(request).includes(RIGHT.bodyId);
+        return {
+          validate: () => undefined,
+          apply: (document) => {
+            const frame = { ...document } as ProjectDocument;
+            if (refused) refuses.add(frame);
+            return frame;
+          },
+          resultBodyId: BODY,
+          ...(request.tool === 'modeling-each'
+            ? {
+                check: () => {
+                  if (refused) throw new Error(REFUSED);
+                },
+                namesRefusedInput: true
+              }
+            : {})
+        };
+      },
+      derive: async (document) =>
+        refuses.has(document)
+          ? {
+              ...fakeDocument(true).derived,
+              warnings: ['Feature "Mirror 2": The plane is not finite.'],
+              featureWarnings: [
+                {
+                  featureId: 'feat_right' as FeatureId,
+                  featureName: 'Mirror 2',
+                  kind: 'build-failed',
+                  message: 'Feature "Mirror 2": The plane is not finite.'
+                }
+              ]
+            }
+          : fakeDocument(true).derived
+    });
+    return { hook, commit, built };
+  }
+
+  it('previews every picked body as one request, and one body as Mirror always was', async () => {
+    const { hook, built } = harness();
+    act(() => hook.result.current.start('mirror', [], [], [LEFT]));
+    act(() => {
+      hook.result.current.pickPlane(PLANE);
+    });
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(built.at(-1)).toMatchObject({
+      tool: 'modeling',
+      state: { operation: 'mirror', value: { targetBodyId: LEFT.bodyId } }
+    });
+    // A second body joins the picks; the first stays.
+    act(() => {
+      hook.result.current.pickBody(box('body_middle', 40));
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ tool: 'modeling-each' })
+    );
+    expect(hook.result.current.slots.bodies.map((body) => body.bodyId)).toEqual(
+      [LEFT.bodyId, 'body_middle']
+    );
+    expect(hook.result.current.hint).toBe(
+      '2 bodies · Slide the plane, or pick another'
+    );
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      expect(hook.result.current.done()).toBe(true);
+    });
+  });
+
+  it('names the refused body, holds Done, keeps every pick, and clears once it is removed', async () => {
+    const { hook, commit } = harness();
+    act(() => hook.result.current.start('mirror', [], [], [LEFT, RIGHT]));
+    act(() => {
+      hook.result.current.pickPlane(PLANE);
+    });
+    // The body is named in place of the kernel's sentence about the feature.
+    await waitFor(() => expect(hook.result.current.refusal).toBe(REFUSED));
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      expect(hook.result.current.done()).toBe(false);
+    });
+    expect(commit).not.toHaveBeenCalled();
+    expect(hook.result.current.slots.bodies.map((body) => body.bodyId)).toEqual(
+      [LEFT.bodyId, RIGHT.bodyId]
+    );
+    expect(hook.result.current.slots.plane).toEqual(PLANE);
+    // Clicked out, the rest mirror.
+    act(() => {
+      hook.result.current.pickBody(RIGHT);
+    });
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.refusal).toBeNull();
+  });
+
+  it('an edit of one Mirror takes one body: a click replaces it', () => {
+    const { hook } = harness();
+    act(() =>
+      hook.result.current.edit('mirror', {
+        featureId: 'feat_1' as FeatureId,
+        nodeId: 'node_1',
+        name: 'Mirror 3',
+        data: {
+          featureKind: 'mirror',
+          targetBodyId: LEFT.bodyId,
+          plane: {
+            origin: { x: 0, y: 0, z: 0 },
+            normal: { x: 1, y: 0, z: 0 }
+          }
+        },
+        resultBodyId: BODY,
+        ownBodyIds: [BODY],
+        slots: {
+          profiles: [],
+          axisId: null,
+          path: [],
+          guide: [],
+          faces: [],
+          bodies: [LEFT],
+          plane: PLANE,
+          edges: []
+        },
+        values: {},
+        raws: {},
+        touched: [],
+        options: {},
+        axes: [],
+        choices: {},
+        lockedOptions: [],
+        notice: null
+      })
+    );
+    act(() => {
+      hook.result.current.pickBody(RIGHT);
+    });
+    expect(hook.result.current.slots.bodies.map((body) => body.bodyId)).toEqual(
+      [RIGHT.bodyId]
+    );
+  });
+});

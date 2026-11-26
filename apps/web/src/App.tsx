@@ -2116,6 +2116,11 @@ import {
   type ProfilePick,
   type RefPick
 } from './lib/inPlace/tools';
+import {
+  composeMirrorSet,
+  mirrorSetRefusal,
+  type MirrorSetMember
+} from './lib/inPlace/mirrorBodies';
 import { imagePlacementPlane, placeImage } from './lib/inPlace/image';
 import {
   FIXED_POINT_OPTION,
@@ -23756,11 +23761,18 @@ export function App() {
         inPlaceBodyMode(command.spec, command.options)
       ) {
         // With the body picked, a flat face is the plane to mirror or split
-        // across; otherwise any face names its body.
+        // across; otherwise any face names its body. M11 (D4): Shift or ⌘ on
+        // a command that takes several bodies (Mirror) adds or removes the
+        // clicked body instead.
+        const addsBody =
+          additive &&
+          inPlaceBodyMode(command.spec, command.options, !!command.editing) ===
+            'many';
         if (
           command.spec.wantsPlane &&
           command.slots.bodies.length > 0 &&
-          selection.kind === 'face'
+          selection.kind === 'face' &&
+          !addsBody
         ) {
           // The plane is the face as clicked, where it stands on screen: a
           // plane is stored by its numbers, so unlike a face operation's
@@ -23795,6 +23807,8 @@ export function App() {
           !representations[selection.bodyId] ||
           (command.editing?.data.featureKind === 'boolean' &&
             command.editing.ownBodyIds.includes(selection.bodyId));
+        // Shift or ⌘ on a preview's result adds no body: it is not one yet.
+        if (previewResult && addsBody) return true;
         const shown = previewResult
           ? (command.slots.bodies[0]?.bodyId ?? null)
           : selection.bodyId;
@@ -29137,23 +29151,10 @@ export function App() {
           bodyName,
           ...request.part
         });
-      case 'modeling': {
-        // Through the card's own submission builder, so a face operation
-        // run in place is validated and stored exactly as the card's was.
-        const targetBodyId =
-          'targetBodyId' in request.state.value
-            ? request.state.value.targetBodyId
-            : '';
-        const body = targetBodyId ? representations[targetBodyId] : undefined;
-        const submission = buildModelingOperationSubmission(
-          {
-            ...request.state,
-            value: { ...request.state.value, name }
-          } as ModelingOperationFormState,
-          modelingFaceOptions(body?.topology, body)
-        );
-        return commandForModelingSubmission(submission);
-      }
+      case 'modeling':
+        return inPlaceModelingCommand(request.state, name);
+      case 'modeling-each':
+        return inPlaceMirrorSet(request, name).command;
       case 'boolean':
         // A union or intersect result is named for itself; a subtract keeps
         // its base body's name, exactly as the card's Create does.
@@ -29253,6 +29254,46 @@ export function App() {
       case 'reference-image':
         return commandFactories.addReferenceImage({ image: request.image });
     }
+  }
+  /**
+   * A face operation through the card's own submission builder, so one run
+   * in place is validated and stored exactly as the card's was.
+   */
+  function inPlaceModelingCommand(
+    state: ModelingOperationFormState,
+    name: string
+  ): AnyCommand {
+    const targetBodyId =
+      'targetBodyId' in state.value ? state.value.targetBodyId : '';
+    const body = targetBodyId ? representations[targetBodyId] : undefined;
+    const submission = buildModelingOperationSubmission(
+      {
+        ...state,
+        value: { ...state.value, name }
+      } as ModelingOperationFormState,
+      modelingFaceOptions(body?.topology, body)
+    );
+    return commandForModelingSubmission(submission);
+  }
+  /**
+   * M11 (D4): a Mirror of several bodies, one Mirror feature per body in one
+   * transaction, each named on from the one before.
+   */
+  function inPlaceMirrorSet(
+    request: Extract<InPlaceRequest, { tool: 'modeling-each' }>,
+    name: string
+  ): { command: AnyCommand; members: MirrorSetMember[] } {
+    return composeMirrorSet(
+      managerRef.current?.document,
+      name,
+      request.states.map((state) =>
+        'targetBodyId' in state.value
+          ? (state.value.targetBodyId as BodyId)
+          : ('' as BodyId)
+      ),
+      (index, memberName) =>
+        inPlaceModelingCommand(request.states[index]!, memberName)
+    );
   }
   /** The datum a datum request adds, and which kind, or null for others. */
   function inPlaceDatum(
@@ -29576,6 +29617,26 @@ export function App() {
             : {})
         };
       }
+      if (request.tool === 'modeling-each') {
+        // M11 (D4): every body's mirror must build. One that does not is
+        // named, and Done waits with every pick kept.
+        const set = inPlaceMirrorSet(request, title);
+        return {
+          command: set.command,
+          validate: (document) => set.command.validate(document),
+          apply: (document) => set.command.apply(document),
+          resultBodyId: set.members.at(-1)?.resultBodyId,
+          check: (derived: ProjectDocument['derived']) => {
+            const refused = mirrorSetRefusal(
+              set.members,
+              derived,
+              (bodyId) => representations[bodyId]?.name
+            );
+            if (refused) throw new Error(refused);
+          },
+          namesRefusedInput: true
+        };
+      }
       // A pattern's frame is named as its commit names it, so Done can land
       // this very command and keep the rebuild the frame already made.
       const command = inPlaceCommandFor(
@@ -29614,6 +29675,28 @@ export function App() {
         return;
       }
       const name = newFeatureName(title);
+      if (request.tool === 'modeling-each') {
+        // M11 (D4): one transaction, so one Undo; each body's Mirror is a
+        // target of its own, so none of them lands unless all of them built.
+        const set = inPlaceMirrorSet(request, name);
+        const last = set.members.at(-1);
+        if (!last || set.members.length !== request.states.length) {
+          setStatus('Mirror could not name a body to mirror.');
+          return Promise.resolve(false);
+        }
+        return executeValidatedFeature(set.command, {
+          featureName: last.featureName,
+          resultBodyId: last.resultBodyId,
+          targets: set.members.map((member) => ({
+            featureName: member.featureName,
+            featureId: member.featureId,
+            resultBodyId: member.resultBodyId
+          })),
+          successMessage: commandOutcomeMessage(set.command.label),
+          onSuccess: finishFeatureCreation,
+          cancelled: withdrawn
+        }).then((outcome) => outcome === 'committed');
+      }
       // The frame Done was pressed on built this pattern already; see below.
       const previewedPattern =
         request.tool === 'pattern' ? (previewed?.built.command ?? null) : null;
@@ -31126,6 +31209,14 @@ export function App() {
   // longer has is dropped and said, since nothing on screen could click it
   // back out of the list.
   const inPlaceEditPicks = inPlace.slots;
+  // M11: a Mirror lists several bodies, but its edit holds one.
+  const inPlaceListsBodies =
+    inPlace.tool !== null &&
+    inPlaceBodyMode(
+      IN_PLACE_TOOL_SPECS[inPlace.tool],
+      inPlace.options,
+      inPlaceEditing !== null
+    ) === 'many';
   const inPlaceFacePickRef = useRef(inPlaceFacePick);
   inPlaceFacePickRef.current = inPlaceFacePick;
   const inPlaceBodyPickRef = useRef(inPlaceBodyPick);
@@ -31215,9 +31306,7 @@ export function App() {
     const guide = curves(inPlaceEditPicks.guide);
     // A boolean's inputs are a list a missing body could not be clicked out
     // of; a one-body slot is replaced by the next click, so it stays.
-    const listsBodies =
-      inPlace.tool !== null &&
-      IN_PLACE_TOOL_SPECS[inPlace.tool].bodyMode === 'many';
+    const listsBodies = inPlaceListsBodies;
     // Gone means gone from the document, or still without a shape once the
     // exact rebuild has finished: a body between rebuilds keeps its place.
     const kept = listsBodies
@@ -31330,6 +31419,7 @@ export function App() {
   }, [
     inPlaceEditing,
     inPlaceEditPicks,
+    inPlaceListsBodies,
     inPlace.tool,
     doc,
     representations,
@@ -35710,7 +35800,8 @@ export function App() {
         const plan = folderCommandPicks(
           command.slots.bodies.map((body) => body.bodyId),
           bodyIds.filter((bodyId) => inPlaceEditTakesBody(bodyId)),
-          command.spec.bodyMode
+          inPlaceBodyMode(command.spec, command.options, !!command.editing) ??
+            command.spec.bodyMode
         );
         if (plan.kind === 'too-many') {
           setStatus(
