@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   controlOwnsEnter,
+  enterSkipsExactEntry,
   exactEntryShortcut,
   inPlaceTypedEntryKey,
   isTypingTarget
@@ -35,6 +36,31 @@ describe('a control that owns its Enter', () => {
   });
 });
 
+// U11: Enter on a focused Select other row opened the value entry for the
+// pick made before the list opened, instead of confirming the row.
+describe("Enter that is not the pick's value entry", () => {
+  it('belongs to a marked control or a menu row; the viewport keeps it', () => {
+    const host = document.createElement('div');
+    host.innerHTML =
+      '<button data-own-enter="">reopen</button>' +
+      '<div role="menu" aria-label="Select other">' +
+      '<button role="menuitem"><span>Top face</span></button></div>' +
+      '<canvas></canvas><button class="tool">Box</button>';
+    const own = host.querySelector('[data-own-enter]');
+    const row = host.querySelector('[role="menuitem"]');
+    expect(enterSkipsExactEntry(own)).toBe(true);
+    expect(enterSkipsExactEntry(row)).toBe(true);
+    expect(enterSkipsExactEntry(row!.querySelector('span'))).toBe(true);
+    // With no menu open, Enter on the viewport or the page still opens the
+    // pick's value entry.
+    expect(enterSkipsExactEntry(host.querySelector('canvas'))).toBe(false);
+    expect(enterSkipsExactEntry(host.querySelector('.tool'))).toBe(false);
+    expect(enterSkipsExactEntry(document.body)).toBe(false);
+    expect(enterSkipsExactEntry(null)).toBe(false);
+    expect(enterSkipsExactEntry(window)).toBe(false);
+  });
+});
+
 describe('exact entry shortcut ownership', () => {
   it.each(['0', '1', '4', '9', '-', '.'])(
     'captures the initial %s before camera shortcuts',
@@ -45,6 +71,19 @@ describe('exact entry shortcut ownership', () => {
       expect(exactEntryShortcut(IDLE, key(value), false, false)).toBeNull();
     }
   );
+
+  // U11 review: a held Enter that confirmed a Select other row reached the
+  // viewport by auto-repeat and opened the new pick's value entry.
+  it('opens the value entry on a fresh Enter only, not a held one', () => {
+    expect(exactEntryShortcut(armed, key('Enter'), false, false)).toEqual({});
+    const held = new KeyboardEvent('keydown', { key: 'Enter', repeat: true });
+    expect(exactEntryShortcut(armed, held, false, false)).toBeNull();
+    // A held digit still types: the field takes its repeats once it opens.
+    const digit = new KeyboardEvent('keydown', { key: '4', repeat: true });
+    expect(exactEntryShortcut(armed, digit, false, false)).toEqual({
+      initial: '4'
+    });
+  });
 
   it('reopens a refused value with Enter or a replacement digit', () => {
     const failed = interactionReducer(armed, {

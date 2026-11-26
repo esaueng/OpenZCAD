@@ -501,6 +501,7 @@ import { useRememberedSection } from './hooks/useRememberedSection';
 import { newBlendFacePick } from './lib/blendRearm';
 import {
   controlOwnsEnter,
+  enterSkipsExactEntry,
   exactEntryShortcut,
   inPlaceTypedEntryKey,
   isTypingTarget
@@ -37753,8 +37754,13 @@ export function App() {
         keypad !== null,
         modelingLocked
       );
-      // Enter on a reopen button is that button's, not the pick's value entry.
-      if (exactEntry && !(event.key === 'Enter' && controlOwnsEnter(target))) {
+      // Enter on a reopen button is that button's, not the pick's value
+      // entry; so is Enter on a menu's row, such as Select other's, whose
+      // Enter confirms that row rather than the pick it would replace.
+      if (
+        exactEntry &&
+        !(event.key === 'Enter' && enterSkipsExactEntry(target))
+      ) {
         event.preventDefault();
         if (interaction.mode === 'region' && extrudeBarFailedRef.current) {
           setStatus(EXTRUDE_ENTRY_UNAVAILABLE);

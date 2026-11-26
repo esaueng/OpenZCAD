@@ -29,6 +29,22 @@ export function controlOwnsEnter(target: EventTarget | null): boolean {
   );
 }
 
+/**
+ * Whether Enter on `target` is left to it rather than opening the pick's
+ * value entry: a control marked as owning Enter, or a row of an open menu.
+ * Select other's list is such a menu: Enter on a focused row confirms that
+ * row, and opening exact entry instead acted on the pick it would replace
+ * (and its preventDefault cancelled the row's own activation).
+ */
+export function enterSkipsExactEntry(target: EventTarget | null): boolean {
+  return (
+    controlOwnsEnter(target) ||
+    (typeof Element !== 'undefined' &&
+      target instanceof Element &&
+      target.closest('[role="menu"]') !== null)
+  );
+}
+
 export function exactEntryShortcut(
   interaction: InteractionState,
   event: Pick<
@@ -39,6 +55,7 @@ export function exactEntryShortcut(
     | 'altKey'
     | 'isComposing'
     | 'defaultPrevented'
+    | 'repeat'
   >,
   typing: boolean,
   keypadOpen: boolean,
@@ -58,7 +75,10 @@ export function exactEntryShortcut(
     (interaction.phase !== 'armed' && interaction.phase !== 'failed')
   )
     return null;
-  if (event.key === 'Enter') return {};
+  // Only a fresh press of Enter opens the value entry. A held Enter's
+  // auto-repeat belongs to whatever its first keydown did (confirming a
+  // Select other row, Done, Apply), not to the focus that press left behind.
+  if (event.key === 'Enter') return event.repeat ? null : {};
   return /^[0-9.-]$/.test(event.key) ? { initial: event.key } : null;
 }
 
