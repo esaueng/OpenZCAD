@@ -141,8 +141,11 @@ export function BottomSheet({
     }
   }, [detent]);
 
-  // The stage beneath a full sheet takes no focus and no taps.
-  useEffect(() => {
+  // The stage beneath a full sheet takes no focus and no taps. A layout
+  // effect, so leaving full clears `inert` (in the cleanup, which runs before
+  // any layout effect's setup) before the focus return below looks for an
+  // opener there, such as the header's More.
+  useLayoutEffect(() => {
     if (detent !== 'full') return;
     const elements = (backgroundRef.current?.() ?? []).filter(
       (element): element is Element => Boolean(element)

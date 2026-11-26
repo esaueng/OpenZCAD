@@ -441,7 +441,15 @@
   color: var(--color-text-muted);
 }
 
-.viewer-area:has(.numeric-keypad[data-operation]) .handle-label-chip {
+.viewer-area:has(.numeric-keypad[data-operation]) .handle-label-chip,
+/* The compact workspace (U12) draws the keypad outside the stage, in its
+   overlay host: the stage's tag steps aside all the same, so one switch is
+   seen and focused. */
+.app-shell[data-shell='compact']:has(
+    .compact-overlay-host .numeric-keypad[data-operation]
+  )
+  .viewer-area
+  .handle-label-chip {
   visibility: hidden;
 }
 

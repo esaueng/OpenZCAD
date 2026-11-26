@@ -406,6 +406,122 @@ test.describe('the compact workspace frame', () => {
     await expect(bar).toHaveCount(0);
   });
 
+  test('Enter on More opens it over a spline in progress, which stays open', async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openCompactProject(page, 'Compact spline');
+    await page
+      .getByRole('button', { name: 'Open the command bar', exact: true })
+      .click();
+    const field = page.getByRole('combobox', { name: 'Search commands' });
+    await field.fill('Sketch');
+    await page
+      .getByRole('option', { name: /^Sketch/ })
+      .first()
+      .click();
+    await page.getByRole('button', { name: 'Top (XY)' }).click();
+    // Read whether shown or not: the status line says what each gesture did.
+    const status = page.locator('[role="contentinfo"]');
+    await expect(status).toContainText('Sketch', { timeout: 30_000 });
+    await page.waitForTimeout(800);
+    const blur = () =>
+      page.evaluate(() =>
+        (document.activeElement as HTMLElement | null)?.blur()
+      );
+    // S arms the fit spline; three points are placed on open canvas.
+    await blur();
+    await page.keyboard.press('s');
+    const bounds = (await page.locator('.viewer-host canvas').boundingBox())!;
+    for (const [fx, fy] of [
+      [0.3, 0.35],
+      [0.5, 0.3],
+      [0.65, 0.42]
+    ] as const) {
+      const x = bounds.x + bounds.width * fx;
+      const y = bounds.y + bounds.height * fy;
+      await page.mouse.move(x, y, { steps: 3 });
+      await page.mouse.click(x, y);
+    }
+
+    // Enter on the header's More is More's own: it opens the page and the
+    // spline under it is not finished.
+    const more = page.getByRole('button', { name: 'More', exact: true });
+    await more.focus();
+    await page.keyboard.press('Enter');
+    await expect(more).toHaveAttribute('aria-expanded', 'true');
+    await expect(status).not.toContainText('Sketch 01 started.');
+    await expect(status).toContainText('Enter finishes');
+    await page.keyboard.press('Escape');
+    await expect(more).toHaveAttribute('aria-expanded', 'false');
+    await expect(status).toContainText('Enter finishes');
+
+    // Focus on nothing in particular, Enter still finishes it through the
+    // points placed.
+    await blur();
+    await page.keyboard.press('Enter');
+    // The sketch's first curve is announced as the sketch starting.
+    await expect(status).toContainText('Sketch 01 started.');
+  });
+
+  test('shows one operation switch while a Fillet value is typed', async ({
+    page
+  }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openCompactProject(page, 'Compact fillet');
+    await placeBox(page);
+    const canvas = page.locator('.viewer-host canvas');
+    await expect
+      .poll(
+        () =>
+          canvas.evaluate(
+            (element) =>
+              new Promise<boolean>((resolve) => {
+                element.dispatchEvent(
+                  new CustomEvent('openzcad:e2e-select-edge', {
+                    detail: {
+                      curve: 'any',
+                      resolve: (value: unknown) => resolve(value !== null)
+                    }
+                  })
+                );
+              })
+          ),
+        { timeout: 60_000 }
+      )
+      .toBe(true);
+    const tag = page.locator('.handle-label-chip');
+    await expect(tag).toHaveText('Fillet ▾');
+    await expect(tag).toBeVisible();
+    await page.getByTestId('direct-manipulation-value').click();
+    const keypad = page.getByRole('dialog', { name: 'Radius value' });
+    await expect(keypad).toBeVisible();
+    await expect(
+      page.locator('.compact-overlay-host .numeric-keypad')
+    ).toHaveCount(1);
+    // The keypad carries the switch; the stage's own tag steps aside, so
+    // exactly one is seen and reached by Tab.
+    const carried = keypad.getByRole('button', { name: /Fillet/ });
+    await expect(carried).toBeVisible();
+    await expect(tag).toBeHidden();
+    expect(
+      await page.evaluate(
+        () =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              '.handle-label-chip, .keypad-operation'
+            )
+          ].filter(
+            (element) =>
+              getComputedStyle(element).visibility !== 'hidden' &&
+              element.getClientRects().length > 0
+          ).length
+      )
+    ).toBe(1);
+  });
+
   test('gives focus back inside the sheet as a page steps back', async ({
     page
   }) => {

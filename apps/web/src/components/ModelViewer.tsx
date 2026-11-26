@@ -461,6 +461,7 @@ import {
   type SketchTextDraft,
   type SketchToolId
 } from '../lib/interaction/machine';
+import { controlOwnsEnter } from '../lib/exactEntryShortcut';
 import {
   compositeSizeLabel,
   dragCompositeShape,
@@ -5256,6 +5257,13 @@ export function ModelViewer({
           event.stopPropagation();
           return;
         }
+      }
+      if (event.key === 'Enter' && controlOwnsEnter(event.target)) {
+        // A control that owns its Enter (the compact workspace's More, a
+        // sheet page's rows, the top bar's "Edit not applied") keeps it:
+        // the press neither finishes a spline nor places a held drag or a
+        // typed sketch value before the control's own click.
+        return;
       }
       if (
         sketchMoveRef.current &&

@@ -1,6 +1,13 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AppShell } from '../AppShell';
+import { NumericKeypad } from '../NumericKeypad';
 import type { CompactChromeProps } from './compactSlots';
 
 function chrome(
@@ -38,14 +45,18 @@ function chrome(
 
 function shell(
   compact: ReturnType<typeof chrome> | null,
-  slots: { inspector?: React.ReactNode; command?: React.ReactNode } = {}
+  slots: {
+    inspector?: React.ReactNode;
+    command?: React.ReactNode;
+    viewer?: React.ReactNode;
+  } = {}
 ) {
   return (
     <AppShell
       topBar={<header className="topbar">top</header>}
       toolBar={null}
       sidebar={null}
-      viewer={<div className="viewer-shell">viewer</div>}
+      viewer={slots.viewer ?? <div className="viewer-shell">viewer</div>}
       inspector={slots.inspector ?? null}
       command={slots.command ?? null}
       assistant={null}
@@ -166,6 +177,71 @@ describe('AppShell in the compact workspace', () => {
     expect(root).toHaveAttribute('data-shell', 'compact');
     unmount();
     expect(root).not.toHaveAttribute('data-shell');
+  });
+
+  it('keeps the document marked while any compact frame is up', async () => {
+    const root = document.documentElement;
+    const first = render(shell(chrome()));
+    const second = render(shell(chrome()));
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll('.compact-chrome').length
+      ).toBeGreaterThanOrEqual(2)
+    );
+    expect(root).toHaveAttribute('data-shell', 'compact');
+    // One frame leaves; the other is still up, and the mark stays.
+    first.unmount();
+    expect(root).toHaveAttribute('data-shell', 'compact');
+    second.unmount();
+    expect(root).not.toHaveAttribute('data-shell');
+  });
+
+  it('draws an open keypad as the sheet when the layout turns compact', async () => {
+    const keypad = (
+      <div className="viewer-shell">
+        <NumericKeypad
+          request={{
+            kind: 'command',
+            label: 'Width',
+            initial: '20',
+            unitKind: 'length',
+            commandValueId: 'width'
+          }}
+          units="mm"
+          scope={{}}
+          anchorRef={{ current: null }}
+          onPreview={() => undefined}
+          onCommit={() => undefined}
+          onCancel={() => undefined}
+        />
+      </div>
+    );
+    const { container, rerender } = render(shell(null, { viewer: keypad }));
+    const regular = screen.getByRole('dialog', { name: 'Width value' });
+    expect(container.querySelector('.viewer-area')).toContainElement(regular);
+
+    // Phone chosen in Settings with the keypad still open.
+    rerender(shell(chrome(), { viewer: keypad }));
+    // Never drawn on the stage first: the keypad waits for the overlay host.
+    expect(container.querySelector('.viewer-area .numeric-keypad')).toBeNull();
+    const host = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>(
+        '.compact-overlay-host'
+      );
+      expect(element).not.toBeNull();
+      return element!;
+    });
+    const control = await waitFor(() =>
+      within(host).getByRole('dialog', { name: 'Width value' })
+    );
+    expect(document.querySelectorAll('.numeric-keypad')).toHaveLength(1);
+    // Placed as the phone's sheet by effects bound to the nodes on screen,
+    // and its field holds focus.
+    expect(control.style.visibility).toBe('visible');
+    expect(control).toHaveAttribute('data-placement', 'sheet');
+    expect(
+      within(control).getByRole('textbox', { name: 'Width' })
+    ).toHaveFocus();
   });
 
   it('draws an open File page from the commands as they are now', async () => {

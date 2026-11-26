@@ -16,6 +16,7 @@ import {
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import {
   CompactCommandRowContext,
+  COMPACT_OVERLAY_HOST_PENDING,
   CompactOverlayHostContext,
   type CompactChromeProps
 } from './compact/compactSlots';
@@ -255,6 +256,20 @@ export function AppShell({
   );
 }
 
+/** How many compact frames are mounted: the document is marked while any is. */
+let compactShellsMounted = 0;
+
+/** Marks the document compact; the returned release unmarks it after the last. */
+function markDocumentCompact(): () => void {
+  const root = document.documentElement;
+  compactShellsMounted += 1;
+  root.dataset.shell = 'compact';
+  return () => {
+    compactShellsMounted = Math.max(0, compactShellsMounted - 1);
+    if (compactShellsMounted === 0) delete root.dataset.shell;
+  };
+}
+
 /**
  * The compact frame: the same stage and slots under a header, over mode
  * tabs, with one bottom sheet. The rails, the Tools drawer and the docks are
@@ -294,13 +309,7 @@ function CompactAppShell({
   // Dialogs, menus and popovers portalled to the body sit outside the shell:
   // marking the document too gives them the compact tokens while the compact
   // workspace is up, and nothing once it leaves.
-  useLayoutEffect(() => {
-    const root = document.documentElement;
-    root.dataset.shell = 'compact';
-    return () => {
-      delete root.dataset.shell;
-    };
-  }, []);
+  useLayoutEffect(() => markDocumentCompact(), []);
   const commandRowSlot = useMemo(
     () => ({ host: commandRowHost, report: setCommandRowPresent }),
     [commandRowHost]
@@ -319,7 +328,9 @@ function CompactAppShell({
   return (
     <ParameterDefinitionProvider value={parameterDefinition}>
       <CompactCommandRowContext.Provider value={commandRowSlot}>
-        <CompactOverlayHostContext.Provider value={overlayHost}>
+        <CompactOverlayHostContext.Provider
+          value={overlayHost ?? COMPACT_OVERLAY_HOST_PENDING}
+        >
           <div className="app-shell column-layout" data-shell="compact">
             {/* Kept mounted for what it owns (its menus' file inputs, the
               rename field), and hidden: the compact header stands in. */}

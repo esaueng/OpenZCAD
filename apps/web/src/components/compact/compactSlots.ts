@@ -31,18 +31,29 @@ export function useCompactCommandRowHost(present: boolean): HTMLElement | null {
 }
 
 /**
+ * The compact frame is up but its chrome (loaded lazily) has not yet given
+ * the host: what goes there waits rather than drawing on the stage first.
+ */
+export const COMPACT_OVERLAY_HOST_PENDING = 'pending';
+
+export type CompactOverlayHost =
+  HTMLElement | typeof COMPACT_OVERLAY_HOST_PENDING | null;
+
+/**
  * Where what must stay usable over the compact sheet at any height goes (U12
  * slice 2): the numeric keypad. The stage is inert while the sheet stands at
  * full, so a keypad drawn on it could be neither focused nor tapped; the
  * compact chrome provides a host outside the stage instead. Null in the
  * regular workspace, where the keypad stays on the stage.
  */
-export const CompactOverlayHostContext = createContext<HTMLElement | null>(
-  null
-);
+export const CompactOverlayHostContext =
+  createContext<CompactOverlayHost>(null);
 
-/** The compact overlay host, or null in the regular workspace. */
-export function useCompactOverlayHost(): HTMLElement | null {
+/**
+ * The compact overlay host; `COMPACT_OVERLAY_HOST_PENDING` while the compact
+ * frame waits for it; null in the regular workspace.
+ */
+export function useCompactOverlayHost(): CompactOverlayHost {
   return useContext(CompactOverlayHostContext);
 }
 

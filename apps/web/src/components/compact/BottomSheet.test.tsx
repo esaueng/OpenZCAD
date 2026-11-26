@@ -324,6 +324,50 @@ describe('BottomSheet', () => {
     expect(document.activeElement).toBe(opener);
   });
 
+  it('gives focus back to an opener under a full sheet once it is live', () => {
+    function Header() {
+      const { state, dispatch } = useSheet(false);
+      return (
+        <>
+          <header className="compact-header">
+            <button
+              type="button"
+              onClick={() => dispatch({ type: 'push', page: page('more') })}
+            >
+              More
+            </button>
+          </header>
+          <BottomSheet
+            label="Workspace sheet"
+            state={state}
+            dispatch={dispatch}
+            hasRoot={false}
+            renderPage={renderPage}
+            background={() => [document.querySelector('.compact-header')]}
+          />
+        </>
+      );
+    }
+    render(<Header />);
+    const more = screen.getByRole('button', { name: 'More' });
+    more.focus();
+    fireEvent.click(more);
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Sheet height' }), {
+      key: 'ArrowUp'
+    });
+    expect(sheet().dataset.detent).toBe('full');
+    const header = document.querySelector('.compact-header')!;
+    expect(header).toHaveAttribute('inert');
+    // The last page leaves from full: the sheet closes, the header is live
+    // again, and focus is back on More rather than dropped on the body.
+    const item = screen.getByRole('button', { name: 'More item' });
+    item.focus();
+    fireEvent.keyDown(item, { key: 'Escape' });
+    expect(sheet()).toHaveAttribute('hidden');
+    expect(header).not.toHaveAttribute('inert');
+    expect(document.activeElement).toBe(more);
+  });
+
   it('lets Escape through to a running tool at half', () => {
     const onWindowKey = vi.fn();
     window.addEventListener('keydown', onWindowKey);
