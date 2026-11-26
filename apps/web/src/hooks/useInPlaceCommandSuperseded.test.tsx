@@ -96,11 +96,14 @@ function delayedWorker(outcomes: boolean[]) {
   return { hook, replies, built, publishPreview };
 }
 
-/** Lets a released reply reach publish and React settle. */
-const settle = () =>
-  act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+/**
+ * Waits until `count` builds have started. The previewer runs one build at
+ * a time and starts the next only after the previous reply was published,
+ * so once build `count` starts, every earlier reply has reached publish()
+ * and the newest is held: the state under test, with no fixed sleep.
+ */
+const buildsStarted = (replies: unknown[], count: number) =>
+  waitFor(() => expect(replies).toHaveLength(count));
 
 describe('U11 cell 2: a delayed reply for a superseded value', () => {
   // Pinned gap, failure class Command state (U01, useInPlaceCommand.ts):
@@ -132,17 +135,17 @@ describe('U11 cell 2: a delayed reply for a superseded value', () => {
       });
       expect(hook.result.current.canFinish).toBe(false);
 
-      // A's refusal arrives. B is the request on screen and has no frame yet.
+      // A's refusal arrives. B's frame has started and is held: B is the
+      // request on screen and has no frame yet.
       act(() => replies[1]!());
-      await settle();
+      await buildsStarted(replies, 3);
       expect(JSON.stringify(built[1])).toContain('90');
+      expect(JSON.stringify(built[2])).toContain('180');
       expect(hook.result.current.canFinish).toBe(false);
       // Command state: A's refusal must not stand under B's value.
       expect(hook.result.current.refusal).toBeNull();
 
       // B's own frame lands and builds: Done is B's, and nothing is refused.
-      await waitFor(() => expect(replies).toHaveLength(3));
-      expect(JSON.stringify(built[2])).toContain('180');
       act(() => replies[2]!());
       await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
       expect(hook.result.current.refusal).toBeNull();
@@ -170,7 +173,7 @@ describe('U11 cell 2: a delayed reply for a superseded value', () => {
       void hook.result.current.setValue('angle', 180);
     });
     act(() => replies[1]!());
-    await settle();
+    await buildsStarted(replies, 3);
     // A built, but Done commits what is typed: B, which has not been shown.
     expect(hook.result.current.canFinish).toBe(false);
     act(() => {
@@ -178,7 +181,6 @@ describe('U11 cell 2: a delayed reply for a superseded value', () => {
     });
 
     // B's refusal is B's own: said, Done held, and the preview taken down.
-    await waitFor(() => expect(replies).toHaveLength(3));
     act(() => replies[2]!());
     await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
     expect(hook.result.current.canFinish).toBe(false);
@@ -197,14 +199,13 @@ describe('U11 cell 2: a delayed reply for a superseded value', () => {
       // The target changes while the first frame is in flight.
       act(() => hook.result.current.pickAxis('sketch-horizontal'));
       act(() => replies[0]!());
-      await settle();
-      expect(built).toHaveLength(1);
+      // The new axis's frame has started and is held.
+      await buildsStarted(replies, 2);
+      expect(JSON.stringify(built[1])).not.toBe(JSON.stringify(built[0]));
       expect(hook.result.current.canFinish).toBe(false);
       // Command state: the old axis's refusal is not the new axis's.
       expect(hook.result.current.refusal).toBeNull();
 
-      await waitFor(() => expect(replies).toHaveLength(2));
-      expect(JSON.stringify(built[1])).not.toBe(JSON.stringify(built[0]));
       act(() => replies[1]!());
       await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
       expect(hook.result.current.refusal).toBeNull();

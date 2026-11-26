@@ -160,6 +160,9 @@ interface Drawn {
   volume: number | null;
   maxZ: number;
   minX: number;
+  maxX: number;
+  /** Radii of the body's cylindrical faces: the bore, as drawn. */
+  cylinders: number[];
 }
 
 /** The drawn coupon (the live body starting at x = 0), preview frames included. */
@@ -179,7 +182,12 @@ async function drawnCoupon(page: Page): Promise<Drawn | null> {
                   volume?: number;
                   bbox: {
                     min: { x: number; z: number };
-                    max: { z: number };
+                    max: { x: number; z: number };
+                  };
+                  topology?: {
+                    faces?: {
+                      geometry?: { surfaceType?: string; radius?: number };
+                    }[];
                   };
                 }[];
               }) =>
@@ -192,7 +200,18 @@ async function drawnCoupon(page: Page): Promise<Drawn | null> {
                           ? null
                           : Math.round(body.volume * 100) / 100,
                       maxZ: Math.round(body.bbox.max.z * 1000) / 1000,
-                      minX: Math.round(body.bbox.min.x * 1000) / 1000
+                      minX: Math.round(body.bbox.min.x * 1000) / 1000,
+                      maxX: Math.round(body.bbox.max.x * 1000) / 1000,
+                      cylinders: (body.topology?.faces ?? [])
+                        .filter(
+                          (face) =>
+                            face.geometry?.surfaceType === 'cylinder' &&
+                            face.geometry.radius !== undefined
+                        )
+                        .map(
+                          (face) =>
+                            Math.round(face.geometry!.radius! * 1000) / 1000
+                        )
                     }))
                 )
             }
@@ -204,6 +223,10 @@ async function drawnCoupon(page: Page): Promise<Drawn | null> {
 }
 
 const couponTop = async (page: Page) => (await drawnCoupon(page))?.maxZ;
+const couponRight = async (page: Page) => (await drawnCoupon(page))?.maxX;
+/** The drawn bore's radius, preview frames included. */
+const boreRadii = async (page: Page) =>
+  (await drawnCoupon(page))?.cylinders ?? [];
 const couponVolume = async (page: Page) =>
   (await drawnCoupon(page))?.volume ?? null;
 
@@ -345,15 +368,19 @@ test('an overlapping pick confirmed from Select other is the face the preview an
   // from the top face.
   await expect(mode).toHaveText('Diameter');
   await expect(chip).toHaveText('Ø 12 mm');
+  expect(await boreRadii(page)).toEqual([6]);
   await chip.click();
   const diameter = page.getByRole('dialog', { name: 'Diameter value' });
   const field = diameter.getByRole('textbox');
   await expect(field).toHaveValue('12');
 
-  // Ø 14 previews and applies to the bore only: the top stays at 14.
+  // Ø 14 previews on the bore before anything is applied — the drawn
+  // preview's bore is r 7 — and on the bore only: the top stays at 14.
   await field.fill('14');
   const apply = diameter.getByRole('button', { name: 'Apply diameter' });
   await expect(apply).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => boreRadii(page), { timeout: 30_000 }).toEqual([7]);
+  expect(await featureCount(page)).toBe(features);
   expect(await couponTop(page)).toBe(14);
   await apply.click();
   await expect(diameter).toBeHidden();
@@ -517,13 +544,19 @@ test.fixme('a negative Diameter or Radius on the bore is refused at its field', 
   await expect(menu).toBeHidden();
   await expect(picked).toContainText('Through hole');
   await page.getByTestId('direct-manipulation-value').click();
-  const keypad = page.getByRole('dialog', { name: 'Diameter value' });
-  const field = keypad.getByRole('textbox');
-  for (const [radio, value] of [
-    ['Ø Diameter', '-12'],
-    ['R Radius', '-6']
+  // The keypad is named for the mode it is in: "Diameter value", then
+  // "Radius value" once R is chosen.
+  for (const [radio, name, value] of [
+    ['Ø Diameter', 'Diameter value', '-12'],
+    ['R Radius', 'Radius value', '-6']
   ] as const) {
-    await keypad.getByRole('radio', { name: radio }).click();
+    await page
+      .locator('.numeric-keypad')
+      .getByRole('radio', { name: radio })
+      .click();
+    const keypad = page.getByRole('dialog', { name });
+    await expect(keypad).toBeVisible();
+    const field = keypad.getByRole('textbox');
     await field.fill(value);
     await expect(keypad.getByRole('alert')).toBeVisible({ timeout: 30_000 });
     await expect(field).toHaveAttribute('aria-invalid', 'true');
@@ -535,13 +568,11 @@ test.fixme('a negative Diameter or Radius on the bore is refused at its field', 
 });
 
 /**
- * Cell 4, what the product shows today. Under a section view (Side, YZ at
- * x = 45, keeping x < 45) a valid Offset Face edit that the section only
- * partly hides, one it hides wholly, and a refused one. The refusal is told
- * apart (an alert, the field invalid, Apply held); the two valid edits are
- * not told apart from each other: the Offset Face keypad has no section
- * advisory and no Show full model, which only Extrude offers. The advisory
- * is pinned below.
+ * Cell 4. Under a section view (Side, YZ at x = 45, keeping x < 45) a valid
+ * Offset Face edit that the section only partly hides, one it hides wholly,
+ * and a refused one: the refusal is told apart (an alert, the field invalid,
+ * Apply held) from both valid edits. Whether the two valid edits are told
+ * apart from each other is the pinned case below; today they are not.
  */
 test('under a section, a refused face edit is told apart from valid ones', async ({
   page
@@ -579,7 +610,7 @@ test('under a section, a refused face edit is told apart from valid ones', async
   await field.fill('2');
   await expect(apply).toBeEnabled({ timeout: 30_000 });
   await expect(keypad.getByRole('alert')).toHaveCount(0);
-  const hiddenNotes = await keypad.locator('.keypad-section-recovery').count();
+  await expect(field).toHaveAttribute('aria-invalid', 'false');
   await field.press('Escape');
   await page.keyboard.press('Escape');
 
@@ -591,7 +622,7 @@ test('under a section, a refused face edit is told apart from valid ones', async
   await field.fill('-2');
   await expect(apply).toBeEnabled({ timeout: 30_000 });
   await expect(keypad.getByRole('alert')).toHaveCount(0);
-  const partlyNotes = await keypad.locator('.keypad-section-recovery').count();
+  await expect(field).toHaveAttribute('aria-invalid', 'false');
   await field.press('Escape');
 
   // Refused: a Total below zero on the same face.
@@ -603,11 +634,6 @@ test('under a section, a refused face edit is told apart from valid ones', async
   await expect(apply).toBeDisabled();
   await field.press('Escape');
 
-  // Today neither valid edit carries a section note, so the two read alike.
-  expect({ hiddenNotes, partlyNotes }).toEqual({
-    hiddenNotes: 0,
-    partlyNotes: 0
-  });
   // Nothing above committed, and the section is as it was set.
   expect(await featureCount(page)).toBe(features);
   await expect(section).toHaveAttribute('aria-pressed', 'true');
@@ -619,8 +645,9 @@ test('under a section, a refused face edit is told apart from valid ones', async
  * planar face on the clipped side of a planar cut the visibility is exact
  * (the Right face's plane x = 90 lies wholly past the cut at x = 45), as
  * Extrude's `isExtrudeChangeClipped` already decides for its own preview.
- * Smallest failing prefix: open Fixture A, pick the Right face, set Section
- * view Side at 45, open the Offset keypad, type 2. Expected: the keypad says
+ * Smallest failing prefix: open Fixture A, set Section view Side at 45, pick
+ * the Right face (flip the cut to reach it, then flip it back), open the
+ * Offset keypad, type 2. Expected: the keypad says
  * "Section view hides this change" with Show full model for the wholly
  * hidden edit only; Show full model is a view change that keeps the typed
  * value, the focus, the face and the request, and adds no History row.
@@ -633,28 +660,64 @@ test.fixme('a face edit hidden wholly by the section says so and can reveal it',
   const picked = page.getByRole('group', { name: 'Picked' });
   const chip = page.getByTestId('direct-manipulation-value');
   const features = await featureCount(page);
-  const right = await screenPoint(page, [90, 4, 7]);
-  await page.mouse.click(right.x, right.y);
-  await expect(picked).toContainText('Right face');
   const section = page.getByRole('button', { name: /^Section view — now:/ });
   const panel = page.getByRole('group', { name: 'Section view', exact: true });
+  const flip = panel.getByRole('button', { name: 'Flip cut direction' });
   await section.click();
   await panel.getByRole('button', { name: 'Side (YZ plane)' }).click();
   const cut = panel.getByRole('spinbutton', { name: 'Cut position' });
   await cut.fill('45');
   await cut.press('Enter');
   await section.click();
-  await chip.click();
+  await expect(panel).toBeHidden();
+  await expect(section).toHaveAttribute('aria-pressed', 'true');
   const keypad = page.locator('.numeric-keypad');
   const field = keypad.getByRole('textbox');
+  const apply = keypad.getByRole('button', { name: /^Apply/ });
+  const note = keypad.getByText('Section view hides this change');
+
+  // Partly hidden: the top face spans the cut. A valid edit, and no note.
+  const top = await screenPoint(page, [30, 30, 14]);
+  await page.mouse.click(top.x, top.y);
+  await expect(picked).toContainText('Top face');
+  await chip.click();
+  await field.fill('-2');
+  await expect(apply).toBeEnabled({ timeout: 30_000 });
+  await expect(note).toHaveCount(0);
+  await field.press('Escape');
+  await page.keyboard.press('Escape');
+
+  // Flip the cut to keep x > 45, pick the Right face, flip it back: the
+  // Right face (x = 90) is then wholly past the cut, and still picked.
+  await section.click();
+  await flip.click();
+  await section.click();
+  const right = await screenPoint(page, [90, 4, 7]);
+  await page.mouse.click(right.x, right.y);
+  await expect(picked).toContainText('Right face');
+  await section.click();
+  await flip.click();
+  await expect(flip).toHaveAttribute('aria-pressed', 'false');
+  await section.click();
+  await expect(panel).toBeHidden();
+  await expect(picked).toContainText('Right face');
+
+  // Wholly hidden: a valid +2, said to be hidden by the section.
+  await chip.click();
   await field.fill('2');
-  await expect(keypad).toContainText('Section view hides this change', {
-    timeout: 30_000
-  });
+  await expect(apply).toBeEnabled({ timeout: 30_000 });
+  await expect.poll(() => couponRight(page), { timeout: 30_000 }).toBe(92);
+  await expect(note).toBeVisible({ timeout: 30_000 });
+
+  // Show full model is a view change: the section goes, and the typed
+  // value, the focus, the face and the live preview of x = 92 stay, with
+  // nothing committed.
   await keypad.getByRole('button', { name: 'Show full model' }).click();
   await expect(section).toHaveAttribute('aria-pressed', 'false');
   await expect(field).toHaveValue('2');
   await expect(field).toBeFocused();
   await expect(picked).toContainText('Right face');
+  await expect(apply).toBeEnabled();
+  expect(await couponRight(page)).toBe(92);
   expect(await featureCount(page)).toBe(features);
 });
