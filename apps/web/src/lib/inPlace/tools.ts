@@ -655,6 +655,14 @@ export type InPlaceRequest =
       state: ModelingOperationFormState;
     }
   | {
+      /**
+       * M11 (D4): one face operation per picked body (a Mirror of several
+       * bodies), each its own feature, committed together as one step.
+       */
+      tool: 'modeling-each';
+      states: ModelingOperationFormState[];
+    }
+  | {
       tool: 'boolean';
       operation: BooleanOperation;
       targetBodyIds: BodyId[];
@@ -925,6 +933,11 @@ export interface InPlaceToolSpec {
   faceMode?: 'one' | 'many';
   /** Whole bodies it takes, named by a click on any of their faces. */
   bodyMode?: 'one' | 'many';
+  /**
+   * The bodies an edit of one of its features takes, when fewer than a new
+   * command's (a Mirror's edit is of one feature, so of one body).
+   */
+  editBodyMode?: 'one';
   /** Model edges it takes, all on one body (Shift is not needed). */
   edgeMode?: 'many';
   /** Takes a plane: a ghost principal plane, a datum plane or a flat face. */
@@ -5559,37 +5572,52 @@ function planeHint(
   return null;
 }
 
+/**
+ * M11 (D4): Mirror takes several bodies about one plane. Each body is its own
+ * Mirror feature, editable and deletable on its own, and Done commits them
+ * all as one step. One body is the Mirror it always was. With a body picked,
+ * a plain click on a flat face is the plane; Shift (the viewport's additive
+ * pick, as the touch multi-select toggle) adds or removes the clicked body,
+ * as a click on its Objects row does. The plane is stored by
+ * its numbers, so a face of one of the picked bodies is a plane like any
+ * other, and that body's copy meets it on that face.
+ */
 const mirror: InPlaceToolSpec = {
   id: 'mirror',
   title: 'Mirror',
   profileMode: 'none',
-  bodyMode: 'one',
+  bodyMode: 'many',
+  editBodyMode: 'one',
   wantsPlane: true,
   wantsAxis: false,
   wantsPath: false,
   values: [PLANE_OFFSET, ...TYPED_PLANE_VALUES],
   options: [PLANE_MODE_OPTION],
-  hint: (slots, options) =>
-    planeHint(slots, 'mirror', options) ?? 'Slide the plane, or pick another',
+  hint: (slots, options) => {
+    const hint =
+      planeHint(slots, 'mirror', options) ?? 'Slide the plane, or pick another';
+    return slots.bodies.length > 1
+      ? `${slots.bodies.length} bodies · ${hint}`
+      : hint;
+  },
   ready: (slots, options) =>
     slots.bodies.length > 0 &&
     (slots.plane !== null || options?.planeMode === 'typed'),
   request(slots, values, options, _ctx, numbers) {
-    const body = slots.bodies[0];
     const plane = commandPlane(slots, values, numbers ?? {}, options);
-    if (!body || !plane) return null;
-    const fields = offsetPlaneFields(plane, values.offset);
-    return {
-      tool: 'modeling',
-      state: {
-        operation: 'mirror',
-        value: {
-          name: 'Mirror',
-          targetBodyId: body.bodyId,
-          ...fields
-        }
+    if (slots.bodies.length === 0 || !plane) return null;
+    // Each body's own copy of the plane, so no two features share one.
+    const states = slots.bodies.map((body): ModelingOperationFormState => ({
+      operation: 'mirror',
+      value: {
+        name: 'Mirror',
+        targetBodyId: body.bodyId,
+        ...offsetPlaneFields(plane, values.offset)
       }
-    };
+    }));
+    return states.length === 1
+      ? { tool: 'modeling', state: states[0]! }
+      : { tool: 'modeling-each', states };
   },
   handles: planeHandles
 };
@@ -6032,12 +6060,17 @@ export function inPlaceFacePickSurfaces(
   }
 }
 
-/** The bodies a command takes as its options now stand. */
+/**
+ * The bodies a command takes as its options now stand, and whether it is
+ * editing a stored feature.
+ */
 export function inPlaceBodyMode(
   spec: InPlaceToolSpec | null | undefined,
-  options: Readonly<Record<string, string>> | undefined
+  options: Readonly<Record<string, string>> | undefined,
+  editing = false
 ): 'one' | 'many' | undefined {
   if (!spec || takesFeatureFaces(spec, options)) return undefined;
+  if (editing && spec.bodyMode && spec.editBodyMode) return spec.editBodyMode;
   return spec.bodyMode;
 }
 

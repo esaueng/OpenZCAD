@@ -167,6 +167,42 @@ describe('InPlaceCommandBar', () => {
     ).toContain(diagnostic);
   });
 
+  // M11 (D4): a Mirror of several bodies names the body it could not
+  // mirror, and says to take it out, around whatever the kernel's sentence
+  // translates to; neither is left to Technical details.
+  it.each([
+    ['an untyped', 'Feature "Mirror 3": Mirror target is unavailable.', null],
+    [
+      'a typed',
+      'Remus mirror refused: the shell is open',
+      { category: 'invalid-input', code: 'open-shell' }
+    ]
+  ] as const)(
+    'names a refused pick ahead of %s kernel sentence, with its advice',
+    (_kind, diagnostic, classification) => {
+      render(
+        <InPlaceCommandBar
+          title="Mirror"
+          hint="2 bodies · Slide the plane, or pick another"
+          refusal={diagnostic}
+          refusalClassification={classification}
+          refusalPick={{
+            name: 'Back block',
+            advice: 'Remove it from the picks, or pick another plane.'
+          }}
+          canFinish={false}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+      const headline = screen.getByRole('status').textContent ?? '';
+      expect(headline).toMatch(/^Back block: \S/);
+      expect(headline).toMatch(
+        / Remove it from the picks, or pick another plane\.$/
+      );
+    }
+  );
+
   it('shows an adapter sentence as it is, with nothing to disclose', () => {
     const sentence =
       'Fillet could not be created on 1 selected edge with radius 30. Try a smaller radius: radius 15 builds here.';
