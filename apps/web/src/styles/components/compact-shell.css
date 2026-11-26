@@ -182,6 +182,7 @@
 .compact-tab:focus-visible,
 .compact-float-button:focus-visible,
 .compact-selection-chip:focus-visible,
+.compact-analysis-chip:focus-visible,
 .compact-menu-row:focus-visible,
 .compact-sheet-grabber:focus-visible {
   outline: 2px solid var(--color-accent);
@@ -285,7 +286,8 @@
 }
 
 .compact-float-button,
-.compact-selection-chip {
+.compact-selection-chip,
+.compact-analysis-chip {
   pointer-events: auto;
   box-sizing: border-box;
   min-height: var(--compact-target);
@@ -316,6 +318,21 @@
   align-items: center;
   gap: var(--sp-2);
   padding: 0 var(--sp-3);
+  border-radius: 999px;
+  font-size: 15px;
+}
+
+/* An analysis left on, away from View's Display page: its name and Off,
+   beside the undo pair, clear of the view cube's corner on a short
+   landscape stage; the selection chip keeps the right. */
+.compact-analysis-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
   border-radius: 999px;
   font-size: 15px;
 }

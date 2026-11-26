@@ -2,17 +2,20 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleHelp,
+  Copy,
   Ellipsis,
   FileText,
   FolderOpen,
   Redo2,
   Search,
   Settings,
-  Undo2
+  Undo2,
+  X
 } from 'lucide-react';
 import {
   Suspense,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -27,6 +30,12 @@ import { OWN_ENTER_ATTRIBUTE } from '../../lib/exactEntryShortcut';
 import type { PaletteCommand } from '../CommandBar';
 import { BottomSheet, SHEET_OVERLAY_ATTRIBUTE, useSheet } from './BottomSheet';
 import {
+  ANALYSIS_LABELS,
+  analysisRuntime,
+  useAnalysisRuntime
+} from '../../lib/analysis/analysisRuntime';
+import {
+  CompactAnalysisSlotContext,
   CompactTrayContext,
   type CompactChromeProps,
   type CompactTraySlot
@@ -172,6 +181,7 @@ export default function CompactWorkspace({
   fileCommands,
   selectionLabel,
   onClearSelection,
+  onMakeCopy,
   reducedMotion,
   sheetContent,
   hasSheetContent,
@@ -185,6 +195,14 @@ export default function CompactWorkspace({
   const tabsRef = useRef<HTMLElement | null>(null);
   const floatRef = useRef<HTMLDivElement | null>(null);
   const hasTray = tray !== null && tray !== undefined && tray !== false;
+  // An analysis left on (M09) keeps colouring the model in every mode, as in
+  // the regular workspace, where its panel with Off stays over the stage.
+  // Here the panel lives in View's Display page; wherever that page is not
+  // showing it, a chip on the stage says what is on and turns it off.
+  const analysisKind = useAnalysisRuntime((s) => s.request?.kind ?? null);
+  const analysisPanelShown = Boolean(
+    useContext(CompactAnalysisSlotContext)?.host
+  );
   // A tray is the sheet's own root too: the sheet rests at peek on it.
   const hasRoot = hasSheetContent || hasTray;
   const { state, dispatch } = useSheet(hasRoot);
@@ -342,6 +360,21 @@ export default function CompactWorkspace({
             <MenuList
               label="More"
               rows={[
+                // A shared link's visitor's way to keep the model, in any
+                // mode: the regular top bar's labelled button, here.
+                ...(onMakeCopy
+                  ? [
+                      {
+                        id: 'make-copy',
+                        label: 'Make a copy',
+                        icon: <Copy size={18} />,
+                        run: () => {
+                          closePages();
+                          onMakeCopy();
+                        }
+                      }
+                    ]
+                  : []),
                 {
                   id: 'settings',
                   label: 'Open settings',
@@ -486,6 +519,20 @@ export default function CompactWorkspace({
               <Redo2 size={20} aria-hidden="true" />
             </button>
           </div>
+          {analysisKind && !analysisPanelShown ? (
+            <button
+              type="button"
+              className="compact-analysis-chip"
+              aria-label={`Turn off ${ANALYSIS_LABELS[analysisKind].toLowerCase()} analysis`}
+              onClick={() => analysisRuntime.off()}
+            >
+              <span className="compact-selection-dot" aria-hidden="true" />
+              <span className="compact-selection-text" aria-hidden="true">
+                {ANALYSIS_LABELS[analysisKind]}
+              </span>
+              <X size={18} aria-hidden="true" />
+            </button>
+          ) : null}
           {selectionLabel ? (
             <button
               type="button"

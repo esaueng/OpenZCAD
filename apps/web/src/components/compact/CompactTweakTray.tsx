@@ -1,6 +1,5 @@
 import {
   Check,
-  Copy,
   Download,
   History,
   Minus,
@@ -53,8 +52,6 @@ export interface CompactTweakTrayProps {
   onExportStep(): void;
   onOpenMeshExport(): void;
   onViewActivityLog(): void;
-  /** A shared link's visitor: copy the model into a project of their own. */
-  onMakeCopy?(): void;
   onStageCovered?(): void;
 }
 
@@ -128,6 +125,19 @@ export function CompactParameterRow({
   const anchorRef = useRef<
     ((point: { x: number; y: number } | null) => void) | null
   >(null);
+  // A keypad draft previews in the model until it is applied or cancelled.
+  // The keypad can also leave with its page (Back, Escape, the sheet
+  // closing, another mode or the regular layout taking over): that leaving
+  // cancels the draft too, as the keypad's own Cancel does, so no preview
+  // outlives the keypad that typed it.
+  const draftRef = useRef(false);
+  const leaveDraftRef = useRef<() => void>(() => {});
+  leaveDraftRef.current = () => {
+    if (!draftRef.current) return;
+    draftRef.current = false;
+    onPreview?.(parameter.name, null);
+  };
+  useEffect(() => () => leaveDraftRef.current(), []);
   const readout = useLengthReadout(units);
   const converted = parameter.quantity === 'length' && readout.shown !== units;
   const shownValue =
@@ -248,16 +258,21 @@ export function CompactParameterRow({
           units={units}
           scope={scope}
           anchorRef={anchorRef}
-          onPreview={(next, raw) =>
-            onPreview?.(parameter.name, raw ?? String(next))
-          }
+          onPreview={(next, raw) => {
+            draftRef.current = true;
+            onPreview?.(parameter.name, raw ?? String(next));
+          }}
           onCommit={(_next, raw) => {
+            // Applying takes the draft over: cancelling it now would cancel
+            // the edit's own check.
+            draftRef.current = false;
             setKeypadOpen(false);
             void set(raw);
           }}
           onCancel={() => {
             setKeypadOpen(false);
-            onPreview?.(parameter.name, null);
+            draftRef.current = true;
+            leaveDraftRef.current();
           }}
         />
       ) : null}
@@ -407,23 +422,6 @@ function ExportPage(props: CompactTweakTrayProps) {
             </span>
           </button>
         </li>
-        {props.onMakeCopy ? (
-          <li>
-            <button
-              type="button"
-              className="compact-menu-row"
-              aria-label="Make a copy"
-              onClick={props.onMakeCopy}
-            >
-              <span className="compact-menu-icon" aria-hidden="true">
-                <Copy size={18} />
-              </span>
-              <span className="compact-menu-label" aria-hidden="true">
-                Make a copy
-              </span>
-            </button>
-          </li>
-        ) : null}
         <li>
           <button
             type="button"

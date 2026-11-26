@@ -83,6 +83,12 @@ export interface CompactChromeProps {
   /** The current pick's name, or null with nothing picked. */
   selectionLabel: string | null;
   onClearSelection?(): void;
+  /**
+   * A shared link's visitor: copy the model into a project of their own.
+   * Offered whenever the regular top bar offers it, whatever the link's
+   * mode; absent outside a share session.
+   */
+  onMakeCopy?(): void;
   reducedMotion: boolean;
 }
 

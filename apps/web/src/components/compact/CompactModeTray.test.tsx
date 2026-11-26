@@ -7,7 +7,13 @@ import {
 } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import type { ParameterNode } from '@openzcad/shared';
+import {
+  toEntityId,
+  toParameterId,
+  type ParameterNode
+} from '@openzcad/shared';
+import { act } from 'react';
+import { analysisRuntime } from '../../lib/analysis/analysisRuntime';
 import { AppShell } from '../AppShell';
 import CompactModeTray, {
   type CompactTweakTrayProps,
@@ -113,13 +119,15 @@ function parameter(
 ): ParameterNode {
   return {
     kind: 'parameter',
-    nodeId: `node-${name}`,
-    parameterId: `param-${name}`,
+    id: toEntityId(`node-${name}`),
+    parentId: null,
+    revisionId: null,
+    parameterId: toParameterId(`param-${name}`),
     name,
     expression,
     value: Number(expression),
     ...extra
-  } as ParameterNode;
+  };
 }
 
 function tweakProps(
@@ -303,6 +311,37 @@ describe('the compact tray', () => {
     expect(screen.queryByRole('switch', { name: 'Section cut' })).toBeNull();
   });
 
+  it('keeps an analysis left on in reach, with Off, away from Display', async () => {
+    try {
+      const { rerender } = render(
+        shell('view', <CompactModeTray mode="view" {...viewProps()} />)
+      );
+      fireEvent.click(await trayButton('View tools', 'Display mode'));
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Thickness analysis' })
+      );
+      expect(analysisRuntime.get().request?.kind).toBe('thickness');
+      // Display holds the panel and its Off: no chip on the stage.
+      const chip = () =>
+        screen.queryByRole('button', { name: 'Turn off thickness analysis' });
+      expect(chip()).toBeNull();
+      // Leaving Display, the model stays coloured; the chip says so.
+      fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+      await waitFor(() => expect(chip()).not.toBeNull());
+      // And in another mode, where no page draws the panel.
+      rerender(
+        shell('tweak', <CompactModeTray mode="tweak" {...tweakProps()} />)
+      );
+      expect(await trayButton('Tweak tools', 'Parameters')).toBeVisible();
+      expect(chip()).not.toBeNull();
+      fireEvent.click(chip()!);
+      expect(analysisRuntime.get().request).toBeNull();
+      await waitFor(() => expect(chip()).toBeNull());
+    } finally {
+      act(() => analysisRuntime.reset());
+    }
+  });
+
   it('asks for the model above the sheet once a page has risen', async () => {
     const props = viewProps();
     render(shell('view', <CompactModeTray mode="view" {...props} />));
@@ -364,8 +403,70 @@ describe('the compact Tweak tray', () => {
     );
   });
 
+  it.each(['Back', 'Close sheet'] as const)(
+    'cancels a keypad draft left by the sheet’s %s',
+    async (control) => {
+      const props = tweakProps();
+      render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
+      fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Edit width' })
+      );
+      const keypad = await screen.findByRole('dialog', { name: /value$/ });
+      fireEvent.change(within(keypad).getByRole('textbox'), {
+        target: { value: '32' }
+      });
+      expect(props.onPreviewParameter).toHaveBeenLastCalledWith('width', '32');
+      fireEvent.click(screen.getByRole('button', { name: control }));
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: /value$/ })).toBeNull()
+      );
+      // The model drops the uncommitted value, and nothing was applied.
+      expect(props.onPreviewParameter).toHaveBeenLastCalledWith('width', null);
+      expect(props.onSetParameter).not.toHaveBeenCalled();
+      // Back to the tray's row either way.
+      await waitFor(() => expect(detent()).toBe('peek'));
+    }
+  );
+
+  it('cancels a keypad draft when another mode takes the sheet', async () => {
+    const props = tweakProps();
+    const { rerender } = render(
+      shell('tweak', <CompactModeTray mode="tweak" {...props} />)
+    );
+    fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit width' }));
+    const keypad = await screen.findByRole('dialog', { name: /value$/ });
+    fireEvent.change(within(keypad).getByRole('textbox'), {
+      target: { value: '32' }
+    });
+    rerender(shell('view', <CompactModeTray mode="view" {...viewProps()} />));
+    await waitFor(() =>
+      expect(props.onPreviewParameter).toHaveBeenLastCalledWith('width', null)
+    );
+  });
+
+  it('applies a keypad value without cancelling its own edit', async () => {
+    const props = tweakProps();
+    render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
+    fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit width' }));
+    const keypad = await screen.findByRole('dialog', { name: /value$/ });
+    fireEvent.change(within(keypad).getByRole('textbox'), {
+      target: { value: '32' }
+    });
+    fireEvent.click(within(keypad).getByRole('button', { name: /^Apply/ }));
+    await waitFor(() =>
+      expect(props.onSetParameter).toHaveBeenCalledWith('width', '32')
+    );
+    // Leaving after applying must not reach for the draft the edit took.
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await waitFor(() => expect(detent()).toBe('peek'));
+    expect(props.onPreviewParameter).not.toHaveBeenCalledWith('width', null);
+  });
+
   it('switches configurations and exports from their pages', async () => {
-    const props = tweakProps({ onMakeCopy: vi.fn() });
+    const props = tweakProps();
     render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
     fireEvent.click(await trayButton('Tweak tools', 'Configuration'));
     const large = await screen.findByRole('button', { name: 'Large' });
@@ -383,8 +484,8 @@ describe('the compact Tweak tray', () => {
     expect(props.onOpenMeshExport).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Activity log' }));
     expect(props.onViewActivityLog).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Make a copy' }));
-    expect(props.onMakeCopy).toHaveBeenCalledTimes(1);
+    // Make a copy is the header's More page's, for every mode (CompactAppShell).
+    expect(screen.queryByRole('button', { name: 'Make a copy' })).toBeNull();
   });
 
   it('holds exports back with the reason, and has no Configuration without rows', async () => {

@@ -40529,7 +40529,6 @@ export function App() {
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={openMeshExport}
             onViewActivityLog={openActivityLog}
-            {...(shareSession ? { onMakeCopy: requestShareCopy } : {})}
             onStageCovered={requestClearStage}
           />
         )}
@@ -40576,6 +40575,9 @@ export function App() {
                   ? selectedFeature.name
                   : commandContextLabel(commandSelection),
               onClearSelection: clearSelection,
+              // The top bar's Make a copy, which the compact header does not
+              // draw: the More page carries it for every share visitor.
+              ...(shareSession ? { onMakeCopy: requestShareCopy } : {}),
               reducedMotion: appSettings.appearance.reducedMotion,
               sheetKey: `${commandCardKey}|${inspectorKey}|${inPlaceKey}|${
                 phonePanel ?? ''

@@ -16,7 +16,8 @@ import {
   locateEdge,
   stubAnonymousApi,
   stubApi,
-  test
+  test,
+  waitForStillViewport
 } from './openzcad-fixtures';
 import { COMPACT_ENTRIES } from '../../apps/web/src/lib/actions/registry';
 
@@ -77,16 +78,25 @@ async function preferCompact(page: Page) {
   }, LAYOUT_KEY);
 }
 
-/** Opens the shared bracket in the compact workspace, in Tweak. */
-async function openSharedBracket(page: Page) {
+/**
+ * Opens the shared bracket in the compact workspace: in Tweak by default, or
+ * through a view-only link.
+ */
+async function openSharedBracket(
+  page: Page,
+  mode: 'tweak' | 'view' = 'tweak'
+) {
   const document = bracket();
   await stubAnonymousApi(page);
   await page.route('**/api/share', (route) =>
     route.fulfill({
       json: {
         document,
-        project: { projectId: document.projectId, name: document.name },
-        mode: 'tweak'
+        project: {
+          projectId: document.projectId,
+          name: document.name,
+          mode
+        }
       }
     })
   );
@@ -101,6 +111,31 @@ async function openSharedBracket(page: Page) {
 }
 
 const sheet = (page: Page) => page.locator('.compact-sheet');
+
+/** The projects stored on this device, by id. */
+function localProjectIds(page: Page): Promise<string[]> {
+  return page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('openzcad-v2');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () =>
+        reject(request.error ?? new Error('IndexedDB request failed'));
+    });
+    try {
+      return await new Promise<string[]>((resolve, reject) => {
+        const request = db
+          .transaction('projects')
+          .objectStore('projects')
+          .getAllKeys();
+        request.onsuccess = () => resolve(request.result.map(String));
+        request.onerror = () =>
+          reject(request.error ?? new Error('IndexedDB request failed'));
+      });
+    } finally {
+      db.close();
+    }
+  });
+}
 
 async function tapMode(page: Page, mode: 'View' | 'Tweak') {
   const tab = page
@@ -252,15 +287,31 @@ test.describe('View and Tweak in the compact sheet', () => {
         ).toBeVisible();
         const workbench = sheet(page).getByLabel('Measurement workbench');
         await expect(workbench).toBeVisible();
+        // Picks land on the exact model, where the camera has come to rest:
+        // the sheet rising asks for the model above it, which turns the
+        // view, and an edge located mid-glide is somewhere else by the tap.
+        await expect(workbench).not.toHaveAttribute('data-busy', /.*/, {
+          timeout: 30_000
+        });
+        await expect(workbench).toContainText('Pick an edge, face, hole', {
+          timeout: 30_000
+        });
+        await waitForStillViewport(page);
         const first = await locateEdge(page);
         await page.touchscreen.tap(first.x, first.y);
+        // The first pick reads before the second is looked for.
+        await expect(
+          workbench.getByRole('button', { name: 'Clear picks' })
+        ).toBeVisible();
+        await expect(workbench.locator('.measurement-live-value')).toBeVisible();
+        await waitForStillViewport(page);
         const second = await locateEdge(page, {
           exclude: [first.topologyId]
         });
         await page.touchscreen.tap(second.x, second.y);
         await expect(
           workbench.getByRole('group', { name: 'Picks' })
-        ).not.toContainText('Pick an edge');
+        ).not.toContainText('Compare…');
         const keep = workbench.getByRole('button', { name: /^Keep/ });
         await keep.tap();
         await expect(workbench.getByRole('listitem')).toHaveCount(1);
@@ -308,9 +359,16 @@ test.describe('View and Tweak in the compact sheet', () => {
           0
         );
         await expectTidy(page);
-        await draft.tap();
-        await expect(draft).toHaveAttribute('aria-pressed', 'false');
+        // Left on, the analysis keeps colouring the model; away from
+        // Display, a chip on the stage says so and turns it off.
         await back(page);
+        const analysisChip = page.getByRole('button', {
+          name: 'Turn off draft analysis'
+        });
+        await expect(analysisChip).toBeVisible();
+        await expectTidy(page);
+        await analysisChip.tap();
+        await expect(analysisChip).toHaveCount(0);
 
         // Views: a standard view, and the sheet steps back to the tray.
         await view('Standard views').tap();
@@ -396,6 +454,47 @@ test.describe('View and Tweak in the compact sheet', () => {
       }
     );
   }
+
+  test(
+    'a view-only link’s visitor makes a copy from More',
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(180_000);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openSharedBracket(page, 'view');
+      // A view-only link opens View alone: no Tweak to reach its Export.
+      await expect(trayButton(page, 'View tools', 'Measure')).toBeVisible();
+      await expect(
+        page
+          .getByRole('group', { name: 'Workspace mode' })
+          .getByRole('button', { name: 'Tweak', exact: true })
+      ).toHaveCount(0);
+      await page.getByRole('button', { name: 'More', exact: true }).tap();
+      const copy = sheet(page).getByRole('button', {
+        name: 'Make a copy',
+        exact: true
+      });
+      await expect(copy).toBeVisible();
+      await copy.tap();
+      // A signed-out visitor's copy lands on this device as a project of
+      // their own, which opens with every mode.
+      await expect
+        .poll(() => localProjectIds(page), { timeout: 30_000 })
+        .toHaveLength(1);
+      await expect(
+        page
+          .getByRole('group', { name: 'Workspace mode' })
+          .getByRole('button', { name: 'Build', exact: true })
+      ).toBeVisible({ timeout: 30_000 });
+      await page.getByRole('button', { name: 'More', exact: true }).tap();
+      await expect(
+        sheet(page).getByRole('button', { name: 'Open settings' })
+      ).toBeVisible();
+      await expect(
+        sheet(page).getByRole('button', { name: 'Make a copy', exact: true })
+      ).toHaveCount(0);
+    }
+  );
 
   test('opens every action it marks for View’s tray by taps alone', async ({
     page
