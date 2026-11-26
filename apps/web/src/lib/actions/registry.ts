@@ -114,6 +114,20 @@ export const COMPACT_ENTRIES: Readonly<
   'file-export-mesh': 'overflow-menu',
   'file-export-image': 'overflow-menu',
   'file-export-cnc-layout': 'overflow-menu',
+  // Slice 10: the project sheet (a tap on the header's project name) holds
+  // the name field, the File menu's units and Duplicate project; Settings
+  // › Advanced the support exports; the header's search, full-screen, takes
+  // a typed command and opens the assistant.
+  'project-rename': 'project-sheet',
+  'project-duplicate': 'project-sheet',
+  'file-display-units-mm': 'project-sheet',
+  'file-display-units-cm': 'project-sheet',
+  'file-display-units-m': 'project-sheet',
+  'file-display-units-inch': 'project-sheet',
+  'file-export-diagnostics': 'settings',
+  'file-export-interaction-log': 'settings',
+  'command-slash': 'command-search',
+  'assistant-toggle': 'command-search',
   // Slice 4, Build: every tool from the All tools sheet, and a pick's own
   // verbs from the tray at rest, as the verb rail offers them. A running
   // tool's tray row (its Options, Cancel and Done) is each command's own

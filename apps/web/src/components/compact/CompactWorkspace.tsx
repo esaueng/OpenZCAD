@@ -7,9 +7,11 @@ import {
   Ellipsis,
   FileText,
   FolderOpen,
+  Map as MapIcon,
   Redo2,
   Search,
   Settings,
+  SquarePen,
   Undo2,
   X
 } from 'lucide-react';
@@ -18,6 +20,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -47,6 +50,7 @@ import {
   type CompactTraySlot
 } from './compactSlots';
 import { ContextTray } from './ContextTray';
+import { ProjectSheet } from './ProjectSheet';
 
 /** The save dot's tone: settled, under way, or worth a look. */
 function saveTone(state: WorkspaceSaveState): 'ok' | 'busy' | 'local' | 'warn' {
@@ -168,7 +172,7 @@ export interface CompactWorkspaceProps extends CompactChromeProps {
 const OWN_ENTER = { [OWN_ENTER_ATTRIBUTE]: '' };
 
 /** The pages the compact chrome pushes onto the sheet, by id. */
-type CompactPage = 'more' | 'file' | 'selection' | 'all-tools';
+type CompactPage = 'more' | 'file' | 'project' | 'selection' | 'all-tools';
 
 /** A tray's page in the back stack: this prefix, then the tray's own key. */
 const TRAY_PAGE = 'tray:';
@@ -195,6 +199,10 @@ export default function CompactWorkspace({
   onSearch,
   onSettings,
   onHelp,
+  onGuide,
+  searchOpen = false,
+  onCloseSearch,
+  project = null,
   fileCommands,
   selectionLabel,
   onClearSelection,
@@ -212,6 +220,7 @@ export default function CompactWorkspace({
   onOverlayHost
 }: CompactWorkspaceProps) {
   const chromeRef = useRef<HTMLDivElement | null>(null);
+  const projectNameHintId = useId();
   const headerRef = useRef<HTMLElement | null>(null);
   const tabsRef = useRef<HTMLElement | null>(null);
   const floatRef = useRef<HTMLDivElement | null>(null);
@@ -428,6 +437,7 @@ export default function CompactWorkspace({
     dispatch({ type: 'push', page: { key }, ...(detent ? { detent } : {}) });
   const closePages = () => dispatch({ type: 'close' });
   const moreOpen = state.stack.some((page) => page.key === 'more');
+  const projectOpen = state.stack.some((page) => page.key === 'project');
   const allToolsOpen = state.stack.some((page) => page.key === 'all-tools');
 
   // Each page is drawn from the workspace's state as it is now, so a row
@@ -444,6 +454,18 @@ export default function CompactWorkspace({
       };
     }
     switch (key as CompactPage) {
+      case 'project':
+        return {
+          title: 'Project',
+          content: (
+            <ProjectSheet
+              projectName={projectName}
+              fileCommands={fileCommands}
+              project={project}
+              done={closePages}
+            />
+          )
+        };
       case 'file':
         return {
           title: 'File',
@@ -490,6 +512,26 @@ export default function CompactWorkspace({
                     closePages();
                     onHelp();
                   }
+                },
+                ...(onGuide
+                  ? [
+                      {
+                        id: 'guide',
+                        label: 'Modeling guide',
+                        icon: <MapIcon size={18} />,
+                        run: () => {
+                          closePages();
+                          onGuide();
+                        }
+                      }
+                    ]
+                  : []),
+                {
+                  id: 'project',
+                  label: 'Project',
+                  icon: <SquarePen size={18} />,
+                  drillIn: true,
+                  run: () => push('project')
                 },
                 {
                   id: 'file',
@@ -606,7 +648,22 @@ export default function CompactWorkspace({
           </div>
         ) : (
           <div className="compact-title">
-            <h1 className="compact-project-name">{projectName}</h1>
+            <h1 className="compact-project-name">
+              {/* The name opens the project sheet: rename, properties,
+                sharing, revisions, export and import, units, storage. */}
+              <button
+                type="button"
+                className="compact-project-button"
+                aria-expanded={projectOpen}
+                aria-describedby={projectNameHintId}
+                onClick={() => (projectOpen ? closePages() : push('project'))}
+              >
+                {projectName}
+              </button>
+            </h1>
+            <span id={projectNameHintId} className="visually-hidden">
+              Opens the project sheet
+            </span>
             <span
               className={`compact-save-dot is-${saveTone(saveState)}`}
               role="img"
@@ -626,14 +683,28 @@ export default function CompactWorkspace({
             <span aria-hidden="true">Finish</span>
           </button>
         ) : null}
-        <button
-          type="button"
-          className="compact-icon-button"
-          aria-label="Open the command bar"
-          onClick={onSearch}
-        >
-          <Search size={22} aria-hidden="true" />
-        </button>
+        {searchOpen && onCloseSearch ? (
+          // The full-screen search covers the stage and the tabs: its way
+          // out by touch stands where it was opened.
+          <button
+            type="button"
+            className="compact-icon-button"
+            aria-label="Close the command bar"
+            aria-expanded="true"
+            onClick={onCloseSearch}
+          >
+            <X size={22} aria-hidden="true" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="compact-icon-button"
+            aria-label="Open the command bar"
+            onClick={onSearch}
+          >
+            <Search size={22} aria-hidden="true" />
+          </button>
+        )}
         <button
           type="button"
           className="compact-icon-button"
