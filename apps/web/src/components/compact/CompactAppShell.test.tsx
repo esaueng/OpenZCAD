@@ -1,16 +1,18 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
   waitFor,
   within
 } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppShell } from '../AppShell';
 import { createPortal } from 'react-dom';
 import { commandContextFor } from '../../lib/commandContext';
 import { InPlaceCommandBar } from '../InPlaceCommandBar';
 import { NumericKeypad } from '../NumericKeypad';
+import { TRAY_REASON_MS } from './ContextTray';
 import {
   CompactTrayContext,
   useCompactCommandRowHost,
@@ -300,6 +302,110 @@ describe('AppShell in the compact workspace', () => {
       null
     );
     expect(sheet).toHaveAttribute('data-detent', 'peek');
+  });
+
+  /** Build's tray holding a pick whose one verb, Shell, cannot run. */
+  async function refusedShell() {
+    const { container } = render(
+      shell(
+        chrome({
+          build: {
+            context: commandContextFor({
+              edgeCount: 0,
+              faceSelected: true,
+              bodyCount: 1,
+              regionCount: 0
+            }),
+            pick: {
+              verbs: [
+                {
+                  id: 'tool:shell',
+                  label: 'Shell',
+                  title: 'Open in another tab',
+                  disabled: true,
+                  pressed: false
+                }
+              ],
+              enabled: () => false,
+              onVerb: vi.fn()
+            },
+            availability: {
+              sketchCount: 0,
+              liveBodyCount: 1,
+              exactGeometryReady: true,
+              hasEdgeSelected: false
+            },
+            activeTool: null,
+            recentTools: [],
+            pinnedTools: [],
+            onLaunchTool: vi.fn()
+          }
+        })
+      )
+    );
+    const sheet = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('.compact-sheet');
+      expect(element).toHaveAttribute('data-detent', 'peek');
+      return element!;
+    });
+    vi.useFakeTimers();
+    const tray = within(sheet).getByRole('group', { name: 'Build tray' });
+    const verb = within(tray).getByRole('button', { name: 'Selection: Shell' });
+    return { sheet, tray, verb };
+  }
+
+  describe("a disabled verb's reason", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('raises the sheet again on a repeat tap after it was lowered', async () => {
+      const { sheet, tray, verb } = await refusedShell();
+      fireEvent.click(verb);
+      expect(sheet).toHaveAttribute('data-detent', 'half');
+      // Lowered by hand while the reason shows: it would stand clipped
+      // under the peek's fold.
+      fireEvent.keyDown(
+        within(sheet).getByRole('slider', { name: 'Sheet height' }),
+        { key: 'Home' }
+      );
+      expect(sheet).toHaveAttribute('data-detent', 'peek');
+      act(() => {
+        vi.advanceTimersByTime(TRAY_REASON_MS / 2);
+      });
+      // Tapped again before it goes: the sheet comes back up to show it.
+      fireEvent.click(verb);
+      expect(within(tray).getByRole('status')).toHaveTextContent(
+        'Open in another tab'
+      );
+      expect(sheet).toHaveAttribute('data-detent', 'half');
+      // And it goes back to the person's peek with the reason.
+      act(() => {
+        vi.advanceTimersByTime(TRAY_REASON_MS + 10);
+      });
+      expect(within(tray).queryByRole('status')).toBeNull();
+      expect(sheet).toHaveAttribute('data-detent', 'peek');
+    });
+
+    it('leaves the tray at peek after All tools opened over it', async () => {
+      const { sheet, tray, verb } = await refusedShell();
+      fireEvent.click(verb);
+      expect(sheet).toHaveAttribute('data-detent', 'half');
+      // All tools opened while the reason raised the sheet.
+      fireEvent.click(within(tray).getByRole('button', { name: 'All tools' }));
+      expect(
+        within(sheet).getByRole('heading', { name: 'All tools' })
+      ).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(TRAY_REASON_MS + 10);
+      });
+      // Back: the tray at the peek the person had, not the raised half.
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Back' }));
+      expect(
+        within(sheet).queryByRole('heading', { name: 'All tools' })
+      ).toBeNull();
+      expect(sheet).toHaveAttribute('data-detent', 'peek');
+    });
   });
 
   it('draws the keypad in the sheet under the tray while Build holds it', async () => {

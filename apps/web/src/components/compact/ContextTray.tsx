@@ -11,9 +11,14 @@ export const TRAY_REASON_MS = 4000;
 /**
  * Says why a disabled verb cannot run, for a while after its tap: on a
  * phone there is no hover to show a tooltip, so a disabled verb stays
- * tappable and answers with its reason inline.
+ * tappable and answers with its reason inline. The third value counts the
+ * taps that asked, so each one can be answered, not only the first.
  */
-export function useTrayReason(): [string | null, (reason: string) => void] {
+export function useTrayReason(): [
+  string | null,
+  (reason: string) => void,
+  number
+] {
   const [reason, setReason] = useState<{ text: string; turn: number } | null>(
     null
   );
@@ -24,7 +29,9 @@ export function useTrayReason(): [string | null, (reason: string) => void] {
   }, [reason]);
   return [
     reason?.text ?? null,
-    (text) => setReason((current) => ({ text, turn: (current?.turn ?? 0) + 1 }))
+    (text) =>
+      setReason((current) => ({ text, turn: (current?.turn ?? 0) + 1 })),
+    reason?.turn ?? 0
   ];
 }
 
@@ -47,11 +54,12 @@ export function ContextTray({
   /**
    * A disabled verb's reason came (true) or went (false). The reason stands
    * under the row, below the peek's fold, so the sheet makes room for it
-   * while it shows.
+   * while it shows. Each tap that asks says so again, so a sheet lowered
+   * meanwhile comes back up for it.
    */
   onReason?(shown: boolean): void;
 }) {
-  const [reason, showReason] = useTrayReason();
+  const [reason, showReason, reasonTurn] = useTrayReason();
   const onReasonRef = useRef(onReason);
   onReasonRef.current = onReason;
   const reasonShown = reason !== null;
@@ -60,7 +68,7 @@ export function ContextTray({
     if (!reasonShown && !reasonSeen.current) return;
     reasonSeen.current = true;
     onReasonRef.current?.(reasonShown);
-  }, [reasonShown]);
+  }, [reasonShown, reasonTurn]);
   const pick = build.pick && build.pick.verbs.length > 0 ? build.pick : null;
   const tools = pick
     ? []

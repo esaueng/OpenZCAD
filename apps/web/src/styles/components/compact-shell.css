@@ -1053,7 +1053,7 @@
   width: auto;
   max-height: none;
   align-items: flex-start;
-  /* Still a containing block, for the rail's fixed type strip. */
+  /* Still a containing block, for the polygon's sides error. */
   transform: translateY(0);
 }
 
@@ -1182,6 +1182,105 @@
   > .sketch-relations
   .sketch-relation-name {
   display: none;
+}
+
+/* A tool's type strip (and Offset's and a pattern's options) stands in the
+   rail under its tool, inside the rail's scroller. Beside the rail it lay
+   over the canvas, where the first drawing tap chose a type instead of
+   placing a point, and on a short stage it ran past the stage's foot, out
+   of reach of the rail's scroll. Each choice is a 44px icon tile; its name
+   stays in the tree for assistive technology and the tool's own button
+   names the type in use. */
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  :is(.sketch-circle-tool, .sketch-modify-tool) {
+  flex-direction: column;
+  align-items: center;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column-float:has(.sketch-rail)
+  .sketch-rail
+  .sketch-type-strip {
+  position: static;
+  width: auto;
+  max-width: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+  padding: 2px;
+  box-shadow: none;
+  animation: none;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  .sketch-offset-joins {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  :is(.sketch-type-tile, .sketch-type-cycle) {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  padding: 0;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  :is(.sketch-type-tile, .sketch-type-sides)
+  > span:not([role]) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  .sketch-type-sides {
+  height: auto;
+  padding: 0;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  .sketch-type-sides
+  input {
+  width: var(--compact-target);
+  height: var(--compact-target);
+  padding: 0 4px;
+  text-align: center;
+}
+
+/* A refused side count is said beside the rail, outside its scroller. */
+.app-shell[data-shell='compact']
+  .workspace-column
+  .sketch-rail
+  .sketch-type-sides-error {
+  position: fixed;
+  top: auto;
+  right: auto;
+  left: calc(100% + var(--sp-2));
+  width: max-content;
+  max-width: 60vw;
+  white-space: normal;
 }
 
 /* ── Feature forms and operation cards in the sheet ── */
@@ -1369,5 +1468,25 @@
 
   .app-shell[data-shell='compact'] .command-bar-lane {
     bottom: var(--sp-2);
+  }
+
+  /* A sketch's rails keep the stage's height: the sheet stands beside
+     them, not under them, so they reserve its width rather than its
+     height (at half, its height is the stage's, which left the rails
+     none). The tools are on the stage's left, clear of the sheet; the
+     relations step left of it. */
+  .app-shell[data-shell='compact']
+    .workspace.has-column
+    .viewer-area
+    .workspace-column-float:has(.sketch-rail) {
+    bottom: calc(var(--compact-target) + var(--sp-2) * 2);
+  }
+
+  .app-shell[data-shell='compact']:has(.compact-sheet:not([hidden]))
+    .workspace.column-layout
+    .viewer-area
+    .instrument-rail:has(> .sketch-relations) {
+    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
+    bottom: calc(var(--compact-target) + var(--sp-2) * 2);
   }
 }

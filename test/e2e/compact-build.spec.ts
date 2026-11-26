@@ -725,6 +725,74 @@ test.describe('Sketch in the compact workspace', () => {
     });
   }
 
+  for (const size of [SIZES[2], SIZES[1]]) {
+    test(`reaches every curve type by touch, in the rail, at ${size.width}×${size.height}`, async ({
+      page
+    }) => {
+      test.setTimeout(120_000);
+      await openCompact(page, size, null, `Compact curves ${size.width}`);
+      await launchFromAllToolsDirect(page, 'Create', 'Sketch');
+      await sheet(page).getByRole('button', { name: 'Top (XY)' }).tap();
+      await expect(sketchTools(page)).toBeVisible();
+      const curve = sketchTools(page).getByRole('button', { name: /^Curve:/ });
+      await curve.scrollIntoViewIfNeeded();
+      await curve.tap();
+      const types = sketchTools(page).getByRole('radiogroup', {
+        name: 'Curve type'
+      });
+      await expect(types).toBeVisible();
+      // The types stand in the rail's column, not out over the canvas
+      // where a drawing tap would land on them.
+      const column = (await page
+        .locator('.workspace-column-float:has(.sketch-rail) .workspace-column')
+        .boundingBox())!;
+      const strip = (await types.boundingBox())!;
+      expect(strip.x).toBeGreaterThanOrEqual(column.x);
+      expect(strip.x + strip.width).toBeLessThanOrEqual(
+        column.x + column.width + 0.5
+      );
+      for (const name of ['Ellipse', 'Arc', 'Fit', 'Control']) {
+        const radio = types.getByRole('radio', { name });
+        await radio.scrollIntoViewIfNeeded();
+        await expectReachable(radio);
+        await radio.tap();
+        await expect(radio).toBeChecked();
+      }
+      expect(
+        await smallTargets(
+          page,
+          '.app-shell[data-shell="compact"] .workspace-column-float'
+        )
+      ).toEqual([]);
+      await expectReachable(
+        page.getByRole('button', { name: 'Finish Sketch', exact: true })
+      );
+    });
+  }
+
+  for (const size of SIZES) {
+    test(`keeps Finish and the tools in reach with More open at ${size.width}×${size.height}`, async ({
+      page
+    }) => {
+      test.setTimeout(120_000);
+      await openCompact(page, size, null, `Compact sketch more ${size.width}`);
+      await launchFromAllToolsDirect(page, 'Create', 'Sketch');
+      await sheet(page).getByRole('button', { name: 'Top (XY)' }).tap();
+      await expect(sketchTools(page)).toBeVisible();
+      const more = page.getByRole('button', { name: 'More', exact: true });
+      await more.tap();
+      await expect(more).toHaveAttribute('aria-expanded', 'true');
+      await expect(
+        sheet(page).getByRole('heading', { name: 'More' })
+      ).toBeVisible();
+      await expectSketchReachable(page);
+      await page
+        .getByRole('button', { name: 'Finish Sketch', exact: true })
+        .tap();
+      await expect(sketchTools(page)).toHaveCount(0);
+    });
+  }
+
   test('leaves plane picking with Cancel or Escape, and a sketch with Escape', async ({
     page
   }) => {

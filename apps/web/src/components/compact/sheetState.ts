@@ -52,6 +52,13 @@ export interface SheetState {
    * Absent while no page is open.
    */
   readonly rootDetent?: SheetDetent;
+  /**
+   * The height the person chose, under a temporary raise (a disabled
+   * verb's reason): where the root goes back to when the raise ends, even
+   * if a page was opened and closed meanwhile. Absent when the height is
+   * the person's own.
+   */
+  readonly restDetent?: SheetDetent;
 }
 
 export const CLOSED_SHEET: SheetState = { detent: 'closed', stack: [] };
@@ -74,8 +81,18 @@ export type SheetAction =
       arrived: boolean;
       at?: Exclude<SheetDetent, 'closed'>;
     }
-  /** At least this high: a tool's Options, a refusal or the keypad. */
-  | { type: 'raise'; detent: Exclude<SheetDetent, 'closed'> }
+  /**
+   * At least this high: a tool's Options, a refusal or the keypad. A
+   * temporary raise (a disabled verb's reason) lifts only the root and is
+   * undone by `lower`, back to the height the person chose.
+   */
+  | {
+      type: 'raise';
+      detent: Exclude<SheetDetent, 'closed'>;
+      temporary?: boolean;
+    }
+  /** A temporary raise ends: the root goes back to the person's height. */
+  | { type: 'lower' }
   /**
    * The workspace's content left and only the tray stays (U12 slice 4): the
    * sheet comes back down to peek, or, under an open page, comes back at
@@ -121,6 +138,50 @@ function below(state: SheetState, hasRoot: boolean): SheetDetent {
 export function sheetReducer(
   state: SheetState,
   action: SheetAction,
+  hasRoot: boolean
+): SheetState {
+  if (action.type === 'raise' && action.temporary) {
+    // Only the root's own height is lifted; a page over it keeps its own.
+    if (!hasRoot || state.stack.length > 0) return state;
+    if (rank(action.detent) <= rank(state.detent)) return state;
+    return {
+      ...state,
+      detent: action.detent,
+      restDetent: state.restDetent ?? state.detent
+    };
+  }
+  if (action.type === 'lower') {
+    const { restDetent, ...rest } = state;
+    if (restDetent === undefined) return state;
+    if (!hasRoot) return rest;
+    const back = restDetent === 'closed' ? 'peek' : restDetent;
+    // Under a page, the root comes back at the person's height after it.
+    return state.stack.length > 0
+      ? { ...rest, rootDetent: back }
+      : { ...rest, detent: back };
+  }
+  const next = reduceSheet(state, action, hasRoot);
+  if (state.restDetent === undefined) return next;
+  // The person moved the root (or something else asked it for room): the
+  // height is theirs now. Pages opening and closing over a raised root
+  // keep the height to go back to.
+  const atRoot = state.stack.length === 0 && next.stack.length === 0;
+  const claimed =
+    (atRoot && next.detent !== state.detent) ||
+    (action.type === 'raise' && state.stack.length === 0);
+  if (claimed) {
+    if (next.restDetent === undefined) return next;
+    const { restDetent: _claimed, ...rest } = next;
+    return rest;
+  }
+  return next.restDetent === state.restDetent
+    ? next
+    : { ...next, restDetent: state.restDetent };
+}
+
+function reduceSheet(
+  state: SheetState,
+  action: Exclude<SheetAction, { type: 'lower' }>,
   hasRoot: boolean
 ): SheetState {
   switch (action.type) {

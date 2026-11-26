@@ -214,6 +214,45 @@ describe('sheet state', () => {
     );
   });
 
+  it("undoes a temporary raise back to the person's height, over pages too", () => {
+    const peek: SheetState = { detent: 'peek', stack: [] };
+    const raised = reduce(peek, true, {
+      type: 'raise',
+      detent: 'half',
+      temporary: true
+    });
+    expect(raised.detent).toBe('half');
+    expect(reduce(raised, true, { type: 'lower' }).detent).toBe('peek');
+    // A page opened and closed over the raised root: the root still goes
+    // back to peek, whether the raise ends under the page or after it.
+    const paged = reduce(raised, true, { type: 'push', page: page('tools') });
+    expect(reduce(paged, true, { type: 'lower' }, { type: 'pop' }).detent).toBe(
+      'peek'
+    );
+    expect(reduce(paged, true, { type: 'pop' }, { type: 'lower' }).detent).toBe(
+      'peek'
+    );
+    // Moved by hand meanwhile, the height is the person's.
+    expect(
+      reduce(
+        raised,
+        true,
+        { type: 'set-detent', detent: 'full' },
+        { type: 'lower' }
+      ).detent
+    ).toBe('full');
+    // Something else asking for half keeps it there.
+    expect(
+      reduce(raised, true, { type: 'raise', detent: 'half' }, { type: 'lower' })
+        .detent
+    ).toBe('half');
+    // A temporary raise never lifts a page.
+    const over: SheetState = { detent: 'peek', stack: [page('more')] };
+    expect(
+      reduce(over, true, { type: 'raise', detent: 'half', temporary: true })
+    ).toBe(over);
+  });
+
   it('settles back to the tray once a tool leaves, unless a page is open', () => {
     expect(
       reduce({ detent: 'half', stack: [] }, true, { type: 'settle' }).detent

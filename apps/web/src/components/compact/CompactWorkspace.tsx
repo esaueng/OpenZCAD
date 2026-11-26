@@ -314,36 +314,18 @@ export default function CompactWorkspace({
   }, []);
 
   // A disabled verb's reason stands under the tray row: tapped at peek,
-  // the sheet comes up to half to show it, and goes back to peek with it
-  // unless it was moved meanwhile.
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  const raisedForReason = useRef(false);
+  // the sheet comes up to half to show it, and goes back to the height the
+  // person chose with it (sheetState's temporary raise), even when All
+  // tools opened and closed meanwhile.
   const onTrayReason = useCallback(
-    (shown: boolean) => {
-      const current = stateRef.current;
-      if (shown) {
-        if (current.detent === 'peek' && current.stack.length === 0) {
-          raisedForReason.current = true;
-          dispatch({ type: 'raise', detent: 'half' });
-        }
-        return;
-      }
-      if (!raisedForReason.current) return;
-      raisedForReason.current = false;
-      if (current.detent === 'half' && current.stack.length === 0) {
-        dispatch({ type: 'set-detent', detent: 'peek' });
-      }
-    },
+    (shown: boolean) =>
+      dispatch(
+        shown
+          ? { type: 'raise', detent: 'half', temporary: true }
+          : { type: 'lower' }
+      ),
     [dispatch]
   );
-  useEffect(() => {
-    // Moved by hand (or by new content) while the reason showed: the
-    // height is the person's now.
-    if (state.detent !== 'half' || state.stack.length > 0) {
-      raisedForReason.current = false;
-    }
-  }, [state.detent, state.stack.length]);
 
   const push = (key: CompactPage, detent?: 'half' | 'full') =>
     dispatch({ type: 'push', page: { key }, ...(detent ? { detent } : {}) });
