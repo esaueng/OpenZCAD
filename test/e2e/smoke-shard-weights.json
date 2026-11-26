@@ -138,6 +138,7 @@
   "picked-feature-delete.spec.ts": 40,
   "picked-step-feature-delete.spec.ts": 53,
   "mirror-pattern.spec.ts": 12,
+  "mirror-several-bodies.spec.ts": 15,
   "path-pattern.spec.ts": 12,
   "pattern-total-length.spec.ts": 12,
   "point-pattern.spec.ts": 12,

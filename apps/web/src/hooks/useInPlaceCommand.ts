@@ -3,6 +3,7 @@ import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureData,
+  FeatureId,
   FeatureWarning,
   ParamValue,
   ParametricVector3,
@@ -70,10 +71,35 @@ export interface InPlaceBuiltCommand {
    */
   check?(derived: ProjectDocument['derived']): void;
   /**
+   * M11 (D4): which of several picks a refused frame refused (a Mirror of
+   * many bodies names the body), and what to do about it, as data: the bar
+   * names it ahead of the kernel's own sentence, which keeps its typed
+   * record, and closes with the advice. Null when no pick is to blame.
+   */
+  refusedPick?(
+    derived: ProjectDocument['derived'],
+    shown: InPlaceShownRefusal
+  ): InPlaceRefusedPick | null;
+  /**
    * The host's own command behind this frame, handed back to `commit` with
    * the frame (see {@link InPlacePreviewedFrame}). The hook never reads it.
    */
   command?: AnyCommand;
+}
+
+/**
+ * Whose words a refusal shows: the feature its attributed warning names, a
+ * warning no feature is named for, or none (the command's own check). A pick
+ * named ahead of the refusal must be that feature's, so the name, the
+ * sentence and its typed record all speak of one feature.
+ */
+export type InPlaceShownRefusal =
+  { featureId: FeatureId } | 'unattributed' | null;
+
+/** The pick a refusal is about, and what the user can do about it. */
+export interface InPlaceRefusedPick {
+  name: string;
+  advice: string;
 }
 
 /**
@@ -363,6 +389,12 @@ export interface InPlaceCommand {
    */
   refusalInput: string | null;
   /**
+   * M11: the pick the refusal is about (the body a Mirror of several could
+   * not mirror) and what to do about it, named in the bar around the
+   * kernel's sentence. Null for any other refusal.
+   */
+  refusalPick: InPlaceRefusedPick | null;
+  /**
    * While {@link refusalInput} is said, the values the frame still on
    * screen built from: a handle's arrow stands on its kept value, at the
    * model, while its chip reads the refused one. Null otherwise.
@@ -535,6 +567,11 @@ export function useInPlaceCommand(
    * still the refusal shown, so no other path that sets a refusal has to
    * clear it.
    */
+  /** The pick a frame's refusal names, for that refusal only (M11). */
+  const [refusalPickFor, setRefusalPickFor] = useState<{
+    message: string;
+    pick: InPlaceRefusedPick;
+  } | null>(null);
   const [typedRefusal, setTypedRefusal] = useState<{
     message: string;
     record: NonNullable<FeatureWarning['kernelRefusal']>;
@@ -1175,14 +1212,25 @@ export function useInPlaceCommand(
               ? { message: fresh, record: freshRecord }
               : null
           );
-          setRefusal(
+          const message =
             fresh ??
-              unresolved ??
-              (result.derived.featureWarnings === undefined
-                ? result.derived.warnings.at(-1)
-                : null) ??
-              'This did not produce a valid body.'
-          );
+            unresolved ??
+            (result.derived.featureWarnings === undefined
+              ? result.derived.warnings.at(-1)
+              : null) ??
+            'This did not produce a valid body.';
+          const shownBy: InPlaceShownRefusal =
+            exact && attributed
+              ? { featureId: attributed.featureId }
+              : fresh !== null ||
+                  (unresolved === null &&
+                    result.derived.featureWarnings === undefined)
+                ? 'unattributed'
+                : null;
+          const pick =
+            frame?.built.refusedPick?.(result.derived, shownBy) ?? null;
+          setRefusalPickFor(pick ? { message, pick } : null);
+          setRefusal(message);
         }
       },
       onFailure: ({ error }) => {
@@ -1863,7 +1911,11 @@ export function useInPlaceCommand(
     if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
-    const bodyMode = inPlaceBodyMode(toolSpec, current?.options);
+    const bodyMode = inPlaceBodyMode(
+      toolSpec,
+      current?.options,
+      editRef.current !== null
+    );
     if (!current || !bodyMode) return false;
     setSession((latest) => {
       if (!latest) return latest;
@@ -2517,6 +2569,10 @@ export function useInPlaceCommand(
       entryRefusal || refusal === null || refusalInputs.length === 0
         ? null
         : refusalInputs.join(' and '),
+    refusalPick:
+      !entryRefusal && refusal !== null && refusalPickFor?.message === refusal
+        ? refusalPickFor.pick
+        : null,
     // An entry refused meanwhile (a 0 typed over the refused radius) leaves
     // the refused request and its kept frame as they were: the arrow stays.
     keptValues:
