@@ -525,6 +525,21 @@ function faceFilterAccepts(
   return surface === 'cylinder';
 }
 
+/**
+ * Runs `run` once the frame after the next has started, by which time what
+ * was rendered now has been drawn; returns its cancel.
+ */
+function afterNextPaint(run: () => void): () => void {
+  if (typeof requestAnimationFrame !== 'function') {
+    const timer = setTimeout(run, 32);
+    return () => clearTimeout(timer);
+  }
+  let frame = requestAnimationFrame(() => {
+    frame = requestAnimationFrame(run);
+  });
+  return () => cancelAnimationFrame(frame);
+}
+
 export function useInPlaceCommand(
   options: UseInPlaceCommandOptions
 ): InPlaceCommand {
@@ -1306,6 +1321,16 @@ export function useInPlaceCommand(
       setRefusalInputs([]);
       setKeptValues(null);
       optionsRef.current.publishPreview(null);
+      // The new target's build waits until the take-down has been drawn.
+      // Started at once, its reply could land while the workspace was still
+      // rendering the take-down, ahead of the viewer installing it: the old
+      // halves then stayed on screen under "Checking…" until that reply
+      // replaced them (the preview check of #2242). A new request or the
+      // command's end before then cancels it; the generation is this
+      // request's from now, so no frame of the old one counts meanwhile.
+      generation.current += 1;
+      const requested = generation.current;
+      return afterNextPaint(() => preview.request(requested));
     }
     generation.current += 1;
     preview.request(generation.current);

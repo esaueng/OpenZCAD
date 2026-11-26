@@ -336,3 +336,134 @@ test('Escape on a refused Split adds no History row and leaves the bodies', asyn
     ]);
   expect(storedSplit(await storedProject(page, projectName))).toBeNull();
 });
+
+// Preview check of #2242: with the coupon's −35 halves kept under a refused
+// +20, the witness picked in Objects takes them down before its own frame.
+// x = 110 cuts the witness, so its frame builds; every frame the viewport
+// draws is recorded in the page, since the stale halves lasted only until
+// that frame landed and a poll from the test sees just its end.
+test('a refused Split takes the kept halves down when Objects picks another body', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await coupon(page, 'K10 split retarget');
+  // Open already, so the pick below is one click.
+  await revealModelPanel(page, 'Objects');
+  const bar = await splitOnEndFace(page);
+  await expect(bar).toHaveClass(/\brefused\b/, { timeout: 30_000 });
+  await enterCommandValue(page, 'offset', '-35');
+  await expect(done(bar)).toBeEnabled({ timeout: 30_000 });
+  await expect
+    .poll(() => drawnSpans(page), { timeout: 30_000 })
+    .toEqual([
+      [0, 55, 27720],
+      [55, 90, 17640],
+      [100, 120, 10080]
+    ]);
+  await enterCommandValue(page, 'offset', '20');
+  await expect(hint(bar)).toContainText(`Offset: ${SPLIT_PLANE_MISSES}`, {
+    timeout: 30_000
+  });
+
+  await recordFrames(page);
+  await pickObjectsBody(page, 'Witness');
+  await expect(done(bar)).toBeEnabled({ timeout: 30_000 });
+  await expect
+    .poll(() => drawnSpans(page))
+    .toEqual([
+      [0, 90, 45360],
+      [100, 110, 5040],
+      [110, 120, 5040]
+    ]);
+  const frames = await recordedFrames(page);
+  const key = (spans: number[][]) => JSON.stringify(spans);
+  const halves = key([
+    [0, 55],
+    [55, 90],
+    [100, 120]
+  ]);
+  const unsplit = key([
+    [0, 90],
+    [100, 120]
+  ]);
+  const witnessCut = key([
+    [0, 90],
+    [100, 110],
+    [110, 120]
+  ]);
+  // The pick takes the halves and the refusal down first: the two blocks
+  // unsplit, before the witness's frame, and the halves never again.
+  const down = frames.findIndex(
+    (frame) => key(frame.spans) === unsplit && !frame.bar.includes('Offset:')
+  );
+  expect(down, JSON.stringify(frames)).toBeGreaterThanOrEqual(0);
+  expect(
+    frames.slice(0, down).some((frame) => key(frame.spans) === witnessCut)
+  ).toBe(false);
+  expect(
+    frames.slice(down).some((frame) => key(frame.spans) === halves),
+    JSON.stringify(frames)
+  ).toBe(false);
+});
+
+interface RecordedFrame {
+  spans: number[][];
+  bar: string;
+}
+
+/** Starts recording each new (spans, bar text) pair the page renders. */
+async function recordFrames(page: Page) {
+  await page.locator('.viewer-host canvas').evaluate((element) => {
+    const store = window as unknown as {
+      __splitFrames: RecordedFrame[];
+      __splitFramesStop: boolean;
+    };
+    store.__splitFrames = [];
+    store.__splitFramesStop = false;
+    const sample = () => {
+      if (store.__splitFramesStop) return;
+      element.dispatchEvent(
+        new CustomEvent('openzcad:e2e-render-policy', {
+          detail: {
+            includeBodies: true,
+            resolve: ({
+              bodies
+            }: {
+              bodies: (GeometryBodyRepresentation & { consumed?: boolean })[];
+            }) => {
+              const frame = {
+                spans: bodies
+                  .filter((body) => !body.consumed)
+                  .map((body) => [
+                    Math.round(body.bbox.min.x),
+                    Math.round(body.bbox.max.x)
+                  ])
+                  .sort((a, b) => a[0]! - b[0]!),
+                bar:
+                  document.querySelector('[aria-label="Split command"]')
+                    ?.textContent ?? ''
+              };
+              const last = store.__splitFrames.at(-1);
+              if (JSON.stringify(last) !== JSON.stringify(frame)) {
+                store.__splitFrames.push(frame);
+              }
+              requestAnimationFrame(sample);
+            }
+          }
+        })
+      );
+    };
+    sample();
+  });
+}
+
+async function recordedFrames(page: Page): Promise<RecordedFrame[]> {
+  return page.evaluate(() => {
+    const store = window as unknown as {
+      __splitFrames: RecordedFrame[];
+      __splitFramesStop: boolean;
+    };
+    store.__splitFramesStop = true;
+    return store.__splitFrames;
+  });
+}

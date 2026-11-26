@@ -14,8 +14,9 @@ already slid: `Offset`, `Plane` for another face, datum or principal pick or a
 switch between a picked and typed plane (a re-pick's reset offset is not
 named), `Origin` and `Normal` for a typed plane, and `Original`. A different
 body is another target (`null`): a frame kept under a refusal comes down with
-that refusal as soon as the other body is picked, a late frame of the old body
-is never drawn for the new one, and once another body's refusal lands the old
+that refusal as soon as the other body is picked (the other body's build
+waits until that take-down has been drawn, so its reply cannot land ahead of
+it), a late frame of the old body is never drawn for the new one, and once another body's refusal lands the old
 frame is no longer kept. Hole, Fillet and Chamfer never return `null`, so their
 behaviour is unchanged. The first face pick
 at offset 0 has no earlier frame and keeps none; superseded frames still never

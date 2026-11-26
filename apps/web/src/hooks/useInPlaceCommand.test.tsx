@@ -3631,6 +3631,8 @@ describe('useInPlaceCommand: a late Split reply', () => {
           ? ON_FACE
           : MISSES;
     const planeX = new WeakMap<object, { x: number; body: string }>();
+    /** The body each build was asked for, in order. */
+    const asked: string[] = [];
     const { hook, publishPreview, commit } = setup({
       buildCommand: (request) => {
         // The Split request stores the plane's fields as written.
@@ -3640,6 +3642,7 @@ describe('useInPlaceCommand: a late Split reply', () => {
           }
         ).state;
         const x = Number(value.origin.x);
+        asked.push(value.targetBodyId);
         return {
           validate: () => undefined,
           apply: (document) => {
@@ -3660,7 +3663,59 @@ describe('useInPlaceCommand: a late Split reply', () => {
     act(() => {
       hook.result.current.pickPlane(END_FACE);
     });
-    return { hook, replies, publishPreview, commit };
+    return { hook, replies, publishPreview, commit, asked };
+  }
+
+  /** Animation frames held, to be run one at a time in request order. */
+  function holdFrames() {
+    const queued = new Map<number, FrameRequestCallback>();
+    let ids = 0;
+    const request = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        ids += 1;
+        queued.set(ids, callback);
+        return ids;
+      });
+    const cancel = vi
+      .spyOn(window, 'cancelAnimationFrame')
+      .mockImplementation((id) => {
+        queued.delete(id);
+      });
+    return {
+      next: () =>
+        act(() => {
+          const [id, callback] = [...queued][0] ?? [];
+          if (id === undefined || !callback) return;
+          queued.delete(id);
+          callback(performance.now());
+        }),
+      pending: () => queued.size,
+      restore: () => {
+        request.mockRestore();
+        cancel.mockRestore();
+      }
+    };
+  }
+
+  /** The coupon's x = 52 halves kept under a refused +8. */
+  async function keptUnderOffset() {
+    const harnessed = harness();
+    const { hook, replies } = harnessed;
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await settle(replies, 3);
+    await waitFor(() =>
+      expect(hook.result.current.refusalInput).toBe('Offset')
+    );
+    return harnessed;
   }
 
   /** The next build asked for, released, with the plane x it was for. */
@@ -3977,6 +4032,53 @@ describe('useInPlaceCommand: a late Split reply', () => {
     expect(
       publishPreview.mock.calls.slice(picked).every(([shown]) => shown === null)
     ).toBe(true);
+  });
+
+  // Preview check of #2242: in the app, the witness's reply landed while the
+  // workspace was still rendering the take-down, ahead of the viewer
+  // installing it, so the halves stayed under "Checking…" until that reply
+  // replaced them. The witness's build now waits until the take-down has
+  // been drawn: two animation frames.
+  it("builds another body only after the kept halves' take-down is drawn", async () => {
+    const { hook, replies, publishPreview, asked } = await keptUnderOffset();
+    const frames = holdFrames();
+    try {
+      act(() => {
+        hook.result.current.pickBody(WITNESS);
+      });
+      expect(hook.result.current.refusal).toBeNull();
+      expect(publishPreview).toHaveBeenLastCalledWith(null);
+      expect(asked).toHaveLength(3);
+      frames.next();
+      expect(asked).toHaveLength(3);
+      frames.next();
+      expect(asked.at(-1)).toBe(WITNESS.bodyId);
+      expect(asked).toHaveLength(4);
+    } finally {
+      frames.restore();
+    }
+    await settle(replies, 4);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  it('builds nothing for another body when the command ends before its turn', async () => {
+    const { hook, asked, commit } = await keptUnderOffset();
+    const frames = holdFrames();
+    try {
+      act(() => {
+        hook.result.current.pickBody(WITNESS);
+      });
+      act(() => {
+        expect(hook.result.current.cancel()).toBe(true);
+      });
+      while (frames.pending() > 0) frames.next();
+    } finally {
+      frames.restore();
+    }
+    expect(asked).toHaveLength(3);
+    expect(commit).not.toHaveBeenCalled();
   });
 
   // The same, with +8 typed on the witness before its first frame lands:
