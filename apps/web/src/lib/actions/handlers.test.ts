@@ -44,8 +44,12 @@ describe('the workspace’s handler map', () => {
   });
 
   it('is what the keyboard runs, with no second copy of a handled command', () => {
-    expect(keyboard).toContain(
-      'const keyAction = actionHandler(actionHandlers, modelCommand?.id);'
+    expect(keyboard).toMatch(
+      /const keyAction = actionHandler\(actionHandlers, modelCommand\?\.id\);\s*if \(keyAction\) \{\s*keyAction\(\);\s*return;/
+    );
+    // Settings' global key runs the same entry as its row.
+    expect(keyboard).toMatch(
+      /global === 'app-settings'\) \{\s*event\.preventDefault\(\);\s*actionHandlers\['app-settings'\]\(\);/
     );
     for (const id of ids) {
       expect(keyboard, id).not.toContain(`case '${id}':`);
@@ -57,7 +61,12 @@ describe('the workspace’s handler map', () => {
   it('is what each command-bar row for a handled action runs', () => {
     for (const id of ids) {
       if (!actionEntry(id)?.sources.includes('command-bar')) continue;
-      expect(palette, id).toContain(`run: actionHandlers['${id}']`);
+      // The row's own entry: from its id to the next row's.
+      const at = palette.indexOf(`id: '${id}'`);
+      expect(at, id).toBeGreaterThanOrEqual(0);
+      const next = palette.slice(at + 1).search(/\bid: ['`]/);
+      const row = palette.slice(at, next < 0 ? undefined : at + 1 + next);
+      expect(row, id).toContain(`run: actionHandlers['${id}']`);
     }
   });
 });

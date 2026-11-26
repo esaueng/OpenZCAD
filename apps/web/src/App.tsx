@@ -37172,6 +37172,7 @@ export function App() {
   // One handler per action (U12): its keyboard shortcut and its command-bar
   // row both run this entry. Normal to face is not here: its key turns only
   // to a settled face pick, which the keyboard map checks first.
+  const openShortcutReference = () => setShortcutsOpen(true);
   const actionHandlers = {
     'view-front': () => requestView('front'),
     'view-top': () => requestView('top'),
@@ -37194,8 +37195,9 @@ export function App() {
     // The slash is the command grammar: the field opens with it typed,
     // listing every command.
     'command-slash': () => draftPrompt('/'),
-    'shortcut-reference': () => setShortcutsOpen(true),
-    'app-help': () => setShortcutsOpen(true),
+    // The `?` key and the command bar's Help row open the same reference.
+    'shortcut-reference': openShortcutReference,
+    'app-help': openShortcutReference,
     'app-settings': openSettings
   } satisfies ActionHandlers;
 
@@ -37237,7 +37239,7 @@ export function App() {
 
       if (global === 'app-settings') {
         event.preventDefault();
-        openSettings();
+        actionHandlers['app-settings']();
         return;
       }
 
