@@ -13,7 +13,7 @@ and sync use a native AuthenticationServices bridge, and the bundled offline
 changes neither one's model. The owner's decisions of 2026-11-26 (one app
 on `zcad.app`, its bundle ID, distribution, policy) are recorded in
 [Owner decisions and authorizations](#owner-decisions-and-authorizations);
-only the team ID is still open.
+the team ID is supplied at deploy time.
 
 ## Context
 
@@ -335,8 +335,8 @@ The Worker serves `GET /.well-known/apple-app-site-association` with status
 
 **Owner decisions (2026-11-26):** one app, `app.esau.openzcad.ios`, on
 `zcad.app` only; `beta.zcad.app`, `stable.zcad.app` and preview hosts never
-serve the AASA. The team ID is still to be supplied; the Worker reads the
-app ID from `APPLE_WEBCREDENTIALS_APP_IDS`, so it is never hard-coded.
+serve the AASA. The Worker reads the app ID, team ID included, from
+`APPLE_WEBCREDENTIALS_APP_IDS`, so it is never hard-coded.
 
 ### 3. Session
 
@@ -778,8 +778,9 @@ Decided by the owner on 2026-11-26:
 6. **Passkey sign-in.** Not wanted. Passkeys stay for unlocking encryption
    only, and sign-in stays on email codes (ADR-012).
 
-Still open: the Apple Developer **team ID**. It is needed only for the
-entitlement and the AASA value, from the Worker PR on.
+The Apple Developer team ID was supplied on 2026-11-26. It is not written
+into the repository: it enters at deploy time through
+`APPLE_WEBCREDENTIALS_APP_IDS` and through Xcode signing settings.
 
 ## Consequences
 
