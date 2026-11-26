@@ -13,7 +13,9 @@ apart from what each frame was made from, since the request stores the plane
 already slid: `Offset`, `Plane` for another face, datum or principal pick or a
 switch between a picked and typed plane (a re-pick's reset offset is not
 named), `Origin` and `Normal` for a typed plane, and `Original`. A different
-body names nothing, so no frame of the old body is kept. The first face pick
+body is another target (`null`): a frame kept under a refusal comes down with
+that refusal as soon as the other body is picked. A frame taken down is never
+kept again, so an input is named only over the frame it is measured from. The first face pick
 at offset 0 has no earlier frame and keeps none; superseded frames still never
 become the kept frame. `useInPlaceCommand.test.tsx` covers the offset, a
 re-picked plane, another body, the first pick and Escape (no commit);

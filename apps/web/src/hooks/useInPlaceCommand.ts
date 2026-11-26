@@ -949,18 +949,22 @@ export function useInPlaceCommand(
       kept &&
       kept.session === sessionRef.current?.id &&
       kept.base === optionsRef.current.baseVersion
-        ? tool.refusedInputs(kept.request, refused, {
+        ? (tool.refusedInputs(kept.request, refused, {
             built: kept,
             refused: made
-          })
+          }) ?? [])
         : [];
     setRefusalInputs(inputs);
     // The handles stand on the values the kept frame built from, so a
     // refused size (a 1000 mm radius) leaves its arrow and chip at the edge
     // being edited rather than that far along the arrow, off the model.
     setKeptValues(inputs.length > 0 && kept ? kept.values : null);
-    if (inputs.length === 0) optionsRef.current.publishPreview(null);
-    else if (kept && supersededDrawn.current)
+    if (inputs.length === 0) {
+      optionsRef.current.publishPreview(null);
+      // The frame comes down, so none is left to keep under a later
+      // refusal: an input is named only over the frame it is measured from.
+      lastBuilt.current = null;
+    } else if (kept && supersededDrawn.current)
       optionsRef.current.publishPreview(kept.preview);
     supersededDrawn.current = false;
   };
@@ -1264,6 +1268,35 @@ export function useInPlaceCommand(
     // A new request is not shown yet: Done waits for its own frame, never
     // the previous request's (which a profile or axis change replaces).
     setPreviewValid(false);
+    // A frame kept under a refusal that says nothing about the new request
+    // (a Split's other body) comes down now, with the refusal named over
+    // it, rather than standing for the new target until its frame lands.
+    // The refusal stays recorded as shown, so a late frame of the old
+    // target is not drawn in its place either.
+    const kept = lastBuilt.current;
+    const tool = specRef.current;
+    if (
+      refusalShown.current &&
+      kept &&
+      tool?.refusedInputs &&
+      requestRef.current &&
+      tool.refusedInputs(kept.request, requestRef.current, {
+        built: kept,
+        refused: {
+          values: requestValuesRef.current,
+          ...requestPicksRef.current
+        }
+      }) === null
+    ) {
+      lastBuilt.current = null;
+      supersededDrawn.current = false;
+      shownKey.current = null;
+      setRefusal(null);
+      setTypedRefusal(null);
+      setRefusalInputs([]);
+      setKeptValues(null);
+      optionsRef.current.publishPreview(null);
+    }
     generation.current += 1;
     preview.request(generation.current);
     // A re-armed edit is a new request even when it builds the same thing

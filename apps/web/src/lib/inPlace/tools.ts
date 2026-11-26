@@ -1140,13 +1140,15 @@ export interface InPlaceToolSpec {
    * frame on screen under the refusal instead of taking it down. `frames`
    * holds what each request was made from, for a tool whose request alone
    * does not tell its inputs apart (a Split's plane already slid by its
-   * offset).
+   * offset). Null when the request is of another target (a Split of another
+   * body): the last frame says nothing about it, so it comes down as soon as
+   * that request is made, and is not kept under any later refusal.
    */
   refusedInputs?(
     built: InPlaceRequest,
     refused: InPlaceRequest,
     frames?: { built: InPlaceFrameInputs; refused: InPlaceFrameInputs }
-  ): string[];
+  ): string[] | null;
 }
 
 /** What a preview frame's request was made from. */
@@ -5664,13 +5666,13 @@ const split: InPlaceToolSpec = {
  * by its offset, so the plane and the offset are told apart by what each
  * frame was made from. A plane picked again starts unslid: the offset that
  * only followed the new pick is not named. A different body is no change of
- * an input on this one, and its refusal keeps no frame of the old body.
+ * an input on this one: null, so no frame of the old body stands for it.
  */
 export function splitRefusedInputs(
   built: InPlaceRequest,
   refused: InPlaceRequest,
   frames?: { built: InPlaceFrameInputs; refused: InPlaceFrameInputs }
-): string[] {
+): string[] | null {
   if (
     !frames ||
     built.tool !== 'modeling' ||
@@ -5682,7 +5684,7 @@ export function splitRefusedInputs(
   }
   const a = built.state.value;
   const b = refused.state.value;
-  if (a.targetBodyId !== b.targetBodyId) return [];
+  if (a.targetBodyId !== b.targetBodyId) return null;
   const was = frames.built;
   const now = frames.refused;
   const typed = (inputs: InPlaceFrameInputs) =>

@@ -3541,6 +3541,12 @@ describe('useInPlaceCommand: a late Split reply', () => {
     min: { x: 0, y: 0, z: 0 },
     max: { x: 90, y: 36, z: 14 }
   };
+  /** The witness block beside the coupon, which no plane here crosses. */
+  const WITNESS = {
+    bodyId: 'body_witness' as BodyId,
+    min: { x: 100, y: 0, z: 0 },
+    max: { x: 120, y: 36, z: 14 }
+  };
   const END_FACE = {
     kind: 'face' as const,
     origin: { x: 90, y: 18, z: 7 },
@@ -3803,11 +3809,7 @@ describe('useInPlaceCommand: a late Split reply', () => {
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
     // The witness block beside the coupon, picked with the plane kept.
     act(() => {
-      hook.result.current.pickBody({
-        bodyId: 'body_witness' as BodyId,
-        min: { x: 100, y: 0, z: 0 },
-        max: { x: 120, y: 36, z: 14 }
-      });
+      hook.result.current.pickBody(WITNESS);
     });
     await settle(replies, 3);
     await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
@@ -3828,6 +3830,115 @@ describe('useInPlaceCommand: a late Split reply', () => {
       expect(publishPreview.mock.calls.length).toBeGreaterThan(published)
     );
     expect(hook.result.current.refusal).not.toBeNull();
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  // Review of #2242, finding 1: the coupon's kept halves and its "Offset"
+  // refusal say nothing about the witness, so they come down at the pick,
+  // not when the witness's own verdict lands.
+  it('takes the kept halves and refusal down as soon as another body is picked', async () => {
+    const { hook, replies, publishPreview } = harness();
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await settle(replies, 3);
+    await waitFor(() =>
+      expect(hook.result.current.refusalInput).toBe('Offset')
+    );
+    act(() => {
+      hook.result.current.pickBody(WITNESS);
+    });
+    // The witness's frame is still building.
+    await waitFor(() => expect(replies).toHaveLength(4));
+    expect(hook.result.current.refusal).toBeNull();
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    await settle(replies, 4);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  // Review of #2242, finding 2: once the coupon's frame came down for the
+  // witness, it is not there to keep. Picked back and refused, the coupon
+  // names no input over a viewport that shows no halves.
+  it('names nothing over a body picked back after its frame came down', async () => {
+    const { hook, replies, publishPreview } = harness();
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.pickBody(WITNESS);
+    });
+    await settle(replies, 3);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await settle(replies, 4);
+    await waitFor(() => expect(hook.result.current.values.offset).toBe(8));
+    act(() => {
+      hook.result.current.pickBody(COUPON);
+    });
+    await waitFor(() => expect(replies).toHaveLength(5));
+    const published = publishPreview.mock.calls.length;
+    expect(await settle(replies, 5)).toBe(98);
+    await waitFor(() =>
+      expect(publishPreview.mock.calls.length).toBeGreaterThan(published)
+    );
+    expect(hook.result.current.refusal).toMatch(/does not split the solid/);
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  // The same, with +8 typed on the witness before its first frame lands:
+  // no refusal stood when the body changed, so it is the witness's refusal
+  // taking the coupon's frame down that leaves nothing to keep.
+  it('keeps nothing once a refusal on another body took the frame down', async () => {
+    const { hook, replies, publishPreview } = harness();
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.pickBody(WITNESS);
+    });
+    await waitFor(() => expect(replies).toHaveLength(3));
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await settle(replies, 3);
+    await settle(replies, 4);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    act(() => {
+      hook.result.current.pickBody(COUPON);
+    });
+    await waitFor(() => expect(replies).toHaveLength(5));
+    const published = publishPreview.mock.calls.length;
+    expect(await settle(replies, 5)).toBe(98);
+    await waitFor(() =>
+      expect(publishPreview.mock.calls.length).toBeGreaterThan(published)
+    );
     expect(hook.result.current.refusalInput).toBeNull();
     expect(hook.result.current.keptValues).toBeNull();
     expect(publishPreview).toHaveBeenLastCalledWith(null);

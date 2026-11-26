@@ -1362,12 +1362,12 @@ describe('body tools', () => {
         frame({ offset: 0, planeNX: 1, planeNZ: 0 }, { planeMode: 'typed' })
       )
     ).toEqual(['Normal', 'Offset']);
-    // Another body is not an input changed on this one: nothing is named,
-    // so no frame of the old body is kept under the refusal.
+    // Another body is not an input changed on this one: null, so no frame
+    // of the old body stands for it, under a refusal or while it builds.
     const witness = { ...BODY, bodyId: 'body_w' as BodyId };
     expect(
       named(built, frame({ offset: 4 }, {}, { bodies: [witness] }))
-    ).toEqual([]);
+    ).toBeNull();
     // Without the frames, or for another tool's request, nothing is named.
     expect(
       spec.refusedInputs!(built.request, frame({ offset: 4 }).request)
