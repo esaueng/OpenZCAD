@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
@@ -26,6 +33,7 @@ import {
   type ImagePlacement,
   type ImageSlot,
   type InPlaceContext,
+  type InPlaceFrameInputs,
   type InPlaceRequest,
   type InPlaceSlots,
   type InPlaceToolId,
@@ -897,6 +905,9 @@ export function useInPlaceCommand(
   );
   const requestValuesRef = useRef(requestValues);
   requestValuesRef.current = requestValues;
+  /** The options and picks {@link request} was made from, likewise. */
+  const requestPicksRef = useRef({ options: chosen, slots });
+  requestPicksRef.current = { options: chosen, slots };
   const requestKey = request ? JSON.stringify(request) : null;
   const requestKeyRef = useRef(requestKey);
   requestKeyRef.current = requestKey;
@@ -926,6 +937,9 @@ export function useInPlaceCommand(
         request: InPlaceRequest;
         /** The values the request was made from. */
         values: Readonly<Record<string, number>>;
+        /** The options and picks it was made from. */
+        options: InPlaceFrameInputs['options'];
+        slots: InPlaceFrameInputs['slots'];
       }
     >()
   ).current;
@@ -951,6 +965,8 @@ export function useInPlaceCommand(
     base: number | null | undefined;
     request: InPlaceRequest;
     values: Readonly<Record<string, number>>;
+    options: InPlaceFrameInputs['options'];
+    slots: InPlaceFrameInputs['slots'];
     /** The frame as it was published, to put back under a refusal. */
     preview: ProjectDocument;
   } | null>(null);
@@ -965,17 +981,27 @@ export function useInPlaceCommand(
    * that built on screen (it is no longer this request's, and the bar says
    * which input to change back), else the preview comes down.
    */
-  const showRefused = (refused: InPlaceRequest | null) => {
+  const showRefused = (
+    refused: InPlaceRequest | null,
+    made: InPlaceFrameInputs
+  ) => {
     const tool = specRef.current;
     const kept = lastBuilt.current;
-    const inputs =
+    const named =
       tool?.refusedInputs &&
       refused &&
       kept &&
       kept.session === sessionRef.current?.id &&
       kept.base === optionsRef.current.baseVersion
-        ? tool.refusedInputs(kept.request, refused)
+        ? tool.refusedInputs(kept.request, refused, {
+            built: kept,
+            refused: made
+          })
         : [];
+    // A refusal of another target (a Split's other body) is not measured
+    // from that frame, and neither is any after it: it is no longer kept.
+    if (named === null) lastBuilt.current = null;
+    const inputs = named ?? [];
     setRefusalInputs(inputs);
     // The handles stand on the values the kept frame built from, so a
     // refused size (a 1000 mm radius) leaves its arrow and chip at the edge
@@ -985,6 +1011,28 @@ export function useInPlaceCommand(
     else if (kept && supersededDrawn.current)
       optionsRef.current.publishPreview(kept.preview);
     supersededDrawn.current = false;
+  };
+  /**
+   * Whether a frame was built for another target than the request now
+   * made (a Split of the body picked before): nothing it shows is about
+   * the current request, so it is never drawn for it, refusal or not.
+   */
+  const ofAnotherTarget = (
+    frame: InPlaceFrameInputs & { request: InPlaceRequest }
+  ) => {
+    const tool = specRef.current;
+    const current = requestRef.current;
+    return Boolean(
+      tool?.refusedInputs &&
+      current &&
+      tool.refusedInputs(frame.request, current, {
+        built: frame,
+        refused: {
+          values: requestValuesRef.current,
+          ...requestPicksRef.current
+        }
+      }) === null
+    );
   };
   /**
    * The request the frame or refusal now on screen was published for. A
@@ -1038,7 +1086,8 @@ export function useInPlaceCommand(
           bodyId: command.resultBodyId,
           built: command,
           request: current,
-          values: requestValuesRef.current
+          values: requestValuesRef.current,
+          ...requestPicksRef.current
         });
         return built;
       },
@@ -1140,7 +1189,8 @@ export function useInPlaceCommand(
             !valid ||
             !result ||
             refusalShown.current ||
-            shownKey.current === requestKeyRef.current
+            shownKey.current === requestKeyRef.current ||
+            ofAnotherTarget(frame)
           )
             return;
           shownKey.current = frame.key;
@@ -1172,6 +1222,8 @@ export function useInPlaceCommand(
             base: frame.base,
             request: frame.request,
             values: frame.values,
+            options: frame.options,
+            slots: frame.slots,
             preview: shown
           };
         }
@@ -1206,7 +1258,13 @@ export function useInPlaceCommand(
           // The last frame that built is not this request: left on screen
           // under a bare refusal, it reads as the value that was refused, so
           // only a tool that names the changed input keeps it.
-          showRefused(frame?.request ?? null);
+          showRefused(
+            frame?.request ?? null,
+            frame ?? {
+              values: requestValuesRef.current,
+              ...requestPicksRef.current
+            }
+          );
           setTypedRefusal(
             fresh && freshRecord
               ? { message: fresh, record: freshRecord }
@@ -1246,7 +1304,10 @@ export function useInPlaceCommand(
         lastValidFrame.current = null;
         setPreviewValid(false);
         setPreviewAdvisory(null);
-        showRefused(requestRef.current);
+        showRefused(requestRef.current, {
+          values: requestValuesRef.current,
+          ...requestPicksRef.current
+        });
         setRefusal(
           error instanceof Error ? error.message : 'Unable to preview this.'
         );
@@ -1262,6 +1323,31 @@ export function useInPlaceCommand(
     setEntryRefusals([]);
   }, [editIdentity]);
   const instant = spec?.instant === true;
+  // A frame kept under a refusal that says nothing about the new request (a
+  // Split's other body) comes down with the request, refusal and all, in the
+  // same paint: a layout effect, so no frame shows the new pick over the old
+  // body's halves, its "Offset" refusal or the kept value on its chip, and
+  // the viewer installs the take-down in that commit too. As a passive
+  // effect it ran a paint late, and the viewer's own install one more:
+  // the preview check of #2242 caught the halves under "Checking…" in that
+  // gap. It runs before the build below is asked for, so no reply for the
+  // new request can land ahead of it. A late frame of the old target is not
+  // drawn in its place either (`ofAnotherTarget`, which reads the frame,
+  // not the refusal shown).
+  useLayoutEffect(() => {
+    const kept = lastBuilt.current;
+    if (!requestKey || !refusalShown.current || !kept) return;
+    if (!ofAnotherTarget(kept)) return;
+    lastBuilt.current = null;
+    supersededDrawn.current = false;
+    shownKey.current = null;
+    setRefusal(null);
+    setTypedRefusal(null);
+    setRefusalInputs([]);
+    setKeptValues(null);
+    optionsRef.current.publishPreview(null);
+    // Only a new request can retarget; the refs say the rest.
+  }, [requestKey]);
   useEffect(() => {
     if (!requestKey || instant) {
       // Nothing to build (a pick taken back out): no frame, and no refusal

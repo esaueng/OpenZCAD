@@ -1169,9 +1169,26 @@ export interface InPlaceToolSpec {
    * U11: the bar inputs, by the names they carry in the bar, that a refused
    * request changed from the last one that built, so a kernel refusal says
    * what to change back or again. A tool with this keeps that last built
-   * frame on screen under the refusal instead of taking it down.
+   * frame on screen under the refusal instead of taking it down. `frames`
+   * holds what each request was made from, for a tool whose request alone
+   * does not tell its inputs apart (a Split's plane already slid by its
+   * offset). Null when the request is of another target (a Split of another
+   * body): the last frame says nothing about it, so it comes down as soon as
+   * that request is made, and is not kept under any later refusal.
    */
-  refusedInputs?(built: InPlaceRequest, refused: InPlaceRequest): string[];
+  refusedInputs?(
+    built: InPlaceRequest,
+    refused: InPlaceRequest,
+    frames?: { built: InPlaceFrameInputs; refused: InPlaceFrameInputs }
+  ): string[] | null;
+}
+
+/** What a preview frame's request was made from. */
+export interface InPlaceFrameInputs {
+  /** Every value as a number. */
+  values: Readonly<Record<string, number>>;
+  options: Readonly<Record<string, string>>;
+  slots: InPlaceSlots;
 }
 
 function section(pick: ProfilePick): SketchSectionReference {
@@ -5685,8 +5702,61 @@ const split: InPlaceToolSpec = {
       }
     };
   },
-  handles: planeHandles
+  handles: planeHandles,
+  refusedInputs: splitRefusedInputs
 };
+
+/**
+ * M11 (owner decision D5): the Split inputs a refused request changed from
+ * the last one that built, so the kept two-halves frame stays on screen and
+ * the bar names what to put back. The request stores the plane already slid
+ * by its offset, so the plane and the offset are told apart by what each
+ * frame was made from. A plane picked again starts unslid: the offset that
+ * only followed the new pick is not named. A different body is no change of
+ * an input on this one: null, so no frame of the old body stands for it.
+ */
+export function splitRefusedInputs(
+  built: InPlaceRequest,
+  refused: InPlaceRequest,
+  frames?: { built: InPlaceFrameInputs; refused: InPlaceFrameInputs }
+): string[] | null {
+  if (
+    !frames ||
+    built.tool !== 'modeling' ||
+    built.state.operation !== 'split' ||
+    refused.tool !== 'modeling' ||
+    refused.state.operation !== 'split'
+  ) {
+    return [];
+  }
+  const a = built.state.value;
+  const b = refused.state.value;
+  if (a.targetBodyId !== b.targetBodyId) return null;
+  const was = frames.built;
+  const now = frames.refused;
+  const typed = (inputs: InPlaceFrameInputs) =>
+    inputs.options.planeMode === 'typed';
+  const changed = (id: string) => !sameParam(was.values[id], now.values[id]);
+  const inputs: string[] = [];
+  let repicked = false;
+  if (typed(was) !== typed(now)) {
+    inputs.push('Plane');
+  } else if (typed(now)) {
+    const vector = (prefix: string) =>
+      (['X', 'Y', 'Z'] as const).some((axis) => changed(`${prefix}${axis}`));
+    if (vector('planeO')) inputs.push('Origin');
+    if (vector('planeN')) inputs.push('Normal');
+  } else if (!sameParam(was.slots.plane, now.slots.plane)) {
+    inputs.push('Plane');
+    repicked = true;
+  }
+  const unslid = (now.values.offset ?? 0) === PLANE_OFFSET.initial;
+  if (changed('offset') && !(repicked && unslid)) inputs.push('Offset');
+  if (Boolean(a.keepOriginal) !== Boolean(b.keepOriginal)) {
+    inputs.push('Original');
+  }
+  return inputs;
+}
 
 const COPY_OPTION: OptionSpec = {
   id: 'copy',

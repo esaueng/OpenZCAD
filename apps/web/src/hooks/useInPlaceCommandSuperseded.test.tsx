@@ -20,7 +20,8 @@ import type { InPlaceRequest, ProfilePick } from '../lib/inPlace/tools';
  *
  * This is the mechanism behind the Split bar seen briefly showing a refusal
  * for an earlier value: Split, like Revolve here, previews through this
- * hook, and neither names a refused input (`refusedInputs`). Its browser
+ * hook. Revolve names no refused input (`refusedInputs`); Split now does
+ * (M11), and a superseded frame is never the one it keeps. Its browser
  * neighbours are in `test/e2e/selection-preview-feedback.spec.ts`. Refusals
  * are asserted by presence, never by their sentence.
  */
