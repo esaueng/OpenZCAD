@@ -858,7 +858,7 @@ describe('Cell 4b: a rim chamfer beside a through bore', () => {
 });
 
 const INNER_LOOP_ADVICE =
-  "A flat face beside this edge has a hole, pocket or boss inside it, which the modeling engine can't chamfer next to yet. Smaller distances failed too. If a feature made that shape, add the chamfer before it.";
+  "A flat face beside this edge has a hole, pocket or boss inside it, which the modeling engine can't chamfer next to yet. Smaller distances failed too. If a separate, later feature made that shape, chamfer the edge before that feature.";
 
 /** The Chamfer feature's warning in `derived`. */
 function chamferWarning(derived: DerivedState) {

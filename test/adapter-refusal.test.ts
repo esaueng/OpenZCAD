@@ -181,7 +181,7 @@ describe('a refused fillet or chamfer carries its classification', () => {
         kernelMessage: 'the shell the chamfer assembled failed validation'
       });
     const reason =
-      "A flat face beside this edge has a hole, pocket or boss inside it, which the modeling engine can't chamfer next to yet. Smaller distances failed too. If a feature made that shape, add the chamfer before it.";
+      "A flat face beside this edge has a hole, pocket or boss inside it, which the modeling engine can't chamfer next to yet. Smaller distances failed too. If a separate, later feature made that shape, chamfer the edge before that feature.";
     const message = `Chamfer could not be created on 1 selected edge with distance 1. ${reason}`;
     const advice = (
       cause: 'face-inner-loop' | 'neighbor-faces'

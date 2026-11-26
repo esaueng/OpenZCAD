@@ -1414,7 +1414,7 @@ export function edgeModifierRefusal(
       const what = named.count === 1 ? 'this edge' : 'these edges';
       return structural(
         'face-inner-loop',
-        `A flat face beside ${what} has a hole, pocket or boss inside it, which the modeling engine can't chamfer next to yet. Smaller distances failed too. If a feature made that shape, add the chamfer before it.`
+        `A flat face beside ${what} has a hole, pocket or boss inside it, which the modeling engine can't chamfer next to yet. Smaller distances failed too. If a separate, later feature made that shape, chamfer the edge before that feature.`
       );
     }
   } catch {
