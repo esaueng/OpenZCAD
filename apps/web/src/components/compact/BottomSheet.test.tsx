@@ -109,6 +109,40 @@ describe('sheet state', () => {
     expect(reduce(holding, true, { type: 'leave' })).toBe(holding);
   });
 
+  it("drops every page for a running tool's row, at the row's own height", () => {
+    // Build's tray at peek, More › Panels › History raised to full, then
+    // Box run: its row arrives under the pages and asks for peek.
+    const over = reduce(
+      { detent: 'peek', stack: [] },
+      true,
+      { type: 'push', page: page('more') },
+      { type: 'push', page: page('panels') },
+      { type: 'set-detent', detent: 'full' },
+      { type: 'root', present: true, arrived: true, at: 'peek' }
+    );
+    expect(over.detent).toBe('full');
+    expect(reduce(over, true, { type: 'leave', toRoot: true })).toEqual({
+      detent: 'peek',
+      stack: []
+    });
+    // A tool with a card asks for half: the root comes back that high.
+    const carded = reduce(
+      { detent: 'peek', stack: [page('panels')], rootDetent: 'peek' },
+      true,
+      { type: 'root', present: true, arrived: true, at: 'half' },
+      { type: 'leave', toRoot: true }
+    );
+    expect(carded).toEqual({ detent: 'half', stack: [] });
+    // A page opened over an empty sheet: the row still needs peek.
+    expect(
+      reduce(
+        { detent: 'half', stack: [page('more')], rootDetent: 'closed' },
+        true,
+        { type: 'leave', toRoot: true }
+      )
+    ).toEqual({ detent: 'peek', stack: [] });
+  });
+
   it('goes back to the height the root had when its first page goes', () => {
     // All tools opened from the tray at peek comes up full, a modal over an
     // inert stage; Back or Escape returns the tray to peek, the stage live.

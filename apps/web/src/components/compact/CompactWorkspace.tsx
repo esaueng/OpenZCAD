@@ -215,12 +215,21 @@ export default function CompactWorkspace({
   // alone to peek); content leaving closes a sheet that holds nothing else,
   // and brings one that keeps a tray back down to its peek (under an open
   // page, once the page goes).
+  //
+  // A running command's row arriving takes the sheet, wherever the command
+  // was run from (the command bar, a key, the tray, All tools, a selection
+  // verb, an action sheet): every page goes, as for an edit started from a
+  // page, and the sheet stands at the root's height, so the row's Cancel and
+  // Done show at once rather than under History until Back.
   const lastKey = useRef('');
+  const lastRow = useRef(false);
   useEffect(() => {
     const key = hasSheetContent ? sheetKey : '';
     const arrived = key !== '' && key !== lastKey.current;
     const left = key === '' && lastKey.current !== '';
+    const rowArrived = commandRowPresent && !lastRow.current;
     lastKey.current = key;
+    lastRow.current = commandRowPresent;
     if (left && trayShown) {
       dispatch({ type: 'settle' });
       return;
@@ -231,7 +240,16 @@ export default function CompactWorkspace({
       arrived,
       at: rowOnly ? 'peek' : 'half'
     });
-  }, [dispatch, hasRoot, hasSheetContent, rowOnly, sheetKey, trayShown]);
+    if (rowArrived) dispatch({ type: 'leave', toRoot: true });
+  }, [
+    commandRowPresent,
+    dispatch,
+    hasRoot,
+    hasSheetContent,
+    rowOnly,
+    sheetKey,
+    trayShown
+  ]);
 
   // The keypad needs the room of half height at least.
   useEffect(() => {

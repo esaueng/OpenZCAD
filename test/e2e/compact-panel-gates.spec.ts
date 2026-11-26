@@ -6,6 +6,7 @@ import {
   transformBody
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
+import { expectReachable } from './compactHelpers';
 import { expect, stubAnonymousApi, stubApi, test } from './openzcad-fixtures';
 
 const LAYOUT_KEY = 'openzcad.layout:v1';
@@ -124,6 +125,36 @@ async function swipe(page: Page, row: Locator, dx: number) {
   }
   await touch.send('touchEnd');
   await touch.detach();
+}
+
+/** Opens History through the header's More › Panels, by taps. */
+async function openHistoryFromMore(page: Page) {
+  await page.getByRole('button', { name: 'More', exact: true }).tap();
+  await sheet(page).getByRole('button', { name: 'Panels', exact: true }).tap();
+  await sheet(page)
+    .getByRole('tablist', { name: 'Panels' })
+    .getByRole('tab', { name: 'History', exact: true })
+    .tap();
+  await expect(sheet(page).locator('[data-page="panels"]')).toBeVisible();
+}
+
+/**
+ * Box's tray row shows at once, at the peek a running tool comes up at:
+ * no page is left over it, and its Done and Cancel take a tap. Cancel
+ * then ends it.
+ */
+async function expectBoxRowShown(page: Page) {
+  const bar = sheet(page).getByRole('group', { name: 'Box command' });
+  await expect(bar).toBeVisible({ timeout: 30_000 });
+  await expect(sheet(page).locator('[data-page]')).toHaveCount(0);
+  await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
+  const row = sheet(page).locator('.compact-command-row .compact-tray-row');
+  const done = row.getByRole('button', { name: 'Done' });
+  const cancel = row.getByRole('button', { name: 'Cancel' });
+  await expectReachable(done);
+  await expectReachable(cancel);
+  await cancel.tap();
+  await expect(bar).toHaveCount(0);
 }
 
 async function closeSheet(page: Page) {
@@ -300,11 +331,10 @@ test.describe('the compact workspace keeps the regular gates', () => {
       await expect(boxRow).toBeVisible();
       await page.keyboard.press('Enter');
       // The Box runs: its size chips stand on the stage, and its row in the
-      // sheet under the History page.
+      // sheet, the History page gone from over it.
       await expect(page.getByRole('button', { name: /^Width \d/ })).toBeVisible(
         { timeout: 30_000 }
       );
-      await sheet(page).getByRole('button', { name: 'Back' }).tap();
       const bar = sheet(page).getByRole('group', { name: 'Box command' });
       await expect(bar).toBeVisible();
       await bar.getByRole('button', { name: /Cancel/ }).tap();
@@ -332,6 +362,42 @@ test.describe('the compact workspace keeps the regular gates', () => {
           )
         )
         .toBe(true);
+    }
+  );
+
+  test(
+    'a tool run over an open panel takes the sheet, its row in reach at once',
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(150_000);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openCompactProject(page, 'Tool over panel');
+
+      // Ctrl+K over History at full height: Box from the command bar.
+      await openHistoryFromMore(page);
+      await sheetToFull(page);
+      await page.keyboard.press('ControlOrMeta+k');
+      const field = page.getByRole('combobox', { name: 'Search commands' });
+      await expect(field).toBeFocused();
+      await page.keyboard.type('box');
+      await expect(
+        page.getByRole('option', { name: /^Box/ }).first()
+      ).toBeVisible();
+      await page.keyboard.press('Enter');
+      await expectBoxRowShown(page);
+
+      // The header's search over History at half (at full the header is
+      // under the sheet's inert background).
+      await openHistoryFromMore(page);
+      await expect(sheet(page)).toHaveAttribute('data-detent', 'half');
+      await searchAndTap(page, 'Box', /^Box/);
+      await expectBoxRowShown(page);
+
+      // Box's own key, B, over History at half (over a full sheet only a
+      // global key goes on).
+      await openHistoryFromMore(page);
+      await page.keyboard.press('b');
+      await expectBoxRowShown(page);
     }
   );
 

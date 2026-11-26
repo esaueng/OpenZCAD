@@ -71,9 +71,12 @@ export type SheetAction =
   /**
    * The workspace took the sheet for its own content (an edit, a tool or an
    * inspector started from a page): every page goes, so nothing stands over
-   * that content, which keeps the height the pages stood at.
+   * that content, which keeps the height the pages stood at. With `toRoot`
+   * (a running command's tray row arriving) it goes back to the root's own
+   * height instead, as a pop to the root would: the row comes up at the
+   * peek it asks for, the model in view and live to pick on.
    */
-  | { type: 'leave' }
+  | { type: 'leave'; toRoot?: boolean }
   | { type: 'step-up' }
   | { type: 'step-down' }
   /**
@@ -238,14 +241,11 @@ function reduceSheet(
       };
     case 'leave': {
       if (state.stack.length === 0) return state;
-      return {
-        stack: [],
-        detent: !hasRoot
-          ? 'closed'
-          : state.detent === 'closed'
-            ? 'peek'
-            : state.detent
-      };
+      if (!hasRoot) return { stack: [], detent: 'closed' };
+      const back = action.toRoot
+        ? (state.rootDetent ?? state.detent)
+        : state.detent;
+      return { stack: [], detent: back === 'closed' ? 'peek' : back };
     }
     case 'step-up': {
       if (state.detent === 'closed' && !hasRoot && state.stack.length === 0) {
