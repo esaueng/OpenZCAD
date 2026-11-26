@@ -139,7 +139,7 @@ describe('earlier-sketch reference eligibility (S06 / I01)', () => {
       });
     }
     expect(() => assertProjectionsResolve(derived, objectIds)).toThrow(
-      `That edge cannot be projected linked here: the source body is unavailable at the sketch's place in the history (source feature "Cap"). To copy it as independent geometry instead, switch Project to Unlinked and pick it again.`
+      `Switch Project to Unlinked and pick again: "Cap" is after this sketch, so it can't stay linked.`
     );
   });
 
@@ -185,10 +185,10 @@ describe('earlier-sketch reference eligibility (S06 / I01)', () => {
     expect(volumes[part.capBodyId]!.volume).toBeCloseTo(VOLUMES.cap, 6);
   });
 
-  // The later-body refusal says why and how to recover: the case above
-  // shows an unlinked copy of the same face is legal, so the sentence
-  // offers the Project tool's Unlinked mode. The refusal is taken in a hook,
-  // so a setup error cannot pass as the sentence.
+  // The later-body refusal says how to recover and why: the case above
+  // shows an unlinked copy of the same face is legal, so the sentence leads
+  // with the Project tool's Unlinked mode and names Cap. The refusal is
+  // taken in a hook, so a setup error cannot pass as the sentence.
   describe('the later-face refusal', () => {
     let refusal: unknown;
     beforeAll(async () => {
@@ -208,7 +208,7 @@ describe('earlier-sketch reference eligibility (S06 / I01)', () => {
 
     it('offers the unlinked route', () => {
       expect((refusal as Error).message).toBe(
-        `That edge cannot be projected linked here: the source body is unavailable at the sketch's place in the history (source feature "Cap"). To copy it as independent geometry instead, switch Project to Unlinked and pick it again.`
+        `Switch Project to Unlinked and pick again: "Cap" is after this sketch, so it can't stay linked.`
       );
     });
   });

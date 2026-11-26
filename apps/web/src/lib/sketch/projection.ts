@@ -427,11 +427,16 @@ export function projectionAddCommand(input: {
  * user clicked, so an unlinked copy of it builds.
  */
 const SOURCE_UNAVAILABLE =
-  /^its source body is unavailable at the sketch's place in the history\b/;
+  /^its source body is unavailable at the sketch's place in the history \(source feature "(.*)"\)\.$/;
 
-/** How a refused linked pick can still land: the Project tool's Unlinked mode. */
-export const UNLINKED_ROUTE =
-  'To copy it as independent geometry instead, switch Project to Unlinked and pick it again.';
+/**
+ * The refusal for a later feature's edge, recovery first: the workspace
+ * toast is one line on desktop and cuts the rest off, so the Project tool's
+ * Unlinked mode leads and the cause, naming the feature, follows.
+ */
+export function laterSourceRefusal(featureName: string): string {
+  return `Switch Project to Unlinked and pick again: "${featureName}" is after this sketch, so it can't stay linked.`;
+}
 
 /**
  * Refuses a candidate unless the exact build re-found every new linked
@@ -442,7 +447,7 @@ export const UNLINKED_ROUTE =
  * proved the edge exists there.
  *
  * A source that is unavailable at the sketch's place (a later feature's
- * edge) also offers the unlinked route, which builds. A re-pick does not:
+ * edge) leads with the unlinked route, which builds. A re-pick does not:
  * it replaces a linked source on an existing object, and stepping Project
  * to Unlinked disarms it, so that route would add a copy rather than
  * repair the object.
@@ -455,12 +460,13 @@ export function assertProjectionsResolve(
   for (const objectId of objectIds) {
     const state = derived.sketchProjections?.[objectId];
     if (state?.status === 'broken') {
-      const route =
-        !options.repick && SOURCE_UNAVAILABLE.test(state.reason)
-          ? ` ${UNLINKED_ROUTE}`
-          : '';
+      const later = options.repick
+        ? null
+        : SOURCE_UNAVAILABLE.exec(state.reason);
       throw new Error(
-        `That edge cannot be projected linked here: ${state.reason.replace(/^its /, 'the ')}${route}`
+        later
+          ? laterSourceRefusal(later[1]!)
+          : `That edge cannot be projected linked here: ${state.reason.replace(/^its /, 'the ')}`
       );
     }
     if (!state) {

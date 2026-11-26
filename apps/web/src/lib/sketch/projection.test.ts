@@ -22,7 +22,7 @@ import {
 } from '@openzcad/shared';
 import {
   assertProjectionsResolve,
-  UNLINKED_ROUTE,
+  laterSourceRefusal,
   projectionAddCommand,
   projectionFromPick,
   projectionFromPickWithLineage,
@@ -549,7 +549,7 @@ describe('repair, unlink and the words for each', () => {
     ).toThrow(/the sketch did not build/);
   });
 
-  it('offers the unlinked route only when a later feature owns the source', () => {
+  it('leads with the unlinked route only when a later feature owns the source', () => {
     const verdict = (reason: string) => ({
       sketchProjections: { ent_a: { status: 'broken' as const, reason } }
     });
@@ -567,14 +567,21 @@ describe('repair, unlink and the words for each', () => {
     const later = verdict(
       `its source body is unavailable at the sketch's place in the history (source feature "Cap").`
     );
-    // The cause stays, naming the later feature, and the recovery names
-    // the Project tool's Unlinked mode: an unlinked copy of the pick builds.
+    // Recovery first, naming the Project tool's Unlinked mode (an unlinked
+    // copy of the pick builds), then the cause, naming the later feature:
+    // the desktop toast is one line and cuts off whatever does not fit.
     expect(refusal(later)).toBe(
-      `That edge cannot be projected linked here: the source body is unavailable at the sketch's place in the history (source feature "Cap"). ${UNLINKED_ROUTE}`
+      `Switch Project to Unlinked and pick again: "Cap" is after this sketch, so it can't stay linked.`
     );
-    expect(UNLINKED_ROUTE).toBe(
-      'To copy it as independent geometry instead, switch Project to Unlinked and pick it again.'
-    );
+    expect(refusal(later)).toBe(laterSourceRefusal('Cap'));
+    // A feature name with quotes or parentheses is taken whole.
+    expect(
+      refusal(
+        verdict(
+          `its source body is unavailable at the sketch's place in the history (source feature "Cap (2) "top"").`
+        )
+      )
+    ).toBe(laterSourceRefusal('Cap (2) "top"'));
     // A re-pick replaces an existing object's linked source; stepping to
     // Unlinked disarms it, so the route would add a copy, not repair.
     expect(refusal(later, { repick: true })).toBe(

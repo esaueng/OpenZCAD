@@ -26,7 +26,7 @@ import {
  */
 
 const PROJECT = 'Reference eligibility';
-const REFUSAL = `That edge cannot be projected linked here: the source body is unavailable at the sketch's place in the history (source feature "Cap"). To copy it as independent geometry instead, switch Project to Unlinked and pick it again.`;
+const REFUSAL = `Switch Project to Unlinked and pick again: "Cap" is after this sketch, so it can't stay linked.`;
 const BOSS_VOLUME = '301.59 mm³';
 const CAP_VOLUME = '1200 mm³';
 /** Written to this device: local-only or synced, not mid-save. */
@@ -248,6 +248,16 @@ test('an earlier sketch refuses a later face, survives a view round trip, and ke
   const { downstreamFace } = await aim();
   await page.mouse.click(downstreamFace.x, downstreamFace.y);
   await expect(status).toContainText(REFUSAL, { timeout: 30_000 });
+  // The desktop toast is one ellipsized line: the whole refusal, recovery
+  // and cause, must fit in it, or the Unlinked route is cut off on screen.
+  const line = status.getByRole('status');
+  await expect(line).toHaveText(REFUSAL);
+  expect(
+    await line.evaluate((node) => ({
+      overflow: node.scrollWidth - node.clientWidth,
+      width: window.innerWidth
+    }))
+  ).toEqual({ overflow: 0, width: 1440 });
   // Nothing changed: no new entity or constraint, the same stored version,
   // no projection verdict, and the later features build as before.
   expect((await sketchState(canvas)).objects).toHaveLength(1);
