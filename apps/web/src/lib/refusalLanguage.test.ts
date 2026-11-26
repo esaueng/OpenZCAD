@@ -542,7 +542,7 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
       // Untyped, the touch names neither an edge nor a face: the kernel
       // words both alike (see the typed Split cases below).
       "the cutting plane does not cross the solid's interior; it only touches the body and contains edge 3 of the solid, so there is nothing to split",
-      'The cutting plane only touches the body, along an edge or a face. Slide the plane into the body.'
+      'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.'
     ],
     [
       // Untyped, not claimed as a miss: the kernel says this of a plane
@@ -647,7 +647,7 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
       expect(
         plainRefusal(TOUCH, split('unsupported', 'some_future_cause')).message
       ).toBe(
-        'The cutting plane only touches the body, along an edge or a face. Slide the plane into the body.'
+        'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.'
       );
       expect(
         plainRefusal(

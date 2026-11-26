@@ -748,6 +748,29 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
       );
     });
 
+    // Through the equator (scoped re-check of #2074): z = 0 contains the
+    // edge where the hemispheres meet, so the kernel calls it a touch. The
+    // plane runs through the centre, so the bar must not say it only
+    // touches the body or tell the user to slide it in.
+    it('z = 0, through the equator: no touch is claimed', async () => {
+      const { document, ball } = sphere();
+      const split = addSplitFeature(document, {
+        name: 'Split',
+        targetBodyId: ball,
+        plane: zPlane(0)
+      });
+      const refused = expectTyped(
+        await outcome(split.document, 'Split'),
+        'unsupported',
+        'equator'
+      );
+      expect(refused.reason).toBeUndefined();
+      expect(refused.bar).toBe(
+        'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.'
+      );
+      expect(refused.bar).not.toMatch(/only touches|slide the plane into/i);
+    });
+
     // K10 finding, class Capability boundary (mis-typed as invalid_input),
     // owner Remus split: a plane through a curved body that crosses none of
     // its edges is refused as "entirely on one side". Expected: two

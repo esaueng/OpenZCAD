@@ -198,9 +198,15 @@ export const SPLIT_PLANE_ON_EDGE =
  */
 const SPLIT_PLANE_NOT_CUT =
   'Split could not cut the body along this plane. Check that the plane passes through the body.';
-/** A plane that only touches the body, where nothing said how. */
+/**
+ * The kernel's "does not cross the interior", where nothing proved how the
+ * plane meets the body. The kernel judges it from the body's edges alone, so
+ * it says this of a plane through a sphere's equator too (K10): the sentence
+ * must claim neither a touch nor a direction to slide, only the edge or face
+ * the plane runs along.
+ */
 const SPLIT_PLANE_TOUCHES =
-  'The cutting plane only touches the body, along an edge or a face. Slide the plane into the body.';
+  'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.';
 const SPLIT_SENTENCES: Readonly<Record<string, string>> = {
   plane_misses_body: SPLIT_PLANE_MISSES,
   plane_on_face: SPLIT_PLANE_ON_FACE,
