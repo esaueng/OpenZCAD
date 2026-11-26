@@ -571,6 +571,9 @@ let retainedProjections: {
  */
 const KEPT_DRAWINGS_PER_SHEET = 2;
 
+/** How far a finger may drift and still tap an annotation tool's pick. */
+const PICK_TAP_SLOP_PX = 10;
+
 /**
  * A sheet's last complete drawing: its views' projections by view intent and
  * the bodies its dimensions measured, under the fingerprint it was drawn at.
@@ -3783,6 +3786,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   } | null>(null);
   /** Touch points on the canvas, for a two-finger pinch. */
   const touchesRef = useRef(new Map<number, { x: number; y: number }>());
+  /**
+   * A finger down on an annotation tool's pick surface, waiting for its
+   * release to pick or place; a second finger or a drag cancels it.
+   */
+  const pickTapRef = useRef<{
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
   const wheelClassifier = useRef<WheelGestureClassifier | null>(null);
   const wheelRef = useRef<(event: WheelEvent) => void>(() => undefined);
   wheelRef.current = (event: WheelEvent) => {
@@ -5621,6 +5633,26 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   };
   const onPickPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
     if (event.button !== 0 || !tool) return;
+    // A finger picks and places on its release, as a tap: the first finger
+    // of a pinch must not commit a dimension before the second one lands.
+    if (event.pointerType === 'touch') {
+      pickTapRef.current = {
+        pointerId: event.pointerId,
+        clientX: event.clientX,
+        clientY: event.clientY
+      };
+      return;
+    }
+    pickAt(event);
+  };
+  const onPickPointerUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    const tap = pickTapRef.current;
+    if (tap?.pointerId !== event.pointerId) return;
+    pickTapRef.current = null;
+    if (tool) pickAt(tap);
+  };
+  const pickAt = (event: { clientX: number; clientY: number }) => {
+    if (!tool) return;
     const at = paperPoint(event);
     if (!at) return;
     if (pickedEnough(tool)) {
@@ -6293,6 +6325,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (touches.size >= 2) {
         panRef.current = null;
+        pickTapRef.current = null;
         setDrag(null);
         setAnnotationDrag(null);
         event.stopPropagation();
@@ -6309,6 +6342,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     event: ReactPointerEvent<SVGSVGElement>
   ) => {
     const touches = touchesRef.current;
+    const tap = pickTapRef.current;
+    if (
+      tap?.pointerId === event.pointerId &&
+      Math.hypot(event.clientX - tap.clientX, event.clientY - tap.clientY) >
+        PICK_TAP_SLOP_PX
+    )
+      pickTapRef.current = null;
     if (event.pointerType === 'touch' && touches.has(event.pointerId)) {
       if (touches.size === 2) {
         const measure = () => {
@@ -7958,6 +7998,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 width={paper.width}
                 height={paper.height}
                 onPointerDown={onPickPointerDown}
+                onPointerUp={onPickPointerUp}
+                onPointerCancel={() => {
+                  pickTapRef.current = null;
+                }}
                 onPointerMove={onPickPointerMove}
                 onPointerLeave={() => setHover(null)}
               />

@@ -3050,6 +3050,96 @@ describe('DrawingWorkspace geometry annotations (D02 v73)', () => {
   });
 });
 
+describe('DrawingWorkspace touch placement (U12 slice 9)', () => {
+  /** A horizontal dimension picked by touch, waiting for its place. */
+  async function pickedHorizontal() {
+    resetRetainedProjections();
+    const sheet = starter(
+      drawingSourceFingerprint({ [bodyId]: straightCube() }, [bodyId])!
+    );
+    const { onCommand } = setup({ sheet, straightEdges: true });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    Object.defineProperty(canvas, 'getScreenCTM', {
+      configurable: true,
+      value: () => ({
+        a: 1,
+        b: 0,
+        c: 0,
+        d: 1,
+        e: 0,
+        f: 0,
+        inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 })
+      })
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Horizontal' }));
+    const surface = canvas.querySelector('.drawing-pick-surface')!;
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    const k = drawingPaperPerModelUnit(sheet.scale, 'mm');
+    let nextPointer = 1;
+    const finger = (u: number, v: number, pointerId = nextPointer++) => ({
+      clientX: front.centerMm.x + (u - 5) * k,
+      clientY: 297 - (front.centerMm.y + (v - 5) * k),
+      button: 0,
+      pointerId,
+      pointerType: 'touch'
+    });
+    const tap = (point: ReturnType<typeof finger>) => {
+      fireEvent.pointerDown(surface, point);
+      fireEvent.pointerUp(surface, point);
+    };
+    // The cube's top edge, tapped: its length is the span to place.
+    tap(finger(5, 10));
+    const added = () =>
+      onCommand.mock.calls
+        .map(([command]) => command)
+        .filter((command) => command.kind === 'drawing.annotation.add');
+    expect(added()).toHaveLength(0);
+    expect(canvas.querySelector('.drawing-pick-surface')).toBe(surface);
+    return { surface, finger, tap, added };
+  }
+
+  it('lets a pinch zoom while a dimension waits for its place, then a tap places it', async () => {
+    const { surface, finger, tap, added } = await pickedHorizontal();
+    // A pinch: the first finger lands, a second joins, both spread and lift.
+    const first = finger(5, 20);
+    const second = finger(5, 30);
+    fireEvent.pointerDown(surface, first);
+    expect(added()).toHaveLength(0);
+    fireEvent.pointerDown(surface, second);
+    fireEvent.pointerMove(surface, { ...first, clientY: first.clientY + 20 });
+    fireEvent.pointerMove(surface, { ...second, clientY: second.clientY - 20 });
+    fireEvent.pointerUp(surface, first);
+    fireEvent.pointerUp(surface, second);
+    expect(added()).toHaveLength(0);
+    expect(surface.isConnected).toBe(true);
+    expect(surface.getAttribute('data-tool')).toBe('horizontal');
+    // One finger tapped on its own places it.
+    tap(finger(5, 20));
+    expect(added()).toHaveLength(1);
+    expect(
+      (added()[0]!.payload as { annotation: DrawingAnnotation }).annotation
+        .kind
+    ).toBe('linear');
+  });
+
+  it('places nothing when a finger drags instead of tapping', async () => {
+    const { surface, finger, tap, added } = await pickedHorizontal();
+    const drag = finger(5, 20);
+    fireEvent.pointerDown(surface, drag);
+    fireEvent.pointerMove(surface, { ...drag, clientX: drag.clientX + 40 });
+    fireEvent.pointerUp(surface, { ...drag, clientX: drag.clientX + 40 });
+    expect(added()).toHaveLength(0);
+    expect(surface.getAttribute('data-tool')).toBe('horizontal');
+    tap(finger(5, 20));
+    expect(added()).toHaveLength(1);
+  });
+});
+
 describe('DrawingWorkspace geometric tolerancing (D07 v98)', () => {
   it('previews a datum symbol with the letter it commits', async () => {
     resetRetainedProjections();
