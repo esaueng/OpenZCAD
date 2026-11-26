@@ -76,7 +76,9 @@ export interface KeypadRequest {
     /** U09: an in-place command's handle value. */
     | 'command'
     /** U09: a value of the in-place Extrude (`commandValueId` names it). */
-    | 'extrude';
+    | 'extrude'
+    /** U12: an exposed parameter's value, from the compact Tweak sheet. */
+    | 'parameter';
   /** Short label over the value field ('Offset', 'Radius', 'Height'). */
   label: string;
   /** Prefill; may be a typed digit captured mid-gesture. */

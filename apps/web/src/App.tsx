@@ -1441,6 +1441,11 @@ function MoveOverlay(props: ComponentProps<typeof LazyMoveOverlay>) {
     </ErrorBoundary>
   );
 }
+// The compact workspace's View and Tweak trays (U12 slice 7): loaded only
+// where the compact workspace is in force, off the entry chunk.
+const LazyCompactModeTray = lazyWithStaleChunkNotice(
+  () => import('./components/compact/CompactModeTray')
+);
 const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
   import('./components/MeasurementDock').then((module) => ({
     default: module.MeasurementDock
@@ -20688,7 +20693,9 @@ export function App() {
   // There the "Panels hidden" pill leaves the rail, whose foot the drawer
   // covers, for the stage's foot (phone-stage.css).
   const oneColumnPhoneStage = useMediaQuery(ONE_COLUMN_PHONE_STAGE_MEDIA);
+  // The compact workspace's sheet asks for itself once it has risen.
   const phonePartsShown =
+    !compactShell &&
     phoneStage &&
     viewMode &&
     (phonePartsOpen ?? panelState.viewModeRailOpen) === true;
@@ -20699,7 +20706,9 @@ export function App() {
   // foot (I47): once, as it opens, what it measures slides above it. Wider,
   // it floats beside the model and the camera stays. Build's workbench is a
   // command card and never moves the camera.
-  const measuringOverStage = measuring && modelingLocked;
+  // The compact View and Tweak sheet asks once it has risen (U12 slice 7).
+  const measuringOverStage =
+    measuring && modelingLocked && !(compactShell && (viewMode || tweakMode));
   useEffect(() => {
     if (
       measuringOverStage &&
@@ -40398,9 +40407,138 @@ export function App() {
     phoneStage && (commandCardKey || inspectorKey || inPlaceKey)
       ? `${commandCardKey}|${inspectorKey}|${inPlaceKey}`
       : null;
+  // The slider was released, or a key repeat ended: cut it exactly.
+  const commitSectionCut = (offset?: number) => {
+    const section = viewerSettingsRef.current.sectionView;
+    const next =
+      section && offset !== undefined ? { ...section, offset } : section;
+    persistSectionView(next);
+    void requestExactSection(next);
+  };
+  const toggleGrid = () =>
+    setViewerSettings((current) => ({
+      ...current,
+      showGrid: !current.showGrid
+    }));
+  // U12 slice 7: View's and Tweak's tray in the compact sheet, in place of
+  // View's bar and rail and Tweak's rail and flyouts. Each control runs the
+  // handler those run.
+  const compactModeTray =
+    !compactShell || !(viewMode || tweakMode) ? null : (
+      <ErrorBoundary label="Mode tray" resetKey={resolvedWorkspaceMode}>
+        {viewMode ? (
+          <LazyCompactModeTray
+            mode="view"
+            measure={{
+              on: measuring,
+              toggle: toggleMeasure,
+              dock: measurementDock
+            }}
+            section={{
+              current: viewerSettings.sectionView ?? null,
+              rangeFor: sectionAxisRange,
+              outline: sectionOutline,
+              units: doc.units,
+              onToggle: toggleSectionView,
+              onPlane: setSectionPlane,
+              onOffset: setSectionOffset,
+              onCommit: commitSectionCut,
+              onFlip: flipSectionDirection,
+              onExport: () => void handleExportSectionDxf()
+            }}
+            display={{
+              settings: viewerSettings,
+              projection,
+              onDisplayMode: setDisplayMode,
+              onToggleXray: toggleXray,
+              onToggleProjection: toggleProjection,
+              onToggleOrbitMode: toggleOrbitMode,
+              onToggleGrid: toggleGrid,
+              onFit: () => setFitSignal((value) => value + 1)
+            }}
+            views={{
+              onView: requestView,
+              ...(savedViewsControl ? { saved: savedViewsControl } : {})
+            }}
+            parts={{
+              bodies: partsProps.bodies,
+              hiddenBodyIds: partsProps.hiddenBodyIds,
+              selectedBodyIds: partsProps.selectedBodyIds,
+              onSelectBody: partsProps.onSelectBody,
+              onToggleVisibility: partsProps.onToggleVisibility,
+              onIsolate: partsProps.onIsolate,
+              onShowAll: partsProps.onShowAll,
+              configuration: doc.configurations
+                ? {
+                    rows: doc.configurations.rows,
+                    activeRowId: doc.configurations.activeRowId,
+                    shownRowId: viewerRowId,
+                    building:
+                      viewerRowId !== null &&
+                      !viewerRowDocument &&
+                      !configurationRows.errors.has(viewerRowId),
+                    error: viewerRowId
+                      ? (configurationRows.errors.get(viewerRowId) ?? null)
+                      : null,
+                    onShow: setViewerRowId
+                  }
+                : null
+            }}
+            onStageCovered={requestClearStage}
+          />
+        ) : (
+          <LazyCompactModeTray
+            mode="tweak"
+            measure={{
+              on: measuring,
+              toggle: toggleMeasure,
+              dock: measurementDock
+            }}
+            units={doc.units}
+            parameters={exposedParameters}
+            parameterValues={parameterScope.scope}
+            parameterMinimums={liveParameterMinimums}
+            modelError={parameterModelError}
+            onPreviewParameter={handlePreviewParameter}
+            onSetParameter={(name, expression) =>
+              handleSetParameter(name, expression)
+            }
+            configuration={
+              doc.configurations
+                ? {
+                    rows: doc.configurations.rows,
+                    activeRowId: doc.configurations.activeRowId,
+                    onActivate: (rowId) =>
+                      Promise.resolve(
+                        configurationActions.activate(rowId)
+                      ).then((refused) => {
+                        if (refused) setStatus(refused);
+                      })
+                  }
+                : null
+            }
+            canExport={
+              exportBodyIds.length > 0 &&
+              !parameterEditPending &&
+              !parameterDraftActive &&
+              !parameterModelError
+            }
+            exportScope={exportControlScope}
+            exportWithheld={exportWithheldMessage}
+            exportUnavailableReason={emptyExportReason}
+            onExportStep={() => void handleExportStep()}
+            onOpenMeshExport={openMeshExport}
+            onViewActivityLog={openActivityLog}
+            {...(shareSession ? { onMakeCopy: requestShareCopy } : {})}
+            onStageCovered={requestClearStage}
+          />
+        )}
+      </ErrorBoundary>
+    );
   const workspace = (
     <WorkspaceAppShell
       covered={sharePage !== null}
+      compactTray={compactModeTray}
       compact={
         compactShell
           ? {
@@ -40646,7 +40784,7 @@ export function App() {
         />
       }
       toolBar={
-        drawingMode ? null : modelingLocked ? (
+        drawingMode || compactModeTray ? null : modelingLocked ? (
           <ViewModeBar
             settings={viewerSettings}
             projection={projection}
@@ -40685,7 +40823,10 @@ export function App() {
         ) : null
       }
       sidebar={
-        viewMode || drawingMode || assembleMode ? null : tweakMode ? (
+        viewMode ||
+        drawingMode ||
+        assembleMode ||
+        compactModeTray ? null : tweakMode ? (
           <TweakPanel
             onPhoneSheetShown={requestClearStage}
             units={doc?.units}
@@ -41478,7 +41619,7 @@ export function App() {
             modeOverlay={
               modelingLocked ? (
                 <>
-                  {viewMode && (
+                  {viewMode && !compactModeTray && (
                     <ViewModeRail
                       {...partsProps}
                       configuration={
@@ -41516,7 +41657,7 @@ export function App() {
                       execute={executeCommand}
                     />
                   )}
-                  {measurementDock}
+                  {compactModeTray ? null : measurementDock}
                 </>
               ) : inPlace.active ? (
                 keypad?.kind === 'command' && keypad.commandValueId ? (
@@ -41928,17 +42069,8 @@ export function App() {
             }
             onSectionPlane={setSectionPlane}
             onSectionOffset={setSectionOffset}
-            // The slider was released, or a key repeat ended: cut it exactly.
             onSectionFlip={flipSectionDirection}
-            onSectionCommit={(offset) => {
-              const section = viewerSettingsRef.current.sectionView;
-              const next =
-                section && offset !== undefined
-                  ? { ...section, offset }
-                  : section;
-              persistSectionView(next);
-              void requestExactSection(next);
-            }}
+            onSectionCommit={commitSectionCut}
             onExportSectionDxf={() => void handleExportSectionDxf()}
             sectionOutline={sectionOutline}
             runSurfaceAnalysis={geometry.surfaceAnalysis}
