@@ -1,13 +1,39 @@
 import XCTest
 
+/// Runs on every simulator the shared scheme targets: iPad and iPhone.
 final class WorkspaceSmokeTests: XCTestCase {
+    private var phone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+    private var device: String { phone ? "iPhone" : "iPad" }
+
+    /// The full layout's header sits under the phone's status bar until the
+    /// compact header honours the safe area (U12 slice 2), and the status bar
+    /// takes taps there. The phone reaches header actions through the
+    /// command bar instead.
+    private func runCommand(_ title: String, in app: XCUIApplication) {
+        let search = app.textFields["Search commands"].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 30), app.debugDescription)
+        search.tap()
+        search.typeText(title + "\n")
+    }
+
+    private func openProjects(_ app: XCUIApplication) {
+        if phone {
+            if app.textFields["Search commands"].firstMatch.waitForExistence(timeout: 10) {
+                runCommand("Back to projects", in: app)
+            }
+        } else {
+            let home = app.buttons["OpenZCAD"].firstMatch
+            if home.waitForExistence(timeout: 10) { home.tap() }
+        }
+    }
+
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
     }
 
-    func testWorkspaceFillsTheTabletInBothOrientations() {
+    func testWorkspaceFillsTheScreenInBothOrientations() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launch()
@@ -32,17 +58,18 @@ final class WorkspaceSmokeTests: XCTestCase {
             }, evaluatedWith: app)
             waitForExpectations(timeout: 15)
             let image = XCTAttachment(screenshot: screen.screenshot())
-            image.name = orientation == .portrait ? "Full-screen portrait" : "Full-screen landscape"
+            image.name = "\(device) full-screen \(orientation == .portrait ? "portrait" : "landscape")"
             image.lifetime = .keepAlways
             add(image)
         }
         XCUIDevice.shared.orientation = .portrait
     }
 
-    func testTouchSketchAndExtrude() {
+    func testTouchSketchAndExtrude() throws {
+        try XCTSkipIf(phone, "The phone's touch sketch flow arrives with the compact sketch layout (U12 slice 6).")
         XCUIDevice.shared.orientation = .landscapeLeft
         defer { XCUIDevice.shared.orientation = .portrait }
-        let projectName = "iPad Sketch Smoke \(UUID().uuidString.prefix(8))"
+        let projectName = "\(device) Sketch Smoke \(UUID().uuidString.prefix(8))"
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launch()
@@ -95,12 +122,11 @@ final class WorkspaceSmokeTests: XCTestCase {
     }
 
     func testBundledWorkspaceLoads() {
-        let projectName = "iPad Prototype Smoke \(UUID().uuidString.prefix(8))"
+        let projectName = "\(device) Prototype Smoke \(UUID().uuidString.prefix(8))"
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launch()
-        let home = app.buttons["OpenZCAD"].firstMatch
-        if home.waitForExistence(timeout: 10) { home.tap() }
+        openProjects(app)
         let newProject = app.buttons["New project"]
         XCTAssertTrue(newProject.waitForExistence(timeout: 30), app.debugDescription)
         let name = app.textFields["Project name"]
@@ -120,10 +146,14 @@ final class WorkspaceSmokeTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["Rename project \(projectName)"].waitForExistence(timeout: 30))
         XCTAssertTrue(solid.waitForExistence(timeout: 30), "The saved model must survive process termination.")
-        app.buttons["File"].firstMatch.tap()
-        let export = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Export STEP")).firstMatch
-        XCTAssertTrue(export.waitForExistence(timeout: 10), app.debugDescription)
-        export.tap()
+        if phone {
+            runCommand("Export STEP", in: app)
+        } else {
+            app.buttons["File"].firstMatch.tap()
+            let export = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Export STEP")).firstMatch
+            XCTAssertTrue(export.waitForExistence(timeout: 10), app.debugDescription)
+            export.tap()
+        }
         let picker = app.navigationBars.firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertTrue(app.buttons["Save"].firstMatch.waitForExistence(timeout: 15), app.debugDescription)
@@ -132,7 +162,7 @@ final class WorkspaceSmokeTests: XCTestCase {
         waitForExpectations(timeout: 15)
         XCTAssertTrue(app.buttons["Rename project \(projectName)"].isHittable, app.debugDescription)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "iPad native CAD workspace"
+        screenshot.name = "\(device) native CAD workspace"
         screenshot.lifetime = .keepAlways
         add(screenshot)
         print(app.debugDescription)

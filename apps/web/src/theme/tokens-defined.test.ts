@@ -60,3 +60,75 @@ describe('custom properties', () => {
     expect(undefinedTokens).toEqual([]);
   });
 });
+
+describe('compact workspace tokens', () => {
+  // The compact shell (U12) re-declares tokens under [data-shell='compact'].
+  // A token it reads or re-declares that the regular :root lacks would work
+  // on a phone and silently drop out on the desktop, or the reverse.
+  const tokensCss = readFileSync(join(root, 'theme', 'tokens.css'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  const rootStart = tokensCss.indexOf(':root {');
+  const rootBlock = tokensCss.slice(
+    rootStart,
+    tokensCss.indexOf('}', rootStart)
+  );
+  const regular = new Set(
+    [...rootBlock.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!)
+  );
+  const compactRules = stylesheets.flatMap((sheet) =>
+    [
+      ...readFileSync(sheet, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .matchAll(/([^{}]+)\{([^{}]*)\}/g)
+    ]
+      .filter((m) => m[1]!.includes('data-shell'))
+      .map((m) => ({ sheet: sheet.slice(root.length + 1), body: m[2]! }))
+  );
+
+  it('finds the compact blocks', () => {
+    expect(compactRules.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('re-declares only design tokens the regular workspace defines on :root', () => {
+    // The compact theme blocks in tokens.css; a compact layout rule elsewhere
+    // may still keep a private token of its own.
+    const extra = compactRules
+      .filter(({ sheet }) => sheet === join('theme', 'tokens.css'))
+      .flatMap(({ sheet, body }) =>
+      [...body.matchAll(/(--[a-z0-9-]+)\s*:/g)]
+        .map((m) => m[1]!)
+        .filter((name) => !regular.has(name))
+        .map((name) => `${name} (${sheet})`)
+    );
+    expect(extra).toEqual([]);
+  });
+
+  it('reads only tokens that are defined for the compact shell', () => {
+    // Declared on :root, in a compact block, or set at runtime from a
+    // component (a sheet's live height, say).
+    const compactDeclared = new Set(
+      compactRules.flatMap(({ body }) =>
+        [...body.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!)
+      )
+    );
+    const runtime = new Set(
+      sources.flatMap((source) =>
+        [
+          ...readFileSync(source, 'utf8').matchAll(/['"`](--[a-z0-9-]+)['"`:]/g)
+        ].map((m) => m[1]!)
+      )
+    );
+    const missing = compactRules.flatMap(({ sheet, body }) =>
+      [...body.matchAll(/var\(\s*(--[a-z0-9-]+)/g)]
+        .map((m) => m[1]!)
+        .filter(
+          (name) =>
+            !regular.has(name) &&
+            !compactDeclared.has(name) &&
+            !runtime.has(name)
+        )
+        .map((name) => `${name} (${sheet})`)
+    );
+    expect(missing).toEqual([]);
+  });
+});

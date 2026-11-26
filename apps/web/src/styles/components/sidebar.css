@@ -15,7 +15,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .sidebar {
@@ -869,7 +869,7 @@
 .history-match {
   color: inherit;
   background: color-mix(in srgb, var(--color-accent) 30%, transparent);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .history-timeline .feature-list {
@@ -1557,7 +1557,7 @@ button.history-row-refused.is-reopen:focus-visible {
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
   opacity: 0;
   transform: translate(-4px, -50%);
   pointer-events: none;
@@ -2039,7 +2039,7 @@ button.history-row-refused.is-reopen:focus-visible {
 
 .configuration-scroll thead th {
   color: var(--color-text-muted);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 
 .configuration-scroll tr.active th[scope='row'] {

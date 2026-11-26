@@ -161,7 +161,7 @@
   font-size: var(--fs-mini);
   font-weight: var(--fw-medium);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .assistant-model {
@@ -243,8 +243,8 @@
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: calc(0.08em * var(--ls-eyebrow-scale));
+  text-transform: var(--tt-eyebrow);
 }
 
 /* A turn: the user's words in a soft bubble on the right, the assistant's
@@ -361,7 +361,7 @@
 .assistant-answer-list dd {
   margin: 0;
   color: var(--color-text);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 
 .assistant-thumbs {
@@ -567,8 +567,8 @@
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  letter-spacing: calc(0.1em * var(--ls-eyebrow-scale));
+  text-transform: var(--tt-eyebrow);
 }
 
 .assistant-card.questions .assistant-card-label {
@@ -1025,14 +1025,14 @@
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-weight: 400;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: calc(0.06em * var(--ls-eyebrow-scale));
+  text-transform: var(--tt-eyebrow);
   border-top: 0;
 }
 
 .assistant-readings tbody th {
   color: var(--color-text);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 
 .assistant-readings tbody td {
@@ -1096,7 +1096,7 @@
 .assistant-pending-item img {
   width: 28px;
   height: 20px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   object-fit: cover;
 }
 

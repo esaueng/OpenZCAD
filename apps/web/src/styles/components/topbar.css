@@ -546,7 +546,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 /* I03: the File menu's Units switch, four compact radio chips. */

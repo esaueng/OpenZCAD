@@ -169,7 +169,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
   color: var(--color-text-subtle);
   white-space: nowrap;
   overflow: hidden;

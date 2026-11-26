@@ -52,7 +52,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
   white-space: nowrap;
 }
 
@@ -192,7 +192,7 @@
   font-size: var(--fs-mini);
   font-weight: var(--fw-regular);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .panel-body h3:first-child,

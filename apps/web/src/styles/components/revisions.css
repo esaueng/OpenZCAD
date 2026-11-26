@@ -441,7 +441,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .error-page h1 {

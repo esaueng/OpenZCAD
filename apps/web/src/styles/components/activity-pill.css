@@ -279,7 +279,7 @@
   display: block;
   height: 3px;
   overflow: hidden;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--color-surface-hover);
 }
 

@@ -24,6 +24,20 @@ body {
     font-size: 16px !important;
   }
 
+  /* The compact shell's body type is 17 px (U12, theme/tokens.css), so its
+     fields stay at that size instead of being lowered to the floor. */
+  [data-shell='compact']
+    input:not(
+      [type='checkbox'],
+      [type='radio'],
+      [type='range'],
+      [type='color']
+    ),
+  [data-shell='compact'] select,
+  [data-shell='compact'] textarea {
+    font-size: 17px !important;
+  }
+
   .app-shell {
     -webkit-tap-highlight-color: transparent;
   }

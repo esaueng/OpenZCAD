@@ -2491,7 +2491,7 @@ button.command-rail.is-suggested {
   font-size: var(--fs-mini);
   font-weight: var(--fw-regular);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .command-flyout-close {
@@ -2658,7 +2658,7 @@ button.command-rail.is-suggested {
   font-size: var(--fs-mini);
   font-weight: var(--fw-regular);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .command-flyout-heading:first-child {
@@ -3376,7 +3376,7 @@ button.command-rail.is-suggested {
 .panel-gap-grip {
   width: 36px;
   height: 2px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--color-border-strong);
   transition: background var(--dur-fast) var(--ease-out);
 }
@@ -3526,7 +3526,7 @@ button.command-rail.is-suggested {
 .panel-float-grip-bar {
   width: 48px;
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-md);
   background: var(--color-surface);
   border: var(--border-thin);
   box-shadow: var(--shadow-1);
@@ -3597,7 +3597,7 @@ button.command-rail.is-suggested {
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
   white-space: nowrap;
   pointer-events: none;
 }
@@ -3935,7 +3935,7 @@ button.model-panel-grip[aria-expanded='true'] {
   font-size: var(--fs-mini);
   font-weight: var(--fw-medium);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .model-panel-name {
@@ -4097,7 +4097,7 @@ button.model-panel-grip[aria-expanded='true'] {
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
   color: var(--color-text-subtle);
 }
 
@@ -5381,7 +5381,7 @@ button.model-panel-grip[aria-expanded='true'] {
   font-size: var(--fs-mini);
   font-weight: var(--fw-regular);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 /* A folded group's title is its toggle, with a chevron that turns. */

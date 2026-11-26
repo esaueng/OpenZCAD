@@ -78,7 +78,7 @@
 .startup-steps li {
   width: 20px;
   height: 3px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--color-border-strong);
   transition: background var(--dur-base);
 }
@@ -2576,7 +2576,7 @@
   padding: 0 8px;
   color: var(--color-accent);
   font-size: var(--fs-sm);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   background: transparent;
   border: 0;
   border-radius: var(--radius-sm);
@@ -3578,7 +3578,7 @@
   width: 8px;
   height: 8px;
   margin-top: 5px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .storage-panel-part-text {
