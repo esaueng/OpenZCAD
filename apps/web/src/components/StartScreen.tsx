@@ -50,6 +50,7 @@ import {
   Settings,
   Trash2,
   TriangleAlert,
+  Users,
   X,
   type LucideIcon
 } from 'lucide-react';
@@ -70,6 +71,7 @@ import {
   type LibraryCardSize,
   type ProjectStatus,
   type ProjectSummary,
+  type ProjectSummarySharing,
   type UnitSystem
 } from '@openzcad/shared';
 import { generateCutePartName } from '../lib/cutePartName';
@@ -295,7 +297,7 @@ interface StartScreenProps {
 const LOADING_PROJECT_TILES = 10;
 
 /** The Projects shelf's narrowing, beside its heading. */
-type ShelfFilter = 'all' | 'pinned' | 'attention' | 'local';
+type ShelfFilter = 'all' | 'pinned' | 'shared' | 'attention' | 'local';
 type ShelfSort = 'custom' | 'edited' | 'name' | 'size';
 
 /**
@@ -325,9 +327,61 @@ type ShelfLayout = 'grid' | 'list';
 const SHELF_FILTERS: ReadonlyArray<{ id: ShelfFilter; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'pinned', label: 'Pinned' },
+  { id: 'shared', label: 'Shared' },
   { id: 'attention', label: 'Needs attention' },
   { id: 'local', label: 'This device only' }
 ];
+
+interface SharingTag {
+  kind: 'with-you' | 'by-you';
+  /** The card's words: who it is shared by. */
+  label: string;
+  /** Its tooltip: with whom, or with what access. */
+  detail: string;
+}
+
+function countOf(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** The tag a shared project's card wears. */
+function sharingTagOf(sharing: ProjectSummarySharing): SharingTag {
+  if (sharing.role !== 'owner') {
+    return {
+      kind: 'with-you',
+      label: 'Shared with you',
+      detail:
+        sharing.role === 'editor'
+          ? 'Shared with you. You can edit it.'
+          : 'Shared with you. You can view it.'
+    };
+  }
+  const reach = [
+    sharing.memberCount
+      ? `with ${countOf(sharing.memberCount, 'person', 'people')}`
+      : null,
+    sharing.linkCount
+      ? `by ${countOf(sharing.linkCount, 'live link', 'live links')}`
+      : null
+  ].filter(Boolean);
+  return {
+    kind: 'by-you',
+    label: 'Shared',
+    detail: `You shared it ${reach.join(' and ')}.`
+  };
+}
+
+/** The Shared tab's tooltip: how many each way. */
+function sharedFilterTitle(projects: readonly ProjectSummary[]): string {
+  let withYou = 0;
+  let byYou = 0;
+  for (const project of projects) {
+    if (!project.sharing) continue;
+    if (project.sharing.role === 'owner') byYou += 1;
+    else withYou += 1;
+  }
+  return `${withYou} shared with you, ${byYou} shared by you`;
+}
 
 const SHELF_LAYOUT_STORAGE_KEY = 'openzcad.start.layout';
 
@@ -457,6 +511,7 @@ function readLibraryView(): LibraryView {
     }
     if (
       stored.filter === 'pinned' ||
+      stored.filter === 'shared' ||
       stored.filter === 'attention' ||
       stored.filter === 'local'
     ) {
@@ -1149,6 +1204,9 @@ export function StartScreen({
     pinned: (project) =>
       projectOrganization(project).pinned ||
       folderByProject.get(project.projectId)?.pinned === true,
+    // Shared with you, or yours with members or a live share link: the
+    // account listing says which (`ProjectSummary.sharing`).
+    shared: (project) => project.sharing !== undefined,
     attention: needsAttention,
     local: (project) => localOnlyIds.has(project.projectId)
   };
@@ -2313,6 +2371,9 @@ export function StartScreen({
     const migrating = migratingProjectIds.has(project.projectId);
     const pinProblem = encryptedPinProblem(project.projectId);
     // In an account whose projects are encrypted, one that is not.
+    // Shared with you, or yours shared with others (the Shared tab's test).
+    const sharing = trashed ? undefined : project.sharing;
+    const sharingTag = sharing ? sharingTagOf(sharing) : null;
     const plaintext =
       accountEncrypts &&
       !trashed &&
@@ -2338,6 +2399,19 @@ export function StartScreen({
               loadThumbnail={loadThumbnail}
               publishThumbnail={publishThumbnail}
             />
+          )}
+          {sharingTag && (
+            <span
+              className={`start-tile-share-tag is-${sharingTag.kind}`}
+              role="img"
+              aria-label={sharingTag.label}
+              title={sharingTag.detail}
+            >
+              <Users size={11} aria-hidden="true" />
+              <span className="start-tile-share-tag-text">
+                {sharingTag.label}
+              </span>
+            </span>
           )}
         </span>
         <span className="start-tile-body">
@@ -2533,6 +2607,7 @@ export function StartScreen({
             ? NOT_ENCRYPTED_LABEL.toLowerCase()
             : null,
       recoveryOf !== null && !trashed ? `recovery copy of ${recoveryOf}` : null,
+      sharingTag ? sharingTag.label.toLowerCase() : null,
       localOnly && !trashed && !syncEntry && !conflicted
         ? 'on this device only'
         : null,
@@ -3030,7 +3105,7 @@ export function StartScreen({
     (entry) =>
       entry.id === 'all' ||
       entry.id === activeFilter ||
-      (layoutCounts[entry.id] > 0 &&
+      ((layoutCounts[entry.id] ?? 0) > 0 &&
         (entry.id !== 'pinned' || pinnedFilterShown))
   );
   // 14 Nov 2026: a folder with nothing pinned showed one "All 2" tab beside
@@ -3102,7 +3177,7 @@ export function StartScreen({
     0
   );
 
-  const { all, pinned, attention, local } = filterCounts;
+  const { all, pinned, shared, attention, local } = filterCounts;
   const footerPositions = shelfGroups
     .flatMap((group) => group.items)
     .flatMap((item, index) =>
@@ -3120,6 +3195,7 @@ export function StartScreen({
     saveLibraryLayout({
       all,
       pinned,
+      shared,
       attention,
       local,
       footers: footerPositions ? footerPositions.split(',').map(Number) : [],
@@ -3133,6 +3209,7 @@ export function StartScreen({
     sort,
     all,
     pinned,
+    shared,
     attention,
     local,
     footerPositions,
@@ -3817,7 +3894,9 @@ export function StartScreen({
                     title={
                       entry.id === 'pinned' && !loading && pinnedViaFolder > 0
                         ? `${filterCounts.pinned} ${filterCounts.pinned === 1 ? 'project' : 'projects'}, ${pinnedViaFolder} of them in pinned folders`
-                        : undefined
+                        : entry.id === 'shared' && !loading
+                          ? sharedFilterTitle(baseProjects)
+                          : undefined
                     }
                     className={[
                       'start-filter',

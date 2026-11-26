@@ -23,6 +23,7 @@ import {
 import { blobBucket } from './e2eeContentBlobs';
 import type { E2eeInvitationHost } from './e2eeInvitations';
 import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
+import { withProjectSharing } from './projectSharingListing';
 import {
   accountRequiresEncryptedLibrary,
   accountRequiresEncryptedProjects
@@ -2356,7 +2357,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         })
       );
     }
-    const listing = await persistence.listProjects(userId);
+    // Each project's sharing rides along for the shelf's Shared tab.
+    const listing = await withProjectSharing(
+      env.DB,
+      userId,
+      await persistence.listProjects(userId)
+    );
     // Encrypted projects' names travel as project-info envelopes (0033).
     return json(
       isE2eeProjectsEnabled(env, session.email)

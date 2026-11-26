@@ -5517,6 +5517,24 @@ export interface ProjectSummary {
    * format introduced after this build is listed too, as any number.
    */
   storageFormat?: number;
+  /**
+   * How the project is shared, as the account listing reports it: present
+   * on a project shared with the caller, and on the caller's own project
+   * while someone else is a member or a share link is live. Absent on an
+   * unshared project, and on every summary a device store or an older
+   * Worker built, where it reads as unshared.
+   */
+  sharing?: ProjectSummarySharing;
+}
+
+/** A project's sharing on the account listing ({@link ProjectSummary.sharing}). */
+export interface ProjectSummarySharing {
+  /** The caller's access: `owner` for their own project, else a member's role. */
+  role: ProjectAccessRole;
+  /** Owner only: people other than the owner who are members. */
+  memberCount?: number;
+  /** Owner only: share links neither revoked nor expired. */
+  linkCount?: number;
 }
 
 /** 1 = plaintext, 2 = end-to-end encrypted (e2ee-v1). */

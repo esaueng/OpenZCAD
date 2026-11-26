@@ -1578,6 +1578,54 @@ describe('StartScreen shelf filters, order and layout', () => {
     ).toBeNull();
   });
 
+  it('gathers projects shared either way under Shared and tags their cards', () => {
+    const shared = [
+      { ...projects[0]!, sharing: { role: 'editor' as const } },
+      {
+        ...projects[1]!,
+        sharing: { role: 'owner' as const, memberCount: 2, linkCount: 1 }
+      },
+      projects[2]!,
+      projects[3]!
+    ];
+    renderStartScreen({
+      projects: shared,
+      cloudProjectIds: new Set(shared.map((entry) => entry.projectId))
+    });
+    const filters = screen.getByRole('group', { name: 'Show projects' });
+    const tab = within(filters).getByRole('button', { name: /^Shared/ });
+    expect(tab).toHaveTextContent('Shared2');
+    expect(tab).toHaveAttribute('title', '1 shared with you, 1 shared by you');
+    fireEvent.click(tab);
+    expect(tileNames().sort()).toEqual(['Axle', 'Bracket']);
+    const withYou = screen.getByRole('img', { name: 'Shared with you' });
+    expect(withYou).toHaveAttribute(
+      'title',
+      'Shared with you. You can edit it.'
+    );
+    expect(
+      document.querySelector('[data-tile-id="project_b"]')
+    ).toContainElement(withYou);
+    expect(screen.getByRole('img', { name: 'Shared' })).toHaveAttribute(
+      'title',
+      'You shared it with 2 people and by 1 live link.'
+    );
+  });
+
+  it('offers no Shared tab when nothing is shared', () => {
+    renderStartScreen({
+      projects,
+      cloudProjectIds: new Set(projects.map((entry) => entry.projectId))
+    });
+    expect(
+      within(screen.getByRole('group', { name: 'Show projects' })).queryByRole(
+        'button',
+        { name: /^Shared/ }
+      )
+    ).toBeNull();
+    expect(document.querySelector('.start-tile-share-tag')).toBeNull();
+  });
+
   it('drops the device-only filter when there is no account to compare against', () => {
     const props = startScreenProps({ projects, cloudProjectIds: new Set() });
     const { rerender } = render(<StartScreen {...props} />);

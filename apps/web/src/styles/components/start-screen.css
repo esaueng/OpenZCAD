@@ -1619,6 +1619,56 @@
   color: var(--color-accent);
 }
 
+/* A shared project says so over its preview's top-left corner, the one the
+   flags leave free: "Shared with you" in the accent, "Shared" (yours, with
+   members or a live link) quieter. The list's small preview keeps the icon. */
+.start-tile-share-tag {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 16px);
+  padding: 2px 6px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  line-height: 12px;
+  pointer-events: none;
+}
+
+.start-tile-share-tag.is-with-you {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, currentcolor 45%, transparent);
+}
+
+/* The thumbnail's own svg rule fills the pane; the tag's icon must not. */
+.start-tile-thumb .start-tile-share-tag svg {
+  flex: none;
+  width: 11px;
+  height: 11px;
+}
+
+.start-tile-share-tag-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-tile-grid.is-list .start-tile-share-tag {
+  top: 2px;
+  left: 2px;
+  padding: 2px;
+}
+
+.start-tile-grid.is-list .start-tile-share-tag-text {
+  display: none;
+}
+
 /* What wants a look (a divergence, a save under way or failed): one mark in
    the top-right corner of a card's preview, and the Status column in the
    list, where it keeps its words. */
