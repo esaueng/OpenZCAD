@@ -339,9 +339,19 @@ The app reuses the desktop PKCE authorization unchanged in shape:
 
 - **A second client id.** The Worker accepts `openzcad-ios` as well as
   `openzcad-macos`, as an allowlist instead of the single
-  `DESKTOP_CLIENT_ID`. The approval page names the client being approved
+  `DESKTOP_CLIENT_ID`. The allowlist applies at **every** layer that checks
+  the client today, not only the request parser:
+  - the access-token validator (`apps/web/worker/auth.ts`, the
+    `row.client_id !== DESKTOP_CLIENT_ID` check on `desktop_access_tokens`);
+  - the refresh path, which already compares against the requesting client;
+  - the E2EE write guard (`apps/web/worker/e2eeWriteAuthorization.ts`, the
+    literal `client_id = 'openzcad-macos'` in its transaction SQL).
+
+  Missing any one of them issues a token that `/api/session` or an
+  encrypted key write then rejects. The approval page names the client being approved
   ("OpenZCAD for iPhone and iPad"). Its user-code messages stop saying
   "macOS" for that client.
+
 - **Starting.** `session.signIn` makes Swift generate the state and the
   PKCE verifier and call `start`. Native UI shows the user code, then
   opens the returned approval URL in an `ASWebAuthenticationSession`. That
@@ -383,10 +393,46 @@ Its requirements:
   (`sendNativeProjectRequest`) becomes a request header
   (`x-openzcad-prepared`), obtained from a `session.prepare` bridge call.
   Native strips that header before forwarding.
+- **Prepared sends keep the desktop contract** (`send_authenticated` in
+  `apps/desktop/src-tauri/src/desktop_auth.rs`):
+  - `session.prepare` readies one credential, the access token and the
+    session it belongs to, under a fresh handle. A send carrying that handle
+    uses **exactly that credential**, never the proxy's current one, so an
+    account switch between the page's project check and the send cannot put
+    the old account's queued data under the new account.
+  - A handle is single-use and short-lived. A missing, unknown, used or
+    expired handle, or one whose session has ended, sends nothing; the page
+    gets a 401.
+  - A 401 on a prepared send drops that credential. Native never retries a
+    prepared send. The page readies a new handle and runs
+    `checkProjectRequest` again before any retry (`desktopBridge.ts`).
+  - Only requests without a handle may refresh an expiring credential and,
+    after a 401, refresh and send once more.
 - **Methods and paths.** The proxy accepts `GET`, `HEAD`, `POST`, `PUT`,
   `PATCH` and `DELETE` only under `/api/`. It mirrors the Rust
   `renderer_api_destination` allowlist and its share-token header
   handling. Navigation to `/api/*` is refused in `decidePolicyFor`.
+- **Admission before the bearer.** Scheme tasks do not pass through the
+  message handler's main-frame check, so the proxy admits a request itself
+  before attaching any credential:
+  - the URL is exactly `zcad-ipad://app/api/…` (scheme, host, no port or
+    user info), the method and path are on the allowlist, and the web
+    view's committed main document is the workspace origin;
+  - anything else fails with no upstream request.
+- **Upstream requests are rebuilt, not copied.** Native builds each upstream
+  request from an explicit header allowlist (content type, accept,
+  conditional-request headers, the share-token header and the web app's own
+  `x-openzcad-*` headers, enumerated in PR 3 against
+  `renderer_api_destination`), then adds the bearer. It never forwards
+  `Origin`, `Referer`, `Cookie` or `Sec-Fetch-*`. The Worker's
+  `assertSameOrigin` (`apps/web/worker/index.ts`) rejects a foreign
+  `Origin`, and like the desktop's native client the proxy sends none: the
+  request carries no ambient credential, only the bearer native chose after
+  admission, so the cross-origin signal has nothing to protect.
+- **No cookies.** The proxy's `URLSession` uses an ephemeral configuration
+  with `httpShouldSetCookies = false`, `httpCookieAcceptPolicy = .never` and
+  no URL cache. Native drops `Set-Cookie` from every response it returns to
+  the page.
 - **Responses are never executable.** API responses would be same-origin,
   and `script-src 'self'` would otherwise allow
   `<script src="/api/…">` or `new Worker('/api/…')`. So the proxy:
@@ -438,6 +484,17 @@ The server rules are unchanged:
 Whether a desktop refresh chain has an absolute cap, like the browser's 90
 days, is unverified. This ADR adds none; it would apply to both clients.
 
+**Refreshes are serialised.** Reusing a rotated refresh token revokes the
+session (`apps/web/worker/auth.ts`), so two requests that both find an
+expired access token must not both refresh:
+
+- One refresh is in flight at a time, shared by every request that needs
+  it, as the desktop's `refresh_guard` does. Requests that waited use the
+  credential it produced.
+- Each sign-in starts a new session generation. A refresh that completes
+  after its session ended (sign-out, revocation or another sign-in) is
+  discarded: its tokens are never stored in the Keychain or used.
+
 #### Sign-out and revocation
 
 - **Signing out in the app.**
@@ -488,6 +545,19 @@ days, is unverified. This ADR adds none; it would apply to both clients.
   - The account key and encryption key stay in the key session's memory.
   - The identity key is opened only for an operation and never cached.
   - Pending ceremonies are invalidated when the key session ends.
+- **Ceremonies expire with their key session.** The browser path aborts its
+  credential request and erases late results when the key session ends
+  (`passkeys.ts`). The native path must match it:
+  - Every `passkey.*` call carries a ceremony id, and the adapter records
+    the key-session generation that started it.
+  - When the key session ends, the adapter sends `passkey.cancel` for each
+    pending ceremony. Native cancels the `ASAuthorizationController`
+    request and drops any reply for a cancelled ceremony.
+  - A reply that still reaches the adapter for a cancelled ceremony, or
+    after the generation changed, is zeroed at once and never delivered to
+    a caller.
+  - Test: locking during an open system prompt delivers no PRF bytes, and
+    the late array is zeroed.
 - **Other frames.** There are none: `frame-src 'none'` plus the main-frame
   check. Workers cannot reach message handlers.
 - **Device keys.** The app is its own ADR-024 device. Its device signing
@@ -592,8 +662,11 @@ size (plan, slice 13):
 
 1. **This ADR.**
 2. **Worker.**
-   - The client-id allowlist (`openzcad-macos`, `openzcad-ios`) and
-     per-client approval wording.
+   - The client-id allowlist (`openzcad-macos`, `openzcad-ios`) at every
+     layer: the request parser, the access-token validator, the refresh
+     path and the E2EE write guard. Per-client approval wording.
+   - Tests that an iOS credential reads `/api/session` and writes E2EE key
+     records, and that an unknown client id fails at each layer.
    - The AASA route behind `APPLE_WEBCREDENTIALS_APP_IDS`, off by default,
      with exact-host checks.
    - Unit tests for unknown clients, the AASA body, 404 when unset, the
@@ -621,6 +694,10 @@ size (plan, slice 13):
 | ------------------------------------------------------------------------------------------- | ------------------------ | -------------------------- |
 | Message schema, validation, origin check (XCTest); web adapter with a fake bridge (Vitest)  | yes                      | —                          |
 | Proxy allowlist, content-type rewriting, `nosniff`/sandbox headers, navigation refusal, CSP | yes                      | —                          |
+| Proxy admission, header allowlist (no `Origin`/`Cookie`), cookies off, `Set-Cookie` dropped | yes                      | —                          |
+| Prepared handle: exact credential, single use, no native retry, stale handle sends nothing  | yes                      | —                          |
+| One shared refresh; a refresh finishing after sign-out is discarded                         | yes                      | —                          |
+| Locking during a passkey prompt delivers nothing and zeroes a late reply                    | unverified (treat as no) | **required**               |
 | Keychain store and first-launch cleanup                                                     | yes (simulator Keychain) | confirm                    |
 | PKCE sign-in against beta through `ASWebAuthenticationSession`                              | yes, with beta access    | confirm                    |
 | Secure context and `crypto.subtle` on `zcad-ipad://app`                                     | yes                      | confirm                    |
