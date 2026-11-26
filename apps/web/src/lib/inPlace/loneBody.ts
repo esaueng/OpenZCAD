@@ -17,8 +17,10 @@ export function loneBodyFor(
 ): BodyId | null {
   const spec = IN_PLACE_TOOL_SPECS[tool];
   // A solid offset names its body by a face of it; the host turns the body
-  // into that face.
-  if (spec.bodyMode !== 'one' && tool !== 'solid-offset') return null;
+  // into that face. A Mirror takes several bodies (M11), but one Mirror
+  // each, so the only body there is still starts it.
+  if (spec.bodyMode !== 'one' && tool !== 'solid-offset' && tool !== 'mirror')
+    return null;
   const live = Object.values(bodies).filter(
     (body) => !body.consumed && !hidden.has(body.bodyId)
   );
