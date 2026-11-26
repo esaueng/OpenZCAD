@@ -465,6 +465,103 @@ describe('the compact Tweak tray', () => {
     expect(props.onPreviewParameter).not.toHaveBeenCalledWith('width', null);
   });
 
+  it('leaves another field’s apply alone when a stale draft’s keypad closes', async () => {
+    // As in App: the model holds one preview, and any preview call, a cancel
+    // included, stops the parameter edit still being checked.
+    let check = 0;
+    const applied: Record<string, string> = {};
+    let release: () => void = () => {};
+    const props = tweakProps({
+      parameters: [
+        parameter('width', '20', { quantity: 'length' }),
+        parameter('depth', '10', { quantity: 'length' })
+      ],
+      parameterValues: { width: 20, depth: 10 },
+      parameterMinimums: {},
+      onPreviewParameter: vi.fn(() => {
+        check += 1;
+      }),
+      onSetParameter: vi.fn((name: string, expression: string) => {
+        const request = ++check;
+        return new Promise<string | null>((resolve) => {
+          release = () => {
+            if (check !== request) {
+              resolve('The project or parameter changed. Try again.');
+              return;
+            }
+            applied[name] = expression;
+            resolve(null);
+          };
+        });
+      })
+    });
+    render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
+    fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
+    // A Width draft, left open.
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit width' }));
+    const widthPad = await screen.findByRole('dialog', {
+      name: /^width value$/i
+    });
+    fireEvent.change(within(widthPad).getByRole('textbox'), {
+      target: { value: '32' }
+    });
+    // Depth, reached by keyboard, takes 22 and applies it.
+    fireEvent.click(screen.getByRole('button', { name: 'Edit depth' }));
+    const depthPad = await screen.findByRole('dialog', {
+      name: /^depth value$/i
+    });
+    fireEvent.change(within(depthPad).getByRole('textbox'), {
+      target: { value: '22' }
+    });
+    fireEvent.click(within(depthPad).getByRole('button', { name: /^Apply/ }));
+    await waitFor(() =>
+      expect(props.onSetParameter).toHaveBeenCalledWith('depth', '22')
+    );
+    // Back at once, while Depth is still being checked: Width's keypad
+    // leaves, and its replaced draft must not cancel Depth's edit.
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await waitFor(() => expect(detent()).toBe('peek'));
+    await act(async () => release());
+    expect(applied).toEqual({ depth: '22' });
+    expect(props.onPreviewParameter).not.toHaveBeenCalledWith('width', null);
+    expect(props.onPreviewParameter).not.toHaveBeenCalledWith('depth', null);
+  });
+
+  it('cancels only the draft the model shows when two keypads close', async () => {
+    const props = tweakProps({
+      parameters: [
+        parameter('width', '20', { quantity: 'length' }),
+        parameter('depth', '10', { quantity: 'length' })
+      ],
+      parameterValues: { width: 20, depth: 10 },
+      parameterMinimums: {}
+    });
+    render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
+    fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit width' }));
+    fireEvent.change(
+      within(
+        await screen.findByRole('dialog', { name: /^width value$/i })
+      ).getByRole('textbox'),
+      { target: { value: '32' } }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit depth' }));
+    fireEvent.change(
+      within(
+        await screen.findByRole('dialog', { name: /^depth value$/i })
+      ).getByRole('textbox'),
+      { target: { value: '22' } }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await waitFor(() => expect(detent()).toBe('peek'));
+    // Depth's draft replaced Width's in the model: one cancel, Depth's.
+    const cancels = vi
+      .mocked(props.onPreviewParameter!)
+      .mock.calls.filter(([, expression]) => expression === null);
+    expect(cancels).toEqual([['depth', null]]);
+    expect(props.onSetParameter).not.toHaveBeenCalled();
+  });
+
   it('switches configurations and exports from their pages', async () => {
     const props = tweakProps();
     render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));

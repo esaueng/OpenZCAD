@@ -17,7 +17,8 @@ import {
   stubAnonymousApi,
   stubApi,
   test,
-  waitForStillViewport
+  waitForStillViewport,
+  waitForSurfacesToSettle
 } from './openzcad-fixtures';
 import { COMPACT_ENTRIES } from '../../apps/web/src/lib/actions/registry';
 
@@ -39,10 +40,11 @@ const LAYOUT_KEY = 'openzcad.layout:v1';
 function bracket() {
   let document = createProjectDocument('Bracket', toUserId('owner'));
   document = setParameter(document, { name: 'width', expression: '20' });
+  document = setParameter(document, { name: 'depth', expression: '4' });
   document = addPrimitiveFeature(document, {
     name: 'Plate',
     primitiveKind: 'box',
-    dimensions: { width: 'width', height: 10, depth: 4 }
+    dimensions: { width: 'width', height: 10, depth: 'depth' }
   });
   document = addPrimitiveFeature(document, {
     name: 'Lug',
@@ -82,10 +84,7 @@ async function preferCompact(page: Page) {
  * Opens the shared bracket in the compact workspace: in Tweak by default, or
  * through a view-only link.
  */
-async function openSharedBracket(
-  page: Page,
-  mode: 'tweak' | 'view' = 'tweak'
-) {
+async function openSharedBracket(page: Page, mode: 'tweak' | 'view' = 'tweak') {
   const document = bracket();
   await stubAnonymousApi(page);
   await page.route('**/api/share', (route) =>
@@ -137,7 +136,7 @@ function localProjectIds(page: Page): Promise<string[]> {
   });
 }
 
-async function tapMode(page: Page, mode: 'View' | 'Tweak') {
+async function tapMode(page: Page, mode: 'View' | 'Tweak' | 'Build') {
   const tab = page
     .getByRole('group', { name: 'Workspace mode' })
     .getByRole('button', { name: mode, exact: true });
@@ -149,6 +148,34 @@ function trayButton(page: Page, tray: string, name: string): Locator {
   return page
     .getByRole('toolbar', { name: tray })
     .getByRole('button', { name, exact: true });
+}
+
+/**
+ * Waits for a stage control to come to rest before a tap: the sheet's
+ * height spring and the stage row riding on it both finished, and the
+ * control's box the same on two reads in a row. `data-detent` changes as
+ * the sheet starts moving, so a tap on that alone can land mid-glide.
+ */
+async function settledControl(page: Page, control: Locator) {
+  await expect(control).toBeVisible();
+  await waitForSurfacesToSettle(page, [
+    '.compact-sheet',
+    '.compact-stage-controls'
+  ]);
+  let last = '';
+  await expect
+    .poll(async () => {
+      const box = await control.boundingBox();
+      const read = box
+        ? [box.x, box.y, box.width, box.height]
+            .map((value) => value.toFixed(1))
+            .join(',')
+        : 'none';
+      const stable = read !== 'none' && read === last;
+      last = read;
+      return stable;
+    })
+    .toBe(true);
 }
 
 /** Taps the sheet's Back, returning to the tray at peek. */
@@ -303,7 +330,9 @@ test.describe('View and Tweak in the compact sheet', () => {
         await expect(
           workbench.getByRole('button', { name: 'Clear picks' })
         ).toBeVisible();
-        await expect(workbench.locator('.measurement-live-value')).toBeVisible();
+        await expect(
+          workbench.locator('.measurement-live-value')
+        ).toBeVisible();
         await waitForStillViewport(page);
         const second = await locateEdge(page, {
           exclude: [first.topologyId]
@@ -365,10 +394,14 @@ test.describe('View and Tweak in the compact sheet', () => {
         const analysisChip = page.getByRole('button', {
           name: 'Turn off draft analysis'
         });
-        await expect(analysisChip).toBeVisible();
+        await settledControl(page, analysisChip);
         await expectTidy(page);
         await analysisChip.tap();
         await expect(analysisChip).toHaveCount(0);
+        // Off for real: Display's Draft is no longer pressed.
+        await view('Display mode').tap();
+        await expect(draft).toHaveAttribute('aria-pressed', 'false');
+        await back(page);
 
         // Views: a standard view, and the sheet steps back to the tray.
         await view('Standard views').tap();
@@ -454,6 +487,179 @@ test.describe('View and Tweak in the compact sheet', () => {
       }
     );
   }
+
+  for (const size of SIZES.filter((each) => each.width < each.height)) {
+    test(
+      `an analysis chip keeps its target beside a long selection at ${size.width}×${size.height}`,
+      size.width === 360 ? { tag: '@ci-smoke' } : {},
+      async ({ page }) => {
+        test.setTimeout(180_000);
+        await page.setViewportSize(size);
+        const feature = 'Mounting bracket counterbore boss';
+        let document = createProjectDocument(
+          'Long names',
+          toUserId('user_e2e')
+        );
+        document = addPrimitiveFeature(document, {
+          name: feature,
+          bodyName: 'Bracket',
+          primitiveKind: 'box',
+          dimensions: { width: 30, height: 20, depth: 10 }
+        });
+        await stubApi(page);
+        await page.route('**/api/projects', (route) =>
+          route.request().method() === 'POST'
+            ? route.fulfill({
+                status: 201,
+                json: {
+                  project: {
+                    projectId: document.projectId,
+                    name: document.name,
+                    revisionCount: 1,
+                    updatedAt: new Date().toISOString()
+                  },
+                  document
+                }
+              })
+            : route.fulfill({ json: { projects: [] } })
+        );
+        await preferCompact(page);
+        await page.goto('/');
+        await page.getByLabel('Project name').fill(document.name);
+        await page.getByRole('button', { name: 'New project' }).tap();
+        await expect(
+          page.locator('.app-shell[data-shell="compact"]')
+        ).toBeVisible({ timeout: 60_000 });
+
+        // Draft analysis on, left on from View's Display page.
+        await tapMode(page, 'View');
+        await trayButton(page, 'View tools', 'Display mode').tap();
+        const draft = sheet(page).getByRole('button', {
+          name: 'Draft analysis'
+        });
+        await draft.tap();
+        await expect(draft).toHaveAttribute('aria-pressed', 'true');
+        await back(page);
+
+        // Build, with the long-named feature picked from search.
+        await tapMode(page, 'Build');
+        await page
+          .getByRole('button', { name: 'Open the command bar', exact: true })
+          .tap();
+        await page
+          .getByRole('combobox', { name: 'Search commands' })
+          .fill('Mounting');
+        await page
+          .getByRole('option', { name: `Go to ${feature} Feature` })
+          .tap();
+        const selection = page.getByRole('button', {
+          name: `Selection: ${feature}`
+        });
+        const analysisChip = page.getByRole('button', {
+          name: 'Turn off draft analysis'
+        });
+        await settledControl(page, selection);
+        await settledControl(page, analysisChip);
+
+        // Each chip a whole 44 px target, its words shown whole: none
+        // squeezed, cut or clamped.
+        const chips = await page
+          .locator('.compact-stage-controls > button')
+          .evaluateAll((elements) =>
+            elements.map((element) => {
+              const box = element.getBoundingClientRect();
+              const text = element.querySelector('.compact-selection-text')!;
+              return {
+                label: element.getAttribute('aria-label'),
+                width: box.width,
+                height: box.height,
+                clipped:
+                  text.scrollWidth > text.clientWidth + 1 ||
+                  text.scrollHeight > text.clientHeight + 1
+              };
+            })
+          );
+        expect(chips.map((chip) => chip.label).sort()).toEqual([
+          `Selection: ${feature}`,
+          'Turn off draft analysis'
+        ]);
+        for (const chip of chips) {
+          expect(chip.width, chip.label!).toBeGreaterThanOrEqual(43.5);
+          expect(chip.height, chip.label!).toBeGreaterThanOrEqual(43.5);
+          expect(chip.clipped, chip.label!).toBe(false);
+        }
+        await expect(analysisChip).toContainText('Draft');
+        await expect(selection).toContainText(feature);
+        // Both chips clear of each other and of the stage's edges.
+        const [a, b] = await Promise.all([
+          analysisChip.boundingBox(),
+          selection.boundingBox()
+        ]);
+        const overlap =
+          Math.min(a!.x + a!.width, b!.x + b!.width) - Math.max(a!.x, b!.x) >
+            0 &&
+          Math.min(a!.y + a!.height, b!.y + b!.height) - Math.max(a!.y, b!.y) >
+            0;
+        expect(overlap).toBe(false);
+        for (const box of [a!, b!]) {
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(size.width);
+        }
+        await analysisChip.tap();
+        await expect(analysisChip).toHaveCount(0);
+      }
+    );
+  }
+
+  test(
+    'a keypad left open on another field does not cancel an applied value',
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(180_000);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openSharedBracket(page);
+      await trayButton(page, 'Tweak tools', 'Parameters').tap();
+      const editWidth = sheet(page).getByRole('button', {
+        name: 'Edit width'
+      });
+      const editDepth = sheet(page).getByRole('button', {
+        name: 'Edit depth'
+      });
+      await expect(editDepth).toContainText('4');
+      // A Width draft, left open.
+      await editWidth.tap();
+      const widthPad = page.getByRole('dialog', { name: /^width value$/i });
+      await expect(widthPad).toBeVisible();
+      for (const key of ['Backspace', 'Backspace', '3', '2']) {
+        await widthPad.getByRole('button', { name: key, exact: true }).tap();
+      }
+      // Depth, opened by keyboard, takes 22 and applies it.
+      await editDepth.focus();
+      await page.keyboard.press('Enter');
+      const depthPad = page.getByRole('dialog', { name: /^depth value$/i });
+      await expect(depthPad).toBeVisible();
+      await page.keyboard.type('22');
+      // Apply, and Back in the same moment, while Depth is still being
+      // checked: Width's keypad leaves with the page, and its draft, which
+      // Depth's replaced, must cancel nothing.
+      await page.evaluate(() => {
+        document.activeElement!.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+        );
+        document
+          .querySelector<HTMLElement>(
+            '.compact-sheet button[aria-label="Back"]'
+          )!
+          .click();
+      });
+      await expect(depthPad).toHaveCount(0);
+      await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
+      await expect(widthPad).toHaveCount(0);
+      await trayButton(page, 'Tweak tools', 'Parameters').tap();
+      await expect(editDepth).toContainText('22', { timeout: 30_000 });
+      await expect(editWidth).toContainText('20');
+    }
+  );
 
   test(
     'a view-only link’s visitor makes a copy from More',

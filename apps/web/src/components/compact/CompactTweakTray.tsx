@@ -95,6 +95,15 @@ function plainNumber(expression: string): boolean {
 }
 
 /**
+ * Which row's keypad draft the model is previewing, shared by a page's rows.
+ * The model holds one preview, and cancelling it also stops any parameter
+ * edit still being checked, so only the row whose draft is live may cancel:
+ * a row whose draft another row's preview replaced, or any row once an edit
+ * is applied, leaves the model alone.
+ */
+export type ParameterDraftOwner = { current: object | null };
+
+/**
  * An exposed parameter as a large row: its name, its value (tap for the
  * keypad), and − / + steppers. An on/off parameter is one switch. A value
  * set by an expression keeps its expression: the steppers leave it alone,
@@ -106,6 +115,7 @@ export function CompactParameterRow({
   minimum,
   units,
   scope,
+  draftOwner,
   onSet,
   onPreview
 }: {
@@ -114,6 +124,8 @@ export function CompactParameterRow({
   minimum?: number;
   units: UnitSystem;
   scope: Record<string, number>;
+  /** Shared by the page's rows; a row alone keeps its own. */
+  draftOwner?: ParameterDraftOwner;
   onSet(name: string, expression: string): void | Promise<string | null>;
   onPreview?(name: string, expression: string | null): void;
 }) {
@@ -129,12 +141,16 @@ export function CompactParameterRow({
   // The keypad can also leave with its page (Back, Escape, the sheet
   // closing, another mode or the regular layout taking over): that leaving
   // cancels the draft too, as the keypad's own Cancel does, so no preview
-  // outlives the keypad that typed it.
-  const draftRef = useRef(false);
+  // outlives the keypad that typed it. Only this row's own live draft is
+  // cancelled (see ParameterDraftOwner): never a draft another row's preview
+  // replaced, and never an edit already applied, this row's or another's.
+  const draftToken = useRef({}).current;
+  const ownDraftOwner = useRef<object | null>(null);
+  const owner = draftOwner ?? ownDraftOwner;
   const leaveDraftRef = useRef<() => void>(() => {});
   leaveDraftRef.current = () => {
-    if (!draftRef.current) return;
-    draftRef.current = false;
+    if (owner.current !== draftToken) return;
+    owner.current = null;
     onPreview?.(parameter.name, null);
   };
   useEffect(() => () => leaveDraftRef.current(), []);
@@ -156,6 +172,9 @@ export function CompactParameterRow({
         : null;
 
   async function set(expression: string) {
+    // An applied edit replaces whatever draft the model was previewing, and
+    // cancelling a draft now would cancel the edit's own check.
+    owner.current = null;
     const token = ++submission.current;
     setError(null);
     setPending(true);
@@ -259,19 +278,16 @@ export function CompactParameterRow({
           scope={scope}
           anchorRef={anchorRef}
           onPreview={(next, raw) => {
-            draftRef.current = true;
+            owner.current = draftToken;
             onPreview?.(parameter.name, raw ?? String(next));
           }}
           onCommit={(_next, raw) => {
-            // Applying takes the draft over: cancelling it now would cancel
-            // the edit's own check.
-            draftRef.current = false;
+            // Applying takes the draft over (set gives up the ownership).
             setKeypadOpen(false);
             void set(raw);
           }}
           onCancel={() => {
             setKeypadOpen(false);
-            draftRef.current = true;
             leaveDraftRef.current();
           }}
         />
@@ -290,6 +306,7 @@ function ParametersPage(props: CompactTweakTrayProps) {
     onSetParameter,
     onPreviewParameter
   } = props;
+  const draftOwner = useRef<object | null>(null);
   return (
     <>
       {modelError ? (
@@ -307,6 +324,7 @@ function ParametersPage(props: CompactTweakTrayProps) {
               minimum={parameterMinimums?.[parameter.name]}
               units={units}
               scope={parameterValues}
+              draftOwner={draftOwner}
               onSet={onSetParameter}
               {...(onPreviewParameter ? { onPreview: onPreviewParameter } : {})}
             />

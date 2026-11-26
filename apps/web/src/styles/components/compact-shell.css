@@ -273,6 +273,9 @@
   right: max(var(--sp-2), env(safe-area-inset-right));
   bottom: calc(var(--compact-sheet-h, 0px) + var(--sp-2));
   display: flex;
+  /* A chip that does not fit beside the undo pair takes a row of its own
+     above it, rather than squeezing another chip below its 44 px target. */
+  flex-wrap: wrap-reverse;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
@@ -312,22 +315,35 @@
 }
 
 .compact-selection-chip {
-  min-width: 0;
+  min-width: var(--compact-target);
   max-width: 60%;
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: 0 var(--sp-3);
-  border-radius: 999px;
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: 22px;
   font-size: 15px;
+  text-align: start;
+}
+
+/* A long name wraps between words onto a second line, never cut mid-word. */
+.compact-selection-chip .compact-selection-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: 1.25;
 }
 
 /* An analysis left on, away from View's Display page: its name and Off,
    beside the undo pair, clear of the view cube's corner on a short
    landscape stage; the selection chip keeps the right. */
 .compact-analysis-chip {
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: var(--compact-target);
   margin-right: auto;
   display: inline-flex;
   align-items: center;
@@ -350,6 +366,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* An analysis's name is one word, shown whole: the chip does not shrink. */
+.compact-analysis-chip .compact-selection-text {
+  overflow: visible;
 }
 
 /* ── The bottom sheet ── */
