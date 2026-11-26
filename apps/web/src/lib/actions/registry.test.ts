@@ -4,9 +4,14 @@ import { describe, expect, it } from 'vitest';
 import { ANNOTATION_TOOL_KEYS, ANNOTATION_TOOLS } from '../drawing/toolKeys';
 import { KEYMAP_COMMANDS, toolCommandId } from '../keymap';
 import { TOOL_GROUPS } from '../tools';
-import { LOOK_AT_FACE_ITEM_ID, SELECT_OTHER_ITEM_ID } from '../viewportMenu';
+import {
+  FACE_VERB_PREFIX,
+  LOOK_AT_FACE_ITEM_ID,
+  SELECT_OTHER_ITEM_ID
+} from '../viewportMenu';
 import {
   ACTIONS,
+  type ActionMenu,
   COMPACT_ENTRIES,
   DISPLAY_UNIT_ROWS,
   REGULAR_TOUCH_GAPS,
@@ -34,6 +39,12 @@ const literalIds = (text: string, pattern: RegExp) =>
 const withSource = (source: string) =>
   ACTIONS.filter((entry) => entry.sources.includes(source as never));
 
+/** The action a menu's item runs, by the menu's own item id. */
+const menuAction = (menu: ActionMenu, item: string) =>
+  ACTIONS.find((entry) =>
+    entry.menuItems.some((route) => route.menu === menu && route.item === item)
+  )?.id;
+
 describe('action registry', () => {
   it('names every action once, with a label and a source', () => {
     const ids = ACTIONS.map((entry) => entry.id);
@@ -60,45 +71,106 @@ describe('action registry', () => {
     // The two templated row families, read from the same block.
     expect(palette).toContain('id: `tool-${toolId}`');
     expect(palette).toContain('id: `file-display-units-${unit}`');
-    expect(palette).toContain("(['mm', 'cm', 'm', 'inch'] as const)");
+    const unitList = /\(\[([^\]]+)\] as const\)\.map\(\(unit\)/.exec(palette);
+    expect(unitList, 'the unit rows’ list').not.toBeNull();
+    const units = literalIds(unitList![1]!, /'([^']+)'/g);
+    expect(DISPLAY_UNIT_ROWS.map(([unit]) => unit)).toEqual(units);
 
     const rows = new Set(literalIds(palette, /\bid: '([^']+)'/g));
     for (const group of TOOL_GROUPS) {
       for (const tool of group.tools) rows.add(toolCommandId(tool));
     }
-    for (const [unit] of DISPLAY_UNIT_ROWS) {
-      rows.add(`file-display-units-${unit}`);
-    }
+    for (const unit of units) rows.add(`file-display-units-${unit}`);
     const registered = new Set(withSource('command-bar').map((e) => e.id));
     expect([...registered].sort()).toEqual([...rows].sort());
   });
 
-  it('maps every App menu item to an action', () => {
-    // Menu items are written `item: { id: …`; templated ids end in `*`.
-    const items = new Set(
-      [...app.matchAll(/item: \{\s*id: (?:'([^']+)'|`([^`$]+)\$\{)/g)].map(
-        (match) => match[1] ?? `${match[2]}*`
-      )
-    );
-    items.add(SELECT_OTHER_ITEM_ID);
-    items.add(LOOK_AT_FACE_ITEM_ID);
-    const registered = new Set(
-      ACTIONS.flatMap((entry) => entry.menuItems.map((item) => item.item))
-    );
-    expect([...registered].sort()).toEqual([...items].sort());
+  it('maps every App menu item to an action, menu by menu', () => {
+    // Each menu is built in its own App function; its items are written
+    // `item: { id: …`, and a templated id is recorded ending in `*`.
+    const builders: Record<ActionMenu, string> = {
+      viewport: 'function handleViewportContextMenu(',
+      selection: 'function openViewportSelectionContextMenu(',
+      'history-row': 'function handleFeatureContextMenu('
+    };
+    for (const [menu, start] of Object.entries(builders) as [
+      ActionMenu,
+      string
+    ][]) {
+      const items = new Set(
+        [
+          ...block(app, start, '\n  function ').matchAll(
+            /item: \{\s*id: (?:'([^']+)'|`([^`$]+)\$\{)/g
+          )
+        ].map((match) => match[1] ?? `${match[2]}*`)
+      );
+      expect(items.size, menu).toBeGreaterThan(0);
+      if (menu === 'selection') {
+        items.add(SELECT_OTHER_ITEM_ID);
+        items.add(LOOK_AT_FACE_ITEM_ID);
+      }
+      const registered = ACTIONS.flatMap((entry) =>
+        entry.menuItems
+          .filter((item) => item.menu === menu)
+          .map((item) => item.item)
+      ).filter((item) => !item.startsWith(FACE_VERB_PREFIX));
+      expect(new Set(registered).size, menu).toBe(registered.length);
+      expect([...registered].sort(), menu).toEqual([...items].sort());
+    }
+    // Where an item id repeats across menus, each menu keeps its own action.
+    expect(menuAction('selection', 'delete')).toBe('selection-delete');
+    expect(menuAction('history-row', 'delete')).toBe('feature-delete');
+    expect(menuAction('selection', 'edit')).toBe('feature-edit');
+    expect(menuAction('history-row', 'edit')).toBe('feature-edit');
+    expect(menuAction('selection', 'move')).toBe('tool-transform');
   });
 
-  it('maps every verb-rail verb to an action', () => {
+  it('holds exactly the verb rail’s verbs, each also a face-menu item', () => {
     expect(selectionVerbAction('tool:fillet')).toBe('tool-fillet');
     expect(selectionVerbAction('action:offset-face')).toBe(
       'selection-offset-face'
     );
-    // `SELECTION_ACTIONS` is exhaustive by type; the other verb ids are
-    // the union's literal members.
+    const capabilities = read('lib/interaction/capabilities.ts');
+    const actions = literalIds(
+      block(capabilities, 'export type SelectionActionId =', ';'),
+      /\| '([^']+)'/g
+    );
     const callout = read('lib/selectionCallout.ts');
-    const union = block(callout, 'export type SelectionCalloutVerbId =', ';');
-    for (const verb of literalIds(union, /\| '([^']+)'/g)) {
-      expect(actionEntry(selectionVerbAction(verb)), verb).toBeDefined();
+    const others = literalIds(
+      block(callout, 'export type SelectionCalloutVerbId =', ';'),
+      /\| '([^']+)'/g
+    );
+    // The tools a pick offers: `tools(…)` lists, and an unarmed edge's
+    // Fillet and Chamfer (`edgeVerb` falls back to the tool).
+    const verbs = block(
+      callout,
+      'export function selectionCalloutVerbs(',
+      '\n}\n'
+    );
+    const tools = new Set([
+      ...[...verbs.matchAll(/\btools\(([^)]*)\)/g)].flatMap((match) =>
+        literalIds(match[1]!, /'([^']+)'/g)
+      ),
+      ...literalIds(verbs, /edgeVerb\('([^']+)'/g)
+    ]);
+    expect(tools.size).toBeGreaterThan(0);
+    const expected = new Set([
+      ...actions.map((id) => `action:${id}`),
+      ...others,
+      ...[...tools].map((tool) => `tool:${tool}`)
+    ]);
+    const registered = withSource('selection-verb');
+    expect(registered.map((entry) => entry.id).sort()).toEqual(
+      [...expected].map(selectionVerbAction).sort()
+    );
+    for (const verb of expected) {
+      expect(
+        actionEntry(selectionVerbAction(verb))?.menuItems,
+        verb
+      ).toContainEqual({
+        menu: 'selection',
+        item: `${FACE_VERB_PREFIX}${verb}`
+      });
     }
   });
 
@@ -115,22 +187,54 @@ describe('action registry', () => {
     expect(drawing).not.toMatch(/const (ANNOTATION_TOOL_KEYS|\w+_TOOL_KEY) =/);
   });
 
-  it('holds the keys surfaces handle themselves', () => {
-    expect(app).toContain(
-      "async function handleSketchClipboardKey(key: 'a' | 'c' | 'v')"
+  it('holds the keys surfaces handle themselves, by the key each answers to', () => {
+    const clipboard = block(
+      app,
+      "async function handleSketchClipboardKey(key: 'a' | 'c' | 'v')",
+      '\n  }\n'
     );
-    const timeline = read('components/assembly/MotionStudyTimeline.tsx');
-    expect(timeline).toContain("event.key === '[') jumpKey(-1)");
-    expect(timeline).toContain("event.key === ']') jumpKey(1)");
-    for (const id of [
-      'sketch-select-all',
-      'sketch-copy',
-      'sketch-paste',
-      'motion-previous-key',
-      'motion-next-key'
-    ]) {
+    const timeline = block(
+      read('components/assembly/MotionStudyTimeline.tsx'),
+      'function onKeyDown(event: ReactKeyboardEvent<HTMLElement>)',
+      '\n  }\n'
+    );
+    // Each fixed key, the handler that answers it, and what it runs there.
+    const fixed: [id: string, key: string, source: string, handled: string][] =
+      [
+        ['sketch-select-all', 'Ctrl+A', clipboard, "if (key === 'a') {"],
+        ['sketch-copy', 'Ctrl+C', clipboard, "if (key === 'c') {"],
+        [
+          'sketch-paste',
+          'Ctrl+V',
+          clipboard,
+          'const copied = sketchClipboardRef.current;'
+        ],
+        ['motion-play-pause', 'Space', timeline, "if (event.key === ' ') {"],
+        [
+          'motion-key-pose',
+          'K',
+          timeline,
+          "event.key === 'K') keyAtPlayhead()"
+        ],
+        [
+          'motion-previous-key',
+          '[',
+          timeline,
+          "event.key === '[') jumpKey(-1)"
+        ],
+        ['motion-next-key', ']', timeline, "event.key === ']') jumpKey(1)"],
+        ['motion-delete-key', 'Delete', timeline, "event.key === 'Delete' ||"]
+      ];
+    for (const [id, key, source, handled] of fixed) {
+      expect(source, id).toContain(handled);
       expect(actionEntry(id)?.sources, id).toEqual(['fixed-key']);
+      expect(actionEntry(id)?.fixedKeys, id).toEqual([key]);
     }
+    // Every key the timeline answers is accounted for.
+    expect(literalIds(timeline, /event\.key === '([^']+)'/g).sort()).toEqual(
+      [' ', 'Backspace', 'Delete', 'Escape', 'K', '[', ']', 'k'].sort()
+    );
+    expect(withSource('fixed-key')).toHaveLength(fixed.length);
   });
 
   it('lists only registered actions as touch gaps and compact entries', () => {

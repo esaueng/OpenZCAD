@@ -8,8 +8,12 @@ import {
 } from '../drawing/toolKeys';
 import type { SelectionActionId } from '../interaction/capabilities';
 import { KEYMAP_COMMANDS, toolCommandId } from '../keymap';
-import { TOOL_GROUPS } from '../tools';
-import { LOOK_AT_FACE_ITEM_ID, SELECT_OTHER_ITEM_ID } from '../viewportMenu';
+import { TOOL_GROUPS, type ToolId } from '../tools';
+import {
+  FACE_VERB_PREFIX,
+  LOOK_AT_FACE_ITEM_ID,
+  SELECT_OTHER_ITEM_ID
+} from '../viewportMenu';
 
 /**
  * Every user-reachable action, once (U12 slice 1; plan in
@@ -191,6 +195,7 @@ const MENU_ITEMS: readonly (readonly [
   ['selection', 'edit', 'feature-edit', 'Edit feature'],
   ['selection', 'delete', 'selection-delete', 'Delete selection'],
   // A History row's menu (also its ⋯ button).
+  ['history-row', 'edit', 'feature-edit'],
   ['history-row', 'measurements', 'feature-measurements', 'Measurements'],
   ['history-row', 'rename', 'feature-rename', 'Rename step'],
   ['history-row', 'repair-face', 'feature-repick', 'Re-pick a reference'],
@@ -256,6 +261,37 @@ const selectionActionsComplete: [UnlistedSelectionAction] extends [never]
   : UnlistedSelectionAction = true;
 void selectionActionsComplete;
 
+/**
+ * The tools the verb rail offers for some pick (`selectionCalloutVerbs`):
+ * a face's, an edge's, a body's, several bodies' and a region's.
+ */
+const TOOL_VERBS = [
+  'sketch',
+  'hole',
+  'shell',
+  'draft',
+  'thicken',
+  'datum-plane',
+  'thread',
+  'datum-axis',
+  'fillet',
+  'chamfer',
+  'transform',
+  'axis-rotate',
+  'scale',
+  'mirror',
+  'split',
+  'linear-pattern',
+  'solid-offset',
+  'union',
+  'subtract',
+  'intersect',
+  'extrude',
+  'revolve',
+  'sweep',
+  'loft'
+] as const satisfies readonly ToolId[];
+
 /** The verb rail's verbs that are neither a selection action nor a tool. */
 const OTHER_SELECTION_VERBS: readonly (readonly [id: string, label: string])[] =
   [
@@ -292,8 +328,11 @@ const FIXED_INPUTS: readonly (readonly [
   ['sketch-select-all', 'Select all sketch entities', 'fixed-key', 'Ctrl+A'],
   ['sketch-copy', 'Copy sketch entities', 'fixed-key', 'Ctrl+C'],
   ['sketch-paste', 'Paste sketch entities', 'fixed-key', 'Ctrl+V'],
+  ['motion-play-pause', 'Play or pause the animation', 'fixed-key', 'Space'],
+  ['motion-key-pose', 'Key the pose at the playhead', 'fixed-key', 'K'],
   ['motion-previous-key', 'Previous animation key', 'fixed-key', '['],
   ['motion-next-key', 'Next animation key', 'fixed-key', ']'],
+  ['motion-delete-key', 'Delete the selected key', 'fixed-key', 'Delete'],
   [
     'selection-connected-edges',
     'Select connected edges',
@@ -353,12 +392,18 @@ function buildActions(): ActionEntry[] {
   for (const [menu, item, action, label] of MENU_ITEMS) {
     add(action, label, 'menu').menuItems.push({ menu, item });
   }
-  for (const [id, label] of SELECTION_ACTIONS) {
-    add(selectionVerbAction(`action:${id}`), label, 'selection-verb');
-  }
-  for (const [id, label] of OTHER_SELECTION_VERBS) {
-    add(selectionVerbAction(id), label, 'selection-verb');
-  }
+  // A face's verbs also lead its selection menu, as `verb:<verb id>`
+  // (`faceVerbMenuItems`), whenever the rail offers them for that face.
+  const verb = (verbId: string, label: string | undefined) => {
+    add(selectionVerbAction(verbId), label, 'selection-verb');
+    add(selectionVerbAction(verbId), undefined, 'menu').menuItems.push({
+      menu: 'selection',
+      item: `${FACE_VERB_PREFIX}${verbId}`
+    });
+  };
+  for (const [id, label] of SELECTION_ACTIONS) verb(`action:${id}`, label);
+  for (const [id, label] of OTHER_SELECTION_VERBS) verb(id, label);
+  for (const tool of TOOL_VERBS) verb(`tool:${tool}`, undefined);
   for (const kind of ANNOTATION_TOOLS) {
     add(
       `drawing-${kind}`,
