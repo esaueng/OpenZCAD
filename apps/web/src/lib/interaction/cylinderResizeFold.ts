@@ -54,13 +54,37 @@ function onAxisLine(
 const near = (a: Vector3, b: Vector3, tolerance: number) =>
   Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= tolerance;
 
+/** The length the held wall's span shares with the recorded one. */
+function sharedSpan(
+  wall: HeldCylinderWall,
+  start: Vector3,
+  end: Vector3
+): number {
+  const axis = { x: end.x - start.x, y: end.y - start.y, z: end.z - start.z };
+  const length = Math.hypot(axis.x, axis.y, axis.z);
+  const along = (point: Vector3) =>
+    ((point.x - start.x) * axis.x +
+      (point.y - start.y) * axis.y +
+      (point.z - start.z) * axis.z) /
+    length;
+  const [a, b] = [along(wall.axisStart), along(wall.axisEnd)];
+  return Math.min(Math.max(a, b), length) - Math.max(Math.min(a, b), 0);
+}
+
 /**
  * Whether the held wall is the face the resize targeted, by the rules the
- * exact rebuild resolves that face with: a shared v5 name proves it by role,
- * and otherwise the wall must sit at the operation's recorded axis endpoints,
- * in either order. A resize rewrites the face's hash, so the stored hash
- * cannot name the resized wall; and coaxial sibling patches share the radius
- * and axis line, so only their spans tell them apart.
+ * exact rebuild resolves that face with. When both carry a v5 name, the
+ * names decide, whatever the geometry says. Otherwise the resize rewrote the
+ * face's hash, so the stored hash cannot name the resized wall, and coaxial
+ * sibling patches share the radius and axis line: the span tells them apart.
+ *
+ * A through-hole is a complete turn, so no other hole wall at its radius on
+ * its axis can share any of its axial range, and a span that overlaps the
+ * recorded one is the same bore even when the resize re-trimmed its ends
+ * against a chamfer. Any other wall may be a partial turn beside a sibling
+ * over the same range, so it must sit at the recorded endpoints, in either
+ * order. A repeat drag of such a wall whose ends the resize moved appends a
+ * second edit rather than risk rewriting a sibling's.
  */
 function sameResizedFace(
   wall: HeldCylinderWall,
@@ -68,14 +92,14 @@ function sameResizedFace(
   tolerance: number
 ): boolean {
   const stored = operation.faceReference;
-  if (
-    stored &&
-    wall.reference &&
-    wall.reference.producingFeatureId === stored.producingFeatureId &&
-    wall.reference.lineageName === stored.lineageName
-  )
-    return true;
+  if (stored && wall.reference)
+    return (
+      wall.reference.producingFeatureId === stored.producingFeatureId &&
+      wall.reference.lineageName === stored.lineageName
+    );
   const { sourceAxisStart: start, sourceAxisEnd: end } = operation;
+  if (operation.kind === 'resize-through-hole' && wall.concavity === 'hole')
+    return sharedSpan(wall, start, end) > tolerance;
   return (
     (near(wall.axisStart, start, tolerance) &&
       near(wall.axisEnd, end, tolerance)) ||
@@ -92,9 +116,14 @@ function sameResizedFace(
  * hole. When the last feature in the history is a resize of this body's wall
  * — the same face, on the same axis line, now at the size that resize
  * produced — the new size goes into that feature instead. A coaxial sibling
- * patch at the same size is another face, so its drag appends. Anything after it in the
- * history, a symbolic size, or a drag back to where that resize started
- * (which it could not express) appends as before.
+ * patch at the same size is another face, so its drag appends. Anything
+ * after it in the history, a symbolic size, or a drag back to where that
+ * resize started (which it could not express) appends as before.
+ *
+ * Tolerances scale with the wall's own size, as the exact rebuild's checks
+ * do, never with its distance from the origin: far out, a position-scaled
+ * band would merge a bore with the outer wall a fraction of a millimetre
+ * away.
  */
 export function cylinderResizeFold(
   document: ProjectDocument,
@@ -115,13 +144,19 @@ export function cylinderResizeFold(
   // A size bound to a named parameter is edited through the parameter.
   if (operation.kind === 'resize-through-hole' && operation.parameterBinding)
     return null;
-  const scale = Math.max(
-    1,
-    wall.radius,
-    Math.hypot(wall.axisStart.x, wall.axisStart.y, wall.axisStart.z),
-    Math.hypot(wall.axisEnd.x, wall.axisEnd.y, wall.axisEnd.z)
+  const { sourceAxisStart, sourceAxisEnd } = operation;
+  const recordedLength = Math.hypot(
+    sourceAxisEnd.x - sourceAxisStart.x,
+    sourceAxisEnd.y - sourceAxisStart.y,
+    sourceAxisEnd.z - sourceAxisStart.z
   );
-  const tolerance = scale * 1e-6;
+  // DIRECT_EDIT_TOLERANCE, relative to the radius and the recorded length.
+  const radiusTolerance = Math.max(1e-6, wall.radius * 1e-6);
+  const axisTolerance = Math.max(
+    1e-6,
+    wall.radius * 1e-6,
+    recordedLength * 1e-6
+  );
   const [producedRadius, sourceRadius] =
     operation.kind === 'resize-cylindrical-face'
       ? [operation.radius, operation.sourceRadius]
@@ -133,24 +168,20 @@ export function cylinderResizeFold(
         ];
   if (
     typeof producedRadius !== 'number' ||
-    Math.abs(producedRadius - wall.radius) > tolerance ||
-    Math.abs(nextRadius - sourceRadius) <= tolerance ||
-    (operation.kind === 'resize-cylindrical-face' &&
-      wall.concavity !== undefined &&
-      operation.concavity !== wall.concavity) ||
+    Math.abs(producedRadius - wall.radius) > radiusTolerance ||
+    Math.abs(nextRadius - sourceRadius) <= radiusTolerance ||
+    (wall.concavity !== undefined &&
+      (operation.kind === 'resize-cylindrical-face'
+        ? operation.concavity
+        : 'hole') !== wall.concavity) ||
     !onAxisLine(
       wall.axisStart,
-      operation.sourceAxisStart,
-      operation.sourceAxisEnd,
-      tolerance
+      sourceAxisStart,
+      sourceAxisEnd,
+      axisTolerance
     ) ||
-    !onAxisLine(
-      wall.axisEnd,
-      operation.sourceAxisStart,
-      operation.sourceAxisEnd,
-      tolerance
-    ) ||
-    !sameResizedFace(wall, operation, tolerance)
+    !onAxisLine(wall.axisEnd, sourceAxisStart, sourceAxisEnd, axisTolerance) ||
+    !sameResizedFace(wall, operation, axisTolerance)
   )
     return null;
   return {
