@@ -182,4 +182,88 @@ describe('TopologyPickList', () => {
     list.hide();
     expect(document.activeElement).toBe(opener);
   });
+
+  /**
+   * U11: Enter on a focused row acted on the pick made before the list
+   * opened. The workspace's window keydown read Enter as "open the value
+   * entry" and its preventDefault cancelled the row's own activation, so
+   * the list closed on the old pick. The list now owns Enter on its rows.
+   */
+  it('confirms the focused row on Enter and keeps the key from the workspace', () => {
+    const { list, onSelect } = setup();
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    const rim = candidate('edge:rim', 1, 'edge');
+    const top = candidate('face:top', 2);
+    list.show(
+      [
+        { candidate: rim, label: 'Part · Hole edge' },
+        { candidate: top, label: 'Part · Top face' }
+      ],
+      { clientX: 200, clientY: 220 },
+      true
+    );
+    const rows = Array.from(
+      list.element.querySelectorAll<HTMLButtonElement>(
+        '.topology-pick-list-row'
+      )
+    );
+    rows[0]!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })
+    );
+    expect(document.activeElement).toBe(rows[1]);
+
+    const workspace = vi.fn();
+    window.addEventListener('keydown', workspace);
+    try {
+      const enter = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true
+      });
+      rows[1]!.dispatchEvent(enter);
+      expect(enter.defaultPrevented).toBe(true);
+      expect(workspace).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', workspace);
+    }
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(top);
+    expect(list.visible).toBe(false);
+    // Focus goes back to where it was before the list took it.
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('leaves a modified Enter and Enter with no row focused alone', () => {
+    const { list, onSelect } = setup();
+    list.show(
+      [{ candidate: candidate('edge-1', 4, 'edge'), label: 'Part · Edge R4' }],
+      { clientX: 200, clientY: 220 },
+      true
+    );
+    const row = list.element.querySelector<HTMLButtonElement>(
+      '.topology-pick-list-row'
+    )!;
+    const ctrlEnter = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true
+    });
+    row.dispatchEvent(ctrlEnter);
+    expect(ctrlEnter.defaultPrevented).toBe(false);
+    // Enter on the title, outside any row.
+    const title = list.element.querySelector('.topology-pick-list-title')!;
+    const bare = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true
+    });
+    row.blur();
+    title.dispatchEvent(bare);
+    expect(bare.defaultPrevented).toBe(false);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(list.visible).toBe(true);
+  });
 });

@@ -53,6 +53,24 @@ export class TopologyPickList {
         return;
       }
       const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      if (
+        event.key === 'Enter' &&
+        current >= 0 &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        !event.isComposing
+      ) {
+        // Enter on a focused row confirms that row, as Space and a click
+        // do. The list owns the key: left to bubble, the workspace read it
+        // as "open the value entry" for the pick made before the list
+        // opened, and its preventDefault cancelled the row's own activation.
+        event.preventDefault();
+        event.stopPropagation();
+        buttons[current]!.click();
+        return;
+      }
       let next: number | null = null;
       if (event.key === 'ArrowDown') {
         next = current < 0 ? 0 : (current + 1) % buttons.length;

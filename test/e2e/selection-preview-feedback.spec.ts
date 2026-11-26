@@ -414,15 +414,15 @@ test('an overlapping pick confirmed from Select other is the face the preview an
 });
 
 /**
- * Pinned gap, failure class Pick (U11 / viewer): Enter on a focused Select
- * other row does not confirm that row. The list closes and the workspace's
- * Enter opens exact entry for the candidate picked before the list opened
- * (here the rim edge's Radius keypad); Space confirms the row. Smallest
- * failing prefix: open Fixture A, click the rim at (48.3, 18, 14), Alt+↓,
- * ↓ to "Top face", Enter. Expected: Enter selects the focused row, as Space
- * and a click do, and opens no keypad for the old pick.
+ * U11, failure class Pick (fixed): Enter on a focused Select other row
+ * confirms that row, as Space and a click do. It used to close the list and
+ * open exact entry for the candidate picked before the list opened (here the
+ * rim edge's Radius keypad): the workspace read Enter as "open the value
+ * entry", and its preventDefault cancelled the row's own activation. Focus
+ * goes back where it was before Alt+↓ took it, so a second Enter, with no
+ * menu open, opens the value entry for the row just confirmed.
  */
-test.fixme('Enter on a focused Select other row confirms that row', async ({
+test('Enter on a focused Select other row confirms that row', async ({
   page
 }) => {
   await openCoupon(page);
@@ -431,11 +431,28 @@ test.fixme('Enter on a focused Select other row confirms that row', async ({
   await page.mouse.move(rim.x, rim.y);
   await page.mouse.click(rim.x, rim.y);
   await expect(picked).toContainText('Hole edge');
+  // The click leaves focus on the viewport; the list takes it on Alt+↓ and
+  // gives it back there once a row is confirmed.
+  const viewport = page.locator('.viewer-shell');
+  await expect(viewport).toBeFocused();
   const { menu } = await focusStackRow(page, rim, /Top face/);
   await page.keyboard.press('Enter');
   await expect(menu).toBeHidden();
   await expect(picked).toContainText('Top face');
+  await expect(picked).not.toContainText('Hole edge');
   await expect(page.locator('.numeric-keypad')).toHaveCount(0);
+  await expect(viewport).toBeFocused();
+
+  // With no menu open, Enter still opens the value entry, now for the
+  // confirmed top face rather than the rim it replaced.
+  await page.keyboard.press('Enter');
+  await expect(
+    page.getByRole('dialog', { name: 'Offset value' })
+  ).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Radius value' })).toHaveCount(
+    0
+  );
+  await expect(picked).toContainText('Top face');
 });
 
 test('a negative Total is refused at its field and stays editable; the same inward offset applies', async ({

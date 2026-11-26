@@ -29,6 +29,22 @@ export function controlOwnsEnter(target: EventTarget | null): boolean {
   );
 }
 
+/**
+ * Whether Enter on `target` is left to it rather than opening the pick's
+ * value entry: a control marked as owning Enter, or a row of an open menu.
+ * Select other's list is such a menu: Enter on a focused row confirms that
+ * row, and opening exact entry instead acted on the pick it would replace
+ * (and its preventDefault cancelled the row's own activation).
+ */
+export function enterSkipsExactEntry(target: EventTarget | null): boolean {
+  return (
+    controlOwnsEnter(target) ||
+    (typeof Element !== 'undefined' &&
+      target instanceof Element &&
+      target.closest('[role="menu"]') !== null)
+  );
+}
+
 export function exactEntryShortcut(
   interaction: InteractionState,
   event: Pick<
