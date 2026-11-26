@@ -157,6 +157,69 @@ async function modelCenter(page: Page) {
   return { x: stage.x + stage.width / 2, y: stage.y + stage.height * 0.4 };
 }
 
+/** Where the stage's own controls stand: the handles' value and mode chips. */
+function stageControlRects(page: Page) {
+  return page.evaluate(() =>
+    [
+      ...document.querySelectorAll(
+        '.viewer-area button, [data-testid^="direct-manipulation"]'
+      )
+    ].map((element) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return [x, y, width, height].map(Math.round).join(',');
+    })
+  );
+}
+
+/**
+ * A point on the model that a tap picks: its middle, or the nearest point to
+ * it that a fingertip's width away still lands on the canvas. A picked
+ * face's handles stand their value chips on the model, and a tap on one
+ * opens the keypad rather than picking. The chips are read once they stand
+ * still, so none moves under the point after it is chosen.
+ */
+async function modelPoint(page: Page) {
+  let last = '';
+  await expect
+    .poll(
+      async () => {
+        const now = JSON.stringify(await stageControlRects(page));
+        const still = now === last;
+        last = now;
+        return still;
+      },
+      { intervals: [300] }
+    )
+    .toBe(true);
+  const center = await modelCenter(page);
+  const point = await page
+    .locator('.viewer-host canvas')
+    .evaluate((canvas, middle) => {
+      const reach = 16;
+      const clear = (x: number, y: number) =>
+        [-reach, 0, reach].every((dx) =>
+          [-reach, 0, reach].every(
+            (dy) => document.elementFromPoint(x + dx, y + dy) === canvas
+          )
+        );
+      const offsets: [number, number][] = [];
+      for (let dx = -64; dx <= 64; dx += 16) {
+        for (let dy = -48; dy <= 48; dy += 16) offsets.push([dx, dy]);
+      }
+      offsets.sort(
+        ([ax, ay], [bx, by]) => ax * ax + ay * ay - bx * bx - by * by
+      );
+      for (const [dx, dy] of offsets) {
+        if (clear(middle.x + dx, middle.y + dy)) {
+          return { x: middle.x + dx, y: middle.y + dy };
+        }
+      }
+      return null;
+    }, center);
+  expect(point, 'a point on the model clear of the handles').not.toBeNull();
+  return point!;
+}
+
 async function openPanelsFromMore(page: Page) {
   await page.getByRole('button', { name: 'More', exact: true }).tap();
   await sheet(page).getByRole('button', { name: 'Panels', exact: true }).tap();
@@ -389,7 +452,7 @@ test.describe('the compact workspace panels', () => {
     alsoReached('view-xray');
 
     // A tap on the model picks; the chip opens the selection sheet.
-    const center = await modelCenter(page);
+    let center = await modelPoint(page);
     await page.touchscreen.tap(center.x, center.y);
     const chip = page.locator('.compact-selection-chip');
     await expect(chip).toBeVisible();
@@ -412,6 +475,8 @@ test.describe('the compact workspace panels', () => {
 
     // A face pick: Select body takes its whole body, as a double-click does.
     await sheet(page).getByRole('button', { name: 'Back' }).tap();
+    // The first pick's handles are up now: the tap keeps clear of them.
+    center = await modelPoint(page);
     await page.touchscreen.tap(center.x, center.y);
     await expect(chip).toHaveAccessibleName(/face/i);
     await chip.tap();
