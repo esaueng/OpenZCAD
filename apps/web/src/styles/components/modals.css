@@ -152,8 +152,8 @@
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: calc(0.06em * var(--ls-eyebrow-scale));
+  text-transform: var(--tt-eyebrow);
 }
 
 .project-properties-list {
@@ -1057,7 +1057,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .export-dialog-option {
@@ -1896,8 +1896,8 @@
   color: var(--color-text-dim);
   font-size: var(--fs-mini);
   font-weight: var(--fw-medium);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: calc(0.06em * var(--ls-eyebrow-scale));
+  text-transform: var(--tt-eyebrow);
 }
 
 /* L08: the drawing sheets share links show. */
@@ -2771,8 +2771,8 @@
   color: var(--color-text-dim);
   font-size: var(--fs-mini);
   font-weight: var(--fw-medium);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: calc(0.06em * var(--ls-eyebrow-scale));
+  text-transform: var(--tt-eyebrow);
 }
 
 .share-link-rename-row {

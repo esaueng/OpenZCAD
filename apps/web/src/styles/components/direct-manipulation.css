@@ -110,7 +110,7 @@
   gap: 5px;
   padding: 1px 7px;
   font-size: var(--fs-xs);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   letter-spacing: 0.02em;
   color: var(--color-text-muted);
   background: var(--color-surface);
@@ -591,7 +591,7 @@
 .handle-dimension-prefix:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 1px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 /* Name tag (Diameter/Radius, Total/Offset) flush against the value pill. */
@@ -681,7 +681,7 @@
   content: attr(data-label);
   background: rgba(15, 17, 20, 0.9);
   border: 1px solid rgba(125, 165, 252, 0.34);
-  border-radius: 3px;
+  border-radius: var(--radius-md);
   font-family: var(--font-ui);
   font-size: var(--fs-mini);
   font-weight: var(--fw-regular);
@@ -730,7 +730,7 @@
   font-size: var(--fs-mini);
   white-space: nowrap;
   background: rgba(15, 17, 20, 0.85);
-  border-radius: 3px;
+  border-radius: var(--radius-md);
   transform: translateX(-50%);
 }
 
@@ -1291,7 +1291,7 @@
   font-size: var(--fs-mini);
   font-weight: var(--fw-regular);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .sketch-palette label {
@@ -1403,7 +1403,7 @@
   font-size: var(--fs-mini);
   font-weight: var(--fw-regular);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 .sketch-entity-fields {
@@ -1454,7 +1454,7 @@
   font-size: var(--fs-mini);
   font-weight: var(--fw-regular);
   letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+  text-transform: var(--tt-eyebrow);
 }
 
 /* I01: a projected entity's source and its link actions. */
@@ -1648,7 +1648,7 @@
   height: 14px;
   background: color-mix(in srgb, var(--plane-hue) 28%, transparent);
   border: 1.5px solid var(--plane-hue);
-  border-radius: 3px;
+  border-radius: var(--radius-md);
 }
 
 .sketch-plane-name {

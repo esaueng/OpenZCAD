@@ -245,8 +245,8 @@
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: calc(0.04em * var(--ls-eyebrow-scale));
+  text-transform: var(--tt-eyebrow);
 }
 
 .drawing-panel-heading {
@@ -948,7 +948,7 @@
   flex: 0 0 72px;
   height: 4px;
   overflow: hidden;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--color-border);
 }
 
