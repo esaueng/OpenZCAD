@@ -36,8 +36,8 @@ plane y = 5. An offset of that unnamed Post wall holds only a hash. After the
 same move it stops with a typed `invalid_input` refusal and the app's
 repair prompt, and keeps the cut (1400) with no retarget. The three-operand
 cut names no edges (two operands name all 18), so a chamfer on a generated
-rim also holds only a hash. After the move it stops the same way and leaves
-the cut unchamfered (1400), never moving to another edge; the two-operand
+rim also holds only a hash. After the move it stops with a typed
+`invalid_input` refusal and leaves the cut unchamfered (1400), never moving to another edge; the two-operand
 chamfer follows to x = 13. This is the K05 limit. An `it.fails`
 pins an incidental Untyped-refusal gap: that rim chamfer refuses with category
 `internal` once a through bore sits in the same top face. In a Subtract
