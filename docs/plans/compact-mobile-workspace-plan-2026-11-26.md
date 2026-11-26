@@ -1,6 +1,7 @@
 # Compact mobile workspace plan
 
-Proposed 2026-11-26. Owns [U12](../../ROADMAP.md#u12). Each slice below is one
+Proposed and decided with the owner 2026-11-26 (see
+[Owner decisions](#owner-decisions)). Owns [U12](../../ROADMAP.md#u12). Each slice below is one
 bounded PR that records its evidence as a U12 fragment in
 [docs/roadmap-evidence/](../roadmap-evidence/README.md).
 
@@ -21,7 +22,8 @@ stays reachable. It has:
 - a softer and friendlier look;
 - much less text on screen.
 
-The desktop and tablet ("regular") workspace is unchanged by this plan.
+The desktop and tablet ("regular") workspace keeps its layout. It takes on
+the softer look only in slice 14, after the compact shell ships.
 
 ## Starting point (survey of `main` at `fd46ea8d`)
 
@@ -127,9 +129,11 @@ existing phone specs:
 6. **Undo and redo are always on screen** in every mode, as a floating pair
    on the stage. The two-finger and three-finger taps stay as shortcuts.
 7. **Softer visual language, on the compact shell first** (see below). It is
-   scoped to `[data-shell="compact"]`. Adopting it in the regular workspace is
-   a separate owner decision after the compact shell has been reviewed. This
-   supersedes, for compact only, the U04 "near-square" decision.
+   scoped to `[data-shell="compact"]` while the compact shell is built. After
+   slice 12, a token-only follow-up (slice 14) brings the same radii, colors
+   and type to the regular workspace, keeping desktop density. This
+   supersedes the U04 "near-square" decision: for compact now, everywhere
+   after slice 14.
 8. **Retire, don't stack.** When the compact shell becomes the default for
    the compact class, a deletion PR removes:
    - `phone-stage.css`;
@@ -344,11 +348,28 @@ shipping. The iOS work runs alongside the shell slices:
 - An iPhone 17 / iPhone SE-class UI smoke joins the shared scheme.
 - `run-ipad-simulator.mjs` falls back to any installed iPad or iPhone when
   the named simulator is missing.
-- Out of scope here: sign-in in the native app (the `zcad-ipad://app` origin
-  breaks passkeys, whose RP ID comes from `location.hostname`), App Store
-  identity and signing, and real-iPhone memory budgets. The first two need
-  their own owner decision or ADR; the third is device evidence under
-  [W01](../../ROADMAP.md#w01).
+- **Sign-in and sync use a native bridge** (owner decision). The bundled
+  `zcad-ipad://app` origin stays, so the app remains fully offline-capable,
+  but passkeys cannot run there: their RP ID comes from `location.hostname`.
+  Swift performs the passkey ceremonies through AuthenticationServices
+  against the web domain (associated domains `webcredentials:`), then hands
+  the web app a session through a narrow message handler. The web app's
+  passkey and E2EE code (`lib/e2ee/passkeys.ts`) then calls the bridge
+  instead of `navigator.credentials` when the bridge is present. This needs
+  an ADR before code, because it touches authentication and the
+  [ADR-024](../adrs/ADR-024-end-to-end-encrypted-projects.md) key flow. The
+  ADR must settle:
+  - how the session is scoped and stored (Keychain, never `localStorage`);
+  - which origins the bridge accepts messages from (the app origin only);
+  - how PRF or key-derivation outputs used by encryption cross the bridge
+    without being logged or persisted;
+  - how sign-out and revocation reach both sides.
+
+  Until that slice (13) lands, the native app stays offline-only.
+
+- Out of scope here: App Store identity and signing (an owner decision), and
+  real-iPhone memory budgets (device evidence under
+  [W01](../../ROADMAP.md#w01)).
 
 ## Slices
 
@@ -422,6 +443,19 @@ shipping. The iOS work runs alongside the shell slices:
       `stageFootClaimContracts.test.ts` and the phone parts of
       `viewerResponsiveContracts.test.ts`.
     - `touch-targets`, `touch-navigation` and `touchContracts` are kept.
+13. **Native sign-in bridge.**
+    - The ADR first, then the Swift AuthenticationServices bridge, the
+      associated-domains entitlement and the web-side bridge adapter for
+      passkeys and the session.
+    - It is reviewed as security-sensitive work, independently of slice
+      size.
+    - It is independent of slices 2–12 and can start after slice 11.
+14. **Softer look in the regular workspace.**
+    - The compact radius, color and type tokens move to the global `:root`
+      at desktop density, and the `[data-shell="compact"]` overrides shrink
+      to the sizes that differ.
+    - The regular screenshots move deliberately in this one PR, and contrast
+      tests cover both shells.
 
 Slices 4–10 each turn their registry entries from `pending` to a named compact
 entry, so the parity test tracks progress. They may run in parallel once 1–3
@@ -451,12 +485,17 @@ chrome differs.
   acceptance on a real iPhone records first-load time, memory headroom (W01)
   and the gestures Safari and WKWebView handle differently from emulation.
 
-## Open owner decisions
+## Owner decisions
 
-1. Whether the softer visual language is later adopted by the regular
-   workspace. The recommendation is yes, as a token-only follow-up after
-   slice 12, keeping desktop density.
-2. The 600 px width / 500 px landscape threshold for the compact class. The
-   recommendation is yes, including narrow desktop windows.
-3. Sign-in and sync in the native iOS app (a separate ADR), and its App Store
-   identity.
+Decided 2026-11-26:
+
+1. **The softer look comes to desktop and iPad after the phone ships.** It is
+   a token-only follow-up (slice 14) that keeps desktop density.
+2. **Compact class threshold:** at most 600 px wide, or at most 500 px tall
+   in landscape. This includes narrow desktop windows and iPad Split View,
+   with Settings › Appearance › Layout to force Compact or Full.
+3. **Mode tabs show an icon and one word**, as in the mockups.
+4. **Native iOS sign-in and sync use a native AuthenticationServices
+   bridge** (slice 13, ADR first). The bundled offline app origin is kept.
+
+Still open: the App Store identity and signing of the native app.
