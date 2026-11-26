@@ -18,6 +18,10 @@ Keep credentials in ignored local configuration. Use synthetic or sanitized mode
 
 Create a branch in your fork and open a pull request against `main`. Explain the problem, the resulting behavior, and how you verified it. Discuss large changes in an issue first. Keep fixes focused and include regression coverage for bugs.
 
+Title pull requests as [Conventional Commits](https://www.conventionalcommits.org/) (`feat(web): …`, `fix(kernel-adapter): …`, `docs: …`). Main merges through a squash-only merge queue, so the title becomes the commit, and its type decides the app version: each `feat`, `fix`, `perf` or `revert` merge adds one patch ([App versioning](docs/versioning.md)). Do not bump versions by hand.
+
+Pick work from the [master roadmap](ROADMAP.md). Record an implementation's evidence as a fragment in [docs/roadmap-evidence/](docs/roadmap-evidence/README.md) instead of editing the roadmap row. A change that bumps `PROJECT_DOCUMENT_SCHEMA_VERSION` should state the version it builds on and the one it introduces; tests read the constant rather than a version literal.
+
 Preserve these architecture boundaries:
 
 - The browser document and command history are canonical; viewport meshes are disposable projections.
@@ -32,13 +36,14 @@ The Remus dependencies are pinned to source commits. Kernel updates must include
 Run the checks relevant to your change and report any checks you could not run:
 
 ```bash
-pnpm typecheck
 pnpm lint
+pnpm typecheck
 pnpm test
+pnpm test:parity-corpus
 pnpm build
 pnpm test:e2e
 ```
 
-For geometry changes, also consider `pnpm test:parity-corpus`; for interaction changes, exercise the affected browser workflow. Documentation-only changes should have valid links, accurate commands, and clean formatting. Required pull request checks still apply.
+The first five are the required `checks / validate` gate; CI also runs the tagged Playwright smoke suite. Use the top-level `pnpm build`, which adds the bundle-size check, rather than a filtered web build. Geometry and kernel changes need `pnpm test:parity-corpus`; for interaction changes, exercise the affected browser workflow. [Unit test suites](docs/unit-test-suites.md) and [Browser test suites](docs/browser-test-suites.md) explain how CI selects tests. Documentation-only changes should have valid links, accurate commands, and clean formatting. Required pull request checks still apply.
 
 Do not include secrets, private models, or personal environment details in commits, logs, screenshots, or pull requests. Contributions are made under the repository's [Apache-2.0 license](LICENSE).
