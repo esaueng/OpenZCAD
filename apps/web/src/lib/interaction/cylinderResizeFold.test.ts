@@ -8,7 +8,8 @@ import {
 import {
   FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
-  type DirectEditOperation
+  type DirectEditOperation,
+  type FaceTopologyReferenceV5
 } from '@openzcad/shared';
 import { cylinderResizeFold } from './cylinderResizeFold';
 
@@ -109,6 +110,178 @@ describe('cylinder resize fold', () => {
     });
     expect(
       cylinderResizeFold(bound.document, heldAt(bound.bodyId), 5)
+    ).toBeNull();
+  });
+
+  it('appends on a coaxial sibling patch at the size the resize produced', () => {
+    // Same body, radius and axis line, but another span: a slot splits one
+    // bore into patches, and the tip resized the one at z 0–10.
+    const { document, bodyId } = resized();
+    const sibling = {
+      ...heldAt(bodyId),
+      axisStart: { x: 20, y: 20, z: 12 },
+      axisEnd: { x: 20, y: 20, z: 20 }
+    };
+    expect(cylinderResizeFold(document, sibling, 5)).toBeNull();
+    // Overlapping the recorded span is still another face.
+    expect(
+      cylinderResizeFold(
+        document,
+        { ...sibling, axisStart: { x: 20, y: 20, z: 0 } },
+        5
+      )
+    ).toBeNull();
+  });
+
+  it('folds by a shared face name when the span moved upstream', () => {
+    const reference = {
+      kind: 'face',
+      producingFeatureId: 'feature_bore',
+      lineageName: 'primitive.cylinder.face.wall',
+      currentHash: 7,
+      witnessVersion: 1
+    } as unknown as FaceTopologyReferenceV5;
+    const { document, bodyId } = resized({ faceReference: reference });
+    const longer = {
+      ...heldAt(bodyId),
+      axisStart: { x: 20, y: 20, z: 0 },
+      axisEnd: { x: 20, y: 20, z: 14 }
+    };
+    expect(
+      cylinderResizeFold(document, { ...longer, reference }, 5)?.featureId
+    ).toBe(document.featureOrder.at(-1));
+    // Another name with another span is a sibling, not this face.
+    expect(
+      cylinderResizeFold(
+        document,
+        {
+          ...longer,
+          reference: { ...reference, lineageName: 'subtract.tool.face.wall' }
+        },
+        5
+      )
+    ).toBeNull();
+    // Without a name the recorded span still decides.
+    expect(cylinderResizeFold(document, heldAt(bodyId), 5)?.featureId).toBe(
+      document.featureOrder.at(-1)
+    );
+    // Two different names never fold, even over the recorded span.
+    expect(
+      cylinderResizeFold(
+        document,
+        {
+          ...heldAt(bodyId),
+          reference: { ...reference, lineageName: 'subtract.tool.face.wall' }
+        },
+        5
+      )
+    ).toBeNull();
+  });
+
+  it('never merges walls by their distance from the origin', () => {
+    // A tube 100 m out: the bore went from R4 to R4.95, and the outer wall,
+    // R5 over the same span, is 0.05 mm away.
+    const far = (z: number) => ({ x: 100_000, y: 0, z });
+    const { document, bodyId } = resized({
+      kind: 'resize-through-hole',
+      sourceDiameter: 8,
+      sourceAxisStart: far(0),
+      sourceAxisEnd: far(10),
+      diameter: 9.9
+    });
+    const wall = (radius: number, concavity: 'hole' | 'boss') => ({
+      bodyId,
+      radius,
+      axisStart: far(0),
+      axisEnd: far(10),
+      concavity
+    });
+    expect(cylinderResizeFold(document, wall(5, 'boss'), 4.975)).toBeNull();
+    // Neither the radius nor the side alone may let it through.
+    expect(cylinderResizeFold(document, wall(5, 'hole'), 4.975)).toBeNull();
+    expect(cylinderResizeFold(document, wall(4.95, 'boss'), 4.975)).toBeNull();
+    expect(
+      cylinderResizeFold(document, wall(4.95, 'hole'), 4.975)?.operation
+    ).toMatchObject({ diameter: 9.95 });
+  });
+
+  it('folds a through-hole whose resize re-trimmed its ends', () => {
+    // A chamfered bore spans z 1–9; shrinking it moves its ends to where
+    // the narrower wall meets the chamfers, and an older pick stored no name.
+    const { document, bodyId } = resized({
+      kind: 'resize-through-hole',
+      sourceDiameter: 6,
+      sourceAxisStart: { x: 20, y: 20, z: 1 },
+      sourceAxisEnd: { x: 20, y: 20, z: 9 },
+      diameter: 4.2
+    });
+    const span = (lo: number, hi: number) => ({
+      bodyId,
+      radius: 2.1,
+      axisStart: { x: 20, y: 20, z: hi },
+      axisEnd: { x: 20, y: 20, z: lo },
+      concavity: 'hole' as const
+    });
+    const tip = document.featureOrder.at(-1);
+    expect(cylinderResizeFold(document, span(1.9, 8.1), 2.5)?.featureId).toBe(
+      tip
+    );
+    expect(cylinderResizeFold(document, span(0.5, 9.5), 2.5)?.featureId).toBe(
+      tip
+    );
+    // A coaxial patch beyond the recorded span, or touching only its end,
+    // is a sibling.
+    expect(cylinderResizeFold(document, span(11, 19), 2.5)).toBeNull();
+    expect(cylinderResizeFold(document, span(9, 12), 2.5)).toBeNull();
+  });
+
+  it("never folds a parallel bore that a long bore's axis band would reach", () => {
+    // Two R0.02 bores 0.06 apart: the longer, 100 m, was just resized by an
+    // older pick that stored no name. A length-scaled band (0.1 mm) would
+    // put the shorter bore on the longer one's axis line and rewrite the
+    // longer bore's edit.
+    const { document, bodyId } = resized({
+      kind: 'resize-through-hole',
+      sourceDiameter: 0.04,
+      sourceAxisStart: { x: 0, y: 0, z: 0 },
+      sourceAxisEnd: { x: 0, y: 0, z: 100_000 },
+      diameter: 0.042
+    });
+    const bore = (x: number, length: number) => ({
+      bodyId,
+      radius: 0.021,
+      axisStart: { x, y: 0, z: 0 },
+      axisEnd: { x, y: 0, z: length },
+      concavity: 'hole' as const,
+      reference: {
+        producingFeatureId: 'feature_short',
+        lineageName: 'bore-wall'
+      } as unknown as FaceTopologyReferenceV5
+    });
+    expect(cylinderResizeFold(document, bore(0.06, 90_000), 0.022)).toBeNull();
+    // The long bore itself still folds.
+    expect(
+      cylinderResizeFold(document, bore(0, 100_000), 0.022)?.featureId
+    ).toBe(document.featureOrder.at(-1));
+  });
+
+  it('keeps a moved-end wall resize as a new edit when it may be partial', () => {
+    // The generic wall resize also covers partial turns, which can sit
+    // beside a sibling over the same range: only the recorded ends prove it.
+    const { document, bodyId } = resized({
+      sourceAxisStart: { x: 20, y: 20, z: 1 },
+      sourceAxisEnd: { x: 20, y: 20, z: 9 }
+    });
+    expect(
+      cylinderResizeFold(
+        document,
+        {
+          ...heldAt(bodyId),
+          axisStart: { x: 20, y: 20, z: 1.5 },
+          axisEnd: { x: 20, y: 20, z: 8.5 }
+        },
+        5
+      )
     ).toBeNull();
   });
 

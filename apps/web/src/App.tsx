@@ -32089,7 +32089,8 @@ export function App() {
                 y: target.axisEnd[1],
                 z: target.axisEnd[2]
               },
-              concavity: target.concavity
+              concavity: target.concavity,
+              ...(target.reference ? { reference: target.reference } : {})
             },
             radius
           )
