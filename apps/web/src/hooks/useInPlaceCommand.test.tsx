@@ -3972,12 +3972,13 @@ describe('useInPlaceCommand: M11 Mirror of several bodies', () => {
             : null;
         }
       }),
-      derive: async () => ({
-        ...fakeDocument(true).derived,
-        bodyRepresentations: { [BODY]: {}, body_out_0: {} },
-        warnings: warnings.map((warning) => warning.message),
-        featureWarnings: warnings
-      })
+      derive: async () =>
+        ({
+          ...fakeDocument(true).derived,
+          bodyRepresentations: { [BODY]: {}, body_out_0: {} },
+          warnings: warnings.map((warning) => warning.message),
+          featureWarnings: warnings
+        }) as unknown as ProjectDocument['derived']
     });
     act(() => hook.result.current.start('mirror', [], [], [LEFT, RIGHT]));
     act(() => {
