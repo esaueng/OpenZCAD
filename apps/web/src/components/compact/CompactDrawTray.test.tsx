@@ -128,7 +128,9 @@ function shell(props: Parameters<typeof Stage>[0]) {
 
 const panel = () => document.querySelector<HTMLElement>('.compact-sheet')!;
 const detent = () => panel().getAttribute('data-detent');
-const tray = () => screen.findByRole('toolbar', { name: 'Draw tools' });
+const tray = () =>
+    // The tray is lazy: a cold first load takes longer than findBy's 1 s.
+    screen.findByRole('toolbar', { name: 'Draw tools' }, { timeout: 5000 });
 
 describe('CompactDrawTray (U12 slice 9)', () => {
   it('rests at peek and opens each page over the tray', async () => {

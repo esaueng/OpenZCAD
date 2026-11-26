@@ -3666,7 +3666,9 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
   }
   const fingerprint = () =>
     drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!;
-  const tray = () => screen.findByRole('toolbar', { name: 'Draw tools' });
+  const tray = () =>
+    // The tray is lazy: a cold first load takes longer than findBy's 1 s.
+    screen.findByRole('toolbar', { name: 'Draw tools' }, { timeout: 5000 });
   const sheetPanel = () =>
     document.querySelector<HTMLElement>('.compact-sheet')!;
   async function openPage(name: string) {
@@ -3878,6 +3880,20 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
     fireEvent.click(page.getByRole('button', { name: 'Update' }));
     expect(onCommand).toHaveBeenCalledTimes(1);
     expect(onCommand.mock.calls[0]![0].kind).toBe('drawing.sheet.update');
+  });
+
+  it('steps a page back on Escape from its own controls', async () => {
+    compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Export');
+    const pdf = await page.findByRole('button', { name: 'Export PDF' });
+    expect(sheetPanel().getAttribute('data-detent')).toBe('half');
+    pdf.focus();
+    fireEvent.keyDown(pdf, { key: 'Escape' });
+    await waitFor(() =>
+      expect(sheetPanel().getAttribute('data-detent')).toBe('peek')
+    );
+    expect(within(sheetPanel()).queryByRole('button', { name: 'Export PDF' }))
+      .toBeNull();
   });
 
   it('offers only a new sheet before the first one', async () => {
