@@ -99,6 +99,7 @@ import {
   type ThreadRequest
 } from './thread';
 import { referenceImage, type ImageSlot } from './image';
+import { faceAlignSpec } from './faceAlign';
 import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
 import { standardPartSpec, type StandardPartRequest } from './standardPart';
 
@@ -140,6 +141,7 @@ export type InPlaceToolId =
   | 'split'
   | 'scale'
   | 'axis-rotate'
+  | 'align'
   | 'union'
   | 'subtract'
   | 'intersect'
@@ -180,6 +182,7 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'split',
   'scale',
   'axis-rotate',
+  'align',
   'union',
   'subtract',
   'intersect',
@@ -664,6 +667,8 @@ export type InPlaceRequest =
       tool: 'transform';
       targetBodyId: BodyId;
       translation: ParametricVector3;
+      /** Align (M10): the turn, as Move stores it; absent is none. */
+      rotationDeg?: ParametricVector3;
       scale?: ParamValue;
       pivot?: ParametricVector3;
       axisRotation?: { axis: InPlaceAxisRef; angleDeg: ParamValue };
@@ -921,8 +926,22 @@ export interface InPlaceToolSpec {
   featureName?: string;
   /** One profile, an ordered list of them (a loft's sections), or none. */
   profileMode: 'none' | 'one' | 'many';
-  /** Model faces it takes, all on one body; `planar` refuses curved ones. */
-  faceMode?: 'one' | 'many';
+  /**
+   * Model faces it takes, all on one body; `planar` refuses curved ones.
+   * `pair` takes two in order, the second on another body (Align's moving
+   * face, then its target): a click on a picked face takes it back out.
+   */
+  faceMode?: 'one' | 'many' | 'pair';
+  /**
+   * Why a clicked face cannot join the picks as they stand (Align's curved
+   * face, or a target on the moving body), else null: the click is refused
+   * with this sentence on the status line.
+   */
+  refuseFace?(
+    slots: InPlaceSlots,
+    face: FacePick,
+    ctx: InPlaceContext
+  ): string | null;
   /** Whole bodies it takes, named by a click on any of their faces. */
   bodyMode?: 'one' | 'many';
   /** Model edges it takes, all on one body (Shift is not needed). */
@@ -6000,7 +6019,7 @@ const DIRECTION_QUANTUM = 1e-9;
 export function inPlaceFaceMode(
   spec: InPlaceToolSpec | null | undefined,
   options: Readonly<Record<string, string>> | undefined
-): 'one' | 'many' | undefined {
+): 'one' | 'many' | 'pair' | undefined {
   if (!spec) return undefined;
   if (takesFeatureFaces(spec, options)) return 'many';
   return spec.faceMode;
@@ -8102,6 +8121,7 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   split,
   scale,
   'axis-rotate': axisRotate,
+  align: faceAlignSpec,
   union: booleanSpec('union', 'Union'),
   subtract: booleanSpec('subtract', 'Subtract'),
   intersect: booleanSpec('intersect', 'Intersect'),

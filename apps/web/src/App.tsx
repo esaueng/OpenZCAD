@@ -29171,6 +29171,7 @@ export function App() {
           name,
           targetBodyId: request.targetBodyId,
           translation: request.translation,
+          ...(request.rotationDeg ? { rotationDeg: request.rotationDeg } : {}),
           ...(request.scale !== undefined ? { scale: request.scale } : {}),
           ...(request.pivot !== undefined ? { pivot: request.pivot } : {}),
           ...(request.axisRotation
@@ -30452,7 +30453,8 @@ export function App() {
   /** A face-list command's faces, lit as a sweep's are. */
   const inPlaceFocusFaces = useMemo<TopologySelection[] | null>(
     () =>
-      inPlaceFaceMode(inPlaceSpec, inPlace.options) === 'many' &&
+      (inPlaceFaceMode(inPlaceSpec, inPlace.options) === 'many' ||
+        inPlaceFaceMode(inPlaceSpec, inPlace.options) === 'pair') &&
       inPlace.slots.faces.length > 0
         ? inPlace.slots.faces.map((face) => ({
             bodyId: face.bodyId,
