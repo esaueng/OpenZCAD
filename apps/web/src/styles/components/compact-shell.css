@@ -587,7 +587,8 @@
   background: var(--color-surface-hover);
 }
 
-.compact-menu-row:disabled {
+.compact-menu-row:disabled,
+.compact-menu-row[aria-disabled='true'] {
   color: var(--color-text-dim);
   cursor: not-allowed;
 }

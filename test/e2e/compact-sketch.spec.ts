@@ -657,6 +657,57 @@ test.describe('the compact sketch', () => {
     await finishSpline.tap();
     await expectEntities(page, drawn + 1);
 
+    // Enter on the type the chooser opens on finishes the spline, as on
+    // the rail's type strip: it does not re-arm Fit spline and drop the
+    // points placed.
+    await tapPlane(page, [
+      [-22, 36],
+      [-12, 42],
+      [-2, 36]
+    ]);
+    await expect(finishSpline).toBeVisible();
+    await curve.tap();
+    const fitTile = sketchTools(page)
+      .getByRole('radiogroup', { name: 'Curve type' })
+      .getByRole('radio', { name: 'Fit spline' });
+    await expect(fitTile).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expectEntities(page, drawn + 2);
+    await expect(finishSpline).toHaveCount(0);
+    const splines = (await sketchState(page)).objects.filter(
+      ({ data }) => data.objectKind === 'spline'
+    ) as unknown as { data: { points: unknown[] } }[];
+    expect(splines.at(-1)!.data.points).toHaveLength(3);
+    await sketchTools(page)
+      .getByRole('button', { name: 'Back to the sketch tools' })
+      .tap();
+
+    // Select all, unavailable while Offset collects its picks, says why on
+    // a tap: a phone has no hover to show its title.
+    await openAllSketchTools(page);
+    const offset = await pageControl(
+      page,
+      'Offset',
+      sheet(page).getByRole('region', { name: 'Modify' })
+    );
+    await offset.tap();
+    await expect(offset).toHaveAttribute('aria-pressed', 'true');
+    const selectAll = await pageControl(page, 'Select all');
+    await expect(selectAll).toHaveAttribute('aria-disabled', 'true');
+    // A finger on it: Playwright's own tap waits for an enabled control.
+    const at = (await selectAll.boundingBox())!;
+    await page.touchscreen.tap(at.x + at.width / 2, at.y + at.height / 2);
+    const why = sheet(page).getByRole('status').filter({
+      hasText: 'Finish or cancel Offset first.'
+    });
+    await expect(why).toBeVisible();
+    await expectReachable(why);
+    expect(await entityCount(page)).toBe(drawn + 2);
+    await offset.scrollIntoViewIfNeeded();
+    await offset.tap();
+    await expect(offset).toHaveAttribute('aria-pressed', 'false');
+    await sheet(page).getByRole('button', { name: 'Back', exact: true }).tap();
+
     // A text draft outlives its card closing, and Text brings it back.
     await tapTool(page, 'Text');
     const card = page.getByRole('form', { name: 'Place text' });

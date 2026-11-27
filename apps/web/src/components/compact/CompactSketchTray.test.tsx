@@ -482,11 +482,14 @@ describe('the compact sketch', () => {
     expect(
       controlOwnsEnter(within(row).getByRole('button', { name: 'Line' }))
     ).toBe(false);
-    // A type chooser's row is navigation of its own.
+    // A type chooser's tiles leave Enter to the work in progress, as the
+    // rail's type strips do: Enter on the Fit spline tile finishes the
+    // spline, not re-arms the tool and drops its points. Back is the row's
+    // own way out.
     fireEvent.click(within(row).getByRole('button', { name: /^Curve:/ }));
     const types = within(row).getByRole('radiogroup', { name: 'Curve type' });
     for (const radio of within(types).getAllByRole('radio')) {
-      expect(controlOwnsEnter(radio)).toBe(true);
+      expect(controlOwnsEnter(radio)).toBe(false);
     }
     expect(
       controlOwnsEnter(
@@ -549,12 +552,21 @@ describe('the compact sketch', () => {
     );
     await openAllSketchTools();
     const selectAll = screen.getByRole('button', { name: 'Select all' });
-    // Ctrl+A does nothing here; the row says why rather than doing nothing.
-    expect(selectAll).toBeDisabled();
+    // Ctrl+A does nothing here; the row says why rather than doing nothing,
+    // and on a tap, since a phone has no hover to show its title.
+    expect(selectAll).toHaveAttribute('aria-disabled', 'true');
     expect(selectAll).toHaveAttribute(
       'title',
       'Finish or cancel Offset first.'
     );
+    const row = within(selectAll.closest('li') as HTMLElement);
+    expect(row.queryByRole('status')).toBeNull();
+    fireEvent.click(selectAll);
+    expect(p.onSelectAll).not.toHaveBeenCalled();
+    expect(row.getByRole('status')).toHaveTextContent(
+      'Finish or cancel Offset first.'
+    );
+    expect(row.getByRole('status')).toBeVisible();
     rerender(
       shell(
         <CompactModeTray
@@ -565,9 +577,16 @@ describe('the compact sketch', () => {
         />
       )
     );
-    expect(screen.getByRole('button', { name: 'Select all' })).toBeDisabled();
-    rerender(shell(<CompactModeTray mode="sketch" {...props()} />));
-    expect(screen.getByRole('button', { name: 'Select all' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Select all' })).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    const free = props();
+    rerender(shell(<CompactModeTray mode="sketch" {...free} />));
+    const enabled = screen.getByRole('button', { name: 'Select all' });
+    expect(enabled).toHaveAttribute('aria-disabled', 'false');
+    fireEvent.click(enabled);
+    expect(free.onSelectAll).toHaveBeenCalledTimes(1);
     expect(
       sketchSelectAllReason({
         canConstrain: false,

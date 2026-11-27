@@ -63,14 +63,16 @@ import {
   type SketchPaletteContentProps
 } from '../SketchToolRail';
 import { SKETCH_SELECTION_PAGE, useCompactTray } from './compactSlots';
+import { useTrayReason } from './ContextTray';
 import { TrayPage, useTrayPagesLeaveWithTray } from './CompactTray';
 
 /**
  * Marks a tray control whose Enter is its own: the viewer leaves Enter on
  * it to the control rather than finishing a spline in progress. The draw
- * tools do not carry it: Enter on the tool just tapped finishes the work in
- * progress, as on the rail (U01). The sheet's pages and the stage's chips
- * already own their Enter through the containers they land in.
+ * tools and a chooser's type tiles do not carry it: Enter on the tool or
+ * type just tapped finishes the work in progress, as on the rail and its
+ * type strips (U01). The sheet's pages and the stage's chips already own
+ * their Enter through the containers they land in.
  */
 const OWN_ENTER = { [OWN_ENTER_ATTRIBUTE]: '' };
 
@@ -236,7 +238,10 @@ interface TypeChoice<T extends string> {
 /**
  * A slot's types in the tray's own row, in place of the tools: never over
  * the canvas, where a drawing tap would land on it. A choice arms the tool
- * with that type and gives the row back to the tools.
+ * with that type and gives the row back to the tools. The tiles leave Enter
+ * to the work in progress, as the rail's type strips do: Enter on the Fit
+ * spline tile the chooser opened on finishes the spline being placed
+ * rather than re-arming the tool and dropping its points.
  */
 function TypeChooser<T extends string>({
   label,
@@ -276,7 +281,6 @@ function TypeChooser<T extends string>({
         className="compact-sketch-tools compact-sketch-types"
         role="radiogroup"
         aria-label={label}
-        {...OWN_ENTER}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -316,7 +320,11 @@ function isShapeTool(tool: SketchToolId): tool is 'polygon' | 'slot' | 'point' {
   return tool === 'polygon' || tool === 'slot' || tool === 'point';
 }
 
-/** One action row in a sketch page. */
+/**
+ * One action row in a sketch page. A row that cannot run now stays
+ * tappable and answers with its reason under it, as Build's disabled verbs
+ * do: on a phone there is no hover to show its title.
+ */
 function ActionRow({
   label,
   icon,
@@ -330,16 +338,27 @@ function ActionRow({
   disabledReason?: string | null;
   onPress(): void;
 }) {
+  const [reason, showReason, reasonTurn] = useTrayReason();
+  const shown = disabledReason ? reason : null;
+  const reasonRef = useRef<HTMLParagraphElement | null>(null);
+  // The reason stands under the row, which may sit at the sheet's edge:
+  // each tap that asks brings it into view.
+  useEffect(() => {
+    reasonRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [reasonTurn]);
   return (
     <li>
       <button
         type="button"
         className="compact-menu-row"
         aria-label={label}
-        disabled={Boolean(disabledReason)}
+        aria-disabled={Boolean(disabledReason)}
         title={disabledReason ?? undefined}
         {...(pressed === undefined ? {} : { 'aria-pressed': pressed })}
-        onClick={onPress}
+        onClick={() => {
+          if (disabledReason) showReason(disabledReason);
+          else onPress();
+        }}
       >
         <span className="compact-menu-icon" aria-hidden="true">
           {icon}
@@ -351,6 +370,11 @@ function ActionRow({
           <Check className="compact-menu-check" size={18} aria-hidden="true" />
         ) : null}
       </button>
+      {shown ? (
+        <p ref={reasonRef} className="compact-tray-reason" role="status">
+          {shown}
+        </p>
+      ) : null}
     </li>
   );
 }
