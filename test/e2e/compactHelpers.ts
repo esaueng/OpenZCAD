@@ -54,6 +54,96 @@ export async function expectReachable(control: Locator) {
 }
 
 /**
+ * Waits for the sheet to come to rest: no transition running on it and its
+ * box the same on two reads in a row. `data-detent` changes as the sheet
+ * starts its spring, so a box read on that alone can land mid-glide.
+ */
+export async function waitForSheetToSettle(
+  page: Page,
+  options: { timeout?: number } = {}
+) {
+  let last = '';
+  await expect
+    .poll(async () => {
+      const read = await page.locator('.compact-sheet').evaluate((sheet) => {
+        const moving = sheet
+          .getAnimations()
+          .some((animation) => animation.playState !== 'finished');
+        const box = sheet.getBoundingClientRect();
+        return moving
+          ? 'moving'
+          : [box.left, box.top, box.width, box.height]
+              .map((value) => value.toFixed(1))
+              .join(',');
+      });
+      const settled = read !== 'moving' && read === last;
+      last = read;
+      return settled;
+    }, { intervals: [50, 100], ...options })
+    .toBe(true);
+}
+
+/**
+ * The stage's status (its line and its action, Undo or the like) is drawn
+ * whole, clear of the sheet: not under the sheet at peek, where a strip of
+ * it showed and a tap there reached its action (Section's Turn off), nor
+ * under the side sheet held landscape. The action is on top; the line
+ * takes no tap (one there picks the model).
+ */
+export async function expectStatusClearOfSheet(page: Page) {
+  const status = page.locator(
+    '.workspace-toast:not(.hidden) .workspace-toast-body'
+  );
+  await expect(status).toBeVisible();
+  await waitForSheetToSettle(page);
+  const parts = await page.evaluate(() => {
+    const sheet = document
+      .querySelector('.compact-sheet:not([hidden])')
+      ?.getBoundingClientRect();
+    return [
+      ...document.querySelectorAll<HTMLElement>(
+        '.workspace-toast:not(.hidden) :is(.workspace-toast-body, .workspace-toast-undo)'
+      )
+    ]
+      .filter((element) => {
+        const box = element.getBoundingClientRect();
+        return box.width > 0 && box.height > 0;
+      })
+      .map((element) => {
+        const box = element.getBoundingClientRect();
+        const underSheet = sheet
+          ? box.right > sheet.left + 0.5 &&
+            box.left < sheet.right - 0.5 &&
+            box.bottom > sheet.top + 0.5 &&
+            box.top < sheet.bottom - 0.5
+          : false;
+        const hit = document.elementFromPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2
+        );
+        const undo = element.classList.contains('workspace-toast-undo');
+        return {
+          name: element.textContent?.trim() ?? element.className,
+          underSheet,
+          // The action is what a tap there reaches; the line lets a tap
+          // through to the model, so nothing of the sheet's may stand over it.
+          reached: undo
+            ? hit !== null && element.contains(hit)
+            : hit === null || hit.closest('.compact-sheet') === null,
+          undo,
+          takesTaps: getComputedStyle(element).pointerEvents !== 'none'
+        };
+      });
+  });
+  expect(parts.length).toBeGreaterThan(0);
+  for (const part of parts) {
+    expect(part.underSheet, part.name).toBe(false);
+    expect(part.reached, part.name).toBe(true);
+    expect(part.takesTaps, part.name).toBe(part.undo);
+  }
+}
+
+/**
  * The visible controls under `selector` smaller than 44 px either way, by
  * name and size; empty when every target is large enough.
  */

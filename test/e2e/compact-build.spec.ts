@@ -1,19 +1,22 @@
 import {
   addPrimitiveFeature,
   addSketchFeature,
-  createProjectDocument
+  createProjectDocument,
+  transformBody
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { Locator, Page } from '@playwright/test';
 import {
   expectCompactWorkspace,
   expectReachable,
+  expectStatusClearOfSheet,
   preferCompact,
   smallTargets,
   STAGE_WORD_BUDGET,
   stageWords,
   TRAY_WORD_BUDGET,
-  trayWords
+  trayWords,
+  waitForSheetToSettle
 } from './compactHelpers';
 import {
   expect,
@@ -97,7 +100,7 @@ async function openCompact(
   if (document) {
     await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
       'data-e2e-rendered-bodies',
-      '1',
+      String(document.bodyOrder.length),
       { timeout: 60_000 }
     );
   }
@@ -223,6 +226,61 @@ async function projected(
   );
 }
 
+/**
+ * Every value chip drawn on the stage stands clear of the sheet beside it,
+ * held landscape: none under it, where it could be neither read nor tapped.
+ */
+async function expectChipsBesideSideSheet(page: Page) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const sheet = document
+            .querySelector('.compact-sheet:not([hidden])')!
+            .getBoundingClientRect();
+          const chips = [
+            ...document.querySelectorAll<HTMLElement>('.handle-value-chip')
+          ].filter((chip) => {
+            const box = chip.getBoundingClientRect();
+            return (
+              box.width > 0 &&
+              box.height > 0 &&
+              getComputedStyle(chip).visibility !== 'hidden'
+            );
+          });
+          return chips.length === 0
+            ? ['no chip drawn']
+            : chips
+                .filter(
+                  (chip) => chip.getBoundingClientRect().right > sheet.left
+                )
+                .map((chip) => chip.textContent?.trim() ?? '');
+        }),
+      { timeout: 20_000 }
+    )
+    .toEqual([]);
+}
+
+/**
+ * Every key of the keypad in the sheet is drawn inside the sheet's body:
+ * none below its foot, where it can be neither seen nor tapped.
+ */
+async function expectWholeKeypad(page: Page, keypad: Locator) {
+  await waitForSheetToSettle(page);
+  const outside = await keypad.evaluate((element) => {
+    const body = element
+      .closest('.compact-sheet-body')!
+      .getBoundingClientRect();
+    return [...element.querySelectorAll<HTMLElement>('.keypad-key')]
+      .filter((key) => {
+        const box = key.getBoundingClientRect();
+        return box.top < body.top - 0.5 || box.bottom > body.bottom + 0.5;
+      })
+      .map((key) => key.getAttribute('aria-label') ?? key.textContent);
+  });
+  expect(outside).toEqual([]);
+}
+
 /** Types `digits` on the keypad in the sheet by its keys, then applies. */
 async function keypadEntry(page: Page, keypad: Locator, digits: string) {
   const toggle = keypad.locator('.keypad-grid-toggle');
@@ -341,6 +399,10 @@ test.describe('Build in the compact workspace', () => {
         const cancel = row.getByRole('button', { name: 'Cancel' });
         await expectReachable(done);
         await expectReachable(cancel);
+        if (size.width > size.height) {
+          // Its values on the model stand beside the side sheet, not under it.
+          await expectChipsBesideSideSheet(page);
+        }
 
         // Options raise the sheet to half, in its flow under the row.
         await row.getByRole('button', { name: 'Box options' }).tap();
@@ -389,6 +451,12 @@ test.describe('Build in the compact workspace', () => {
             exact: true
           })
         ).toBeEnabled();
+        // What it says it did ("Added box.") is read whole, over the undo
+        // pair: not under the sheet, nor under its side held landscape.
+        await expect(
+          page.locator('.workspace-toast:not(.hidden) .workspace-toast-body')
+        ).toContainText('Added box');
+        await expectStatusClearOfSheet(page);
       }
     );
   }
@@ -411,13 +479,24 @@ test.describe('Build in the compact workspace', () => {
     await expectTrayBudget(page);
 
     // The radius's chip on the model opens the keypad in the sheet.
+    await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
     await page.getByTestId('command-handle-radius').tap();
     const keypad = sheet(page).getByRole('dialog', { name: /value$/ });
     await expect(keypad).toBeVisible();
     await expect(sheet(page)).toHaveAttribute('data-detent', /half|full/);
     await expectLargeTargets(page);
     await expectReachable(toolRow(page).getByRole('button', { name: 'Done' }));
+    // The whole pad, its lowest row too, in the sheet with the row over it.
+    const grid = keypad.locator('.keypad-grid-toggle');
+    if ((await grid.getAttribute('aria-expanded')) === 'false') {
+      await grid.tap();
+    }
+    await expectWholeKeypad(page, keypad);
+    await expectReachable(keypad.getByRole('button', { name: 'Backspace' }));
     await keypadEntry(page, keypad, '2');
+    // Applied, the pad goes and the sheet with it, back to the row at peek:
+    // not left at half, empty under the row.
+    await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
 
     const done = toolRow(page).getByRole('button', { name: 'Done' });
     await expect(done).toBeEnabled({ timeout: 30_000 });
@@ -503,6 +582,103 @@ test.describe('Build in the compact workspace', () => {
     );
     await toolRow(page).getByRole('button', { name: 'Cancel' }).tap();
     await expect(bar).toHaveCount(0);
+  });
+
+  test('keeps the keypad where it was scrolled as its keys are tapped, held landscape', async ({
+    page
+  }) => {
+    test.setTimeout(180_000);
+    await openCompact(page, SIZES[2], buildDocument('Compact keypad scroll'));
+    await launchFromAllTools(page, 'Edges & faces', 'Fillet');
+    const bar = sheet(page).getByRole('group', { name: 'Fillet command' });
+    await expect
+      .poll(
+        async () => {
+          await tapOpenEdge(page);
+          return (await bar.textContent()) ?? '';
+        },
+        { timeout: 60_000 }
+      )
+      .toMatch(/\d+ edges? ·/);
+    await page.getByTestId('command-handle-radius').tap();
+    const keypad = sheet(page).getByRole('dialog', { name: /value$/ });
+    await expect(keypad).toBeVisible();
+    const grid = keypad.locator('.keypad-grid-toggle');
+    if ((await grid.getAttribute('aria-expanded')) === 'false') {
+      await grid.tap();
+    }
+    // The side sheet is shorter than the pad: its lowest row is scrolled to.
+    await waitForSheetToSettle(page);
+    const body = sheet(page).locator('.compact-sheet-body:not([hidden])');
+    await body.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+    const scrolled = await body.evaluate((element) => element.scrollTop);
+    expect(scrolled).toBeGreaterThan(0);
+    const one = keypad.locator('.keypad-key').filter({ hasText: /^1$/ });
+    const zero = keypad.locator('.keypad-key').filter({ hasText: /^0$/ });
+    await expectReachable(one);
+    // Each tap types, and leaves the keys under the finger: the sheet did
+    // scroll back to its top for the field on every tap.
+    for (const key of [one, zero]) {
+      const at = (await key.boundingBox())!;
+      await page.touchscreen.tap(at.x + at.width / 2, at.y + at.height / 2);
+      expect(await body.evaluate((element) => element.scrollTop)).toBe(
+        scrolled
+      );
+    }
+    await expect(keypad.getByRole('textbox').first()).toHaveValue(/10$/);
+  });
+
+  test('keeps a push/pull value beside the side sheet, held landscape', async ({
+    page
+  }) => {
+    test.setTimeout(150_000);
+    // Two blocks, the second on the right, where the side sheet stands.
+    let document = createProjectDocument(
+      'Compact push pull',
+      toUserId('user_e2e')
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Left block',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 20 }
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Right block',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 20 }
+    });
+    const right = document.bodyOrder[1]!;
+    document = transformBody(document, {
+      name: 'Right block placement',
+      targetBodyId: right,
+      translation: { x: 80, y: 0, z: 0 }
+    }).document;
+    await openCompact(page, SIZES[2], document);
+    await expect
+      .poll(
+        () =>
+          page.locator('.viewer-host canvas').evaluate(
+            (element, bodyId) =>
+              new Promise<{ lineageName?: string } | null>((resolve) => {
+                element.dispatchEvent(
+                  new CustomEvent('openzcad:e2e-select-planar-face', {
+                    detail: {
+                      bodyId,
+                      normal: { x: 0, y: 0, z: 1 },
+                      select: true,
+                      resolve
+                    }
+                  })
+                );
+              }),
+            right
+          ),
+        { timeout: 60_000 }
+      )
+      .toMatchObject({ lineageName: 'primitive.box.face.z-max' });
+    await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
+    await waitForSheetToSettle(page);
+    await expectChipsBesideSideSheet(page);
   });
 
   test('runs Extrude from a tapped sketch region, then Move', async ({
@@ -897,22 +1073,65 @@ test.describe('the compact sheet after All tools and a refused tap', () => {
     });
     await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
     await shell.scrollIntoViewIfNeeded();
-    // A finger on it: Playwright's own tap waits for an enabled control.
-    const at = (await shell.boundingBox())!;
-    await page.touchscreen.tap(at.x + at.width / 2, at.y + at.height / 2);
     const reason = buildTray(page).locator('.compact-tray-reason');
-    await expect(reason).toContainText('open in another tab');
-    // Drawn, not just in the document: inside the sheet's box and on top.
-    await expect(sheet(page)).toHaveAttribute('data-detent', 'half');
-    await expectReachable(reason);
-    const clipped = await reason.evaluate((element) => {
-      const box = element.getBoundingClientRect();
-      const sheetBox = element
-        .closest('.compact-sheet')!
-        .getBoundingClientRect();
-      return box.bottom > sheetBox.bottom || box.top < sheetBox.top;
-    });
-    expect(clipped).toBe(false);
+    // Drawn, not just in the document: inside the sheet's box, in the
+    // viewport and on top, read in one go once the sheet has come to rest
+    // at half (read once mid-spring, it was clipped for a frame or two).
+    // The reason stands for TRAY_REASON_MS; on a loaded machine the spring
+    // and the reads can outlast it, so a reason already gone when read is
+    // asked for again. The read itself is asserted once, outside the retry:
+    // a reason clipped or covered on the settled sheet fails.
+    let shown: {
+      clipped: boolean;
+      inViewport: boolean;
+      onTop: boolean;
+    } | null = null;
+    await expect(async () => {
+      // The verb taken at rest, not riding a sheet that is still moving.
+      await waitForSheetToSettle(page, { timeout: 10_000 });
+      if ((await reason.count()) === 0) {
+        // Still held in the other tab: a tap on an enabled Shell would run it.
+        await expect(shell).toHaveAttribute('aria-disabled', 'true', {
+          timeout: 3_000
+        });
+        // A finger on it: Playwright's own tap waits for an enabled control.
+        const at = (await shell.boundingBox())!;
+        await page.touchscreen.tap(at.x + at.width / 2, at.y + at.height / 2);
+      }
+      await expect(reason).toContainText('open in another tab', {
+        timeout: 3_000
+      });
+      await expect(sheet(page)).toHaveAttribute('data-detent', 'half', {
+        timeout: 3_000
+      });
+      await waitForSheetToSettle(page, { timeout: 10_000 });
+      shown = await page.evaluate(() => {
+        const element = document.querySelector(
+          '.compact-sheet .compact-tray-reason'
+        );
+        if (!element) return null;
+        const box = element.getBoundingClientRect();
+        const sheetBox = element
+          .closest('.compact-sheet')!
+          .getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2
+        );
+        return {
+          clipped: box.bottom > sheetBox.bottom || box.top < sheetBox.top,
+          inViewport:
+            box.top >= 0 &&
+            box.left >= 0 &&
+            box.bottom <= window.innerHeight &&
+            box.right <= window.innerWidth,
+          onTop: hit !== null && element.contains(hit)
+        };
+      });
+      // Only a reason gone before it was read is asked for again.
+      expect(shown).not.toBeNull();
+    }).toPass({ timeout: 90_000 });
+    expect(shown).toEqual({ clipped: false, inViewport: true, onTop: true });
     // Gone with its reason, the sheet goes back to peek.
     await expect(reason).toHaveCount(0, { timeout: 10_000 });
     await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
