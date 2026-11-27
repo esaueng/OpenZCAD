@@ -2785,6 +2785,21 @@ const organizationMirrorHost: OrganizationMirrorHost = {
 const organizationBackground = new OrganizationMirrorBackground();
 
 /**
+ * Duplicates and branches still writing their copy to this device, each
+ * settling once its row is on the shelf. A listing that read this device
+ * before the copy landed would, applied after it, drop the row the copy
+ * added; one that read between the write and the row would list it twice.
+ */
+const projectCopiesInFlight = new Set<Promise<void>>();
+
+/** Settles once no copy is in flight, including any started meanwhile. */
+async function projectCopiesLanded(): Promise<void> {
+  while (projectCopiesInFlight.size > 0) {
+    await Promise.all(projectCopiesInFlight);
+  }
+}
+
+/**
  * Every project this device can reach. Device shelf state is reconciled before
  * expired local copies are purged so a temporarily failed cloud mirror cannot
  * resurrect a project after its local retention window closes.
@@ -2842,8 +2857,14 @@ async function loadProjectSummaries(
       }
       return fallback;
     };
+  // The account is asked at once; this device's rows are read once a copy
+  // still being written has landed, so the listing holds it exactly once.
+  const copiesLanded =
+    projectCopiesInFlight.size > 0 ? projectCopiesLanded() : null;
+  const fromDevice = <T,>(read: () => Promise<T>): Promise<T> =>
+    copiesLanded ? copiesLanded.then(read) : read();
   let priorityProjects: ProjectSummary[] = [];
-  const localRead = (options?.local ?? listLocalProjects())
+  const localRead = (options?.local ?? fromDevice(() => listLocalProjects()))
     .catch(unavailableAs<ProjectSummary[]>([]))
     .then((projects) => {
       priorityProjects = projects;
@@ -2854,7 +2875,7 @@ async function loadProjectSummaries(
   let listingRateLimit: RateLimit | null = null;
   const [local, organizationSnapshots, remote] = await Promise.all([
     localRead,
-    listLocalProjectOrganizationSnapshots().catch(
+    fromDevice(() => listLocalProjectOrganizationSnapshots()).catch(
       unavailableAs(new Map<string, LocalProjectOrganizationSnapshot>())
     ),
     signedIn
@@ -19074,7 +19095,23 @@ export function App() {
   }
 
   /** Copies `project` (or branches its save state); resolves the copy's id. */
-  async function handleDuplicateProject(
+  function handleDuplicateProject(
+    ...args: Parameters<typeof duplicateProject>
+  ): ReturnType<typeof duplicateProject> {
+    const copying = duplicateProject(...args);
+    // Listed until its row is on the shelf: a shelf listing started
+    // meanwhile (Back to projects right after Duplicate) reads this
+    // device once the copy has landed.
+    const landed = copying.then(
+      () => undefined,
+      () => undefined
+    );
+    projectCopiesInFlight.add(landed);
+    void landed.then(() => projectCopiesInFlight.delete(landed));
+    return copying;
+  }
+
+  async function duplicateProject(
     project: ProjectSummary,
     saveState?: ProjectCheckpoint,
     options: {

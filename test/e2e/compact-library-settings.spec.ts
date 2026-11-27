@@ -723,3 +723,57 @@ test(`settings at ${PHONE.width}×${PHONE.height}: a device-approval link opens 
   await dialog.getByRole('button', { name: 'Back to all settings' }).tap();
   await expect(dialog.getByLabel('Find a setting')).toHaveValue('');
 });
+
+test('a copy made just before Back to projects is listed once', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize(SIZES[0]!);
+  await openCompactLibrary(page);
+  await newProject(page, 'Race part');
+
+  // The account holds the copy until the shelf's listing has gone out, and
+  // that listing until the copy's row is up: the shelf then reads this device
+  // before the copy has landed, which is when its listing used to drop it.
+  let listingSent!: () => void;
+  const listingOut = new Promise<void>((resolve) => (listingSent = resolve));
+  let releaseListing!: () => void;
+  const listingHeld = new Promise<void>(
+    (resolve) => (releaseListing = resolve)
+  );
+  await page.route('**/api/projects/*/duplicate', async (route) => {
+    await listingOut;
+    await route.fallback();
+  });
+  await page.route('**/api/projects', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    listingSent();
+    await listingHeld;
+    // An account row marks when this listing reached the shelf.
+    return route.fulfill({
+      json: {
+        projects: [
+          {
+            projectId: 'proj_listing_marker',
+            name: 'Listing marker',
+            revisionCount: 1,
+            updatedAt: new Date().toISOString()
+          }
+        ]
+      }
+    });
+  });
+
+  const sheet = await openProjectSheet(page, 'Race part');
+  await sheet
+    .getByRole('button', { name: 'Duplicate project', exact: true })
+    .tap();
+  await backToLibrary(page);
+  const copies = page
+    .locator('.start-tile-project')
+    .filter({ hasText: 'Race part (copy)' });
+  await expect(copies).toHaveCount(1, { timeout: 60_000 });
+  releaseListing();
+  await expect(tile(page, 'Listing marker')).toBeVisible({ timeout: 60_000 });
+  await expect(copies).toHaveCount(1);
+});
