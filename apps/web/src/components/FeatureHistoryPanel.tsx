@@ -11,9 +11,10 @@ import { featureHistory } from '../lib/featureHistory';
 import { datumPlaneDescription } from '../lib/datumPlanes';
 import { builtOnFailedFeatures } from '../lib/featureRepair';
 import {
-  refusingWarning,
+  refusingWarningDetail,
   type FeatureBuildError
 } from '../lib/featureValidation';
+import { plainRefusal } from '../lib/refusalLanguage';
 
 interface Props {
   document: ProjectDocument;
@@ -59,15 +60,21 @@ export function FeatureHistoryPanel({
   const culprit = failure?.featureId
     ? graph.features.find((feature) => feature.featureId === failure.featureId)
     : undefined;
-  const warning =
+  // Worded as the command bar words it: a typed code by its code, kernel
+  // text in plain words, an adapter sentence as it is.
+  const refusing =
     selected && !isFeatureSuppressed(selected)
-      ? refusingWarning(
+      ? refusingWarningDetail(
           selected.name,
           document.derived.warnings,
           document.derived.featureWarnings,
           selected.featureId
         )
       : null;
+  const warning = refusing
+    ? plainRefusal(refusing.reason, refusing.kernelRefusal ?? refusing.category)
+        .message
+    : null;
   const link = (feature: FeatureNode) => (
     <li key={feature.featureId}>
       <button

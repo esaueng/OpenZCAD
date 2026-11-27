@@ -16,6 +16,7 @@ import {
 } from '@openzcad/shared';
 import { FeatureHistoryPanel } from './FeatureHistoryPanel';
 import { FeatureBuildError } from '../lib/featureValidation';
+import { MIRROR_SOURCE_UNAVAILABLE } from '../lib/refusalLanguage';
 
 it('shows dependent history and routes a failed edit by feature identity', async () => {
   const base = addPrimitiveFeature(
@@ -301,4 +302,46 @@ it('says a step that built on a failed step stands on its unchanged input', () =
       /“Round corners” failed to build, so this step is built on that step's input unchanged\./
     )
   ).toBeVisible();
+});
+
+// A failing step's card words a typed refusal from its code, as the command
+// bar does, and keeps the adapter's sentence out of it (preview check of
+// f4c7f13: a resumed Mirror whose source is suppressed).
+it("words a failing step's typed refusal from its code", () => {
+  const { document, fillet } = plateAndFillet();
+  const failing: ProjectDocument = {
+    ...document,
+    derived: {
+      ...document.derived,
+      warnings: ['Feature "Round corners": Mirror target is unavailable.'],
+      featureWarnings: [
+        {
+          featureId: fillet.featureId,
+          featureName: 'Round corners',
+          kind: 'build-failed',
+          message: 'Feature "Round corners": Mirror target is unavailable.',
+          kernelRefusal: {
+            family: 'reference',
+            category: 'invalid_input',
+            code: 'mirror_source_unavailable'
+          }
+        }
+      ]
+    }
+  };
+  render(
+    <FeatureHistoryPanel
+      document={failing}
+      selectedId={fillet.id}
+      failure={null}
+      onSelect={vi.fn()}
+      onDismissFailure={vi.fn()}
+    />
+  );
+  const details = screen.getByRole('region', { name: 'History details' });
+  expect(details).toHaveTextContent('Needs repair');
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    MIRROR_SOURCE_UNAVAILABLE
+  );
+  expect(details).not.toHaveTextContent('Mirror target is unavailable.');
 });
