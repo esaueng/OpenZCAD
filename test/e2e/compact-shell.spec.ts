@@ -230,187 +230,73 @@ test.describe('the compact workspace frame', () => {
     );
   }
 
-  test('keeps the undo pair clear of the sheet on every frame', async ({
+  test('moves the undo pair with the sheet, never on a clock of its own', async ({
     page
   }) => {
-    // The undo pair rides the sheet's top edge. It once eased its own
-    // `bottom` behind the sheet's height, so it stood inside the sheet as
-    // the sheet came up at load, for as long as a busy main thread stalled
-    // that transition: a settled read could still catch it there. So read
-    // the pair against the sheet on every drawn frame, through the open, a
-    // raise and a lower.
-    //
-    // Where in the frame the read happens decides whether it sees what was
-    // drawn. A rendering update runs animation frames, then style and
-    // layout, then every ResizeObserver callback, re-running layout after
-    // each, then paints; no script runs between its last observer callback
-    // and the paint. The sheet publishes its height (`--compact-sheet-h`)
-    // from one of those callbacks. So every observer callback is wrapped to
-    // read both boxes after it runs, and a later read in the same update
-    // replaces an earlier one: the one left is the frame as painted. A probe
-    // resized from each animation frame gives every frame a callback of its
-    // own, so frames where nothing else resizes (a position-only animation)
-    // are read too, and the next animation frame, which comes after the
-    // paint, keeps the read. A read anywhere else can report a frame never
-    // drawn: between two observers it sees the sheet's new height against
-    // the stale property, and in a task between frames it sees a change the
-    // observers have yet to answer.
+    // The undo pair rides the sheet's top edge through `--compact-sheet-h`,
+    // which the sheet writes on every drawn frame. The pair once eased its
+    // own `bottom` behind that height, so it stood inside the sheet whenever
+    // the sheet came up at once (at load), for as long as a busy main thread
+    // stalled the transition, and a settled read could miss it. The cause is
+    // the transition itself, so the pair must carry none on its position;
+    // reading the computed style needs no frame sampling, which could itself
+    // change how the page resizes. Then, settled at each height, the pair
+    // stands clear of the sheet.
     test.setTimeout(120_000);
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.addInitScript(() => {
-      type Phase = {
-        frames: number;
-        paired: number;
-        worst: number;
-        heights: number[];
-      };
-      type Read = { phase: string; height: number; over: number | null };
-      const state = {
-        phase: 'open:moving',
-        phases: {} as Record<string, Phase>
-      };
-      let pending: Read | null = null;
-      const read = () => {
-        const sheet = document.querySelector('.compact-sheet:not([hidden])');
-        const history = document.querySelector('.compact-history');
-        const sheetBox = sheet?.getBoundingClientRect();
-        pending = {
-          phase: state.phase,
-          height: sheetBox ? Math.round(sheetBox.height) : 0,
-          over:
-            sheetBox && history
-              ? history.getBoundingClientRect().bottom - sheetBox.top
-              : null
-        };
-      };
-      const keep = () => {
-        if (!pending) return;
-        const entry = (state.phases[pending.phase] ??= {
-          frames: 0,
-          paired: 0,
-          worst: -Infinity,
-          heights: []
-        });
-        entry.frames += 1;
-        if (!entry.heights.includes(pending.height)) {
-          entry.heights.push(pending.height);
-        }
-        if (pending.over !== null) {
-          entry.paired += 1;
-          entry.worst = Math.max(entry.worst, pending.over);
-        }
-        pending = null;
-      };
-      const Native = window.ResizeObserver;
-      const probeObserver = new Native(read);
-      let probe: HTMLElement | null = null;
-      const tick = () => {
-        keep();
-        if (!probe && document.body) {
-          probe = document.createElement('div');
-          probe.setAttribute('aria-hidden', 'true');
-          probe.style.cssText =
-            'position:fixed;left:0;top:0;width:1px;height:1px;' +
-            'visibility:hidden;pointer-events:none;contain:strict';
-          document.body.append(probe);
-          probeObserver.observe(probe);
-        }
-        if (probe) {
-          probe.style.width = probe.style.width === '1px' ? '2px' : '1px';
-        }
-        requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-      window.ResizeObserver = class extends Native {
-        constructor(callback: ResizeObserverCallback) {
-          super((entries, observer) => {
-            try {
-              callback(entries, observer);
-            } finally {
-              read();
-            }
-          });
-        }
-      };
-      (
-        window as unknown as {
-          __undoFrames: { state: typeof state; keep: () => void };
-        }
-      ).__undoFrames = { state, keep };
-    });
-    type Phase = {
-      frames: number;
-      paired: number;
-      worst: number;
-      heights: number[];
-    };
-    type Frames = {
-      state: { phase: string; phases: Record<string, Phase> };
-      keep(): void;
-    };
-    // Later frames count toward `phase`.
-    const begin = (phase: string) =>
-      page.evaluate((name) => {
-        (
-          window as unknown as { __undoFrames: Frames }
-        ).__undoFrames.state.phase = name;
-      }, phase);
-    // Waits for `count` painted frames in `phase` that held both boxes.
-    const drawn = (phase: string, count: number) =>
-      page.waitForFunction(
-        ([name, least]) =>
-          ((window as unknown as { __undoFrames: Frames }).__undoFrames.state
-            .phases[name]?.paired ?? 0) >= least,
-        [phase, count] as const
+    await page.setViewportSize({ width: 430, height: 932 });
+    await openCompactProject(page, 'Undo pair');
+    const pair = page.locator('.compact-stage-controls');
+    const easedPosition = await pair.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const properties = style.transitionProperty
+        .split(',')
+        .map((name) => name.trim());
+      const durations = style.transitionDuration
+        .split(',')
+        .map((value) => parseFloat(value) || 0);
+      const delays = style.transitionDelay
+        .split(',')
+        .map((value) => parseFloat(value) || 0);
+      return properties.filter(
+        (name, index) =>
+          [
+            'all',
+            'bottom',
+            'top',
+            'inset',
+            'inset-block',
+            'transform',
+            'translate'
+          ].includes(name) &&
+          (durations[index % durations.length] ?? 0) +
+            (delays[index % delays.length] ?? 0) >
+            0
       );
-    const controls = ['.compact-sheet', '.compact-stage-controls'];
-
-    // Open: the start screen's frames hold no sheet (height 0), then the
-    // sheet comes up to its peek.
-    await openCompactProject(page, 'Compact frames');
-    await waitForSurfacesToSettle(page, controls);
-    await drawn('open:moving', 1);
-    await begin('open:settled');
-    await drawn('open:settled', 2);
+    });
+    expect(easedPosition).toEqual([]);
 
     const sheet = page.locator('.compact-sheet');
     const grabber = sheet.getByRole('slider', { name: 'Sheet height' });
+    const surfaces = ['.compact-sheet', '.compact-stage-controls'];
+    const clearance = async (when: string) => {
+      await waitForSurfacesToSettle(page, surfaces);
+      const [pairBox, sheetBox] = await Promise.all([
+        pair.boundingBox(),
+        sheet.boundingBox()
+      ]);
+      expect(pairBox, `the undo pair ${when}`).not.toBeNull();
+      expect(sheetBox, `the sheet ${when}`).not.toBeNull();
+      expect(
+        pairBox!.y + pairBox!.height - sheetBox!.y,
+        `the undo pair's overlap with the sheet ${when}`
+      ).toBeLessThanOrEqual(1);
+    };
+    await clearance('after the project opens');
     for (const detent of ['half', 'peek']) {
-      // One frame at the old height first, so the phase sees the change.
-      await begin(`${detent}:moving`);
-      await drawn(`${detent}:moving`, 1);
       await grabber.focus();
       await page.keyboard.press('Enter');
       await expect(sheet).toHaveAttribute('data-detent', detent);
-      await waitForSurfacesToSettle(page, controls);
-      await begin(`${detent}:settled`);
-      await drawn(`${detent}:settled`, 2);
-    }
-
-    const { phases } = await page.evaluate(() => {
-      const frames = (window as unknown as { __undoFrames: Frames })
-        .__undoFrames;
-      frames.keep();
-      return frames.state;
-    });
-    for (const phase of ['open', 'half', 'peek']) {
-      const moving = phases[`${phase}:moving`];
-      const settled = phases[`${phase}:settled`];
-      expect(moving?.paired, `frames read during ${phase}`).toBeGreaterThan(0);
-      expect(settled?.paired, `frames read after ${phase}`).toBeGreaterThan(0);
-      expect(
-        new Set(moving?.heights).size,
-        `the sheet's heights during ${phase}: ${moving?.heights.join(', ')}`
-      ).toBeGreaterThan(1);
-      for (const [when, entry] of [
-        ['during', moving],
-        ['after', settled]
-      ] as const) {
-        expect(
-          entry?.worst,
-          `the undo pair stood ${entry?.worst}px into the sheet ${when} ${phase}`
-        ).toBeLessThanOrEqual(1);
-      }
+      await clearance(`at ${detent}`);
     }
   });
 
