@@ -242,6 +242,27 @@ describe('AppShell in the compact workspace', () => {
     }
   });
 
+  it('offers the owner of a shared project their project from More, not a copy', async () => {
+    const props = chrome({
+      shareLink: true,
+      workspaceMode: 'tweak',
+      onMakeCopy: vi.fn(),
+      onOpenOwnProject: vi.fn()
+    });
+    render(shell(props));
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Open your project' })
+    );
+    expect(props.onOpenOwnProject).toHaveBeenCalledTimes(1);
+    expect(props.onMakeCopy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(
+      await screen.findByRole('button', { name: 'Open settings' })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Make a copy' })).toBeNull();
+  });
+
   it('marks the document compact while it is up, for portalled dialogs', async () => {
     const root = document.documentElement;
     const { rerender, unmount } = render(shell(chrome()));

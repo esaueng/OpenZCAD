@@ -179,6 +179,7 @@ export default function CompactWorkspace({
   selectionLabel,
   onClearSelection,
   onMakeCopy,
+  onOpenOwnProject,
   reducedMotion,
   panels,
   selection,
@@ -540,20 +541,33 @@ export default function CompactWorkspace({
               label="More"
               rows={[
                 // A shared link's visitor's way to keep the model, in any
-                // mode: the regular top bar's labelled button, here.
-                ...(onMakeCopy
+                // mode: the regular top bar's labelled button, here. Its
+                // owner is offered the project itself.
+                ...(onOpenOwnProject
                   ? [
                       {
-                        id: 'make-copy',
-                        label: 'Make a copy',
-                        icon: <Copy size={18} />,
+                        id: 'open-own-project',
+                        label: 'Open your project',
+                        icon: <FolderOpen size={18} />,
                         run: () => {
                           closePages();
-                          onMakeCopy();
+                          onOpenOwnProject();
                         }
                       }
                     ]
-                  : []),
+                  : onMakeCopy
+                    ? [
+                        {
+                          id: 'make-copy',
+                          label: 'Make a copy',
+                          icon: <Copy size={18} />,
+                          run: () => {
+                            closePages();
+                            onMakeCopy();
+                          }
+                        }
+                      ]
+                    : []),
                 {
                   id: 'settings',
                   label: 'Open settings',

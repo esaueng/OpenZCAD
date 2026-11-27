@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { DRAWING_TOOL_ACTIONS } from '../drawing/toolActions';
 import { ANNOTATION_TOOL_KEYS, ANNOTATION_TOOLS } from '../drawing/toolKeys';
 import { KEYMAP_COMMANDS, toolCommandId } from '../keymap';
 import { TOOL_GROUPS } from '../tools';
@@ -72,11 +73,16 @@ describe('action registry', () => {
     const units = literalIds(unitList![1]!, /'([^']+)'/g);
     expect(DISPLAY_UNIT_ROWS.map(([unit]) => unit)).toEqual(units);
 
+    // Draw's tools, one row each from the module Draw reads (U12).
+    expect(palette).toContain('DRAWING_TOOL_ACTIONS.map(');
+    expect(palette).toContain('drawingToolRow(drawingTool)');
+
     const rows = new Set(literalIds(palette, /\bid: '([^']+)'/g));
     for (const group of TOOL_GROUPS) {
       for (const tool of group.tools) rows.add(toolCommandId(tool));
     }
     for (const unit of units) rows.add(`file-display-units-${unit}`);
+    for (const action of DRAWING_TOOL_ACTIONS) rows.add(action.id);
     const registered = new Set(withSource('command-bar').map((e) => e.id));
     expect([...registered].sort()).toEqual([...rows].sort());
   });
@@ -284,6 +290,69 @@ describe('action registry', () => {
     // Tweak's exports were reached from the overflow menu already.
     expect(COMPACT_ENTRIES['file-export-step']).toBe('overflow-menu');
     expect(COMPACT_ENTRIES['file-export-mesh']).toBe('overflow-menu');
+  });
+
+  it('gives every Draw tool a command-bar row, in Draw only, running Draw’s own handler', () => {
+    const drawing = withSource('drawing');
+    expect(drawing).toHaveLength(25);
+    for (const entry of drawing) {
+      expect(entry.sources, entry.id).toEqual(['drawing', 'command-bar']);
+    }
+    expect(DRAWING_TOOL_ACTIONS.map((action) => action.id).sort()).toEqual(
+      drawing.map((entry) => entry.id).sort()
+    );
+    // The rows: listed only while Draw is open, each built by one function
+    // that runs the action's entry in the handler map, with the reason a
+    // tool cannot start now.
+    const palette = block(
+      app,
+      'const paletteCommands = withDistinctLabels<PaletteCommand>([',
+      '\n  ]);'
+    );
+    expect(palette).toMatch(
+      /\.\.\.\(drawingMode\s*\?\s*DRAWING_TOOL_ACTIONS\.map\(/
+    );
+    const row = block(
+      app,
+      'const drawingToolRow = (drawingTool: DrawingToolAction)',
+      '\n  };\n'
+    );
+    expect(row).toContain('id: drawingTool.id');
+    expect(row).toContain('run: actionHandlers[drawingTool.id]');
+    expect(row).toContain('status.disabledReason');
+    // The entry runs Draw's handler, the one its keys, toolbar and tray run.
+    const handlers = block(
+      app,
+      'const drawingToolHandlers = Object.fromEntries(',
+      ') as Record<'
+    );
+    expect(handlers).toContain('drawingTools?.run(action.id)');
+    expect(
+      block(app, 'const actionHandlers = {', '} satisfies ActionHandlers;')
+    ).toContain('...drawingToolHandlers');
+    expect(app).toContain('onToolBridge={setDrawingTools}');
+    const workspace = read('components/DrawingWorkspace.tsx');
+    const keys = block(
+      workspace,
+      'shortcutRef.current = (event: KeyboardEvent) => {',
+      '\n  };\n'
+    );
+    expect(keys).toContain('runToolAction(action.id);');
+    expect(workspace).toContain('run: (id) => runToolActionRef.current(id)');
+    // The toolbar and the compact tray start a tool through it too.
+    expect(workspace).toContain(
+      'kind ? runToolAction(`drawing-${kind}`) : chooseTool(null)'
+    );
+    expect(workspace).toContain(
+      'onTool: (kind) => runToolAction(`drawing-${kind}`)'
+    );
+    for (const view of ['section', 'detail', 'auxiliary']) {
+      expect(
+        workspace.split(`onToggle: () => runToolAction('drawing-${view}-view')`)
+          .length - 1,
+        view
+      ).toBe(2);
+    }
   });
 
   it('gives Draw’s tray every drawing tool, and nothing else', () => {
