@@ -1,5 +1,0 @@
----
-row: M07
----
-
-A second radius drag folds into the history tip only when the tip resized the held face itself, by the rules the exact rebuild resolves that face with. When both carry a v5 face name, the names decide. Otherwise a through-hole, a complete turn, matches by an axial span overlapping the recorded one, so a legacy resize that re-trimmed its ends against a chamfer still folds. Any other wall must sit at the recorded axis endpoints. The radius and span tolerances scale with the wall's size, not its distance from the origin, and a through-hole resize never folds a boss wall. A coaxial sibling patch at the same radius now appends its own edit instead of moving the sibling, closing the expected failure the repeated-curved-patches slice pinned, and a tube's outer wall 0.05 mm from its resized bore at X = 100 m no longer rewrites the bore's resize (`cylinderResizeFold.ts`, `cylinderResizeFold.test.ts`, `test/cylinder-resize-fold.test.ts`, `test/repeated-curved-patches.test.ts`).

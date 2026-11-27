@@ -1,7 +1,10 @@
 import { useRef } from 'react';
 import { CirclePlay } from 'lucide-react';
 import { useModalFocus } from '../lib/useModalFocus';
-import { plainRefusal } from '../lib/refusalLanguage';
+import {
+  plainRefusal,
+  type RefusalClassification
+} from '../lib/refusalLanguage';
 
 export interface ResumeHistoryDialogProps {
   /**
@@ -14,8 +17,16 @@ export interface ResumeHistoryDialogProps {
    * hand or paused by a rollback. Absent for a rollback marker move.
    */
   row?: { name: string; state: 'suppressed' | 'paused' };
-  /** The resumed features that would not rebuild, each with its reason. */
-  failures: readonly { name: string; reason: string }[];
+  /**
+   * The resumed features that would not rebuild, each with its reason and,
+   * when the rebuild typed it, its record: a typed code is worded from the
+   * code, as the command bar words it.
+   */
+  failures: readonly {
+    name: string;
+    reason: string;
+    kernelRefusal?: RefusalClassification;
+  }[];
   /** Keep the rollback, or the row, paused. Nothing changes. */
   onKeep(): void;
   /** Commit the move as one undoable step, failures and all. */
@@ -80,7 +91,7 @@ export function ResumeHistoryDialog({
             {named.map((failure, index) => (
               <li key={`${index}-${failure.name}`}>
                 <strong>{failure.name}</strong>:{' '}
-                {plainRefusal(failure.reason).message}
+                {plainRefusal(failure.reason, failure.kernelRefusal).message}
               </li>
             ))}
             {unnamed > 0 && <li>and {unnamed} more</li>}

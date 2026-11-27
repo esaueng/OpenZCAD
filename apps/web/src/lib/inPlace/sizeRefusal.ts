@@ -13,8 +13,26 @@ export interface SmallerSize {
 }
 
 const FEATURE_PREFIX = /^Feature "[^"]*":\s*/u;
-const BUILDS_HERE =
-  /Try a smaller (radius|distance): \1 (-?\d+(?:\.\d+)?(?:e-?\d+)?) builds here\./u;
+/**
+ * A size as the adapter quotes it, which is how JavaScript prints a number:
+ * plain, or in exponent notation for a very small or large one ("1.5e-9",
+ * "1e+21"). Matched whole, so the unit never lands inside the exponent.
+ */
+const SIZE = String.raw`-?\d+(?:\.\d+)?(?:e[+-]?\d+)?`;
+const BUILDS_HERE = new RegExp(
+  String.raw`Try a smaller (radius|distance): \1 (${SIZE}) builds here\.`,
+  'u'
+);
+// A size ends at a space, at the end, or at a full stop that ends the
+// sentence: never at the decimal point of "1.5e-9".
+const WITH_SIZE = new RegExp(
+  String.raw`\bwith (radius|distance) (${SIZE})(?=\s|$|\.(?!\d))`,
+  'u'
+);
+const QUOTED_SIZE = new RegExp(
+  String.raw`: (radius|distance) (${SIZE}) builds here\.`,
+  'u'
+);
 
 /** The proved size in a refusal ("radius 6.25 builds here"), if any. */
 export function smallerSizeIn(refusal: string): SmallerSize | null {
@@ -34,12 +52,6 @@ export function blendRefusalText(refusal: string, unit: string | null): string {
   const text = refusal.replace(FEATURE_PREFIX, '');
   if (!unit) return text;
   return text
-    .replace(
-      /\bwith (radius|distance) (-?\d+(?:\.\d+)?)(?=[.\s])/u,
-      `with $1 $2 ${unit}`
-    )
-    .replace(
-      /: (radius|distance) (-?\d+(?:\.\d+)?(?:e-?\d+)?) builds here\./u,
-      `: $1 $2 ${unit} builds here.`
-    );
+    .replace(WITH_SIZE, `with $1 $2 ${unit}`)
+    .replace(QUOTED_SIZE, `: $1 $2 ${unit} builds here.`);
 }
