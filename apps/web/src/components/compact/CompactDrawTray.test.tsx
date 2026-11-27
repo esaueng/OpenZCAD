@@ -237,6 +237,27 @@ describe('CompactDrawTray (U12 slice 9)', () => {
       clientY: 10
     });
     expect(onCancel).toHaveBeenCalledTimes(2);
+
+    // Done on a lift ends the tool, and its row: the click the browser may
+    // still make of that tap lands on the tray drawn in Done's place, and
+    // opens nothing there.
+    const done = within(row).getByRole('button', { name: 'Done' });
+    const lift = { pointerId: 9, pointerType: 'touch', clientX: 10, clientY: 10 };
+    fireEvent.pointerDown(done, lift);
+    fireEvent.pointerUp(done, lift);
+    expect(onDone).toHaveBeenCalledTimes(3);
+    rerender(shell({ sheets: sheets(), sheet, run: null }));
+    const shown = within(await tray()).getByRole('button', {
+      name: 'Export'
+    });
+    fireEvent.click(shown);
+    expect(within(panel()).queryByRole('heading', { name: 'Export' })).toBeNull();
+    // The next tap is a tap again.
+    fireEvent.pointerDown(shown, { ...lift, pointerId: 10 });
+    fireEvent.click(shown);
+    expect(
+      await within(panel()).findByRole('heading', { name: 'Export' })
+    ).toBeTruthy();
   });
 
   it('brings the settings of a newly added view into sight on Views', async () => {

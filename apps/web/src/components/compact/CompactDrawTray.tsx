@@ -644,8 +644,11 @@ function EmptyRow({ control }: { control: CompactDrawSheets }) {
  * a screen reader click.
  */
 function RunRow({ run }: { run: CompactDrawRun }) {
+  // Not disposed as the row goes: Cancel and Done end the tool, and the
+  // row with it, on the lift, and the click that may follow must still be
+  // swallowed then, not land on the tray button drawn in Done's place. The
+  // swallow ends itself on that click, the next press or a key.
   const [taps] = useState(() => new SwipeActionTaps<'cancel' | 'done'>());
-  useEffect(() => () => taps.dispose(), [taps]);
   const tapAction = (key: 'cancel' | 'done', action: () => void) => ({
     onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
       taps.press();
