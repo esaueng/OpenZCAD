@@ -2132,6 +2132,7 @@ import {
   refusedMirrorMember,
   type MirrorSetMember
 } from './lib/inPlace/mirrorBodies';
+import { planeEdgeFromTopology } from './lib/inPlace/splitEdgePlane';
 import { imagePlacementPlane, placeImage } from './lib/inPlace/image';
 import {
   FIXED_POINT_OPTION,
@@ -23805,6 +23806,30 @@ export function App() {
           !representations[selection.bodyId] ||
           (command.editing?.data.featureKind === 'boolean' &&
             command.editing.ownBodyIds.includes(selection.bodyId));
+        // M11 (D2): with the body picked, a straight edge is half of a plane
+        // through two edges (Split). The plane is read once from the edges
+        // as they stand on screen, the preview's first, and stored by its
+        // numbers like a face's: nothing follows the edges afterwards.
+        if (
+          selection.kind === 'edge' &&
+          command.spec.planeFromEdges &&
+          command.slots.bodies.length > 0 &&
+          command.options.planeMode !== 'typed' &&
+          !additive
+        ) {
+          const edge =
+            selection.hash === undefined
+              ? null
+              : planeEdgeFromTopology(
+                  (
+                    previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+                    representations[selection.bodyId]
+                  )?.topology,
+                  selection.bodyId,
+                  selection.hash
+                );
+          return edge ? command.pickPlaneEdge(edge) : true;
+        }
         // With the body picked, a flat face is the plane to mirror or split
         // across; otherwise any face names its body. M11 (D4): Shift on
         // Mirror, which takes several bodies, toggles the clicked body.
@@ -30818,6 +30843,20 @@ export function App() {
   );
   const inPlaceEdgesRef = useRef(inPlace.slots.edges);
   inPlaceEdgesRef.current = inPlace.slots.edges;
+  // M11 (D2): a Split's edges held toward a plane through two edges, drawn
+  // from their exact ends over whichever body shows (the committed body, the
+  // preview's halves): not a selection, which the viewport matches by an id
+  // only one of those bodies has.
+  const inPlacePlaneEdgeLines = useMemo(
+    () =>
+      inPlace.active && inPlaceSpec?.planeFromEdges
+        ? (inPlace.slots.planeEdges ?? []).map(({ ends: [start, end] }) => ({
+            start,
+            end
+          }))
+        : [],
+    [inPlace.active, inPlaceSpec?.planeFromEdges, inPlace.slots.planeEdges]
+  );
   const litInPlaceEdges = useRef(false);
   useEffect(() => {
     if (inPlaceEdgeKey === null) {
@@ -41335,6 +41374,7 @@ export function App() {
                 ? []
                 : selectedEdges
             }
+            pickedEdgeLines={inPlacePlaneEdgeLines}
             pickListEnabled={
               appSettings.experiments.directManipulation && !inPlace.active
             }
