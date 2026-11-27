@@ -285,9 +285,15 @@ export default function CompactWorkspace({
     trayShown
   ]);
 
-  // The keypad needs the room of half height at least.
+  // The keypad needs the room of half height at least, for as long as it is
+  // open: applied or cancelled, the sheet goes back to the height it stood
+  // at (a running tool's row at peek), rather than staying up at half with
+  // nothing under the row. Raised by the person meanwhile, it stays.
+  const keypadWasUp = useRef(false);
   useEffect(() => {
-    if (keypadUp) dispatch({ type: 'raise', detent: 'half' });
+    if (keypadUp) dispatch({ type: 'raise', detent: 'half', temporary: true });
+    else if (keypadWasUp.current) dispatch({ type: 'lower' });
+    keypadWasUp.current = keypadUp;
   }, [dispatch, keypadUp]);
 
   // What in the sheet asks for room (a tool's Options, a refusal) raises it.

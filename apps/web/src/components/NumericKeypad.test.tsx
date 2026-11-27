@@ -24,6 +24,7 @@ import type { PreviewVerdict } from '../lib/keypad';
 import type { CommandDiagnostic } from '../lib/interaction/machine';
 import type { SelectionCalloutOperation } from '../lib/selectionCallout';
 import { prepareCommandChip } from '../lib/inPlace/chipNames';
+import { CompactOverlayHostContext } from './compact/compactSlots';
 
 /** Answers `(pointer: fine)` as a mouse (true) or a touch screen (false). */
 function stubPointer(fine: boolean) {
@@ -1860,5 +1861,64 @@ describe('a radial size of zero or less', () => {
     expect(within(view.keypad).queryByRole('alert')).toBeNull();
     expect(view.input).toHaveAttribute('aria-invalid', 'false');
     expect(view.onPreview).toHaveBeenLastCalledWith(5);
+  });
+});
+
+describe('the keypad in the compact sheet', () => {
+  /** Taps 7 and Backspace, and says how each tap refocused the field. */
+  function tapKeys(host: HTMLElement | null) {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      render(
+        <CompactOverlayHostContext.Provider value={host}>
+          <NumericKeypad
+            request={{
+              kind: 'offset',
+              label: 'Height',
+              initial: '5',
+              unitKind: 'length'
+            }}
+            units="mm"
+            scope={{}}
+            anchorRef={{ current: null }}
+            onPreview={vi.fn()}
+            onCommit={vi.fn()}
+            onCancel={() => undefined}
+          />
+        </CompactOverlayHostContext.Provider>
+      );
+      focus.mockClear();
+      fireEvent.click(screen.getByRole('button', { name: '7' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Backspace' }));
+      return focus.mock.calls.map((call) => call[0]);
+    } finally {
+      focus.mockRestore();
+    }
+  }
+
+  it('keeps the sheet where it was scrolled when a key refocuses the field', () => {
+    // The pad scrolls in the sheet under the tray row: a refocus that
+    // scrolled the field into view moved the keys from under the finger,
+    // back to the sheet's top on every tap (the #2216 preview check).
+    const host = document.createElement('div');
+    document.body.append(host);
+    try {
+      const calls = tapKeys(host);
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+      for (const options of calls) {
+        expect(options).toEqual({ preventScroll: true });
+      }
+    } finally {
+      cleanup();
+      host.remove();
+    }
+  });
+
+  it('refocuses as before on the regular stage', () => {
+    const calls = tapKeys(null);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const options of calls) {
+      expect(options?.preventScroll ?? false).toBe(false);
+    }
   });
 });

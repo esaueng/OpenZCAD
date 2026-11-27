@@ -59,6 +59,11 @@ export function useCompactCommandRowHost(present: boolean): HTMLElement | null {
   return slot?.host ?? null;
 }
 
+/** Whether this is drawn inside the compact workspace's shell (U12). */
+export function useInCompactShell(): boolean {
+  return useContext(CompactCommandRowContext) !== null;
+}
+
 /**
  * Whether a running command's bar is drawn as the compact sheet's tray (U12
  * slice 4): one pinned row of the tool's icon, its step, Options, Cancel and

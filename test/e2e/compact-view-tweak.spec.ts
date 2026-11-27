@@ -229,7 +229,7 @@ function layoutReport(page: Page): Promise<LayoutReport> {
       : ['no cube'];
     const targets = [
       ...document.querySelectorAll<HTMLElement>(
-        '.compact-chrome button, .compact-chrome select, .compact-chrome input, .compact-chrome [role="slider"]'
+        '.compact-chrome button, .compact-chrome select, .compact-chrome input, .compact-chrome [role="slider"], .compact-chrome summary'
       )
     ].filter(
       (element) => shown(element) && !element.closest('[hidden], [inert]')
@@ -265,6 +265,28 @@ async function expectTidy(page: Page) {
   expect(report.overCube).toEqual([]);
   expect(report.smallTargets).toEqual([]);
   expect(report.regularChrome).toEqual([]);
+}
+
+/**
+ * What the stage draws just above the sheet's top edge, along its width,
+ * that is not the stage itself: a status line left under the sheet showed
+ * a strip there, which took taps.
+ */
+function overSheetEdge(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const sheet = document
+      .querySelector('.compact-sheet:not([hidden])')!
+      .getBoundingClientRect();
+    const found = new Set<string>();
+    for (let x = sheet.left + 8; x < sheet.right - 8; x += 12) {
+      for (const dy of [1, 4, 7]) {
+        const hit = document.elementFromPoint(x, sheet.top - dy);
+        const status = hit?.closest('.workspace-toast');
+        if (status) found.add(hit!.className || hit!.tagName);
+      }
+    }
+    return [...found];
+  });
 }
 
 /** The camera's direction from its target, as the viewer reports it. */
@@ -327,6 +349,23 @@ test.describe('View and Tweak in the compact sheet', () => {
         await expect(workbench).toContainText('Pick an edge, face, hole', {
           timeout: 30_000
         });
+        // The page has the room to be used at half, held either way: the
+        // side sheet held landscape, where half once left the workbench
+        // about 90 px.
+        await expectTidy(page);
+        const room = await workbench.evaluate((element) => {
+          const body = element
+            .closest('.compact-sheet-body')!
+            .getBoundingClientRect();
+          const box = element.getBoundingClientRect();
+          return (
+            Math.min(box.bottom, body.bottom) - Math.max(box.top, body.top)
+          );
+        });
+        expect(room).toBeGreaterThanOrEqual(180);
+        await expect(
+          workbench.getByRole('group', { name: 'Picks' })
+        ).toBeInViewport({ ratio: 1 });
         await waitForStillViewport(page);
         const first = await locateEdge(page);
         await page.touchscreen.tap(first.x, first.y);
@@ -370,6 +409,32 @@ test.describe('View and Tweak in the compact sheet', () => {
         await expectTidy(page);
         await back(page);
         // The tray says the cut is on.
+        await expect(view('Section view')).toHaveClass(/is-on/);
+        // The tray's mark says so, not the stage's standing line: nothing
+        // of it is drawn along the collapsed sheet's edge, where a strip
+        // of it and its Turn off showed and a tap turned the cut back off.
+        await waitForSurfacesToSettle(page, ['.compact-sheet']);
+        const sectionLine = page.locator('.workspace-toast[data-section-line]');
+        await expect(sectionLine).toHaveCount(1);
+        // The rest of the footer is still read out: the warning count and
+        // the sync status…
+        const summary = page.getByRole('group', { name: 'Workspace status' });
+        await expect(summary).toHaveCount(1);
+        await expect(summary).toContainText('warnings');
+        await expect(summary).toContainText('sync');
+        // …while neither the line nor its Turn off is drawn.
+        expect(
+          await sectionLine
+            .locator('.workspace-toast-body')
+            .evaluate((line) => {
+              const box = line.getBoundingClientRect();
+              return box.width <= 1 && box.height <= 1;
+            })
+        ).toBe(true);
+        await expect(
+          sectionLine.getByRole('button', { name: 'Turn off section view' })
+        ).toBeHidden();
+        expect(await overSheetEdge(page)).toEqual([]);
         await expect(view('Section view')).toHaveClass(/is-on/);
 
         // Display: another mode.
@@ -447,11 +512,14 @@ test.describe('View and Tweak in the compact sheet', () => {
 
         // A parameter, typed on the keypad.
         await tweak('Parameters').tap();
-        const edit = sheet(page).getByRole('button', { name: 'Edit width' });
+        const edit = sheet(page).getByRole('button', { name: 'Edit Width' });
         await expect(edit).toContainText('20');
         await edit.tap();
         const keypad = page.getByRole('dialog', { name: /value$/ });
         await expect(keypad).toBeVisible();
+        // Its toggle, Apply, keys and Backspace each a finger's size.
+        await waitForSurfacesToSettle(page, ['.compact-sheet']);
+        expect((await layoutReport(page)).smallTargets).toEqual([]);
         // The pad adds to what the field holds: clear it, then the value.
         for (const key of ['Backspace', 'Backspace', '3', '0']) {
           await keypad.getByRole('button', { name: key, exact: true }).tap();
@@ -460,7 +528,7 @@ test.describe('View and Tweak in the compact sheet', () => {
         await expect(keypad).toHaveCount(0);
         await expect(edit).toContainText('30', { timeout: 30_000 });
         // And a step.
-        await sheet(page).getByRole('button', { name: 'Increase width' }).tap();
+        await sheet(page).getByRole('button', { name: 'Increase Width' }).tap();
         await expect(edit).toContainText('31', { timeout: 30_000 });
         await expectTidy(page);
         await back(page);
@@ -624,10 +692,10 @@ test.describe('View and Tweak in the compact sheet', () => {
       await openSharedBracket(page);
       await trayButton(page, 'Tweak tools', 'Parameters').tap();
       const editWidth = sheet(page).getByRole('button', {
-        name: 'Edit width'
+        name: 'Edit Width'
       });
       const editDepth = sheet(page).getByRole('button', {
-        name: 'Edit depth'
+        name: 'Edit Depth'
       });
       await expect(editDepth).toContainText('4');
       // A Width draft, left open.
@@ -791,5 +859,63 @@ test.describe('View and Tweak in the compact sheet', () => {
       await control.scrollIntoViewIfNeeded();
       await expect(control, id).toBeInViewport();
     }
+  });
+});
+
+test.describe('View in the compact sheet with a mouse', () => {
+  // A narrow desktop window takes the compact layout too (U12): a fine
+  // pointer, with hover, and none of the coarse-pointer touch layouts.
+  test.use({ hasTouch: false, isMobile: false });
+
+  test('keeps a kept measurement’s actions in the sheet at a phone’s width', async ({
+    page
+  }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openSharedBracket(page);
+    const view = page
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: 'View', exact: true });
+    await view.click();
+    await trayButton(page, 'View tools', 'Measure').click();
+    const workbench = sheet(page).getByLabel('Measurement workbench');
+    await expect(workbench).toContainText('Pick an edge, face, hole', {
+      timeout: 30_000
+    });
+    await waitForStillViewport(page);
+    const first = await locateEdge(page);
+    await page.mouse.click(first.x, first.y);
+    await expect(
+      workbench.getByRole('button', { name: 'Clear picks' })
+    ).toBeVisible();
+    await waitForStillViewport(page);
+    const second = await locateEdge(page, { exclude: [first.topologyId] });
+    await page.mouse.click(second.x, second.y);
+    await expect(
+      workbench.getByRole('group', { name: 'Picks' })
+    ).not.toContainText('Compare…');
+    await workbench.getByRole('button', { name: /^Keep/ }).click();
+    await expect(workbench.getByRole('listitem')).toHaveCount(1);
+    // The row's Hide, Copy, Edit and Delete stand in the sheet, each a
+    // finger's size, and the page does not scroll sideways: squeezed into
+    // the desktop row's 108 px track, Delete stood past the sheet's edge.
+    const body = sheet(page).locator('.compact-sheet-body:not([hidden])');
+    const widths = await body.evaluate((element) => ({
+      scroll: element.scrollWidth,
+      client: element.clientWidth
+    }));
+    expect(widths.scroll).toBeLessThanOrEqual(widths.client);
+    const row = workbench.getByRole('listitem');
+    for (const action of ['Hide', 'Copy', 'Edit', 'Delete']) {
+      const button = row.getByRole('button', {
+        name: new RegExp(`^${action}`)
+      });
+      await button.scrollIntoViewIfNeeded();
+      await expect(button, action).toBeInViewport({ ratio: 1 });
+      const box = (await button.boundingBox())!;
+      expect(box.width, action).toBeGreaterThanOrEqual(43.5);
+      expect(box.height, action).toBeGreaterThanOrEqual(43.5);
+    }
+    await expectTidy(page);
   });
 });

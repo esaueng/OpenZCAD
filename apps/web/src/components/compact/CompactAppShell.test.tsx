@@ -637,6 +637,96 @@ describe('AppShell in the compact workspace', () => {
     expect(screen.queryByRole('group', { name: 'Build tray' })).toBeNull();
   });
 
+  it('takes the sheet back down to the row once the keypad closes', async () => {
+    function Row() {
+      const host = useCompactCommandRowHost(true);
+      return host
+        ? createPortal(
+            <CompactCommandTrayContext.Provider value={true}>
+              <InPlaceCommandBar
+                title="Fillet"
+                hint="1 edge · drag the radius"
+                canFinish
+                onDone={vi.fn()}
+                onCancel={vi.fn()}
+              />
+            </CompactCommandTrayContext.Provider>,
+            host
+          )
+        : null;
+    }
+    const stage = (open: boolean) => (
+      <div className="viewer-shell">
+        <Row />
+        {open ? (
+          <NumericKeypad
+            request={{
+              kind: 'command',
+              label: 'Radius',
+              initial: '1',
+              unitKind: 'length',
+              commandValueId: 'radius'
+            }}
+            units="mm"
+            scope={{}}
+            anchorRef={{ current: null }}
+            onPreview={() => undefined}
+            onCommit={() => undefined}
+            onCancel={() => undefined}
+          />
+        ) : null}
+      </div>
+    );
+    const props = chrome({
+      build: {
+        context: commandContextFor({
+          edgeCount: 0,
+          faceSelected: false,
+          bodyCount: 0,
+          regionCount: 0
+        }),
+        pick: null,
+        availability: {
+          sketchCount: 0,
+          liveBodyCount: 1,
+          exactGeometryReady: true,
+          hasEdgeSelected: false
+        },
+        activeTool: 'fillet',
+        recentTools: [],
+        pinnedTools: [],
+        onLaunchTool: vi.fn()
+      }
+    });
+    const detent = () =>
+      document.querySelector('.compact-sheet')!.getAttribute('data-detent');
+    const { rerender } = render(shell(props, { viewer: stage(false) }));
+    await waitFor(() =>
+      screen.getByRole('group', { name: 'Fillet command' })
+    );
+    // A running tool's row alone rests at peek, the model in view.
+    await waitFor(() => expect(detent()).toBe('peek'));
+    rerender(shell(props, { viewer: stage(true) }));
+    await waitFor(() => expect(detent()).toBe('half'));
+    // Applied (or cancelled), the keypad goes, and the sheet with it: no
+    // half-height sheet left empty under the row (the #2216 preview check).
+    rerender(shell(props, { viewer: stage(false) }));
+    await waitFor(() => expect(detent()).toBe('peek'));
+
+    // A height the person chose while it was open is theirs to keep.
+    rerender(shell(props, { viewer: stage(true) }));
+    await waitFor(() => expect(detent()).toBe('half'));
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Sheet height' }), {
+      key: 'End'
+    });
+    await waitFor(() => expect(detent()).toBe('full'));
+    rerender(shell(props, { viewer: stage(false) }));
+    await waitFor(() =>
+      expect(document.querySelectorAll('.numeric-keypad')).toHaveLength(0)
+    );
+    expect(detent()).toBe('full');
+  });
+
   it('draws an open File page from the commands as they are now', async () => {
     const pending = chrome({
       fileCommands: [

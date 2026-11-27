@@ -369,7 +369,7 @@ describe('the compact Tweak tray', () => {
     render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
     fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
     const increase = await screen.findByRole('button', {
-      name: 'Increase width'
+      name: 'Increase Width'
     });
     fireEvent.click(increase);
     await waitFor(() =>
@@ -377,15 +377,15 @@ describe('the compact Tweak tray', () => {
     );
     // At its minimum, it does not go lower.
     expect(
-      screen.getByRole('button', { name: 'Decrease width' })
+      screen.getByRole('button', { name: 'Decrease Width' })
     ).toBeDisabled();
     // An expression keeps its formula: no steppers.
     expect(
-      screen.getByRole('button', { name: 'Increase half' })
+      screen.getByRole('button', { name: 'Increase Half' })
     ).toBeDisabled();
     // On/off is one switch.
     const lettering = screen.getByRole('switch', {
-      name: 'Toggle lettering'
+      name: 'Toggle Lettering'
     });
     expect(lettering).toHaveAttribute('aria-checked', 'true');
     fireEvent.click(lettering);
@@ -394,11 +394,49 @@ describe('the compact Tweak tray', () => {
     );
   });
 
+  it('names each control by the label the row shows, not the parameter id', async () => {
+    const props = tweakProps({
+      parameters: [
+        parameter('plate_t', '4', { quantity: 'length' }),
+        parameter('r1', '2', {
+          quantity: 'length',
+          description: 'Corner radius'
+        }),
+        parameter('show_logo', '1', { toggle: { bodyIds: [] } })
+      ],
+      parameterValues: { plate_t: 4, r1: 2, show_logo: 1 },
+      parameterMinimums: {}
+    });
+    render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
+    fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
+    const list = await screen.findByRole('list', { name: 'Parameters' });
+    for (const label of ['Plate t', 'Corner radius']) {
+      expect(within(list).getByText(label)).toBeInTheDocument();
+      for (const verb of ['Decrease', 'Edit', 'Increase']) {
+        expect(
+          within(list).getByRole('button', { name: `${verb} ${label}` })
+        ).toBeInTheDocument();
+      }
+    }
+    expect(
+      within(list).getByRole('switch', { name: 'Toggle Show logo' })
+    ).toBeInTheDocument();
+    // No control is named by the expression id the row does not show.
+    expect(
+      within(list).queryByRole('button', { name: /plate_t|r1\b/ })
+    ).toBeNull();
+    // The value is still set by its id.
+    fireEvent.click(within(list).getByRole('button', { name: 'Increase Plate t' }));
+    await waitFor(() =>
+      expect(props.onSetParameter).toHaveBeenCalledWith('plate_t', '5')
+    );
+  });
+
   it('types a value on the keypad and applies it', async () => {
     const props = tweakProps();
     render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
     fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit width' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Width' }));
     const keypad = await screen.findByRole('dialog', { name: /value$/ });
     // Drawn over the sheet, in the compact frame's overlay host.
     expect(keypad.closest('.compact-overlay-host')).not.toBeNull();
@@ -421,7 +459,7 @@ describe('the compact Tweak tray', () => {
       render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
       fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
       fireEvent.click(
-        await screen.findByRole('button', { name: 'Edit width' })
+        await screen.findByRole('button', { name: 'Edit Width' })
       );
       const keypad = await screen.findByRole('dialog', { name: /value$/ });
       fireEvent.change(within(keypad).getByRole('textbox'), {
@@ -446,7 +484,7 @@ describe('the compact Tweak tray', () => {
       shell('tweak', <CompactModeTray mode="tweak" {...props} />)
     );
     fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit width' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Width' }));
     const keypad = await screen.findByRole('dialog', { name: /value$/ });
     fireEvent.change(within(keypad).getByRole('textbox'), {
       target: { value: '32' }
@@ -461,7 +499,7 @@ describe('the compact Tweak tray', () => {
     const props = tweakProps();
     render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
     fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit width' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Width' }));
     const keypad = await screen.findByRole('dialog', { name: /value$/ });
     fireEvent.change(within(keypad).getByRole('textbox'), {
       target: { value: '32' }
@@ -509,7 +547,7 @@ describe('the compact Tweak tray', () => {
     render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
     fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
     // A Width draft, left open.
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit width' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Width' }));
     const widthPad = await screen.findByRole('dialog', {
       name: /^width value$/i
     });
@@ -517,7 +555,7 @@ describe('the compact Tweak tray', () => {
       target: { value: '32' }
     });
     // Depth, reached by keyboard, takes 22 and applies it.
-    fireEvent.click(screen.getByRole('button', { name: 'Edit depth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Depth' }));
     const depthPad = await screen.findByRole('dialog', {
       name: /^depth value$/i
     });
@@ -549,14 +587,14 @@ describe('the compact Tweak tray', () => {
     });
     render(shell('tweak', <CompactModeTray mode="tweak" {...props} />));
     fireEvent.click(await trayButton('Tweak tools', 'Parameters'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit width' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Width' }));
     fireEvent.change(
       within(
         await screen.findByRole('dialog', { name: /^width value$/i })
       ).getByRole('textbox'),
       { target: { value: '32' } }
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Edit depth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Depth' }));
     fireEvent.change(
       within(
         await screen.findByRole('dialog', { name: /^depth value$/i })

@@ -9,6 +9,10 @@ import {
   STATUS_LIFETIME_MS
 } from '../lib/statusLifetime';
 import { ViewportDockExtras, WorkspaceReadout } from './WorkspaceReadout';
+import {
+  CompactCommandRowContext,
+  CompactStatusHostContext
+} from './compact/compactSlots';
 
 const SUMMARY = {
   prompt: 'Click a body, face, or edge · Shift+Click adds to selection',
@@ -486,6 +490,120 @@ describe('WorkspaceReadout', () => {
       />
     );
     expect(screen.queryByRole('button', { name: /^Undo/ })).toBeNull();
+  });
+
+  it('draws the status as text in the compact workspace, keeping its Undo', async () => {
+    // U12: there the line stands over the model and the log is in Settings.
+    // Pointer input alone was turned off by CSS, so Tab and Enter on the
+    // line still opened the activity log.
+    const user = userEvent.setup();
+    const onOpenLog = vi.fn();
+    const onUndo = vi.fn();
+    render(
+      <CompactCommandRowContext.Provider value={{ host: null, report() {} }}>
+        <button type="button">Before</button>
+        <WorkspaceReadout
+          status="Added box."
+          statusAt={Date.now()}
+          tone="ready"
+          onOpenLog={onOpenLog}
+          onUndo={onUndo}
+          {...SUMMARY}
+          prompt={null}
+          searchBar={null}
+        />
+      </CompactCommandRowContext.Provider>
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Added box.');
+    expect(
+      screen.queryByRole('button', { name: /Open activity log/ })
+    ).toBeNull();
+    screen.getByRole('button', { name: 'Before' }).focus();
+    // The next tab stop is the Undo: the line itself is none.
+    await user.tab();
+    const undo = screen.getByRole('button', { name: 'Undo: Added box.' });
+    expect(undo).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(onUndo).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole('status'));
+    expect(onOpenLog).not.toHaveBeenCalled();
+    // Still the landmark, with the summary for assistive tech.
+    expect(
+      screen.getByRole('group', { name: 'Workspace status' })
+    ).toHaveTextContent('sync');
+  });
+
+  it("keeps the compact status as text on the sheet's layer at full height", async () => {
+    // #2299 draws the footer on the notice host while the sheet is at full;
+    // #2302 makes its line text in compact. Both hold there together: the
+    // line opens no log and takes no tab stop, its Undo runs, and a cut's
+    // standing line keeps the attribute that hides it.
+    const user = userEvent.setup();
+    const onOpenLog = vi.fn();
+    const onUndo = vi.fn();
+    // The notice layer follows the stage in the document, as in the shell.
+    const container = document.createElement('div');
+    const host = document.createElement('div');
+    document.body.append(container, host);
+    const stage = (
+      status: string,
+      section: { label: string; note: null; onTurnOff(): void } | null
+    ) => (
+      <CompactCommandRowContext.Provider value={{ host: null, report() {} }}>
+        <CompactStatusHostContext.Provider value={host}>
+          <div data-testid="stage">
+            <button type="button">Before</button>
+            <WorkspaceReadout
+              status={status}
+              statusAt={status ? Date.now() : 0}
+              tone="ready"
+              section={section}
+              onOpenLog={onOpenLog}
+              onUndo={onUndo}
+              {...SUMMARY}
+              prompt={null}
+              searchBar={null}
+            />
+          </div>
+        </CompactStatusHostContext.Provider>
+      </CompactCommandRowContext.Provider>
+    );
+    try {
+      const { rerender } = render(stage('Added box.', null), {
+        container
+      });
+      const footer = screen.getByRole('contentinfo');
+      expect(host).toContainElement(footer);
+      expect(screen.getByTestId('stage')).not.toContainElement(footer);
+      expect(footer).not.toHaveAttribute('data-section-line');
+      expect(
+        screen.queryByRole('button', { name: /Open activity log/ })
+      ).toBeNull();
+      screen.getByRole('button', { name: 'Before' }).focus();
+      await user.tab();
+      const undo = screen.getByRole('button', { name: 'Undo: Added box.' });
+      expect(undo).toHaveFocus();
+      await user.keyboard('{Enter}');
+      expect(onUndo).toHaveBeenCalledOnce();
+      await user.click(screen.getByRole('status'));
+      expect(onOpenLog).not.toHaveBeenCalled();
+
+      rerender(
+        stage('', {
+          label: 'Section · XZ plane',
+          note: null,
+          onTurnOff: vi.fn()
+        })
+      );
+      expect(screen.getByRole('contentinfo')).toHaveAttribute(
+        'data-section-line',
+        'true'
+      );
+      expect(host).toContainElement(screen.getByRole('contentinfo'));
+    } finally {
+      host.remove();
+      container.remove();
+    }
   });
 
   it('carries the orbit mode in the summary for assistive tech', () => {

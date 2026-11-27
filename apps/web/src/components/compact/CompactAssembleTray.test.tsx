@@ -168,6 +168,32 @@ describe('Assemble’s compact tray', () => {
     expect(screen.queryByRole('heading', { name: 'Assembly' })).toBeNull();
   });
 
+  it('keeps an exploded view in sight on the stage away from its page', async () => {
+    mount(scissorsManager({ components: true }));
+    await trayButton('Joints');
+    act(() => assemblyRuntime.setActive(true));
+    const chip = () =>
+      screen.queryByRole('button', { name: 'Turn off exploded view' });
+    fireEvent.click(await trayButton('Exploded view'));
+    const page = await screen.findByRole('region', { name: 'Exploded view' });
+    fireEvent.click(within(page).getByRole('button', { name: 'Exploded' }));
+    expect(getAssemblyRuntime().exploded).toBe(true);
+    // Its own page says so: no chip over it.
+    expect(chip()).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    // Back at the tray and on another page, where a drag would pull a part
+    // out rather than turn its joint, the stage says the view is exploded.
+    await waitFor(() => expect(chip()).not.toBeNull());
+    expect(chip()!.closest('.compact-stage-tray')).not.toBeNull();
+    fireEvent.click(await trayButton('Joints'));
+    await waitFor(() => expect(sheetTitle('Joints')).toBeVisible());
+    expect(chip()).not.toBeNull();
+    // Its way out: the parts go back together.
+    fireEvent.click(chip()!);
+    expect(getAssemblyRuntime().exploded).toBe(false);
+    await waitFor(() => expect(chip()).toBeNull());
+  });
+
   it('fixes a part in place from the Parts page', async () => {
     const { commands } = mount(scissorsManager({ components: true }));
     fireEvent.click(await trayButton('Parts'));

@@ -108,6 +108,48 @@ describe('the All tools sheet', () => {
     );
   });
 
+  it('says why under the group the refused tool was tapped in, in view', async () => {
+    const scrolled = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrolled;
+    try {
+      render(
+        <AllToolsSheet
+          build={build({
+            availability: { ...READY, liveBodyCount: 0 },
+            recentTools: ['union']
+          })}
+          onLaunch={vi.fn()}
+        />
+      );
+      const bodies = screen.getByRole('region', { name: 'Bodies' });
+      await tap(within(bodies).getByRole('button', { name: 'Union' }));
+      // Under the tile's own group, not at the list's top, off-screen once
+      // the list has scrolled (the #2216 preview check).
+      expect(within(bodies).getByRole('status')).toHaveTextContent(
+        'Union: Needs at least two bodies'
+      );
+      expect(
+        within(screen.getByRole('region', { name: 'Recent' })).queryByRole(
+          'status'
+        )
+      ).toBeNull();
+      const shown = within(bodies).getByRole('status');
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(shown);
+      // The same tool tapped in the recent row says so there instead.
+      const recent = screen.getByRole('region', { name: 'Recent' });
+      await tap(within(recent).getByRole('button', { name: 'Union' }));
+      expect(within(recent).getByRole('status')).toHaveTextContent(
+        'Union: Needs at least two bodies'
+      );
+      expect(within(bodies).queryByRole('status')).toBeNull();
+      expect(scrolled).toHaveBeenCalledTimes(2);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
   it('opens every tool it is the compact entry of, by taps only', async () => {
     const ids = ACTIONS.filter(
       (entry) => COMPACT_ENTRIES[entry.id] === 'all-tools'

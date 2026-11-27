@@ -10,7 +10,11 @@ import {
 import { toUserId, type BodyId, type ProjectDocument } from '@openzcad/shared';
 import type { Locator, Page } from '@playwright/test';
 import { COMPACT_ENTRIES } from '../../apps/web/src/lib/actions/registry';
-import { preferCompact } from './compactHelpers';
+import {
+  expectReachable,
+  preferCompact,
+  waitForSheetToSettle
+} from './compactHelpers';
 import {
   expect,
   expectBodyCount,
@@ -336,6 +340,11 @@ test.describe('Assemble in the compact sheet', () => {
         await tapInSheet(joints.getByRole('button', { name: 'Add' }));
         const card = sheet(page).getByRole('region', { name: 'Add joint' });
         await expect(card).toBeVisible();
+        // Asked for by touch, as a touch screen takes it.
+        await expect(card).toContainText(
+          'Tap a hole, face or edge on the part that moves.'
+        );
+        await expect(card).not.toContainText('Click');
         await expectTidy(page);
         const arm = await partPoint(page, [80, 5, 10]);
         await page.touchscreen.tap(arm.x, arm.y);
@@ -461,12 +470,38 @@ test.describe('Assemble in the compact sheet', () => {
         await back(page);
         await expect(trayButton(page, 'Exploded view')).toHaveClass(/is-on/);
         await expectTidy(page);
+        // Left on, it is said on the stage over every other page, where a
+        // drag pulls a part out rather than turning its joint.
+        const explodedChip = page.getByRole('button', {
+          name: 'Turn off exploded view'
+        });
+        await expect(explodedChip).toBeVisible();
+        await openPage(page, 'Joints', 'Joints');
+        await waitForSheetToSettle(page);
+        await expectReachable(explodedChip);
+        await expectTidy(page);
+        await back(page);
         await openPage(page, 'Exploded view', 'Exploded view');
+        // Its own page says so: no chip over it.
+        await expect(explodedChip).toHaveCount(0);
         await tapInSheet(explode.getByRole('button', { name: 'Reset' }));
         await expect(explode).toContainText('Drag a part to pull it out');
         await tapInSheet(explode.getByRole('button', { name: 'Assembled' }));
         await expectTidy(page);
         await back(page);
+        await expect(trayButton(page, 'Exploded view')).not.toHaveClass(
+          /is-on/
+        );
+        await expect(explodedChip).toHaveCount(0);
+        // The chip's way out: exploded again, a tap on it puts the parts
+        // back together.
+        await openPage(page, 'Exploded view', 'Exploded view');
+        await tapInSheet(explode.getByRole('button', { name: 'Exploded' }));
+        await back(page);
+        await waitForSheetToSettle(page);
+        await expectReachable(explodedChip);
+        await explodedChip.tap();
+        await expect(explodedChip).toHaveCount(0);
         await expect(trayButton(page, 'Exploded view')).not.toHaveClass(
           /is-on/
         );
@@ -553,7 +588,25 @@ test.describe('Assemble in the compact sheet', () => {
         'motion-play-pause': async () => {
           await back(page);
           await openPage(page, 'Motion', 'Motion');
-          await tapInSheet(inSheet(/^Swing/));
+          // The animation's name and length stand in the middle of its
+          // row, not on the baseline at its top.
+          const swing = inSheet(/^Swing/);
+          await swing.scrollIntoViewIfNeeded();
+          const offsets = await swing.evaluate((row) => {
+            const box = row.getBoundingClientRect();
+            const middle = box.top + box.height / 2;
+            return [
+              ...row.querySelectorAll(
+                '.assembly-study-name, .assembly-study-duration'
+              )
+            ].map((text) => {
+              const shown = text.getBoundingClientRect();
+              return Math.abs(shown.top + shown.height / 2 - middle);
+            });
+          });
+          expect(offsets).toHaveLength(2);
+          for (const offset of offsets) expect(offset).toBeLessThanOrEqual(2);
+          await tapInSheet(swing);
           await expect(timeline).toBeVisible();
           return timeline.getByRole('button', { name: 'Play', exact: true });
         },
