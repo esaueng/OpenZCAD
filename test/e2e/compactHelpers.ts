@@ -64,22 +64,25 @@ export async function waitForSheetToSettle(
 ) {
   let last = '';
   await expect
-    .poll(async () => {
-      const read = await page.locator('.compact-sheet').evaluate((sheet) => {
-        const moving = sheet
-          .getAnimations()
-          .some((animation) => animation.playState !== 'finished');
-        const box = sheet.getBoundingClientRect();
-        return moving
-          ? 'moving'
-          : [box.left, box.top, box.width, box.height]
-              .map((value) => value.toFixed(1))
-              .join(',');
-      });
-      const settled = read !== 'moving' && read === last;
-      last = read;
-      return settled;
-    }, { intervals: [50, 100], ...options })
+    .poll(
+      async () => {
+        const read = await page.locator('.compact-sheet').evaluate((sheet) => {
+          const moving = sheet
+            .getAnimations()
+            .some((animation) => animation.playState !== 'finished');
+          const box = sheet.getBoundingClientRect();
+          return moving
+            ? 'moving'
+            : [box.left, box.top, box.width, box.height]
+                .map((value) => value.toFixed(1))
+                .join(',');
+        });
+        const settled = read !== 'moving' && read === last;
+        last = read;
+        return settled;
+      },
+      { intervals: [50, 100], ...options }
+    )
     .toBe(true);
 }
 
@@ -141,6 +144,25 @@ export async function expectStatusClearOfSheet(page: Page) {
     expect(part.reached, part.name).toBe(true);
     expect(part.takesTaps, part.name).toBe(part.undo);
   }
+}
+
+/**
+ * Presses `key` (Tab or Shift+Tab) from wherever focus is until `control`
+ * holds it, as a keyboard user would, never moving focus by script; fails
+ * after `limit` presses, as a focus trap that leaves `control` out would.
+ */
+export async function tabTo(
+  page: Page,
+  control: Locator,
+  key: 'Tab' | 'Shift+Tab',
+  limit = 80
+) {
+  for (let press = 0; press < limit; press += 1) {
+    if (await control.evaluate((element) => element === document.activeElement))
+      return;
+    await page.keyboard.press(key);
+  }
+  await expect(control).toBeFocused();
 }
 
 /**

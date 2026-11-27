@@ -7,6 +7,7 @@ import {
   within
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   CommandManager,
@@ -3127,6 +3128,147 @@ describe('DrawingWorkspace section views (D03)', () => {
       ).toBeTruthy();
     });
 
+    /**
+     * Zooms the sheet in twice with its buttons, on a canvas with a size (so
+     * a pan would move the paper) whose pointer capture is recorded (a
+     * capture on the canvas takes the rest of the drag from the tool in a
+     * browser). Returns the canvas, its viewBox and the capture spy.
+     */
+    function zoomIn(surface: Element) {
+      const button = screen.getByRole('button', { name: 'Zoom in' });
+      fireEvent.click(button);
+      fireEvent.click(button);
+      const canvas = surface.closest('svg')!;
+      Object.defineProperty(canvas, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({
+          x: 0,
+          y: 0,
+          left: 0,
+          top: 0,
+          right: 840,
+          bottom: 594,
+          width: 840,
+          height: 594,
+          toJSON: () => ({})
+        })
+      });
+      const capture = vi.fn();
+      Object.defineProperty(canvas, 'setPointerCapture', {
+        configurable: true,
+        value: capture
+      });
+      const viewBox = canvas.getAttribute('viewBox');
+      expect(viewBox).not.toBe('0 0 420 297');
+      return { canvas, viewBox, capture };
+    }
+
+    it('draws a section line by touch on a zoomed sheet rather than panning it', async () => {
+      const { surface, front, added, drag, tap, ghostAt } =
+        await armed('Section view');
+      const { canvas, viewBox, capture } = zoomIn(surface);
+      drag(
+        { x: front.x + 0.8, y: front.y + 8 },
+        { x: front.x + 0.8, y: front.y - 8 }
+      );
+      // The paper stayed put under the finger: the drag drew the line.
+      expect(canvas.getAttribute('viewBox')).toBe(viewBox);
+      expect(capture).not.toHaveBeenCalled();
+      const place = { x: front.x - 50, y: front.y };
+      expect(ghostAt(place)).toBe(true);
+      tap(place);
+      expect(added()).toHaveLength(1);
+    });
+
+    it('draws a section line with the mouse on a zoomed sheet rather than panning it', async () => {
+      const { surface, front, ghostAt } = await armed('Section view');
+      const { canvas, viewBox, capture } = zoomIn(surface);
+      const at = (y: number) => ({
+        clientX: front.x + 0.8,
+        clientY: 297 - y,
+        button: 0,
+        pointerId: 41,
+        pointerType: 'mouse'
+      });
+      fireEvent.pointerDown(surface, at(front.y + 8));
+      fireEvent.pointerMove(surface, at(front.y - 8));
+      fireEvent.pointerUp(surface, at(front.y - 8));
+      expect(canvas.getAttribute('viewBox')).toBe(viewBox);
+      expect(capture).not.toHaveBeenCalled();
+      expect(ghostAt({ x: front.x - 50, y: front.y })).toBe(true);
+    });
+
+    it('draws a detail circle by touch on a zoomed sheet rather than panning it', async () => {
+      const { surface, front, added, drag, tap, ghostAt } =
+        await armed('Detail view');
+      const { canvas, viewBox, capture } = zoomIn(surface);
+      drag(front, { x: front.x + 4, y: front.y });
+      expect(canvas.getAttribute('viewBox')).toBe(viewBox);
+      expect(capture).not.toHaveBeenCalled();
+      const place = { x: front.x + 70, y: front.y };
+      expect(ghostAt(place)).toBe(true);
+      tap(place);
+      expect(added()).toHaveLength(1);
+    });
+
+    /** Paper off every view: the sheet's top-left corner. */
+    const blank = { x: 12, y: 285 };
+    /** A mouse drag from `a` to `b` on the paper. */
+    const mouseDrag = (
+      surface: Element,
+      a: { x: number; y: number },
+      b: { x: number; y: number }
+    ) => {
+      const at = (point: { x: number; y: number }) => ({
+        clientX: point.x,
+        clientY: 297 - point.y,
+        button: 0,
+        pointerId: 61,
+        pointerType: 'mouse'
+      });
+      fireEvent.pointerDown(surface, at(a));
+      fireEvent.pointerMove(surface, at(b));
+      fireEvent.pointerUp(surface, at(b));
+    };
+
+    it('pans a zoomed sheet from a drag off every view with Section armed, by touch and mouse (review case)', async () => {
+      // The tool's surface covers the paper: a drag it refuses used to be
+      // lost, the canvas's own pan skipping the surface.
+      const { surface, front, drag, ghostAt } = await armed('Section view');
+      const { canvas, viewBox } = zoomIn(surface);
+      drag(blank, { x: blank.x + 30, y: blank.y });
+      const byTouch = canvas.getAttribute('viewBox');
+      expect(byTouch).not.toBe(viewBox);
+      mouseDrag(surface, blank, { x: blank.x + 30, y: blank.y - 20 });
+      const byMouse = canvas.getAttribute('viewBox');
+      expect(byMouse).not.toBe(byTouch);
+      // Neither drew a line; a drag on a view still does, and pans nothing.
+      const place = { x: front.x - 50, y: front.y };
+      expect(ghostAt(place)).toBe(false);
+      drag(
+        { x: front.x + 0.8, y: front.y + 8 },
+        { x: front.x + 0.8, y: front.y - 8 }
+      );
+      expect(canvas.getAttribute('viewBox')).toBe(byMouse);
+      expect(ghostAt(place)).toBe(true);
+    });
+
+    it('pans a zoomed sheet from a drag off every view with Detail armed, by touch and mouse', async () => {
+      const { surface, front, drag, ghostAt } = await armed('Detail view');
+      const { canvas, viewBox } = zoomIn(surface);
+      drag(blank, { x: blank.x + 30, y: blank.y });
+      const byTouch = canvas.getAttribute('viewBox');
+      expect(byTouch).not.toBe(viewBox);
+      mouseDrag(surface, blank, { x: blank.x + 30, y: blank.y - 20 });
+      const byMouse = canvas.getAttribute('viewBox');
+      expect(byMouse).not.toBe(byTouch);
+      const place = { x: front.x + 70, y: front.y };
+      expect(ghostAt(place)).toBe(false);
+      drag(front, { x: front.x + 4, y: front.y });
+      expect(canvas.getAttribute('viewBox')).toBe(byMouse);
+      expect(ghostAt(place)).toBe(true);
+    });
+
     it('lets a pinch over a detail circle being drawn draw none, and places the detail on a tap', async () => {
       const { front, added, pinch, drag, tap, ghostAt } =
         await armed('Detail view');
@@ -3301,6 +3443,40 @@ describe('DrawingWorkspace auxiliary view by touch (U12 slice 9)', () => {
     // A pinch landing on the edge picks nothing.
     pinch(edge);
     expect(ghostAt(place)).toBe(false);
+    // Zoomed in, a drag off every view pans the sheet, by touch or mouse,
+    // and picks nothing (review case: the tool's surface took the press,
+    // and the canvas's own pan skipped it).
+    const zoomIn = screen.getByRole('button', { name: 'Zoom in' });
+    fireEvent.click(zoomIn);
+    fireEvent.click(zoomIn);
+    Object.defineProperty(canvas, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 840,
+        bottom: 594,
+        width: 840,
+        height: 594,
+        toJSON: () => ({})
+      })
+    });
+    const zoomed = canvas.getAttribute('viewBox');
+    const blank = { x: 12, y: 285 };
+    const down = finger(blank);
+    fireEvent.pointerDown(surface, down);
+    fireEvent.pointerMove(surface, { ...down, clientX: down.clientX + 30 });
+    fireEvent.pointerUp(surface, { ...down, clientX: down.clientX + 30 });
+    const byTouch = canvas.getAttribute('viewBox');
+    expect(byTouch).not.toBe(zoomed);
+    const mouse = { ...finger(blank), pointerType: 'mouse' };
+    fireEvent.pointerDown(surface, mouse);
+    fireEvent.pointerMove(surface, { ...mouse, clientY: mouse.clientY + 20 });
+    fireEvent.pointerUp(surface, { ...mouse, clientY: mouse.clientY + 20 });
+    expect(canvas.getAttribute('viewBox')).not.toBe(byTouch);
+    expect(ghostAt(place)).toBe(false);
     // A finger landing on it picks it on release.
     tap(edge);
     expect(ghostAt(place)).toBe(true);
@@ -3447,8 +3623,7 @@ describe('DrawingWorkspace touch placement (U12 slice 9)', () => {
     tap(finger(5, 20));
     expect(added()).toHaveLength(1);
     expect(
-      (added()[0]!.payload as { annotation: DrawingAnnotation }).annotation
-        .kind
+      (added()[0]!.payload as { annotation: DrawingAnnotation }).annotation.kind
     ).toBe('linear');
   });
 
@@ -3478,8 +3653,7 @@ describe('DrawingWorkspace touch placement (U12 slice 9)', () => {
     tap(finger(5, 20));
     expect(added()).toHaveLength(1);
     expect(
-      (added()[0]!.payload as { annotation: DrawingAnnotation }).annotation
-        .kind
+      (added()[0]!.payload as { annotation: DrawingAnnotation }).annotation.kind
     ).toBe('note');
   });
 });
@@ -3949,6 +4123,8 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
       keepProjections?: boolean;
       /** The project, to show again (its drawings are kept by its id). */
       document?: ProjectDocument;
+      /** Apply each command to the project shown, as App does. */
+      live?: boolean;
     } = {}
   ) {
     if (!options.keepProjections) resetRetainedProjections();
@@ -3962,6 +4138,29 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
     const onCommand = vi.fn((_command: AnyCommand) => true);
     const onStatus = vi.fn();
     const onAnnounceUndoable = vi.fn();
+    const workspaceProps = {
+      bodies,
+      geometryPending: false,
+      defaultBodyIds: [bodyId],
+      requestTessellation: displayTessellation(bodies),
+      editDisabledReason: null,
+      onStatus,
+      onAnnounceUndoable
+    };
+    function LiveWorkspace() {
+      const [shown, setShown] = useState(document);
+      return (
+        <DrawingWorkspace
+          {...workspaceProps}
+          document={shown}
+          onCommand={(command) => {
+            onCommand(command);
+            setShown((current) => command.apply(current));
+            return true;
+          }}
+        />
+      );
+    }
     const rendered = render(
       <AppShell
         topBar={<header className="topbar">top</header>}
@@ -4004,17 +4203,15 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
         }}
         compactTray={<CompactModeTray mode="drawing" />}
         stage={
-          <DrawingWorkspace
-            document={document}
-            bodies={bodies}
-            geometryPending={false}
-            defaultBodyIds={[bodyId]}
-            requestTessellation={displayTessellation(bodies)}
-            editDisabledReason={null}
-            onCommand={onCommand}
-            onStatus={onStatus}
-            onAnnounceUndoable={onAnnounceUndoable}
-          />
+          options.live ? (
+            <LiveWorkspace />
+          ) : (
+            <DrawingWorkspace
+              {...workspaceProps}
+              document={document}
+              onCommand={onCommand}
+            />
+          )
         }
       />
     );
@@ -4148,6 +4345,44 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
     expect(page.getByRole('button', { name: 'Add view' })).toBeTruthy();
   });
 
+  it('shows a new view’s settings after Add view with an annotation picked (review case)', async () => {
+    const sheet = starter(fingerprint());
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    // The cube's bottom front edge: a 10 mm dimension that resolves.
+    sheet.annotations = [
+      {
+        annotationId: 'dann_w' as DrawingAnnotationId,
+        kind: 'linear',
+        viewId: front.viewId,
+        direction: 'horizontal',
+        from: { edge: { bodyId, hash: 210 }, anchor: 'first' },
+        to: { edge: { bodyId, hash: 210 }, anchor: 'second' },
+        placementMm: { x: 0, y: -15 }
+      }
+    ];
+    const { onCommand } = compactSetup({ sheet, live: true });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    fireEvent.pointerDown(
+      await within(canvas).findByRole('button', {
+        name: 'Horizontal dimension 10'
+      }),
+      { button: 0 }
+    );
+    const page = await openPage('Views');
+    fireEvent.click(page.getByRole('button', { name: 'Add view' }));
+    expect(onCommand.mock.calls.at(-1)![0].kind).toBe('drawing.view.add');
+    // The new view is the pick: its settings show, not the dimension's,
+    // which used to stay picked and take precedence over it.
+    expect(
+      await page.findByRole('heading', { name: 'Right view' })
+    ).toBeTruthy();
+    expect(
+      within(sheetPanel()).queryByRole('heading', {
+        name: /dimension/i
+      })
+    ).toBeNull();
+  });
+
   it('lists every sheet with new, rename, duplicate, move and delete', async () => {
     const first = starter(fingerprint());
     const second = { ...starter(fingerprint()), name: 'Sheet 2' };
@@ -4254,8 +4489,9 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
     await waitFor(() =>
       expect(sheetPanel().getAttribute('data-detent')).toBe('peek')
     );
-    expect(within(sheetPanel()).queryByRole('button', { name: 'Export PDF' }))
-      .toBeNull();
+    expect(
+      within(sheetPanel()).queryByRole('button', { name: 'Export PDF' })
+    ).toBeNull();
   });
 
   it('lets a field take Escape for its edit before the page steps back', async () => {
@@ -4333,14 +4569,47 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
     );
   });
 
-  it('offers only a new sheet before the first one', async () => {
+  it('offers only a new sheet before the first one, at peek', async () => {
     const { onCommand } = compactSetup();
     const toolbar = await tray();
-    for (const name of ['Annotate', 'Views', 'Properties', 'Export']) {
-      expect(within(toolbar).getByRole('button', { name })).toBeDisabled();
-    }
-    const page = await openPage('Sheets');
-    fireEvent.click(page.getByRole('button', { name: 'New drawing sheet' }));
+    // Not five greyed tools with nothing to pick on: New sheet alone.
+    expect(
+      within(toolbar)
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+    ).toEqual(['New sheet']);
+    expect(sheetPanel().getAttribute('data-detent')).toBe('peek');
+    fireEvent.click(within(toolbar).getByRole('button', { name: 'New sheet' }));
     expect(onCommand).toHaveBeenCalledTimes(1);
+    expect(onCommand.mock.calls[0]![0].kind).toBe('drawing.sheet.add');
+  });
+
+  it('words the annotation list for the compact page, the tools above it', async () => {
+    compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Annotate');
+    expect(page.getByText(/^Pick a dimension tool above\. /)).toBeTruthy();
+    expect(page.queryByText(/sheet's left/)).toBeNull();
+  });
+
+  it('words a running tool for a finger: tap, not click', async () => {
+    const { onStatus } = compactSetup({ sheet: starter(fingerprint()) });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    const page = await openPage('Annotate');
+    const note = page.getByRole('button', { name: 'Note' });
+    await waitFor(() => expect(note).toHaveAttribute('aria-disabled', 'false'));
+    fireEvent.click(note);
+    const run = await screen.findByRole('group', { name: 'Note placement' });
+    expect(within(run).getByRole('status').textContent).toBe(
+      'Note: pick an edge for its leader, or tap empty paper to place it.'
+    );
+    expect(onStatus).not.toHaveBeenCalledWith(
+      expect.stringMatching(/\bclick/i),
+      expect.anything()
+    );
   });
 });

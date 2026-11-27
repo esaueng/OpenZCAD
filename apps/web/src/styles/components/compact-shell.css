@@ -1051,10 +1051,11 @@
 
 /* The stage's status ("Added box.", "Section on" and its Undo) stands
    over the undo pair, where the action notice stands, clear of the sheet
-   at any height. Placed by the regular stage's notice lane it stood at the
-   stage's foot, under the sheet: a strip of it showed over the sheet at
+   at peek and half. Placed by the regular stage's notice lane it stood at
+   the stage's foot, under the sheet: a strip of it showed over the sheet at
    peek and a tap there reached its Undo, which turned Section back off. A
-   sketch's notices stand higher still, over its relations row (below). */
+   sketch's notices stand higher still, over its relations row (below). At
+   full the line moves onto the sheet's layer (further below). */
 .app-shell[data-shell='compact']
   .workspace.column-layout
   :is(.workspace-toast, .activity-lane) {
@@ -1065,23 +1066,21 @@
   );
 }
 
-/* Standing over the model, the line itself takes no tap: a tap there picks
-   what is under it, as it would with no status up. Its Undo does; the
-   activity log it opens on the regular stage is in Settings. */
-.app-shell[data-shell='compact']
-  .workspace.column-layout
-  .workspace-toast
-  .workspace-toast-body {
+/* The line itself takes no tap, on the stage or on the sheet's layer: over
+   the model a tap there picks what is under it, as it would with no status
+   up, and over a full sheet it reaches the sheet's content. Its Undo does;
+   the activity log it opens on the regular stage is in Settings. */
+.app-shell[data-shell='compact'] .workspace-toast .workspace-toast-body {
   pointer-events: none;
 }
 
 /* A cut left on is said on View's tray (its Section mark) and turned off
    on its page, so its standing line and Turn off are not drawn on the
-   stage: under the sheet at peek, a strip of them showed over its edge,
-   and a tap there turned the cut off. Only those two: the rest of the
-   footer (the workspace summary, the overlap note) is never drawn, and
-   stays read out, and the line's live region stays in place to announce
-   the next status. */
+   stage or the sheet's layer: under the sheet at peek, a strip of them
+   showed over its edge, and a tap there turned the cut off. Only those two:
+   the rest of the footer (the workspace summary, the overlap note) is never
+   drawn, and stays read out, and the line's live region stays in place to
+   announce the next status. */
 .app-shell[data-shell='compact']
   .workspace-toast[data-section-line]
   .workspace-toast-body {
@@ -1107,7 +1106,9 @@
   display: none;
 }
 
-/* A full sheet leaves no stage to show it on: it waits, still read out. */
+/* A full sheet leaves no stage to show them on: the activity lane waits,
+   and so does the status line for the moment before it moves onto the
+   sheet's layer (WorkspaceReadout.tsx). */
 .app-shell[data-shell='compact']:has(.compact-sheet[data-detent='full'])
   .workspace.column-layout
   :is(.workspace-toast, .activity-lane) {
@@ -1118,7 +1119,7 @@
 .app-shell[data-shell='compact']:has(.compact-sheet[data-detent='full'])
   .workspace.column-layout
   .workspace-toast
-  :is(.workspace-toast-body, .workspace-toast-undo) {
+  .workspace-toast-undo {
   pointer-events: none;
 }
 
@@ -1149,6 +1150,42 @@
     :is(.workspace-toast, .activity-lane) {
     bottom: calc(var(--compact-target) * 2 + var(--sp-2) * 3);
   }
+}
+
+/* The status line ("Added box." and its Undo) joins the notice while the
+   sheet stands at full (WorkspaceReadout.tsx): the stage under the sheet is
+   inert then. At the sheet's foot, only a status with something to tap
+   (Undo, Turn off section, Take over editing) stands over the sheet's
+   content; the rest, and a cut's standing line whose Turn off is not drawn
+   (above), step aside until the sheet comes down. */
+.app-shell[data-shell='compact'] .compact-notice-host .workspace-toast {
+  left: max(var(--sp-2), env(safe-area-inset-left));
+  right: max(var(--sp-2), env(safe-area-inset-right));
+  bottom: var(--sp-2);
+  z-index: calc(var(--z-panel-float) + 1);
+}
+
+.app-shell[data-shell='compact']
+  .compact-notice-host
+  .workspace-toast:is(:not(:has(.workspace-toast-undo)), [data-section-line]),
+.app-shell[data-shell='compact']
+  .compact-notice-host
+  .workspace-toast:is(:not(:has(.workspace-toast-undo)), [data-section-line])
+  .workspace-toast-body {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* A status at work, or a warning, with its action keeps its place while
+   the notice is up: the notice stands over it rather than on it. */
+.app-shell[data-shell='compact']
+  .compact-notice-host:has(
+    .workspace-toast:not(.hidden, .ready, [data-section-line]):has(
+        .workspace-toast-undo
+      )
+  )
+  .toast {
+  margin-bottom: calc(var(--compact-target) + var(--sp-1));
 }
 
 /* As on the regular stage (quiet-stage.css), a settled status only repeats
@@ -1936,6 +1973,17 @@
   display: none;
 }
 
+/* ✓ and All sketch tools keep their size beside the scrolling tools; ✓'s
+   slot is held empty while the Spline tool waits for its third point. */
+.compact-tray.is-sketch > .compact-tray-button,
+.compact-sketch-finish-slot {
+  flex: 0 0 var(--compact-target);
+}
+
+.compact-sketch-finish-slot {
+  height: var(--compact-target);
+}
+
 .compact-sketch-tools > .compact-tray-button {
   flex: 0 0 auto;
 }
@@ -2133,6 +2181,17 @@
   box-sizing: border-box;
   min-width: var(--compact-target);
   min-height: var(--compact-target);
+}
+
+/* The overview's profile issues and Highlight gaps, which the sketch's own
+   stylesheet sizes for a pointer, likewise. */
+.compact-sketch-page .sketch-workflow-problems li button,
+.compact-sketch-page .sketch-workflow-problems > .secondary {
+  min-height: var(--compact-target);
+}
+
+.compact-sketch-page .sketch-workflow-problems li button {
+  padding-block: var(--sp-1);
 }
 
 /* A box to tick: a thumb's square around a drawn check. */
@@ -3344,6 +3403,47 @@
     max(var(--sp-4), env(safe-area-inset-left));
 }
 
+.app-shell[data-shell='compact'] .drawing-empty button {
+  min-height: var(--compact-target);
+  padding-inline: var(--sp-4);
+}
+
+/* The tray before the first sheet: New sheet, the one thing to do. */
+.compact-draw-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.compact-draw-new-sheet {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  min-height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-4);
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-size: 16px;
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+}
+
+.compact-draw-new-sheet[aria-disabled='true'] {
+  background: var(--color-surface-2);
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+.compact-draw-new-sheet:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 .app-shell[data-shell='compact'] .drawing-stage {
   gap: var(--sp-2);
   padding: var(--sp-2) max(var(--sp-2), env(safe-area-inset-right))
@@ -3440,6 +3540,11 @@
   flex-direction: column;
   gap: var(--sp-3);
   min-width: 0;
+}
+
+/* Brought into view under the tray row pinned over the page. */
+.compact-draw-selected {
+  scroll-margin-top: calc(var(--compact-target) + var(--sp-3));
 }
 
 .compact-draw-section .drawing-panel-section {

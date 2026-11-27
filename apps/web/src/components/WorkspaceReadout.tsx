@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import {
   CompactCommandTrayContext,
   useCompactCommandRowHost,
+  useCompactStatusHost,
   useInCompactShell
 } from './compact/compactSlots';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
@@ -231,6 +232,7 @@ export function WorkspaceReadout({
   // over the model, where a tap picks what is under it. Its actions (Undo,
   // Turn off and the like) stay buttons.
   const compactShell = useInCompactShell();
+  const statusHost = useCompactStatusHost();
   const notice = compactRowHost && sheetNotice !== null ? null : givenNotice;
   const hasCommandRow = commandRow !== null;
   const hasSelectionGuidance =
@@ -482,6 +484,12 @@ export function WorkspaceReadout({
     return () => observer?.disconnect();
   }, [probedPrompt]);
   const hintRaised = raised && probedPrompt !== null;
+  // While the compact sheet stands at full height the stage is inert, and
+  // the status line's Undo could be neither tapped nor focused there: the
+  // compact workspace then draws the line on its sheet's layer, as it does
+  // the action notice (Toast.tsx). At peek and half it stays on the stage.
+  const footer = (element: ReactNode) =>
+    statusHost ? createPortal(element, statusHost) : element;
   const toastBody = (
     <>
       <i aria-hidden="true" />
@@ -599,109 +607,111 @@ export function WorkspaceReadout({
           </details>
         )}
       </div>
-      <footer
-        className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}`}
-        role="contentinfo"
-        // The cut's own line, a state rather than news: the compact
-        // workspace (U12) shows it on View's tray instead.
-        data-section-line={sectionShown || undefined}
-      >
-        {compactShell ? (
-          <div className={`workspace-toast-body${quiet ? ' quiet' : ''}`}>
-            {toastBody}
-          </div>
-        ) : (
-          <button
-            type="button"
-            className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
-            // Keep the toast out of the tab order while it is faded out.
-            tabIndex={shown ? undefined : -1}
-            title={
-              quiet
-                ? 'View activity log'
-                : sectionShown && section?.note
-                  ? `${paced.status} — ${section.note}`
-                  : missed
-                    ? `${paced.status} — ${missed} in the activity log`
-                    : `${paced.status} — View activity log`
-            }
-            // No trailing period on the action's name (I9): the status, when
-            // there is one, follows it as what the toast currently says.
-            aria-label={
-              quiet || line === ''
-                ? 'Open activity log'
-                : `Open activity log — current status: ${line}`
-            }
-            aria-haspopup="dialog"
-            onClick={onOpenLog}
-          >
-            {toastBody}
-          </button>
-        )}
-        {section && turnOffShown ? (
-          <>
-            {sectionShown && section.note ? (
-              // M09: the toolbox's words for the overlap, which the line
-              // can only point at; read out, and on the line's tooltip.
-              <span className="visually-hidden" role="note">
-                {section.note}
-              </span>
-            ) : null}
+      {footer(
+        <footer
+          className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}`}
+          role="contentinfo"
+          // The cut's own line, a state rather than news: the compact
+          // workspace (U12) shows it on View's tray instead.
+          data-section-line={sectionShown || undefined}
+        >
+          {compactShell ? (
+            <div className={`workspace-toast-body${quiet ? ' quiet' : ''}`}>
+              {toastBody}
+            </div>
+          ) : (
+            <button
+              type="button"
+              className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
+              // Keep the toast out of the tab order while it is faded out.
+              tabIndex={shown ? undefined : -1}
+              title={
+                quiet
+                  ? 'View activity log'
+                  : sectionShown && section?.note
+                    ? `${paced.status} — ${section.note}`
+                    : missed
+                      ? `${paced.status} — ${missed} in the activity log`
+                      : `${paced.status} — View activity log`
+              }
+              // No trailing period on the action's name (I9): the status, when
+              // there is one, follows it as what the toast currently says.
+              aria-label={
+                quiet || line === ''
+                  ? 'Open activity log'
+                  : `Open activity log — current status: ${line}`
+              }
+              aria-haspopup="dialog"
+              onClick={onOpenLog}
+            >
+              {toastBody}
+            </button>
+          )}
+          {section && turnOffShown ? (
+            <>
+              {sectionShown && section.note ? (
+                // M09: the toolbox's words for the overlap, which the line
+                // can only point at; read out, and on the line's tooltip.
+                <span className="visually-hidden" role="note">
+                  {section.note}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="workspace-toast-undo"
+                aria-label="Turn off section view"
+                onClick={section.onTurnOff}
+              >
+                {sectionShown ? 'Turn off' : 'Turn off section'}
+              </button>
+            </>
+          ) : null}
+          {undoShown ? (
             <button
               type="button"
               className="workspace-toast-undo"
-              aria-label="Turn off section view"
-              onClick={section.onTurnOff}
+              aria-label={`Undo: ${line}`}
+              onClick={onUndo}
             >
-              {sectionShown ? 'Turn off' : 'Turn off section'}
+              Undo
             </button>
-          </>
-        ) : null}
-        {undoShown ? (
-          <button
-            type="button"
-            className="workspace-toast-undo"
-            aria-label={`Undo: ${line}`}
-            onClick={onUndo}
+          ) : null}
+          {statusActionShown && statusAction ? (
+            <button
+              type="button"
+              className="workspace-toast-undo"
+              data-status-action={statusAction.id}
+              onClick={statusAction.run}
+            >
+              {statusAction.label}
+            </button>
+          ) : null}
+          <div
+            className="workspace-status-summary"
+            role="group"
+            aria-label="Workspace status"
           >
-            Undo
-          </button>
-        ) : null}
-        {statusActionShown && statusAction ? (
-          <button
-            type="button"
-            className="workspace-toast-undo"
-            data-status-action={statusAction.id}
-            onClick={statusAction.run}
-          >
-            {statusAction.label}
-          </button>
-        ) : null}
-        <div
-          className="workspace-status-summary"
-          role="group"
-          aria-label="Workspace status"
-        >
-          {prompt && <span>{prompt}</span>}
-          <span>
-            <b>warnings</b>
-            {warningCount}
-          </span>
-          <span
-            title={`${workspaceSummary} · rev ${documentVersion ?? '—'}`}
-            aria-label={`${workspaceSummary}. Sync ${syncLabel}.${previewActive ? ' Preview active, not applied.' : ''}`}
-          >
-            <b>sync</b>
-            {syncLabel}
-          </span>
-          {orbitMode && (
+            {prompt && <span>{prompt}</span>}
             <span>
-              <b>orbit</b>
-              {orbitMode === 'turntable' ? 'Turntable' : 'Free'}
+              <b>warnings</b>
+              {warningCount}
             </span>
-          )}
-        </div>
-      </footer>
+            <span
+              title={`${workspaceSummary} · rev ${documentVersion ?? '—'}`}
+              aria-label={`${workspaceSummary}. Sync ${syncLabel}.${previewActive ? ' Preview active, not applied.' : ''}`}
+            >
+              <b>sync</b>
+              {syncLabel}
+            </span>
+            {orbitMode && (
+              <span>
+                <b>orbit</b>
+                {orbitMode === 'turntable' ? 'Turntable' : 'Free'}
+              </span>
+            )}
+          </div>
+        </footer>
+      )}
     </>
   );
 }
