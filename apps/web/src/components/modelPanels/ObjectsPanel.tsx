@@ -51,6 +51,7 @@ import { useArrivals } from '../../hooks/useArrivals';
 import { WindowedRow, WINDOWED_ROW_THRESHOLD } from '../WindowedRow';
 import { useCollapsedFolders } from '../../lib/objectFolderView';
 import { datumPlaneRows } from '../../lib/datumPlanes';
+import { useKeyboardRowEnter } from '../../lib/keyboardRowEnter';
 import { datumAxisRows } from '../../lib/datumAxes';
 import {
   projectionRoleLabel,
@@ -335,6 +336,8 @@ export function ObjectsPanel({
   view
 }: ObjectsPanelProps) {
   const foldersEditable = objectFolderActions?.editable ?? false;
+  // Enter on a row reached by keyboard picks it, as Space does.
+  const rowEnter = useKeyboardRowEnter();
   // The body whose name is a field right now (ZC-127): double-click or F2.
   const [renamingBodyId, setRenamingBodyId] = useState<string | null>(null);
   const [appearanceBodyId, setAppearanceBodyId] = useState<BodyId | null>(null);
@@ -896,7 +899,12 @@ export function ObjectsPanel({
           </select>
         </div>
       </div>
-      <div className="feature-list" role="list" aria-label="Objects">
+      <div
+        className="feature-list"
+        role="list"
+        aria-label="Objects"
+        {...rowEnter}
+      >
         {filteredCount === 0 && !geometryPending && (
           <p className="muted sidebar-hint" role="listitem">
             {objectNeedle

@@ -304,6 +304,60 @@ test('a click on the moving face drawn by the frame on screen takes it back, whi
   expect(await savedMoves(page)).toEqual(['Place the block']);
 });
 
+test('the Offset editor and its keypad close when a click on the moving face clears the picks (U11)', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const document = twoBoxes();
+  const [, blockId] = document.bodyOrder;
+  await openDocument(page, document);
+  await expectBodyCount(page, 2);
+  await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+    'data-e2e-rendered-bodies',
+    '2',
+    { timeout: 30_000 }
+  );
+  await page.keyboard.press('f');
+  await waitForStillViewport(page);
+
+  const bar = await startFlippedAlign(page);
+  await clickWorldPoint(page, [65, 9, 26]);
+  await expect(bar).toContainText('Click a flat face on the target body');
+  await clickWorldPoint(page, [20, 15, 10]);
+  await expect
+    .poll(() => boxOf(page, blockId!), { timeout: 30_000 })
+    .toEqual([60, 5, 4, 70, 13, 10]);
+  await waitForStillViewport(page);
+
+  // The viewport's Offset editor, with its keypad, previewing 2.
+  await page.getByTestId('command-handle-offset').click();
+  const editor = page.locator('.numeric-keypad');
+  await expect(editor).toBeVisible();
+  await editor.getByRole('button', { name: 'Keypad' }).click();
+  const grid = editor.locator('.keypad-grid');
+  await expect(grid).toBeVisible();
+  await grid.getByRole('button', { name: '2', exact: true }).click();
+  await expect
+    .poll(() => boxOf(page, blockId!), { timeout: 30_000 })
+    .toEqual([60, 5, 6, 70, 13, 12]);
+  await waitForStillViewport(page);
+
+  // The moving face, clicked in the preview, is taken back: the picks clear
+  // and the value the editor was editing has nothing left to edit.
+  await clickWorldPoint(page, [65, 9, 12]);
+  await expect(bar).toContainText('Click a flat face on the body to move');
+  await expect(editor).toHaveCount(0);
+  await expect(page.getByTestId('command-handle-offset')).toHaveCount(0);
+  await expect
+    .poll(() => boxOf(page, blockId!), { timeout: 30_000 })
+    .toEqual(MOVING);
+
+  // So the first Escape is the command's: Align closes, nothing stored.
+  await page.keyboard.press('Escape');
+  await expect(bar).toHaveCount(0);
+  expect(await savedMoves(page)).toEqual(['Place the block']);
+});
+
 /**
  * A 40 × 20 × 10 block with a 10 wide, 5 deep slot across its top (two
  * coplanar tops, x 0–15 and 25–40), and a 40 × 30 × 20 target beside it.

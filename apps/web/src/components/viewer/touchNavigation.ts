@@ -280,7 +280,7 @@ export function createTouchNavigation(
 
 /** Toggles on a touch screen that stand in for held modifier keys. */
 export interface TouchModifiers {
-  /** A pick adds or removes, as with Shift or Ctrl/⌘ held. */
+  /** A pick on the model adds or removes, as with Shift held. */
   multiSelect: boolean;
   /** Drags and sketching ignore snaps and inference, as with Shift held. */
   freeValues: boolean;
