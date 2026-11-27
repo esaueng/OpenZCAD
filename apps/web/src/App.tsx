@@ -245,6 +245,7 @@ import {
   type DrawingToolBridge
 } from './lib/drawing/toolActions';
 import { ANNOTATION_TOOL_ICONS } from './components/drawingToolIcons';
+import { ownProjectBehindShare } from './lib/shareOwnProject';
 import type { AutoDimensionPreview } from './lib/drawing/assistantPreflight';
 import type { PatchSource } from './components/modelPanels/modelPanelProps';
 import {
@@ -18460,15 +18461,23 @@ export function App() {
         hydrateSharedDocumentRef.current(opening.document, {
           rememberProject: false
         });
+        const ownLink = ownProjectBehindShare({
+          signedIn: Boolean(sessionRef.current),
+          projectId: opening.document.projectId,
+          projects,
+          accountProjectIds: cloudProjectIds
+        });
         setStatus(
           `${
-            isTweakableWithoutHistory(opening.document)
-              ? `Opened shared model ${shared.name} · adjust its parameters and export. The owner shared it without its history. Make a copy to keep it.`
-              : isSharedWithoutHistory(opening.document)
-                ? `Opened shared model ${shared.name} · view only. The owner shared it without its history. Make a copy to build on it.`
-                : shared.mode === 'view'
-                  ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
-                  : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+            ownLink
+              ? `Opened your shared model ${shared.name} as visitors see it. Open your project to edit it.`
+              : isTweakableWithoutHistory(opening.document)
+                ? `Opened shared model ${shared.name} · adjust its parameters and export. The owner shared it without its history. Make a copy to keep it.`
+                : isSharedWithoutHistory(opening.document)
+                  ? `Opened shared model ${shared.name} · view only. The owner shared it without its history. Make a copy to build on it.`
+                  : shared.mode === 'view'
+                    ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
+                    : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
           }${opening.note ? ` ${opening.note}` : ''}`
         );
       } catch (error) {
@@ -18594,6 +18603,32 @@ export function App() {
     accountEncrypts: boolean | null;
     error: string | null;
   } | null>(null);
+  /**
+   * The signed-in viewer's own project behind the link they opened: offered
+   * in place of Make a copy, which made a second project of their model.
+   */
+  const ownSharedProject =
+    shareSession && doc
+      ? ownProjectBehindShare({
+          signedIn: Boolean(session),
+          projectId: doc.projectId,
+          projects,
+          accountProjectIds: cloudProjectIds
+        })
+      : null;
+  /**
+   * Leaves the link for the project behind it, as accepting an invitation
+   * from a link does: the public session closes completely first, so its
+   * snapshot is never saved under the project's id.
+   */
+  async function openOwnSharedProject() {
+    const own = ownSharedProject;
+    if (!own || !shareSessionRef.current) return;
+    const isCurrent = beginProjectNavigation();
+    await handleGoHome(isCurrent);
+    if (!isCurrent() || shareSessionRef.current) return;
+    await handleOpenProject(own.projectId, isCurrent);
+  }
   function requestShareCopy() {
     const active = shareSessionRef.current;
     if (!active) return;
@@ -41721,7 +41756,11 @@ export function App() {
               onClearSelection: clearSelection,
               // The top bar's Make a copy, which the compact header does not
               // draw: the More page carries it for every share visitor.
-              ...(shareSession ? { onMakeCopy: requestShareCopy } : {}),
+              ...(ownSharedProject
+                ? { onOpenOwnProject: () => void openOwnSharedProject() }
+                : shareSession
+                  ? { onMakeCopy: requestShareCopy }
+                  : {}),
               reducedMotion: appSettings.appearance.reducedMotion,
               panels: {
                 // The model panels are Build's; Comments open in any mode,
@@ -41949,7 +41988,10 @@ export function App() {
               ? {
                   mode: sharedParameters ? 'tweak' : shareSession.mode,
                   ...(sharedWithoutHistory ? { withoutHistory: true } : {}),
-                  onMakeCopy: requestShareCopy
+                  onMakeCopy: requestShareCopy,
+                  ...(ownSharedProject
+                    ? { onOpenOwnProject: () => void openOwnSharedProject() }
+                    : {})
                 }
               : null
           }

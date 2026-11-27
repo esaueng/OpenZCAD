@@ -2,10 +2,14 @@ import {
   test,
   expect,
   shareLoadResponse,
-  stubAnonymousApi
+  stubAnonymousApi,
+  stubApi
 } from './openzcad-fixtures';
-import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import {
+  createProjectDocument,
+  sharedProjectSnapshotDocument
+} from '@openzcad/document-core';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 
 async function holdRestoreResult(page: Page) {
@@ -279,4 +283,96 @@ test('a newer share wins over a held restore that saves locally without opening'
     release();
     await releaseRestore(page);
   }
+});
+
+test('the owner opening their own share link is offered the project, not a copy', async ({
+  page
+}) => {
+  await stubApi(page);
+  let own: ProjectDocument | null = null;
+  page.on('response', async (response) => {
+    if (
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/api/projects' &&
+      response.ok()
+    ) {
+      own = ((await response.json()) as { document: ProjectDocument })
+        .document;
+    }
+  });
+  // The account lists the owner's project with its live link, as the
+  // Worker marks it (`withProjectSharing`).
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'GET' && own
+      ? route.fulfill({
+          json: {
+            projects: [
+              {
+                projectId: own.projectId,
+                name: own.name,
+                revisionCount: 1,
+                updatedAt: new Date().toISOString(),
+                sharing: { role: 'owner', linkCount: 1 }
+              }
+            ]
+          }
+        })
+      : route.fallback()
+  );
+  await page.route('**/api/share', (route) =>
+    own
+      ? route.fulfill({
+          json: {
+            // What the Worker serves: the owner's id taken out.
+            document: sharedProjectSnapshotDocument(own),
+            project: { projectId: own.projectId, name: own.name },
+            mode: 'tweak'
+          }
+        })
+      : route.fulfill({ status: 404, json: { error: 'Unavailable' } })
+  );
+  // Nothing the public session holds is saved over the project.
+  const snapshotWrites: string[] = [];
+  page.on('request', (request) => {
+    if (
+      request.method() !== 'GET' &&
+      new URL(request.url()).pathname.startsWith('/api/projects') &&
+      (request.postData() ?? '').includes('user_shared')
+    )
+      snapshotWrites.push(request.url());
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Own shared bracket');
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
+  await expect(page.locator('.breadcrumb')).toContainText('Own shared bracket');
+  await expect.poll(() => own !== null).toBe(true);
+
+  const token = 'o'.repeat(43);
+  const opened = shareLoadResponse(page, token);
+  await page.evaluate((link) => {
+    window.location.hash = `share=${link}`;
+  }, token);
+  await opened;
+  await expect(
+    page.getByRole('status', { name: 'Shared model · Tweak only' })
+  ).toBeVisible();
+  const openOwn = page.getByRole('button', {
+    name: 'Open your project',
+    exact: true
+  });
+  await expect(openOwn).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toHaveCount(0);
+
+  await openOwn.click();
+  await expect(
+    page.getByRole('status', { name: 'Shared model · Tweak only' })
+  ).toHaveCount(0);
+  await expect(page.locator('.breadcrumb')).toContainText('Own shared bracket');
+  await expect(
+    page.getByRole('button', { name: 'Build', exact: true })
+  ).toBeEnabled();
+  expect(new URL(page.url()).hash).toBe('');
+  expect(snapshotWrites).toEqual([]);
 });

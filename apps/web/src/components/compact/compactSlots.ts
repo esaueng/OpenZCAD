@@ -214,6 +214,11 @@ export interface CompactChromeProps {
    * mode; absent outside a share session.
    */
   onMakeCopy?(): void;
+  /**
+   * The signed-in viewer owns the shared project: More offers it in place
+   * of Make a copy, as the regular top bar does.
+   */
+  onOpenOwnProject?(): void;
   reducedMotion: boolean;
   /** The panel sheet (slice 5): History, Objects and the rest. */
   panels: CompactPanels;
