@@ -3138,6 +3138,25 @@ describe('DrawingWorkspace touch placement (U12 slice 9)', () => {
     tap(finger(5, 20));
     expect(added()).toHaveLength(1);
   });
+
+  it('drops a touch held over a change of tool, placing nothing with the new one', async () => {
+    const { surface, finger, tap, added } = await pickedHorizontal();
+    // A finger held on the paper while a key changes the tool to Note.
+    const held = finger(5, 20);
+    fireEvent.pointerDown(surface, held);
+    fireEvent.keyDown(document.body, { key: 'n' });
+    expect(surface.getAttribute('data-tool')).toBe('note');
+    fireEvent.pointerUp(surface, held);
+    expect(added()).toHaveLength(0);
+    expect(surface.getAttribute('data-tool')).toBe('note');
+    // A tap of its own places the note.
+    tap(finger(5, 20));
+    expect(added()).toHaveLength(1);
+    expect(
+      (added()[0]!.payload as { annotation: DrawingAnnotation }).annotation
+        .kind
+    ).toBe('note');
+  });
 });
 
 describe('DrawingWorkspace geometric tolerancing (D07 v98)', () => {

@@ -3820,12 +3820,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const touchesRef = useRef(new Map<number, { x: number; y: number }>());
   /**
    * A finger down on an annotation tool's pick surface, waiting for its
-   * release to pick or place; a second finger or a drag cancels it.
+   * release to pick or place; a second finger or a drag cancels it. It
+   * belongs to the tool, at the step, that took the touch: a tool changed
+   * or stepped on before the release (a key pressed meanwhile) drops it.
    */
   const pickTapRef = useRef<{
     pointerId: number;
     clientX: number;
     clientY: number;
+    tool: AnnotationTool;
   } | null>(null);
   const wheelClassifier = useRef<WheelGestureClassifier | null>(null);
   const wheelRef = useRef<(event: WheelEvent) => void>(() => undefined);
@@ -5671,7 +5674,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       pickTapRef.current = {
         pointerId: event.pointerId,
         clientX: event.clientX,
-        clientY: event.clientY
+        clientY: event.clientY,
+        tool
       };
       return;
     }
@@ -5681,7 +5685,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const tap = pickTapRef.current;
     if (tap?.pointerId !== event.pointerId) return;
     pickTapRef.current = null;
-    if (tool) pickAt(tap);
+    if (tool && tool === tap.tool) pickAt(tap);
   };
   const pickAt = (event: { clientX: number; clientY: number }) => {
     if (!tool) return;
