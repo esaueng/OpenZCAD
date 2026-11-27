@@ -191,6 +191,8 @@ interface ViewerShellProps {
   onCloseFrameRateOverlay?: () => void;
   settings: ViewerSettings;
   fitSignal: number;
+  /** Increment to finish a spline through the points placed so far. */
+  finishSketchCurveSignal?: number;
   autoFrame?: AutoFrameRequest | null;
   creationFrame?: AutoFrameRequest | null;
   /** Bumped to keep the model in the clear stage (ModelViewer). */
@@ -539,6 +541,7 @@ export function ViewerShell({
   onCloseFrameRateOverlay,
   settings,
   fitSignal,
+  finishSketchCurveSignal = 0,
   autoFrame = null,
   creationFrame = null,
   clearStageRequest = 0,
@@ -1032,6 +1035,7 @@ export function ViewerShell({
         onSectionOverlap={setSectionOverlapIds}
         analysisOverlay={analysis.overlay}
         fitSignal={fitSignal}
+        finishSketchCurveSignal={finishSketchCurveSignal}
         autoFrame={autoFrame}
         creationFrame={creationFrame}
         clearStageRequest={clearStageRequest}

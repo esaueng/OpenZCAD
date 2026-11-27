@@ -89,6 +89,7 @@ import {
   referenceImagePlaneBasis
 } from './lib/referenceImageDisplay';
 import { hasDraftDisplay, referenceImagesWithHistory } from '@openzcad/shared';
+import type { SketchProjectionMode } from '@openzcad/shared';
 import type {
   ReferenceImage,
   ReferenceImageId,
@@ -4931,6 +4932,8 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  // The compact sketch tray's ✓: finishes the spline being placed (U12).
+  const [finishSketchCurveSignal, setFinishSketchCurveSignal] = useState(0);
   // A 3D mouse this browser already allows reopens with no prompt. Its keys
   // run the same commands as the keyboard (spaceMouseActions.ts); the roll
   // key turns the camera, so the viewer answers that one.
@@ -40318,6 +40321,35 @@ export function App() {
       }
     />
   ) : null;
+  const armSketchEditTool = (
+    kind: SketchEditToolKind | null,
+    hint?: string
+  ) => {
+    if (kind === 'fillet' || sketchFilletPending) sketchFillet.reset();
+    dispatchInteraction({ type: 'sketch-edit-tool', kind });
+    if (kind === 'fillet') {
+      setStatus('Pick the corners to round.');
+    } else if (hint) {
+      setStatus(hint);
+    }
+  };
+  const armSketchProjection = (mode: SketchProjectionMode) => {
+    setProjectionRepair(null);
+    dispatchInteraction({ type: 'sketch-project-mode', mode });
+    setStatus(
+      mode === 'linked'
+        ? 'Click a model edge, or a face for its boundary, to project it linked: it follows later edits.'
+        : 'Click a model edge, or a face for its boundary, to copy it into the sketch once.'
+    );
+  };
+  const extrudeOpenSketch = () => {
+    if (interaction.mode !== 'sketch') return;
+    if (interaction.session.sketchId) {
+      startExtrude(interaction.session.sketchId as SketchId);
+    } else {
+      setStatus('Close a profile before starting Extrude.');
+    }
+  };
   const armConstraintTool = (kind: SketchConstraintToolKind | null) => {
     dispatchInteraction({
       type: 'sketch-constraint-tool',
@@ -40327,8 +40359,11 @@ export function App() {
       setStatus(constraintToolSpec(kind).hint);
     }
   };
+  // The compact workspace draws its own sketch (U12 slice 6): the rails,
+  // the relations and Finish below are the regular stage's.
+  const regularSketch = interaction.mode === 'sketch' && !compactShell;
   const sketchRelations =
-    interaction.mode === 'sketch' ? (
+    regularSketch && interaction.mode === 'sketch' ? (
       <SketchRelationsRail
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingConstraint={interaction.session.pendingConstraint}
@@ -40337,77 +40372,76 @@ export function App() {
         onSelectionConstraintTool={handleSelectionConstraintTool}
       />
     ) : null;
-  const sketchRail =
+  const sketchReferenceDimensions = editingSketchNode ? (
+    <SketchReferenceDimensions
+      sketch={editingSketchNode}
+      objects={sketchOverview.objects}
+      units={doc.units}
+      resolve={resolveDocumentValue}
+      disabled={sketchSolving || geometryBusy}
+      onCommand={executeCommand}
+      displayUnit={appSettings.sketching.referenceDisplayUnit}
+      onDisplayUnitChange={(referenceDisplayUnit) => {
+        const current = appSettingsRef.current;
+        handleAppSettingsChange({
+          ...current,
+          sketching: { ...current.sketching, referenceDisplayUnit }
+        });
+      }}
+    />
+  ) : null;
+  const sketchWorkflow =
     interaction.mode === 'sketch' ? (
-      <SketchToolRail
-        referenceDimensions={
-          editingSketchNode ? (
-            <SketchReferenceDimensions
-              sketch={editingSketchNode}
-              objects={sketchOverview.objects}
-              units={doc.units}
-              resolve={resolveDocumentValue}
-              disabled={sketchSolving || geometryBusy}
-              onCommand={executeCommand}
-              displayUnit={appSettings.sketching.referenceDisplayUnit}
-              onDisplayUnitChange={(referenceDisplayUnit) => {
-                const current = appSettingsRef.current;
-                handleAppSettingsChange({
-                  ...current,
-                  sketching: { ...current.sketching, referenceDisplayUnit }
-                });
-              }}
-            />
-          ) : null
+      <SketchWorkflow
+        plane={
+          sketchOverviewPlane?.type === 'canonical'
+            ? `${sketchOverviewPlane.plane} plane${sketchOverviewOffset ? ` offset ${formatDocumentLength(doc, sketchOverviewOffset)}` : ''}`
+            : sketchOverviewPlane?.type === 'face'
+              ? 'Attached face'
+              : 'Sketch plane'
         }
+        tool={interaction.session}
+        objects={sketchOverview.objects}
+        selectedId={interaction.session.selectedObjectId}
+        analysis={sketchOverview.analysis}
+        analysisError={sketchOverview.error}
+        geometrySnaps={appSettings.sketching.geometrySnapEnabled}
+        gridSnaps={appSettings.sketching.snapEnabled}
+        busy={sketchSolving || geometryBusy}
+        error={interaction.session.selectedObjectId ? null : sketchEditError}
+        onSelect={(objectId) => {
+          setSketchEditError(null);
+          dispatchInteraction({ type: 'sketch-select-object', objectId });
+        }}
+        onGeometrySnaps={() =>
+          handleAppSettingsChange({
+            ...appSettingsRef.current,
+            sketching: {
+              ...appSettingsRef.current.sketching,
+              geometrySnapEnabled:
+                !appSettingsRef.current.sketching.geometrySnapEnabled
+            }
+          })
+        }
+        onGridSnaps={() =>
+          handleAppSettingsChange({
+            ...appSettingsRef.current,
+            sketching: {
+              ...appSettingsRef.current.sketching,
+              snapEnabled: !appSettingsRef.current.sketching.snapEnabled
+            }
+          })
+        }
+        onDiagnose={showProfileDiagnostics}
+      />
+    ) : null;
+  const sketchRail =
+    regularSketch && interaction.mode === 'sketch' ? (
+      <SketchToolRail
+        referenceDimensions={sketchReferenceDimensions}
         entityEditor={sketchEntityEditor}
         sketchName={editingSketchName}
-        workflow={
-          <SketchWorkflow
-            plane={
-              sketchOverviewPlane?.type === 'canonical'
-                ? `${sketchOverviewPlane.plane} plane${sketchOverviewOffset ? ` offset ${formatDocumentLength(doc, sketchOverviewOffset)}` : ''}`
-                : sketchOverviewPlane?.type === 'face'
-                  ? 'Attached face'
-                  : 'Sketch plane'
-            }
-            tool={interaction.session}
-            objects={sketchOverview.objects}
-            selectedId={interaction.session.selectedObjectId}
-            analysis={sketchOverview.analysis}
-            analysisError={sketchOverview.error}
-            geometrySnaps={appSettings.sketching.geometrySnapEnabled}
-            gridSnaps={appSettings.sketching.snapEnabled}
-            busy={sketchSolving || geometryBusy}
-            error={
-              interaction.session.selectedObjectId ? null : sketchEditError
-            }
-            onSelect={(objectId) => {
-              setSketchEditError(null);
-              dispatchInteraction({ type: 'sketch-select-object', objectId });
-            }}
-            onGeometrySnaps={() =>
-              handleAppSettingsChange({
-                ...appSettingsRef.current,
-                sketching: {
-                  ...appSettingsRef.current.sketching,
-                  geometrySnapEnabled:
-                    !appSettingsRef.current.sketching.geometrySnapEnabled
-                }
-              })
-            }
-            onGridSnaps={() =>
-              handleAppSettingsChange({
-                ...appSettingsRef.current,
-                sketching: {
-                  ...appSettingsRef.current.sketching,
-                  snapEnabled: !appSettingsRef.current.sketching.snapEnabled
-                }
-              })
-            }
-            onDiagnose={showProfileDiagnostics}
-          />
-        }
+        workflow={sketchWorkflow}
         canExtrude={Boolean(sketchOverview.analysis?.profiles.length)}
         tool={interaction.session.tool}
         circleMode={interaction.session.circleMode}
@@ -40433,15 +40467,7 @@ export function App() {
         selectedObjectCount={sketchModeState?.selectedObjectIds?.length ?? 0}
         solveStatus={sketchRailSolveStatus}
         solving={sketchSolving}
-        onEditTool={(kind, hint) => {
-          if (kind === 'fillet' || sketchFilletPending) sketchFillet.reset();
-          dispatchInteraction({ type: 'sketch-edit-tool', kind });
-          if (kind === 'fillet') {
-            setStatus('Pick the corners to round.');
-          } else if (hint) {
-            setStatus(hint);
-          }
-        }}
+        onEditTool={armSketchEditTool}
         onDeleteConstraint={handleDeleteSketchConstraint}
         onSelectConstraintObject={handleSelectConstraintObject}
         onSelectFreeEntity={handleSelectFreeEntity}
@@ -40476,29 +40502,112 @@ export function App() {
           dispatchInteraction({ type: 'sketch-curve-mode', mode })
         }
         projectMode={interaction.session.projectMode ?? 'linked'}
-        onProjectMode={(mode) => {
-          setProjectionRepair(null);
-          dispatchInteraction({ type: 'sketch-project-mode', mode });
-          setStatus(
-            mode === 'linked'
-              ? 'Click a model edge, or a face for its boundary, to project it linked: it follows later edits.'
-              : 'Click a model edge, or a face for its boundary, to copy it into the sketch once.'
-          );
-        }}
+        onProjectMode={armSketchProjection}
         onConstruction={setSketchConstruction}
         onSettings={(sketching) => {
           const current = appSettingsRef.current;
           handleAppSettingsChange({ ...current, sketching });
         }}
         onDiagnostics={showProfileDiagnostics}
-        onExtrude={() => {
-          if (interaction.session.sketchId) {
-            startExtrude(interaction.session.sketchId as SketchId);
-          } else {
-            setStatus('Close a profile before starting Extrude.');
-          }
-        }}
+        onExtrude={extrudeOpenSketch}
       />
+    ) : null;
+  // The compact selection chip names a sketch's pick: the entity, or how
+  // many are picked. Only live entities count, as Copy reads them: an undo
+  // can take picked entities away (a paste undone) while the session still
+  // names them.
+  const compactSketchSelectedIds = sketchModeState?.selectedObjectIds ?? [];
+  const compactSketchSelectionLabel =
+    compactSketchSelectedIds.length > 1
+      ? `${compactSketchSelectedIds.length} entities`
+      : compactSketchSelectedIds.length === 1
+        ? (sketchLabels.get(compactSketchSelectedIds[0]!) ?? 'Entity')
+        : null;
+  // U12 slice 6: the open sketch in the compact workspace, its tray at peek
+  // and its pages in the sheet. Every control runs the rail's handler.
+  const compactSketchTray =
+    compactShell && interaction.mode === 'sketch' ? (
+      <ErrorBoundary label="Sketch tray" resetKey={resolvedWorkspaceMode}>
+        <LazyCompactModeTray
+          mode="sketch"
+          tool={interaction.session.tool}
+          circleMode={interaction.session.circleMode}
+          rectangleMode={interaction.session.rectangleMode ?? 'corner'}
+          polygonSides={
+            interaction.session.polygonSides ?? DEFAULT_SKETCH_POLYGON_SIDES
+          }
+          {...(interaction.session.curveMode
+            ? { curveMode: interaction.session.curveMode }
+            : {})}
+          projectMode={interaction.session.projectMode ?? 'linked'}
+          construction={sketchConstruction}
+          canConstrain={Boolean(interaction.session.sketchId)}
+          canExtrude={Boolean(sketchOverview.analysis?.profiles.length)}
+          solving={sketchSolving}
+          pendingEdit={interaction.session.pendingEdit}
+          pendingConstraint={interaction.session.pendingConstraint}
+          {...(interaction.session.modifyOptions
+            ? { modifyOptions: interaction.session.modifyOptions }
+            : {})}
+          selectedObjectCount={compactSketchSelectedIds.length}
+          relationSelection={relationSelection}
+          splineInProgress={
+            interaction.session.drawing && interaction.session.tool === 'spline'
+          }
+          workflow={sketchWorkflow}
+          palette={{
+            settings: appSettings.sketching,
+            units: doc.units,
+            constraints: sketchConstraintItems,
+            selectedObjectId: interaction.session.selectedObjectId,
+            solveStatus: sketchRailSolveStatus,
+            solving: sketchSolving,
+            referenceDimensions: sketchReferenceDimensions,
+            onSettings: (sketching) => {
+              const current = appSettingsRef.current;
+              handleAppSettingsChange({ ...current, sketching });
+            },
+            onEditConstraint: handleEditSketchDimension,
+            onDeleteConstraint: handleDeleteSketchConstraint,
+            onSelectConstraintObject: handleSelectConstraintObject,
+            onSelectFreeEntity: handleSelectFreeEntity
+          }}
+          entityEditor={sketchTextDraft ? null : sketchEntityEditor}
+          textCard={sketchTextDraft ? sketchEntityEditor : null}
+          onTool={(sketchTool) =>
+            dispatchInteraction({ type: 'sketch-tool', tool: sketchTool })
+          }
+          onCircleMode={(mode) =>
+            dispatchInteraction({ type: 'sketch-circle-mode', mode })
+          }
+          onRectangleMode={(mode) =>
+            dispatchInteraction({ type: 'sketch-rectangle-mode', mode })
+          }
+          onPolygonSides={(sides) =>
+            dispatchInteraction({ type: 'sketch-polygon-sides', sides })
+          }
+          onCurveMode={(mode) =>
+            dispatchInteraction({ type: 'sketch-curve-mode', mode })
+          }
+          onProjectMode={armSketchProjection}
+          onFinishSpline={() => setFinishSketchCurveSignal((n) => n + 1)}
+          onEditTool={armSketchEditTool}
+          onModifyOptions={(options) =>
+            dispatchInteraction({ type: 'sketch-modify-options', options })
+          }
+          onConstruction={setSketchConstruction}
+          onDimension={startSmartDimension}
+          onSolve={() => void handleSolveSketch()}
+          onDiagnostics={showProfileDiagnostics}
+          onExtrude={extrudeOpenSketch}
+          onConstraintTool={armConstraintTool}
+          onSelectionConstraintTool={handleSelectionConstraintTool}
+          onSelectAll={() => void handleSketchClipboardKey('a')}
+          onCopy={() => void handleSketchClipboardKey('c')}
+          onPaste={() => void handleSketchClipboardKey('v')}
+          onStageCovered={requestClearStage}
+        />
+      </ErrorBoundary>
     ) : null;
   /**
    * Everything the model panels read and every action they offer, once for
@@ -40684,19 +40793,18 @@ export function App() {
   // Finish closes the sketch card at its foot, where the eye ends up after
   // the tools; every sketch edit is already committed, so there is nothing
   // to discard.
-  const columnFooter =
-    interaction.mode === 'sketch' ? (
-      <button
-        type="button"
-        className="workspace-column-finish"
-        title="Finish Sketch"
-        aria-label="Finish Sketch"
-        onClick={finishSketchSession}
-      >
-        <Check size={16} aria-hidden="true" />
-        <span className="workspace-column-finish-label">Finish Sketch</span>
-      </button>
-    ) : null;
+  const columnFooter = regularSketch ? (
+    <button
+      type="button"
+      className="workspace-column-finish"
+      title="Finish Sketch"
+      aria-label="Finish Sketch"
+      onClick={finishSketchSession}
+    >
+      <Check size={16} aria-hidden="true" />
+      <span className="workspace-column-finish-label">Finish Sketch</span>
+    </button>
+  ) : null;
   // Direct-mode strips (plane picking, direct extrude) keep floating over
   // the viewport; the column shows the palette so the tool can be changed.
   const columnTools =
@@ -41167,7 +41275,8 @@ export function App() {
   // View's bar and rail and Tweak's rail and flyouts. Each control runs the
   // handler those run.
   const compactModeTray =
-    !compactShell || !(viewMode || tweakMode || assembleMode) ? null : (
+    compactSketchTray ??
+    (!compactShell || !(viewMode || tweakMode || assembleMode) ? null : (
       <ErrorBoundary label="Mode tray" resetKey={resolvedWorkspaceMode}>
         {assembleMode ? (
           // U12 slice 8: Assemble's sidebar, its timeline and the player as
@@ -41302,7 +41411,7 @@ export function App() {
           />
         )}
       </ErrorBoundary>
-    );
+    ));
   const workspace = (
     <WorkspaceAppShell
       covered={sharePage !== null}
@@ -41344,9 +41453,25 @@ export function App() {
               ),
               project: compactProjectSheet,
               selectionLabel:
-                selectedFeature && featureSelectionSource !== 'inferred'
-                  ? selectedFeature.name
-                  : commandContextLabel(commandSelection),
+                interaction.mode === 'sketch'
+                  ? compactSketchSelectionLabel
+                  : selectedFeature && featureSelectionSource !== 'inferred'
+                    ? selectedFeature.name
+                    : commandContextLabel(commandSelection),
+              // U12 slice 6: an open sketch takes over the shell.
+              sketch:
+                interaction.mode === 'sketch'
+                  ? {
+                      name: editingSketchName,
+                      solve: sketchRailSolveStatus
+                        ? {
+                            tone: sketchRailSolveStatus.tone,
+                            label: sketchRailSolveStatus.label
+                          }
+                        : null,
+                      onFinish: finishSketchSession
+                    }
+                  : null,
               onClearSelection: clearSelection,
               // The top bar's Make a copy, which the compact header does not
               // draw: the More page carries it for every share visitor.
@@ -41826,6 +41951,7 @@ export function App() {
             }
             settings={viewerSettings}
             fitSignal={fitSignal}
+            finishSketchCurveSignal={finishSketchCurveSignal}
             autoFrame={autoFrame}
             creationFrame={creationFrame}
             clearStageRequest={clearStageRequest}
