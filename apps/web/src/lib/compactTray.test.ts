@@ -84,7 +84,7 @@ describe('the All tools grid', () => {
     }
   });
 
-  it('lists all 45 tools in their five groups, the leading row first', () => {
+  it('lists all 46 tools in their five groups, the leading row first', () => {
     const sections = allToolsSections('', allToolsLead(['fillet'], []));
     expect(sections.map((section) => section.label)).toEqual([
       'Recent',
@@ -92,7 +92,7 @@ describe('the All tools grid', () => {
     ]);
     expect(sections[0]!.tools).toEqual(['fillet']);
     const grouped = sections.slice(1).flatMap((section) => section.tools);
-    expect(grouped).toHaveLength(45);
+    expect(grouped).toHaveLength(46);
     expect(new Set(grouped)).toEqual(new Set(Object.keys(TOOL_META)));
   });
 
