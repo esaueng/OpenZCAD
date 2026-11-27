@@ -1,4 +1,5 @@
 import {
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -9,44 +10,41 @@ import {
   type ReactNode
 } from 'react';
 import {
-  Angle,
-  ChartPie,
   Crosshair,
-  DraftingCompass,
-  Diameter,
   FileDown,
   Maximize,
   Moon,
   MousePointer2,
-  MoveDiagonal2,
-  MoveHorizontal,
-  MoveVertical,
   Plus,
-  Radius,
   RefreshCw,
   Ruler,
   Scaling,
   Scissors,
-  StickyNote,
-  MessageCircle,
-  Anchor,
-  Columns3,
   Diff,
   Table2,
-  TableProperties,
-  ImageIcon,
   Sun,
   Trash2,
-  TriangleRight,
-  LocateFixed,
-  SeparatorVertical,
-  CircleDashed,
   X,
   ZoomIn,
   SquareArrowOutUpRight,
-  ZoomOut,
-  type LucideIcon
+  ZoomOut
 } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ANNOTATION_TOOL_ICONS } from './drawingToolIcons';
+import {
+  CompactTrayContext,
+  useCompactTrayHost
+} from './compact/compactSlots';
+import type {
+  CompactDrawRun,
+  CompactDrawSheet,
+  CompactDrawSheets
+} from './compact/CompactDrawTray';
+import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
+import {
+  annotationToolStep,
+  viewToolStep
+} from '../lib/drawing/compactDraw';
 import {
   commandFactories,
   composeCommands,
@@ -273,6 +271,12 @@ import {
   SECTION_TOOL_KEY
 } from '../lib/drawing/toolKeys';
 import { CHARACTERISTIC_LABELS } from '../lib/drawing/toleranceFrames';
+
+// Draw's compact tray (U12 slice 9) loads only where the compact workspace
+// is in force.
+const LazyCompactDrawTray = lazyWithStaleChunkNotice(
+  () => import('./compact/CompactDrawTray')
+);
 import { FIT_GRADES, FIT_LETTERS } from '../lib/drawing/isoTolerances';
 import {
   createStarterSheet,
@@ -566,6 +570,21 @@ let retainedProjections: {
  * as well, so undoing the Update brings that drawing back.
  */
 const KEPT_DRAWINGS_PER_SHEET = 2;
+
+/** The export buttons' titles, and the same while the sheet is outdated. */
+const EXPORT_TITLES = {
+  pdf: 'Export this sheet as a vector PDF',
+  svg: 'Export this sheet as SVG',
+  dxf: 'Export this sheet as DXF (R12, paper millimetres, a layer per line kind)'
+} as const;
+const OUTDATED_EXPORT_TITLES = {
+  pdf: 'Export this sheet as drawn, before the latest model change',
+  svg: 'Export this sheet as SVG, as drawn before the latest model change',
+  dxf: 'Export this sheet as DXF, as drawn before the latest model change'
+} as const;
+
+/** How far a finger may drift and still tap an annotation tool's pick. */
+const PICK_TAP_SLOP_PX = 10;
 
 /**
  * A sheet's last complete drawing: its views' projections by view intent and
@@ -1170,6 +1189,23 @@ function svgPoints(points: number[], height: number): string {
   return out.join(' ');
 }
 
+/**
+ * Escape in a field with an unsaved edit puts its value back, and that is
+ * all it does: the key is marked handled, so the compact sheet holding the
+ * field does not also step back a page. Escape in a field with nothing to
+ * put back is left to what holds it.
+ */
+function resetDraft(
+  event: ReactKeyboardEvent<HTMLInputElement>,
+  draft: string,
+  value: string,
+  setDraft: (value: string) => void
+) {
+  if (draft === value) return;
+  event.preventDefault();
+  setDraft(value);
+}
+
 function TextField(props: {
   label: string;
   value: string;
@@ -1200,7 +1236,8 @@ function TextField(props: {
           onBlur={commit}
           onKeyDown={(event) => {
             if (event.key === 'Enter') commit();
-            if (event.key === 'Escape') setDraft(props.value);
+            if (event.key === 'Escape')
+              resetDraft(event, draft, props.value, setDraft);
           }}
         />
       </label>
@@ -1248,38 +1285,16 @@ function NumberField(props: {
   );
 }
 
-
-const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
-  {
-    horizontal: MoveHorizontal,
-    vertical: MoveVertical,
-    aligned: MoveDiagonal2,
-    distance: Ruler,
-    radius: Radius,
-    diameter: Diameter,
-    angle: Angle,
-    'arc-angle': ChartPie,
-    'three-point-angle': DraftingCompass,
-    chamfer: TriangleRight,
-    note: StickyNote,
-    'center-mark': Crosshair,
-    'intersection-mark': LocateFixed,
-    centerline: SeparatorVertical,
-    'circle-centerline': CircleDashed,
-    balloon: MessageCircle,
-    'parts-list': TableProperties,
-    'hole-table': Table2,
-    image: ImageIcon,
-    'datum-feature': Anchor,
-    'feature-control-frame': Columns3,
-    'general-tolerance': Diff
-  };
-
-
 /**
  * D07 (v98): a new frame's tolerance, by the units the sheet prints in:
  * about a tenth of a millimetre, a round number in each.
  */
+/** An annotation tool's icon, drawn for the compact tray's running row. */
+function annotationToolIcon(kind: AnnotationToolKind, size: number) {
+  const Icon = ANNOTATION_TOOL_ICONS[kind];
+  return <Icon size={size} aria-hidden="true" />;
+}
+
 const DEFAULT_FRAME_AMOUNT: Readonly<Record<UnitSystem, number>> = {
   mm: 0.1,
   cm: 0.01,
@@ -2511,7 +2526,8 @@ function FrameAmountField(props: {
         onBlur={commit}
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit();
-          if (event.key === 'Escape') setDraft(String(props.value));
+          if (event.key === 'Escape')
+            resetDraft(event, draft, String(props.value), setDraft);
         }}
       />
     </label>
@@ -2973,7 +2989,7 @@ function OptionalAmountField(props: {
         onBlur={commit}
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit();
-          if (event.key === 'Escape') setDraft(shown);
+          if (event.key === 'Escape') resetDraft(event, draft, shown, setDraft);
         }}
       />
     </label>
@@ -3156,7 +3172,8 @@ function AmountField(props: {
         onBlur={commit}
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit();
-          if (event.key === 'Escape') setDraft(String(props.value));
+          if (event.key === 'Escape')
+            resetDraft(event, draft, String(props.value), setDraft);
         }}
       />
     </label>
@@ -3603,7 +3620,7 @@ function WeightField(props: {
         onBlur={commit}
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit();
-          if (event.key === 'Escape') setDraft(shown);
+          if (event.key === 'Escape') resetDraft(event, draft, shown, setDraft);
         }}
       />
     </label>
@@ -3801,6 +3818,32 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   } | null>(null);
   /** Touch points on the canvas, for a two-finger pinch. */
   const touchesRef = useRef(new Map<number, { x: number; y: number }>());
+  /**
+   * A finger down on an annotation tool's pick surface, waiting for its
+   * release to pick or place; a second finger or a drag cancels it. It
+   * belongs to the tool, at the step, that took the touch: a tool changed
+   * or stepped on before the release (a key pressed meanwhile) drops it.
+   */
+  const pickTapRef = useRef<{
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+    tool: AnnotationTool;
+  } | null>(null);
+  /**
+   * A finger down on an armed view tool's surface (the auxiliary view's
+   * edge or place, a section's or a detail's place), waiting for its
+   * release to act, as an annotation tool's pick does: a second finger or a
+   * drag cancels it, and so does a tool or step changed before the release.
+   */
+  const viewTapRef = useRef<{
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+    tool: 'auxiliary' | 'section' | 'detail';
+    /** The step's own state: the picked edge, the circled region, the line. */
+    step: unknown;
+  } | null>(null);
   const wheelClassifier = useRef<WheelGestureClassifier | null>(null);
   const wheelRef = useRef<(event: WheelEvent) => void>(() => undefined);
   wheelRef.current = (event: WheelEvent) => {
@@ -3870,6 +3913,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   }, [canvasElement]);
   const [darkPaper, setDarkPaper] = useState(readDarkPaper);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
+  // U12 slice 9: in the compact workspace the sheet fills the stage, and the
+  // tabs, toolbar, properties and exports are the compact sheet's tray and
+  // pages, drawn into the tray slot's anchor. Null in the regular workspace.
+  const compactHost = useCompactTrayHost();
+  const compact = compactHost !== null;
   useEffect(() => {
     if (!canvasElement) return;
     const listener = (event: WheelEvent) => wheelRef.current(event);
@@ -5634,6 +5682,27 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   };
   const onPickPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
     if (event.button !== 0 || !tool) return;
+    // A finger picks and places on its release, as a tap: the first finger
+    // of a pinch must not commit a dimension before the second one lands.
+    if (event.pointerType === 'touch') {
+      pickTapRef.current = {
+        pointerId: event.pointerId,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        tool
+      };
+      return;
+    }
+    pickAt(event);
+  };
+  const onPickPointerUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    const tap = pickTapRef.current;
+    if (tap?.pointerId !== event.pointerId) return;
+    pickTapRef.current = null;
+    if (tool && tool === tap.tool) pickAt(tap);
+  };
+  const pickAt = (event: { clientX: number; clientY: number }) => {
+    if (!tool) return;
     const at = paperPoint(event);
     if (!at) return;
     if (pickedEnough(tool)) {
@@ -5740,8 +5809,54 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     auxiliaryTool?.edge && auxiliaryTool.pointer && shownSheet
       ? auxiliaryDraft(shownSheet, auxiliaryTool.edge, auxiliaryTool.pointer)
       : null;
+  /** A finger waits for its release to act on an armed view tool's step. */
+  const holdViewTap = (
+    event: ReactPointerEvent<SVGRectElement>,
+    tool: 'auxiliary' | 'section' | 'detail',
+    step: unknown
+  ) => {
+    viewTapRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      tool,
+      step
+    };
+  };
+  /**
+   * The finger's release, where it is the one waiting and its tool still
+   * stands at the step it landed on; null otherwise.
+   */
+  const takeViewTap = (
+    event: ReactPointerEvent<SVGRectElement>,
+    tool: 'auxiliary' | 'section' | 'detail',
+    step: unknown
+  ): { clientX: number; clientY: number } | null => {
+    const tap = viewTapRef.current;
+    if (tap?.pointerId !== event.pointerId) return null;
+    viewTapRef.current = null;
+    return tap.tool === tool && tap.step === step ? event : null;
+  };
   const onAuxiliaryPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
     if (event.button !== 0 || !auxiliaryTool || !shownSheet) return;
+    // A finger picks and places on its release: the first finger of a
+    // pinch must not place a view before the second one lands.
+    if (event.pointerType === 'touch') {
+      holdViewTap(event, 'auxiliary', auxiliaryTool.edge);
+      return;
+    }
+    auxiliaryAt(event);
+  };
+  const onAuxiliaryPointerUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    const tap = takeViewTap(
+      event,
+      'auxiliary',
+      auxiliaryTool ? auxiliaryTool.edge : undefined
+    );
+    if (tap) auxiliaryAt(tap);
+  };
+  const auxiliaryAt = (event: { clientX: number; clientY: number }) => {
+    if (!auxiliaryTool || !shownSheet) return;
     const at = paperPoint(event);
     if (!at) return;
     if (auxiliaryTool.edge) {
@@ -5822,26 +5937,36 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             : null;
         })()
       : null;
-  const onDetailPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
-    if (event.button !== 0 || !detailTool || !shownSheet) return;
+  /** Places the circled detail where the pointer is. */
+  const placeDetail = (event: { clientX: number; clientY: number }) => {
+    if (!detailTool?.region || !shownSheet) return;
     const at = paperPoint(event);
     if (!at) return;
-    if (detailTool.region) {
-      const source = detailSourceView(detailTool.region.sourceViewId);
-      if (!source) return;
-      const view: DrawingView = {
-        ...detailDraft(shownSheet, source, detailTool.region, at.point),
-        viewId: createDrawingViewId()
-      };
-      setDetailTool(null);
-      if (
-        run(
-          commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
-        )
+    const source = detailSourceView(detailTool.region.sourceViewId);
+    if (!source) return;
+    const view: DrawingView = {
+      ...detailDraft(shownSheet, source, detailTool.region, at.point),
+      viewId: createDrawingViewId()
+    };
+    setDetailTool(null);
+    if (
+      run(
+        commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
       )
-        setSelectedViewId(view.viewId);
+    )
+      setSelectedViewId(view.viewId);
+  };
+  const onDetailPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (event.button !== 0 || !detailTool || !shownSheet) return;
+    if (detailTool.region) {
+      // A finger places on its release, as a tap.
+      if (event.pointerType === 'touch')
+        holdViewTap(event, 'detail', detailTool.region);
+      else placeDetail(event);
       return;
     }
+    const at = paperPoint(event);
+    if (!at) return;
     if (!detailSourceAt(shownSheet, drawnViews, at.point, document.units)) {
       props.onStatus('Start the detail circle inside a view, at its centre.');
       return;
@@ -5866,6 +5991,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       setDetailTool({ ...detailTool, pointer: at.point });
   };
   const onDetailPointerUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    const tap = takeViewTap(event, 'detail', detailTool?.region);
+    if (tap) {
+      placeDetail(tap);
+      return;
+    }
     if (!detailTool?.drag || !shownSheet) return;
     const at = paperPoint(event);
     const end = at?.point ?? detailTool.drag.current;
@@ -5961,33 +6091,43 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             : null;
         })()
       : null;
-  const onSectionPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
-    if (event.button !== 0 || !sectionTool || !shownSheet) return;
+  /** Places the section whose line is drawn where the pointer is. */
+  const placeSection = (event: { clientX: number; clientY: number }) => {
+    if (!sectionTool?.line || !shownSheet) return;
     const at = paperPoint(event);
     if (!at) return;
-    if (sectionTool.line) {
-      const source = sectionSource(sectionTool.line);
-      const draft =
-        source &&
-        sectionPlacement(
-          shownSheet,
-          source.view,
-          sectionTool.line,
-          at.point,
-          source.view.bodyIds,
-          sectionReach(source.view, sectionTool.line)
-        );
-      if (!draft) return;
-      const view: DrawingView = { ...draft, viewId: createDrawingViewId() };
-      setSectionTool(null);
-      if (
-        run(
-          commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
-        )
+    const source = sectionSource(sectionTool.line);
+    const draft =
+      source &&
+      sectionPlacement(
+        shownSheet,
+        source.view,
+        sectionTool.line,
+        at.point,
+        source.view.bodyIds,
+        sectionReach(source.view, sectionTool.line)
+      );
+    if (!draft) return;
+    const view: DrawingView = { ...draft, viewId: createDrawingViewId() };
+    setSectionTool(null);
+    if (
+      run(
+        commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
       )
-        setSelectedViewId(view.viewId);
+    )
+      setSelectedViewId(view.viewId);
+  };
+  const onSectionPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (event.button !== 0 || !sectionTool || !shownSheet) return;
+    if (sectionTool.line) {
+      // A finger places on its release, as a tap.
+      if (event.pointerType === 'touch')
+        holdViewTap(event, 'section', sectionTool.line);
+      else placeSection(event);
       return;
     }
+    const at = paperPoint(event);
+    if (!at) return;
     if (!sectionSourceAt(shownSheet, drawnViews, at.point, document.units)) {
       props.onStatus(
         'Start the section line inside a front, top or side view.'
@@ -6014,6 +6154,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       setSectionTool({ ...sectionTool, pointer: at.point });
   };
   const onSectionPointerUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    const tap = takeViewTap(event, 'section', sectionTool?.line);
+    if (tap) {
+      placeSection(tap);
+      return;
+    }
     if (!sectionTool?.drag || !shownSheet) return;
     const at = paperPoint(event);
     const end = at?.point ?? sectionTool.drag.current;
@@ -6101,9 +6246,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     ) {
       if (broken.some((entry) => entry.annotationId === selectedAnnotationId))
         setSelectedAnnotationId(null);
-      props.onStatus(
-        `Deleted ${broken.length} broken ${broken.length === 1 ? 'annotation' : 'annotations'}. Undo to restore.`
-      );
+      const deleted = `Deleted ${broken.length} broken ${broken.length === 1 ? 'annotation' : 'annotations'}.`;
+      // In the compact frame the notice carries Undo, as a deleted sheet
+      // or view's does.
+      if (compact) announceUndoable(deleted);
+      else props.onStatus(`${deleted} Undo to restore.`);
     }
   };
   const moveAnnotation = (
@@ -6169,6 +6316,50 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       moveAnnotation(annotation, liveAnnotationDrag.current);
   };
 
+  const selectSheet = (sheetId: DrawingSheetId) => {
+    setSelectedSheetId(sheetId);
+    setSelectedViewId(null);
+    setSelectedAnnotationId(null);
+    setTool(null);
+  };
+  // The compact sheets page: what the sheet tabs and their menu do.
+  const compactSheets: CompactDrawSheets = {
+    sheets,
+    activeId: sheet?.sheetId ?? null,
+    onSelect: selectSheet,
+    onCreate: createSheet,
+    onRename: renameSheet,
+    onDuplicate: duplicateSheet,
+    onMove: moveSheet,
+    onDelete: deleteSheet,
+    editDisabledReason: editable ? null : editDisabledReason,
+    createDisabledReason: !editable
+      ? (editDisabledReason ?? 'Drawing edits are unavailable.')
+      : geometryPending
+        ? 'Waiting for the model to finish updating.'
+        : null
+  };
+  /** Draw's compact tray, in the compact sheet's tray slot. */
+  const compactTray = (
+    content: CompactDrawSheet | null,
+    running: CompactDrawRun | null
+  ) => {
+    const host = compactHost?.host;
+    if (!host) return null;
+    return createPortal(
+      <CompactTrayContext.Provider value={host.tray}>
+        <Suspense fallback={null}>
+          <LazyCompactDrawTray
+            sheets={compactSheets}
+            sheet={content}
+            run={running}
+          />
+        </Suspense>
+      </CompactTrayContext.Provider>,
+      host.element
+    );
+  };
+
   if (!sheet || !shownSheet || !page || !status) {
     return (
       <section
@@ -6176,6 +6367,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         className="drawing-workspace"
         aria-label="Drawings"
       >
+        {compactTray(null, null)}
         <div className="drawing-empty">
           <h2>Drawings</h2>
           <p>
@@ -6261,8 +6453,18 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (touches.size >= 2) {
         panRef.current = null;
+        pickTapRef.current = null;
+        viewTapRef.current = null;
         setDrag(null);
         setAnnotationDrag(null);
+        // A section line or detail circle being dragged out is dropped, so
+        // the pinch's first finger does not draw one.
+        setSectionTool((current) =>
+          current?.drag ? { drag: null, line: null, pointer: null } : current
+        );
+        setDetailTool((current) =>
+          current?.drag ? { drag: null, region: null, pointer: null } : current
+        );
         event.stopPropagation();
         return;
       }
@@ -6277,6 +6479,22 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     event: ReactPointerEvent<SVGSVGElement>
   ) => {
     const touches = touchesRef.current;
+    const tap = pickTapRef.current;
+    if (
+      tap?.pointerId === event.pointerId &&
+      Math.hypot(event.clientX - tap.clientX, event.clientY - tap.clientY) >
+        PICK_TAP_SLOP_PX
+    )
+      pickTapRef.current = null;
+    const viewTap = viewTapRef.current;
+    if (
+      viewTap?.pointerId === event.pointerId &&
+      Math.hypot(
+        event.clientX - viewTap.clientX,
+        event.clientY - viewTap.clientY
+      ) > PICK_TAP_SLOP_PX
+    )
+      viewTapRef.current = null;
     if (event.pointerType === 'touch' && touches.has(event.pointerId)) {
       if (touches.size === 2) {
         const measure = () => {
@@ -6388,12 +6606,6 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     );
   })();
 
-  const selectSheet = (sheetId: DrawingSheetId) => {
-    setSelectedSheetId(sheetId);
-    setSelectedViewId(null);
-    setSelectedAnnotationId(null);
-    setTool(null);
-  };
   const deselect = () => {
     setSelectedViewId(null);
     setSelectedAnnotationId(null);
@@ -6420,6 +6632,24 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         ? 'Drawing the views…'
         : 'Drawing up to date';
   const canUpdate = status.kind === 'stale' || status.kind === 'replaced';
+  const onUpdateSheet = () => {
+    if (status.kind !== 'stale' && status.kind !== 'replaced') return;
+    updateSheet({
+      source: { fingerprint: status.fingerprint },
+      ...(status.kind === 'replaced'
+        ? { bodyReplacements: status.replacements }
+        : {})
+    });
+  };
+  /** Each export button's title: why it is refused, or what it writes. */
+  const exportTitle = (format: 'pdf' | 'svg' | 'dxf') =>
+    exportReason ??
+    (outdated ? OUTDATED_EXPORT_TITLES[format] : EXPORT_TITLES[format]);
+  /** An export now writes the drawing of an earlier model: say so. */
+  const outdatedExportWarning =
+    outdated && exportReason === null
+      ? `${message ?? ''} Export now writes this sheet as drawn, before the latest model change.`.trim()
+      : null;
   const exportBlocked =
     (!message || keptDrawing !== null) &&
     (brokenCount > 0 ||
@@ -6431,13 +6661,953 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       ? 'view'
       : null;
 
+  // The properties panel's sections, by name: the regular workspace's
+  // aside shows them together; the compact sheet (U12 slice 9) spreads
+  // them over its Annotate, Views and Properties pages.
+  const annotationProperties =
+    selection === 'annotation' && selectedAnnotation ? (
+      <AnnotationProperties
+        selected={selectedAnnotation}
+        ready={sheetReady}
+        canRepick={canAnnotate}
+        editable={editable}
+        numberFormat={sheetNumberFormat(sheet, document.units)}
+        resolutions={resolutions}
+        pictures={pictures}
+        onTool={chooseTool}
+        onDeselect={deselect}
+        datumLetters={datumLetters}
+        onUpdate={updateAnnotation}
+        onDelete={deleteAnnotation}
+      />
+    ) : null;
+  const viewProperties =
+    selection === 'view' && selectedView ? (
+      <div className="drawing-panel-section is-selection">
+        <SelectionHeading
+          title={`${viewLabel(selectedView)} view`}
+          onDeselect={deselect}
+        />
+        <div className="drawing-field-row">
+          <NumberField
+            label="Centre X (mm)"
+            value={selectedView.centerMm.x}
+            disabled={!editable}
+            onCommit={(x) =>
+              moveView(selectedView.viewId, {
+                ...selectedView.centerMm,
+                x
+              })
+            }
+          />
+          <NumberField
+            label="Centre Y (mm)"
+            value={selectedView.centerMm.y}
+            disabled={!editable}
+            onCommit={(y) =>
+              moveView(selectedView.viewId, {
+                ...selectedView.centerMm,
+                y
+              })
+            }
+          />
+        </div>
+        {selectedView.section &&
+          (() => {
+            const section = selectedView.section;
+            const source = sheet.views.find(
+              (view) => view.viewId === section.sourceViewId
+            );
+            // The plane's world coordinate on the axis it is normal to.
+            const normal = drawingSectionPlane({
+              ...selectedView,
+              section
+            }).normal;
+            const axis =
+              Math.abs(normal.x) === 1
+                ? 'x'
+                : Math.abs(normal.y) === 1
+                  ? 'y'
+                  : 'z';
+            // D03 (v91): a free section's plane is inclined: its offset
+            // is along its own normal, from the model origin.
+            const free = section.frame !== undefined;
+            const sign = free ? 1 : normal[axis];
+            const drawn = projections.get(selectedView.viewId);
+            const approximate =
+              drawn?.state === 'ready'
+                ? drawn.projection.sectionApproximate
+                : undefined;
+            return (
+              <>
+                <NumberField
+                  label={
+                    free
+                      ? `Plane offset (${document.units})`
+                      : `Cut at ${axis.toUpperCase()} (${document.units})`
+                  }
+                  value={section.depth * sign}
+                  disabled={!editable}
+                  onCommit={(value) =>
+                    run(
+                      commandFactories.updateDrawingView(
+                        {
+                          sheetId: sheet.sheetId,
+                          viewId: selectedView.viewId,
+                          sectionDepth: value * sign
+                        },
+                        'Move section plane'
+                      )
+                    )
+                  }
+                />
+                {!free && source && (
+                  <SectionStepFields
+                    steps={section.steps ?? []}
+                    firstDepth={section.depth}
+                    sign={sign}
+                    axisLabel={axis.toUpperCase()}
+                    units={document.units}
+                    bounds={
+                      projections.get(source.viewId)?.state === 'ready'
+                        ? (sectionStepRange(
+                            source,
+                            selectedView,
+                            projections.get(source.viewId)
+                          ) ?? null)
+                        : null
+                    }
+                    editable={editable}
+                    onCommit={(steps) =>
+                      run(
+                        commandFactories.updateDrawingView(
+                          {
+                            sheetId: sheet.sheetId,
+                            viewId: selectedView.viewId,
+                            sectionSteps: steps
+                          },
+                          steps.length > 0
+                            ? 'Edit section steps'
+                            : 'Remove section steps'
+                        )
+                      )
+                    }
+                  />
+                )}
+                <p className="drawing-hint">
+                  Cut from the{' '}
+                  {source
+                    ? DRAWING_VIEW_LABELS[source.orientation].toLowerCase()
+                    : 'source'}{' '}
+                  view along its line {section.label}-{section.label}
+                  {free
+                    ? ', at an angle: it is placed freely.'
+                    : ': it stays aligned with it.'}{' '}
+                  Cut faces are hatched.
+                </p>
+                {approximate ? (
+                  <p className="drawing-hint" role="note">
+                    Approximate: cut from the tessellation, to the display
+                    tolerance. {approximate} Its cut edges cannot be
+                    dimensioned.
+                  </p>
+                ) : (
+                  <p className="drawing-hint">
+                    The cut is the kernel&apos;s exact boolean; hidden lines
+                    are approximate to the display tolerance.
+                  </p>
+                )}
+              </>
+            );
+          })()}
+        {selectedView.detail &&
+          (() => {
+            const detail = selectedView.detail;
+            const source = sheet.views.find(
+              (view) => view.viewId === detail.sourceViewId
+            );
+            const update = (
+              patch: Partial<Pick<DrawingDetail, 'radius' | 'scale'>>,
+              label: string
+            ) =>
+              run(
+                commandFactories.updateDrawingView(
+                  {
+                    sheetId: sheet.sheetId,
+                    viewId: selectedView.viewId,
+                    detail: patch
+                  },
+                  label
+                )
+              );
+            return (
+              <>
+                <label className="drawing-field">
+                  <span>Detail scale</span>
+                  <select
+                    value={formatDrawingScale(detail.scale)}
+                    disabled={!editable}
+                    onChange={(event) => {
+                      const scale = DRAWING_SCALE_PRESETS.find(
+                        (preset) =>
+                          formatDrawingScale(preset) === event.target.value
+                      );
+                      if (scale)
+                        update({ scale: { ...scale } }, 'Scale detail');
+                    }}
+                  >
+                    {DRAWING_SCALE_PRESETS.map((preset) => (
+                      <option
+                        key={formatDrawingScale(preset)}
+                        value={formatDrawingScale(preset)}
+                      >
+                        {formatDrawingScale(preset)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <NumberField
+                  label={`Circle radius (${document.units})`}
+                  value={detail.radius}
+                  disabled={!editable}
+                  onCommit={(value) =>
+                    value > 0 && update({ radius: value }, 'Resize detail')
+                  }
+                />
+                <p className="drawing-hint">
+                  The part of the{' '}
+                  {source ? viewLabel(source).toLowerCase() : 'source'} view
+                  inside circle {detail.label}, at its own scale. It moves
+                  freely; the circle stays on its source.
+                </p>
+              </>
+            );
+          })()}
+        {selectedView.parentViewId && (
+          <p className="drawing-hint">
+            Projected from the{' '}
+            {DRAWING_VIEW_LABELS[
+              sheet.views.find(
+                (view) => view.viewId === selectedView.parentViewId
+              )!.orientation
+            ].toLowerCase()}{' '}
+            view: it stays aligned with it.
+          </p>
+        )}
+        <label className="drawing-check">
+          <input
+            type="checkbox"
+            checked={selectedView.hiddenLines}
+            disabled={!editable}
+            onChange={(event) =>
+              run(
+                commandFactories.updateDrawingView({
+                  sheetId: sheet.sheetId,
+                  viewId: selectedView.viewId,
+                  hiddenLines: event.target.checked
+                })
+              )
+            }
+          />
+          Hidden lines
+        </label>
+        {((document.assembly?.components.length ?? 0) > 0 ||
+          selectedView.exploded) &&
+          !selectedView.section &&
+          !selectedView.detail &&
+          !selectedView.auxiliary &&
+          (selectedView.parentViewId ? (
+            selectedView.exploded && (
+              <p className="drawing-hint">
+                Drawn exploded with its base view.
+              </p>
+            )
+          ) : (
+            <>
+              <label className="drawing-check">
+                <input
+                  type="checkbox"
+                  checked={selectedView.exploded === true}
+                  disabled={
+                    !editable || selectedView.configurationId !== undefined
+                  }
+                  onChange={(event) =>
+                    toggleExploded(selectedView, event.target.checked)
+                  }
+                />
+                Exploded
+              </label>
+              <p className="drawing-hint">
+                {selectedView.configurationId !== undefined
+                  ? 'An exploded view draws the active configuration.'
+                  : 'Draws each part where Assemble shows it exploded, with its projected views. Notes and balloons only.'}
+              </p>
+            </>
+          ))}
+        {document.configurations &&
+          (selectedView.parentViewId ||
+          selectedView.section ||
+          selectedView.detail ||
+          selectedView.auxiliary ? (
+            <p className="drawing-hint">
+              Draws its source view’s configuration.
+            </p>
+          ) : (
+            <label className="drawing-field">
+              <span>Configuration</span>
+              <select
+                value={selectedView.configurationId ?? ''}
+                disabled={!editable}
+                onChange={(event) =>
+                  run(
+                    commandFactories.updateDrawingView({
+                      sheetId: sheet.sheetId,
+                      viewId: selectedView.viewId,
+                      configurationId: event.target.value || null
+                    })
+                  )
+                }
+              >
+                <option value="">{`Active (${
+                  document.configurations.rows.find(
+                    (row) => row.id === document.configurations!.activeRowId
+                  )?.name ?? 'none'
+                })`}</option>
+                {document.configurations.rows.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        <fieldset className="drawing-bodies">
+          <legend>Bodies</legend>
+          {[
+            ...liveBodies,
+            // Bodies the view still names but the model no longer
+            // has: listed so they can be unticked, which is how a
+            // sheet blocked on a deleted body is repaired.
+            ...selectedView.bodyIds.filter((id) => !liveBodies.includes(id))
+          ].map((id) => (
+            <label key={id} className="drawing-check">
+              <input
+                type="checkbox"
+                checked={selectedView.bodyIds.includes(id)}
+                disabled={
+                  !editable ||
+                  // A detail or auxiliary view draws its source's bodies.
+                  selectedView.detail !== undefined ||
+                  selectedView.auxiliary !== undefined ||
+                  // Not offered for removal until the rebuild says
+                  // whether it is really gone.
+                  (geometryPending && !liveBodies.includes(id)) ||
+                  (selectedView.bodyIds.length === 1 &&
+                    selectedView.bodyIds[0] === id)
+                }
+                onChange={(event) =>
+                  run(
+                    commandFactories.updateDrawingView({
+                      sheetId: sheet.sheetId,
+                      viewId: selectedView.viewId,
+                      bodyIds: event.target.checked
+                        ? [...selectedView.bodyIds, id]
+                        : selectedView.bodyIds.filter(
+                            (entry) => entry !== id
+                          )
+                    })
+                  )
+                }
+              />
+              {liveBodies.includes(id)
+                ? (bodies[id]?.name ?? id)
+                : geometryPending
+                  ? `${bodies[id]?.name ?? 'Body'} (updating…)`
+                  : `${bodies[id]?.name ?? 'Deleted body'} (no longer in the model)`}
+            </label>
+          ))}
+        </fieldset>
+        <button
+          type="button"
+          className="secondary"
+          disabled={!editable}
+          onClick={() => deleteView(selectedView.viewId)}
+        >
+          <Trash2 size={13} aria-hidden="true" /> Delete view
+        </button>
+      </div>
+    ) : null;
+  const sheetProperties = (
+    <div className="drawing-panel-section">
+      <h3>Sheet</h3>
+      <TextField
+        label="Name"
+        value={sheet.name}
+        disabled={!editable}
+        onCommit={(name) =>
+          name.trim() &&
+          updateSheet({ name }, `Rename drawing to ${name.trim()}`)
+        }
+      />
+      <div className="drawing-field-row">
+        <label className="drawing-field">
+          <span>Paper</span>
+          <select
+            value={sheet.paper.size}
+            disabled={!editable}
+            onChange={(event) =>
+              changePaper({
+                ...sheet.paper,
+                size: event.target.value as DrawingPaperSize
+              })
+            }
+          >
+            {PAPER_SIZES.map((size) => (
+              <option key={size} value={size}>
+                {DRAWING_PAPER_LABELS[size]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="drawing-field">
+          <span>Orientation</span>
+          <select
+            value={sheet.paper.orientation}
+            disabled={!editable}
+            onChange={(event) =>
+              changePaper({
+                ...sheet.paper,
+                orientation: event.target
+                  .value as DrawingSheet['paper']['orientation']
+              })
+            }
+          >
+            <option value="landscape">Landscape</option>
+            <option value="portrait">Portrait</option>
+          </select>
+        </label>
+      </div>
+      <div className="drawing-field-row">
+        <label className="drawing-field">
+          <span>Scale</span>
+          <select
+            value={formatDrawingScale(sheet.scale)}
+            disabled={!editable}
+            onChange={(event) => {
+              const scale = scaleOptions.find(
+                (option) =>
+                  formatDrawingScale(option) === event.target.value
+              );
+              if (scale) updateSheet({ scale });
+            }}
+          >
+            {scaleOptions.map((scale) => (
+              <option
+                key={formatDrawingScale(scale)}
+                value={formatDrawingScale(scale)}
+              >
+                {formatDrawingScale(scale)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="drawing-field">
+          <span>Projection</span>
+          <select
+            value={sheet.projectionAngle}
+            disabled={!editable}
+            onChange={(event) =>
+              updateSheet({
+                projectionAngle: event.target
+                  .value as DrawingSheet['projectionAngle']
+              })
+            }
+          >
+            <option value="first">First angle</option>
+            <option value="third">Third angle</option>
+          </select>
+        </label>
+      </div>
+    </div>
+  );
+  const viewsSection = (
+    <div className="drawing-panel-section">
+      <h3>Views · {sheet.views.length}</h3>
+      <SheetBodies
+        key={sheet.sheetId}
+        names={sheetBodyIds(sheet).map(
+          (id) =>
+            bodies[id]?.name ??
+            Object.values(document.nodes).find(
+              (node) => node.kind === 'body' && node.bodyId === id
+            )?.name ??
+            'Missing body'
+        )}
+      />
+      {sheetBodyIds(sheet).some(
+        (id) => !props.defaultBodyIds.includes(id)
+      ) && (
+        <p className="drawing-hint">
+          This sheet keeps its saved bodies when you hide or isolate in
+          Build. Select a view to change its bodies.
+        </p>
+      )}
+      {/* Every view, whether or not it is on the page: a view left off
+          the paper (a smaller sheet, an old document) can still be
+          picked here, then moved back or deleted. */}
+      <div
+        className="drawing-view-list"
+        role="listbox"
+        aria-label="Views on this sheet"
+      >
+        {sheet.views.map((view) => {
+          // The view's whole footprint, not its centre: a view half off
+          // the paper exports half a view.
+          const issue = placements.get(view.viewId);
+          return (
+            <button
+              key={view.viewId}
+              type="button"
+              role="option"
+              aria-selected={view.viewId === selectedViewId}
+              className={`drawing-sheet-item${view.viewId === selectedViewId ? ' active' : ''}`}
+              onClick={() => {
+                setSelectedViewId(view.viewId);
+                setSelectedAnnotationId(null);
+              }}
+            >
+              {viewLabel(view)}
+              {issue ? ` (${PLACEMENT_LABELS[issue]})` : ''}
+            </button>
+          );
+        })}
+      </div>
+      {/* Off the paper is said once, over the sheet, where it blocks
+          export. This one blocks nothing, so it is plain text, not a
+          live status that would talk over the sheet's own banner. */}
+      {!offPaper && layoutWarning && (
+        <p className="drawing-field-warning">{layoutWarning}</p>
+      )}
+      {!selectedView && (
+        <p className="drawing-hint">
+          Select a view on the sheet to move it or change what it shows.
+          Drag it, or use the arrow keys (Shift for 10 mm).
+        </p>
+      )}
+      <div className="drawing-field-row">
+        <label className="drawing-field">
+          <span>New view</span>
+          <select
+            value={addOrientation}
+            disabled={!editable}
+            onChange={(event) =>
+              setAddOrientation(
+                event.target.value as DrawingViewOrientation
+              )
+            }
+          >
+            {DRAWING_VIEW_ORIENTATIONS.map((orientation) => (
+              <option key={orientation} value={orientation}>
+                {DRAWING_VIEW_LABELS[orientation]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="secondary"
+          disabled={!editable}
+          onClick={addView}
+        >
+          <Plus size={13} aria-hidden="true" /> Add view
+        </button>
+      </div>
+      <button
+        type="button"
+        className="secondary"
+        disabled={!editable || sheet.views.length === 0}
+        title={
+          editDisabledReason ??
+          'Lay the views out again above the title block, at a smaller scale if they need it'
+        }
+        onClick={() => fitViews()}
+      >
+        <Maximize size={13} aria-hidden="true" /> Fit views to sheet
+      </button>
+      <button
+        type="button"
+        className="secondary"
+        disabled={!editable || sheet.views.length === 0}
+        title={
+          editDisabledReason ??
+          'Lay the views out again, evenly spaced, at the largest scale that fits above the title block'
+        }
+        onClick={() => fitViews(true)}
+      >
+        <Scaling size={13} aria-hidden="true" /> Auto scale
+      </button>
+    </div>
+  );
+  const annotationList = (
+    <AnnotationList
+      sheet={sheet}
+      ready={sheetReady}
+      selected={selectedAnnotation}
+      resolutions={resolutions}
+      onSelect={(annotationId) => {
+        setSelectedAnnotationId(annotationId);
+        setSelectedViewId(null);
+        // In the compact sheet the list is on Annotate: its properties are
+        // the Properties page.
+        if (compact && annotationId) setPropertiesOpen(true);
+      }}
+    />
+  );
+  const dimensionCheck = (
+    <DimensionCheck
+      sheet={sheet}
+      ready={sheetReady}
+      audit={dimensionAudit}
+      resolutions={resolutions}
+      onSelect={(annotationId) => {
+        setSelectedAnnotationId(annotationId);
+        setSelectedViewId(null);
+        if (compact && annotationId) setPropertiesOpen(true);
+      }}
+      autoDisabledReason={autoDisabledReason}
+      autoPlan={shownAutoPlan}
+      onAuto={startAutoDimension}
+      onApplyAuto={applyAutoDimension}
+      onCancelAuto={() => setAutoPlan(null)}
+    />
+  );
+  const sheetFormat = (
+    <SheetFormatFields
+      format={sheet.format}
+      documentUnits={document.units}
+      editable={editable}
+      onChange={(format) =>
+        updateSheet({ format }, 'Change drawing properties')
+      }
+    />
+  );
+  const generalTolerances = (
+    <div className="drawing-panel-section">
+      <h3>General tolerances</h3>
+      <button
+        type="button"
+        className="secondary"
+        disabled={!canUseTool('general-tolerance')}
+        title="Place a block stating ISO 2768 or per-decimal general tolerances (W)"
+        onClick={() =>
+          chooseTool(startAnnotationTool('general-tolerance'))
+        }
+      >
+        <Diff size={13} aria-hidden="true" /> Add general tolerances
+      </button>
+    </div>
+  );
+  const holeTable = (
+    <div className="drawing-panel-section">
+      <h3>Hole table</h3>
+      <button
+        type="button"
+        className="secondary"
+        disabled={!canUseTool('hole-table')}
+        title="Table the holes a view looks down, tagged in the view (Y)"
+        onClick={() => chooseTool(startAnnotationTool('hole-table'))}
+      >
+        <Table2 size={13} aria-hidden="true" /> Add hole table
+      </button>
+    </div>
+  );
+  const titleBlock = (
+    <div className="drawing-panel-section">
+      <h3>Title block</h3>
+      <label className="drawing-field">
+        <span>Layout</span>
+        <select
+          value={sheet.titleBlockLayout ?? ''}
+          disabled={!editable}
+          onChange={(event) =>
+            updateSheet(
+              {
+                titleBlockLayout:
+                  event.target.value === 'shop' ? 'shop' : null
+              },
+              'Change title-block layout'
+            )
+          }
+        >
+          <option value="">Compact</option>
+          <option value="shop">Shop</option>
+        </select>
+      </label>
+      {sheet.titleBlockLayout === 'shop' && (
+        <p className="drawing-hint">
+          Adds material, finish, checked and approved, the company and a
+          general-tolerance note.
+        </p>
+      )}
+      {[
+        ...TITLE_FIELDS,
+        ...(sheet.titleBlockLayout === 'shop' ? SHOP_TITLE_FIELDS : [])
+      ].map(({ key, label }) => (
+        <TextField
+          key={key}
+          label={label}
+          value={sheet.titleBlock[key] ?? ''}
+          placeholder={
+            key === 'title'
+              ? document.name
+              : key === 'date'
+                ? autoDate
+                : undefined
+          }
+          printed
+          disabled={!editable}
+          onCommit={(value) =>
+            updateSheet({ titleBlock: { [key]: value } })
+          }
+        />
+      ))}
+    </div>
+  );
+  const deleteSheetSection = (
+    <div className="drawing-panel-section">
+      <p className="drawing-hint">
+        Lines come from the display tessellation and exact edge samples;
+        curved outlines are approximate to the display tolerance.
+      </p>
+      <button
+        type="button"
+        className="secondary drawing-delete-sheet"
+        disabled={!editable}
+        onClick={() => deleteSheet(sheet.sheetId)}
+      >
+        <Trash2 size={13} aria-hidden="true" /> Delete sheet
+      </button>
+    </div>
+  );
+
+  // What the running view tool asks for next, on the stage or (compact) as
+  // the tray's status.
+  const auxiliaryHint = auxiliaryTool?.edge
+    ? 'Move to the side to see the edge from, then click to place the view.'
+    : 'Pick an inclined straight edge of a front, top or side view.';
+  const detailHint = detailTool?.region
+    ? 'Move the detail into place, then click.'
+    : 'Drag a circle on a view, out from its centre.';
+  const sectionHint = sectionTool?.line
+    ? sectionTool.line.axis === 'free'
+      ? 'Click on a side of the line to place the section seen from there.'
+      : 'Move the section view into place along its arrows, then click.'
+    : 'Drag across a view to draw the section line; at an angle for a free section.';
+  // U12 slice 9: the compact tray's content. A running tool's row (its
+  // step, Cancel and Done) stands in for the tray while it runs; Done keeps
+  // what it placed and ends the tool, which otherwise waits for the next
+  // dimension.
+  const finishPlacement = () => {
+    setTool(null);
+    setSectionTool(null);
+    setDetailTool(null);
+    setAuxiliaryTool(null);
+    setHover(null);
+    props.onStatus('Placement finished.', { immediate: true });
+  };
+  const viewRun = (
+    label: string,
+    icon: ReactNode,
+    step: string,
+    hint: string
+  ): CompactDrawRun => ({
+    label,
+    icon,
+    step,
+    hint,
+    onCancel: () => chooseTool(null),
+    onDone: finishPlacement
+  });
+  const compactRun: CompactDrawRun | null = !compact
+    ? null
+    : tool
+      ? {
+          label: ANNOTATION_TOOL_LABELS[tool.kind],
+          icon: annotationToolIcon(tool.kind, 22),
+          step: annotationToolStep(tool),
+          hint: annotationToolHint(tool),
+          onCancel: () => chooseTool(null),
+          onDone: finishPlacement
+        }
+      : sectionTool
+        ? viewRun(
+            'Section view',
+            <Scissors size={22} aria-hidden="true" />,
+            viewToolStep('section', {
+              picked: sectionTool.line !== null,
+              freeSection: sectionTool.line?.axis === 'free'
+            }),
+            sectionHint
+          )
+        : detailTool
+          ? viewRun(
+              'Detail view',
+              <ZoomIn size={22} aria-hidden="true" />,
+              viewToolStep('detail', { picked: detailTool.region !== null }),
+              detailHint
+            )
+          : auxiliaryTool
+            ? viewRun(
+                'Auxiliary view',
+                <SquareArrowOutUpRight size={22} aria-hidden="true" />,
+                viewToolStep('auxiliary', {
+                  picked: auxiliaryTool.edge !== null
+                }),
+                auxiliaryHint
+              )
+            : null;
+  const compactSheet: CompactDrawSheet | null = !compact
+    ? null
+    : {
+        annotate: {
+          active: tool && !tool.repairId ? tool.kind : null,
+          canUse: canUseTool,
+          disabledReason: toolDisabledReason,
+          onTool: (kind) => chooseTool(startAnnotationTool(kind)),
+          check: dimensionCheck,
+          list: annotationList
+        },
+        viewTools: {
+          section: {
+            active: sectionTool !== null,
+            usable: canSection,
+            disabledReason: sectionDisabledReason,
+            onToggle: toggleSectionTool
+          },
+          detail: {
+            active: detailTool !== null,
+            usable: canDetail,
+            disabledReason: detailDisabledReason,
+            onToggle: toggleDetailTool
+          },
+          auxiliary: {
+            active: auxiliaryTool !== null,
+            usable: canAuxiliary,
+            disabledReason: auxiliaryDisabledReason,
+            onToggle: toggleAuxiliaryTool
+          }
+        },
+        views: viewsSection,
+        selectedView: viewProperties,
+        properties: annotationProperties ?? (
+          <>
+            {sheetProperties}
+            {sheetFormat}
+            {titleBlock}
+          </>
+        ),
+        hasSelection: selection !== null,
+        exports: {
+          reason: exportReason,
+          title: exportTitle,
+          outdatedWarning: outdatedExportWarning,
+          update: canUpdate
+            ? {
+                disabledReason: editable
+                  ? null
+                  : (editDisabledReason ?? 'Drawing edits are unavailable.'),
+                onUpdate: onUpdateSheet
+              }
+            : null,
+          onExport: (format) => void exportSheet(format),
+          broken: brokenCount,
+          canDeleteBroken,
+          onDeleteBroken: deleteBrokenAnnotations
+        },
+        propertiesRequested: propertiesOpen,
+        onPropertiesShown: () => setPropertiesOpen(false)
+      };
+  // The sheet's own controls on the compact stage: its zoom (pinch and pan
+  // stay), dark paper, and the Update a changed model asks for.
+  const compactCanvasControls = (
+    <>
+      {canUpdate ? (
+        <button
+          type="button"
+          className="compact-draw-chip"
+          aria-label="Update"
+          disabled={!editable}
+          title={editDisabledReason ?? 'Redraw this sheet from the current model'}
+          onClick={onUpdateSheet}
+        >
+          <RefreshCw size={18} aria-hidden="true" />
+          <span aria-hidden="true">Update</span>
+        </button>
+      ) : status.kind === 'pending' ? (
+        <span className="compact-draw-chip is-pending" role="status">
+          <span className="compact-selection-dot" aria-hidden="true" />
+          <span aria-hidden="true">Updating</span>
+          <span className="visually-hidden">{message}</span>
+        </span>
+      ) : null}
+      <div
+        className="compact-draw-zoom"
+        role="toolbar"
+        aria-label="Sheet zoom"
+      >
+        <button
+          type="button"
+          className="compact-float-button"
+          aria-label="Zoom out"
+          disabled={zoom.zoom <= 1}
+          onClick={() => zoomBy(1 / SHEET_ZOOM_STEP)}
+        >
+          <ZoomOut size={20} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="compact-float-button"
+          aria-label="Zoom in"
+          disabled={zoom.zoom >= MAX_SHEET_ZOOM}
+          onClick={() => zoomBy(SHEET_ZOOM_STEP)}
+        >
+          <ZoomIn size={20} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="compact-float-button"
+          aria-label="Fit sheet"
+          disabled={zoom.zoom <= 1}
+          onClick={() => setSheetZoom(fitSheetZoom(paper))}
+        >
+          <Maximize size={20} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="compact-float-button"
+          aria-label="Dark paper"
+          aria-pressed={darkPaper}
+          onClick={toggleDarkPaper}
+        >
+          {darkPaper ? (
+            <Sun size={20} aria-hidden="true" />
+          ) : (
+            <Moon size={20} aria-hidden="true" />
+          )}
+        </button>
+      </div>
+    </>
+  );
+
   return (
     <section
       ref={workspaceRef}
-      className={`drawing-workspace${darkPaper ? ' is-dark-paper' : ''}${propertiesOpen ? ' is-properties-open' : ''}`}
+      className={`drawing-workspace${darkPaper ? ' is-dark-paper' : ''}${propertiesOpen && !compact ? ' is-properties-open' : ''}`}
       aria-label="Drawings"
     >
+      {compact && compactTray(compactSheet, compactRun)}
       <div className="drawing-stage">
+        {!compact && (
         <div className="drawing-stage-bar">
           <DrawingSheetTabs
             sheets={sheets}
@@ -6546,14 +7716,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     editDisabledReason ??
                     'Redraw this sheet from the current model'
                   }
-                  onClick={() =>
-                    updateSheet({
-                      source: { fingerprint: status.fingerprint },
-                      ...(status.kind === 'replaced'
-                        ? { bodyReplacements: status.replacements }
-                        : {})
-                    })
-                  }
+                  onClick={onUpdateSheet}
                 >
                   <RefreshCw size={12} aria-hidden="true" /> Update
                 </button>
@@ -6623,12 +7786,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 type="button"
                 className="primary"
                 disabled={exportReason !== null}
-                title={
-                  exportReason ??
-                  (outdated
-                    ? 'Export this sheet as drawn, before the latest model change'
-                    : 'Export this sheet as a vector PDF')
-                }
+                title={exportTitle('pdf')}
                 onClick={() => void exportSheet('pdf')}
               >
                 <FileDown size={13} aria-hidden="true" /> Export PDF
@@ -6638,12 +7796,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 className="secondary"
                 aria-label="Export SVG"
                 disabled={exportReason !== null}
-                title={
-                  exportReason ??
-                  (outdated
-                    ? 'Export this sheet as SVG, as drawn before the latest model change'
-                    : 'Export this sheet as SVG')
-                }
+                title={exportTitle('svg')}
                 onClick={() => void exportSheet('svg')}
               >
                 SVG
@@ -6653,12 +7806,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 className="secondary"
                 aria-label="Export DXF"
                 disabled={exportReason !== null}
-                title={
-                  exportReason ??
-                  (outdated
-                    ? 'Export this sheet as DXF, as drawn before the latest model change'
-                    : 'Export this sheet as DXF (R12, paper millimetres, a layer per line kind)')
-                }
+                title={exportTitle('dxf')}
                 onClick={() => void exportSheet('dxf')}
               >
                 DXF
@@ -6666,11 +7814,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             </div>
           </div>
         </div>
+        )}
         {status.kind === 'missing' ? (
           <div className="drawing-banner is-missing" role="status">
             <span>{message}</span>
           </div>
-        ) : exportBlocked ? (
+        ) : exportBlocked && !compact ? (
           <div className="drawing-banner is-blocked" role="status">
             <span>{exportReason}</span>
             {brokenCount > 0 && (
@@ -6994,6 +8143,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 width={paper.width}
                 height={paper.height}
                 onPointerDown={onPickPointerDown}
+                onPointerUp={onPickPointerUp}
+                onPointerCancel={() => {
+                  pickTapRef.current = null;
+                }}
                 onPointerMove={onPickPointerMove}
                 onPointerLeave={() => setHover(null)}
               />
@@ -7152,6 +8305,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 width={paper.width}
                 height={paper.height}
                 onPointerDown={onAuxiliaryPointerDown}
+                onPointerUp={onAuxiliaryPointerUp}
+                onPointerCancel={() => {
+                  viewTapRef.current = null;
+                }}
                 onPointerMove={onAuxiliaryPointerMove}
               />
             )}
@@ -7164,6 +8321,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 onPointerDown={onDetailPointerDown}
                 onPointerMove={onDetailPointerMove}
                 onPointerUp={onDetailPointerUp}
+                onPointerCancel={() => {
+                  viewTapRef.current = null;
+                }}
               />
             )}
             {sectionTool && (
@@ -7175,9 +8335,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 onPointerDown={onSectionPointerDown}
                 onPointerMove={onSectionPointerMove}
                 onPointerUp={onSectionPointerUp}
+                onPointerCancel={() => {
+                  viewTapRef.current = null;
+                }}
               />
             )}
           </svg>
+          {compact ? compactCanvasControls : (
+          <>
           <DrawingToolRail
             tool={tool}
             canUseTool={canUseTool}
@@ -7206,11 +8371,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           />
           {auxiliaryTool && (
             <div className="drawing-tool-hint" role="status">
-              <span>
-                {auxiliaryTool.edge
-                  ? 'Move to the side to see the edge from, then click to place the view.'
-                  : 'Pick an inclined straight edge of a front, top or side view.'}
-              </span>
+              <span>{auxiliaryHint}</span>
               <button
                 type="button"
                 className="drawing-tool-hint-cancel"
@@ -7222,11 +8383,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           )}
           {detailTool && (
             <div className="drawing-tool-hint" role="status">
-              <span>
-                {detailTool.region
-                  ? 'Move the detail into place, then click.'
-                  : 'Drag a circle on a view, out from its centre.'}
-              </span>
+              <span>{detailHint}</span>
               <button
                 type="button"
                 className="drawing-tool-hint-cancel"
@@ -7238,13 +8395,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           )}
           {sectionTool && (
             <div className="drawing-tool-hint" role="status">
-              <span>
-                {sectionTool.line
-                  ? sectionTool.line.axis === 'free'
-                    ? 'Click on a side of the line to place the section seen from there.'
-                    : 'Move the section view into place along its arrows, then click.'
-                  : 'Drag across a view to draw the section line; at an angle for a free section.'}
-              </span>
+              <span>{sectionHint}</span>
               <button
                 type="button"
                 className="drawing-tool-hint-cancel"
@@ -7266,719 +8417,31 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               </button>
             </div>
           )}
+          </>
+          )}
         </div>
       </div>
+      {!compact && (
       <aside
         id="drawing-properties"
         className="drawing-panel"
         aria-label="Drawing properties"
       >
-        {selection === 'annotation' && selectedAnnotation ? (
-          <AnnotationProperties
-            selected={selectedAnnotation}
-            ready={sheetReady}
-            canRepick={canAnnotate}
-            editable={editable}
-            numberFormat={sheetNumberFormat(sheet, document.units)}
-            resolutions={resolutions}
-            pictures={pictures}
-            onTool={chooseTool}
-            onDeselect={deselect}
-            datumLetters={datumLetters}
-            onUpdate={updateAnnotation}
-            onDelete={deleteAnnotation}
-          />
-        ) : selection === 'view' && selectedView ? (
-          <div className="drawing-panel-section is-selection">
-            <SelectionHeading
-              title={`${viewLabel(selectedView)} view`}
-              onDeselect={deselect}
-            />
-            <div className="drawing-field-row">
-              <NumberField
-                label="Centre X (mm)"
-                value={selectedView.centerMm.x}
-                disabled={!editable}
-                onCommit={(x) =>
-                  moveView(selectedView.viewId, {
-                    ...selectedView.centerMm,
-                    x
-                  })
-                }
-              />
-              <NumberField
-                label="Centre Y (mm)"
-                value={selectedView.centerMm.y}
-                disabled={!editable}
-                onCommit={(y) =>
-                  moveView(selectedView.viewId, {
-                    ...selectedView.centerMm,
-                    y
-                  })
-                }
-              />
-            </div>
-            {selectedView.section &&
-              (() => {
-                const section = selectedView.section;
-                const source = sheet.views.find(
-                  (view) => view.viewId === section.sourceViewId
-                );
-                // The plane's world coordinate on the axis it is normal to.
-                const normal = drawingSectionPlane({
-                  ...selectedView,
-                  section
-                }).normal;
-                const axis =
-                  Math.abs(normal.x) === 1
-                    ? 'x'
-                    : Math.abs(normal.y) === 1
-                      ? 'y'
-                      : 'z';
-                // D03 (v91): a free section's plane is inclined: its offset
-                // is along its own normal, from the model origin.
-                const free = section.frame !== undefined;
-                const sign = free ? 1 : normal[axis];
-                const drawn = projections.get(selectedView.viewId);
-                const approximate =
-                  drawn?.state === 'ready'
-                    ? drawn.projection.sectionApproximate
-                    : undefined;
-                return (
-                  <>
-                    <NumberField
-                      label={
-                        free
-                          ? `Plane offset (${document.units})`
-                          : `Cut at ${axis.toUpperCase()} (${document.units})`
-                      }
-                      value={section.depth * sign}
-                      disabled={!editable}
-                      onCommit={(value) =>
-                        run(
-                          commandFactories.updateDrawingView(
-                            {
-                              sheetId: sheet.sheetId,
-                              viewId: selectedView.viewId,
-                              sectionDepth: value * sign
-                            },
-                            'Move section plane'
-                          )
-                        )
-                      }
-                    />
-                    {!free && source && (
-                      <SectionStepFields
-                        steps={section.steps ?? []}
-                        firstDepth={section.depth}
-                        sign={sign}
-                        axisLabel={axis.toUpperCase()}
-                        units={document.units}
-                        bounds={
-                          projections.get(source.viewId)?.state === 'ready'
-                            ? (sectionStepRange(
-                                source,
-                                selectedView,
-                                projections.get(source.viewId)
-                              ) ?? null)
-                            : null
-                        }
-                        editable={editable}
-                        onCommit={(steps) =>
-                          run(
-                            commandFactories.updateDrawingView(
-                              {
-                                sheetId: sheet.sheetId,
-                                viewId: selectedView.viewId,
-                                sectionSteps: steps
-                              },
-                              steps.length > 0
-                                ? 'Edit section steps'
-                                : 'Remove section steps'
-                            )
-                          )
-                        }
-                      />
-                    )}
-                    <p className="drawing-hint">
-                      Cut from the{' '}
-                      {source
-                        ? DRAWING_VIEW_LABELS[source.orientation].toLowerCase()
-                        : 'source'}{' '}
-                      view along its line {section.label}-{section.label}
-                      {free
-                        ? ', at an angle: it is placed freely.'
-                        : ': it stays aligned with it.'}{' '}
-                      Cut faces are hatched.
-                    </p>
-                    {approximate ? (
-                      <p className="drawing-hint" role="note">
-                        Approximate: cut from the tessellation, to the display
-                        tolerance. {approximate} Its cut edges cannot be
-                        dimensioned.
-                      </p>
-                    ) : (
-                      <p className="drawing-hint">
-                        The cut is the kernel&apos;s exact boolean; hidden lines
-                        are approximate to the display tolerance.
-                      </p>
-                    )}
-                  </>
-                );
-              })()}
-            {selectedView.detail &&
-              (() => {
-                const detail = selectedView.detail;
-                const source = sheet.views.find(
-                  (view) => view.viewId === detail.sourceViewId
-                );
-                const update = (
-                  patch: Partial<Pick<DrawingDetail, 'radius' | 'scale'>>,
-                  label: string
-                ) =>
-                  run(
-                    commandFactories.updateDrawingView(
-                      {
-                        sheetId: sheet.sheetId,
-                        viewId: selectedView.viewId,
-                        detail: patch
-                      },
-                      label
-                    )
-                  );
-                return (
-                  <>
-                    <label className="drawing-field">
-                      <span>Detail scale</span>
-                      <select
-                        value={formatDrawingScale(detail.scale)}
-                        disabled={!editable}
-                        onChange={(event) => {
-                          const scale = DRAWING_SCALE_PRESETS.find(
-                            (preset) =>
-                              formatDrawingScale(preset) === event.target.value
-                          );
-                          if (scale)
-                            update({ scale: { ...scale } }, 'Scale detail');
-                        }}
-                      >
-                        {DRAWING_SCALE_PRESETS.map((preset) => (
-                          <option
-                            key={formatDrawingScale(preset)}
-                            value={formatDrawingScale(preset)}
-                          >
-                            {formatDrawingScale(preset)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <NumberField
-                      label={`Circle radius (${document.units})`}
-                      value={detail.radius}
-                      disabled={!editable}
-                      onCommit={(value) =>
-                        value > 0 && update({ radius: value }, 'Resize detail')
-                      }
-                    />
-                    <p className="drawing-hint">
-                      The part of the{' '}
-                      {source ? viewLabel(source).toLowerCase() : 'source'} view
-                      inside circle {detail.label}, at its own scale. It moves
-                      freely; the circle stays on its source.
-                    </p>
-                  </>
-                );
-              })()}
-            {selectedView.parentViewId && (
-              <p className="drawing-hint">
-                Projected from the{' '}
-                {DRAWING_VIEW_LABELS[
-                  sheet.views.find(
-                    (view) => view.viewId === selectedView.parentViewId
-                  )!.orientation
-                ].toLowerCase()}{' '}
-                view: it stays aligned with it.
-              </p>
-            )}
-            <label className="drawing-check">
-              <input
-                type="checkbox"
-                checked={selectedView.hiddenLines}
-                disabled={!editable}
-                onChange={(event) =>
-                  run(
-                    commandFactories.updateDrawingView({
-                      sheetId: sheet.sheetId,
-                      viewId: selectedView.viewId,
-                      hiddenLines: event.target.checked
-                    })
-                  )
-                }
-              />
-              Hidden lines
-            </label>
-            {((document.assembly?.components.length ?? 0) > 0 ||
-              selectedView.exploded) &&
-              !selectedView.section &&
-              !selectedView.detail &&
-              !selectedView.auxiliary &&
-              (selectedView.parentViewId ? (
-                selectedView.exploded && (
-                  <p className="drawing-hint">
-                    Drawn exploded with its base view.
-                  </p>
-                )
-              ) : (
-                <>
-                  <label className="drawing-check">
-                    <input
-                      type="checkbox"
-                      checked={selectedView.exploded === true}
-                      disabled={
-                        !editable || selectedView.configurationId !== undefined
-                      }
-                      onChange={(event) =>
-                        toggleExploded(selectedView, event.target.checked)
-                      }
-                    />
-                    Exploded
-                  </label>
-                  <p className="drawing-hint">
-                    {selectedView.configurationId !== undefined
-                      ? 'An exploded view draws the active configuration.'
-                      : 'Draws each part where Assemble shows it exploded, with its projected views. Notes and balloons only.'}
-                  </p>
-                </>
-              ))}
-            {document.configurations &&
-              (selectedView.parentViewId ||
-              selectedView.section ||
-              selectedView.detail ||
-              selectedView.auxiliary ? (
-                <p className="drawing-hint">
-                  Draws its source view’s configuration.
-                </p>
-              ) : (
-                <label className="drawing-field">
-                  <span>Configuration</span>
-                  <select
-                    value={selectedView.configurationId ?? ''}
-                    disabled={!editable}
-                    onChange={(event) =>
-                      run(
-                        commandFactories.updateDrawingView({
-                          sheetId: sheet.sheetId,
-                          viewId: selectedView.viewId,
-                          configurationId: event.target.value || null
-                        })
-                      )
-                    }
-                  >
-                    <option value="">{`Active (${
-                      document.configurations.rows.find(
-                        (row) => row.id === document.configurations!.activeRowId
-                      )?.name ?? 'none'
-                    })`}</option>
-                    {document.configurations.rows.map((row) => (
-                      <option key={row.id} value={row.id}>
-                        {row.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
-            <fieldset className="drawing-bodies">
-              <legend>Bodies</legend>
-              {[
-                ...liveBodies,
-                // Bodies the view still names but the model no longer
-                // has: listed so they can be unticked, which is how a
-                // sheet blocked on a deleted body is repaired.
-                ...selectedView.bodyIds.filter((id) => !liveBodies.includes(id))
-              ].map((id) => (
-                <label key={id} className="drawing-check">
-                  <input
-                    type="checkbox"
-                    checked={selectedView.bodyIds.includes(id)}
-                    disabled={
-                      !editable ||
-                      // A detail or auxiliary view draws its source's bodies.
-                      selectedView.detail !== undefined ||
-                      selectedView.auxiliary !== undefined ||
-                      // Not offered for removal until the rebuild says
-                      // whether it is really gone.
-                      (geometryPending && !liveBodies.includes(id)) ||
-                      (selectedView.bodyIds.length === 1 &&
-                        selectedView.bodyIds[0] === id)
-                    }
-                    onChange={(event) =>
-                      run(
-                        commandFactories.updateDrawingView({
-                          sheetId: sheet.sheetId,
-                          viewId: selectedView.viewId,
-                          bodyIds: event.target.checked
-                            ? [...selectedView.bodyIds, id]
-                            : selectedView.bodyIds.filter(
-                                (entry) => entry !== id
-                              )
-                        })
-                      )
-                    }
-                  />
-                  {liveBodies.includes(id)
-                    ? (bodies[id]?.name ?? id)
-                    : geometryPending
-                      ? `${bodies[id]?.name ?? 'Body'} (updating…)`
-                      : `${bodies[id]?.name ?? 'Deleted body'} (no longer in the model)`}
-                </label>
-              ))}
-            </fieldset>
-            <button
-              type="button"
-              className="secondary"
-              disabled={!editable}
-              onClick={() => deleteView(selectedView.viewId)}
-            >
-              <Trash2 size={13} aria-hidden="true" /> Delete view
-            </button>
-          </div>
-        ) : (
-          <div className="drawing-panel-section">
-            <h3>Sheet</h3>
-            <TextField
-              label="Name"
-              value={sheet.name}
-              disabled={!editable}
-              onCommit={(name) =>
-                name.trim() &&
-                updateSheet({ name }, `Rename drawing to ${name.trim()}`)
-              }
-            />
-            <div className="drawing-field-row">
-              <label className="drawing-field">
-                <span>Paper</span>
-                <select
-                  value={sheet.paper.size}
-                  disabled={!editable}
-                  onChange={(event) =>
-                    changePaper({
-                      ...sheet.paper,
-                      size: event.target.value as DrawingPaperSize
-                    })
-                  }
-                >
-                  {PAPER_SIZES.map((size) => (
-                    <option key={size} value={size}>
-                      {DRAWING_PAPER_LABELS[size]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="drawing-field">
-                <span>Orientation</span>
-                <select
-                  value={sheet.paper.orientation}
-                  disabled={!editable}
-                  onChange={(event) =>
-                    changePaper({
-                      ...sheet.paper,
-                      orientation: event.target
-                        .value as DrawingSheet['paper']['orientation']
-                    })
-                  }
-                >
-                  <option value="landscape">Landscape</option>
-                  <option value="portrait">Portrait</option>
-                </select>
-              </label>
-            </div>
-            <div className="drawing-field-row">
-              <label className="drawing-field">
-                <span>Scale</span>
-                <select
-                  value={formatDrawingScale(sheet.scale)}
-                  disabled={!editable}
-                  onChange={(event) => {
-                    const scale = scaleOptions.find(
-                      (option) =>
-                        formatDrawingScale(option) === event.target.value
-                    );
-                    if (scale) updateSheet({ scale });
-                  }}
-                >
-                  {scaleOptions.map((scale) => (
-                    <option
-                      key={formatDrawingScale(scale)}
-                      value={formatDrawingScale(scale)}
-                    >
-                      {formatDrawingScale(scale)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="drawing-field">
-                <span>Projection</span>
-                <select
-                  value={sheet.projectionAngle}
-                  disabled={!editable}
-                  onChange={(event) =>
-                    updateSheet({
-                      projectionAngle: event.target
-                        .value as DrawingSheet['projectionAngle']
-                    })
-                  }
-                >
-                  <option value="first">First angle</option>
-                  <option value="third">Third angle</option>
-                </select>
-              </label>
-            </div>
-          </div>
-        )}
-        <div className="drawing-panel-section">
-          <h3>Views · {sheet.views.length}</h3>
-          <SheetBodies
-            key={sheet.sheetId}
-            names={sheetBodyIds(sheet).map(
-              (id) =>
-                bodies[id]?.name ??
-                Object.values(document.nodes).find(
-                  (node) => node.kind === 'body' && node.bodyId === id
-                )?.name ??
-                'Missing body'
-            )}
-          />
-          {sheetBodyIds(sheet).some(
-            (id) => !props.defaultBodyIds.includes(id)
-          ) && (
-            <p className="drawing-hint">
-              This sheet keeps its saved bodies when you hide or isolate in
-              Build. Select a view to change its bodies.
-            </p>
-          )}
-          {/* Every view, whether or not it is on the page: a view left off
-              the paper (a smaller sheet, an old document) can still be
-              picked here, then moved back or deleted. */}
-          <div
-            className="drawing-view-list"
-            role="listbox"
-            aria-label="Views on this sheet"
-          >
-            {sheet.views.map((view) => {
-              // The view's whole footprint, not its centre: a view half off
-              // the paper exports half a view.
-              const issue = placements.get(view.viewId);
-              return (
-                <button
-                  key={view.viewId}
-                  type="button"
-                  role="option"
-                  aria-selected={view.viewId === selectedViewId}
-                  className={`drawing-sheet-item${view.viewId === selectedViewId ? ' active' : ''}`}
-                  onClick={() => {
-                    setSelectedViewId(view.viewId);
-                    setSelectedAnnotationId(null);
-                  }}
-                >
-                  {viewLabel(view)}
-                  {issue ? ` (${PLACEMENT_LABELS[issue]})` : ''}
-                </button>
-              );
-            })}
-          </div>
-          {/* Off the paper is said once, over the sheet, where it blocks
-              export. This one blocks nothing, so it is plain text, not a
-              live status that would talk over the sheet's own banner. */}
-          {!offPaper && layoutWarning && (
-            <p className="drawing-field-warning">{layoutWarning}</p>
-          )}
-          {!selectedView && (
-            <p className="drawing-hint">
-              Select a view on the sheet to move it or change what it shows.
-              Drag it, or use the arrow keys (Shift for 10 mm).
-            </p>
-          )}
-          <div className="drawing-field-row">
-            <label className="drawing-field">
-              <span>New view</span>
-              <select
-                value={addOrientation}
-                disabled={!editable}
-                onChange={(event) =>
-                  setAddOrientation(
-                    event.target.value as DrawingViewOrientation
-                  )
-                }
-              >
-                {DRAWING_VIEW_ORIENTATIONS.map((orientation) => (
-                  <option key={orientation} value={orientation}>
-                    {DRAWING_VIEW_LABELS[orientation]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              className="secondary"
-              disabled={!editable}
-              onClick={addView}
-            >
-              <Plus size={13} aria-hidden="true" /> Add view
-            </button>
-          </div>
-          <button
-            type="button"
-            className="secondary"
-            disabled={!editable || sheet.views.length === 0}
-            title={
-              editDisabledReason ??
-              'Lay the views out again above the title block, at a smaller scale if they need it'
-            }
-            onClick={() => fitViews()}
-          >
-            <Maximize size={13} aria-hidden="true" /> Fit views to sheet
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={!editable || sheet.views.length === 0}
-            title={
-              editDisabledReason ??
-              'Lay the views out again, evenly spaced, at the largest scale that fits above the title block'
-            }
-            onClick={() => fitViews(true)}
-          >
-            <Scaling size={13} aria-hidden="true" /> Auto scale
-          </button>
-        </div>
-        <AnnotationList
-          sheet={sheet}
-          ready={sheetReady}
-          selected={selectedAnnotation}
-          resolutions={resolutions}
-          onSelect={(annotationId) => {
-            setSelectedAnnotationId(annotationId);
-            setSelectedViewId(null);
-          }}
-        />
-        <DimensionCheck
-          sheet={sheet}
-          ready={sheetReady}
-          audit={dimensionAudit}
-          resolutions={resolutions}
-          onSelect={(annotationId) => {
-            setSelectedAnnotationId(annotationId);
-            setSelectedViewId(null);
-          }}
-          autoDisabledReason={autoDisabledReason}
-          autoPlan={shownAutoPlan}
-          onAuto={startAutoDimension}
-          onApplyAuto={applyAutoDimension}
-          onCancelAuto={() => setAutoPlan(null)}
-        />
+        {annotationProperties ?? viewProperties ?? sheetProperties}
+        {viewsSection}
+        {annotationList}
+        {dimensionCheck}
         {selection === null && (
           <>
-            <SheetFormatFields
-              format={sheet.format}
-              documentUnits={document.units}
-              editable={editable}
-              onChange={(format) =>
-                updateSheet({ format }, 'Change drawing properties')
-              }
-            />
-            <div className="drawing-panel-section">
-              <h3>General tolerances</h3>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!canUseTool('general-tolerance')}
-                title="Place a block stating ISO 2768 or per-decimal general tolerances (W)"
-                onClick={() =>
-                  chooseTool(startAnnotationTool('general-tolerance'))
-                }
-              >
-                <Diff size={13} aria-hidden="true" /> Add general tolerances
-              </button>
-            </div>
-            <div className="drawing-panel-section">
-              <h3>Hole table</h3>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!canUseTool('hole-table')}
-                title="Table the holes a view looks down, tagged in the view (Y)"
-                onClick={() => chooseTool(startAnnotationTool('hole-table'))}
-              >
-                <Table2 size={13} aria-hidden="true" /> Add hole table
-              </button>
-            </div>
-            <div className="drawing-panel-section">
-              <h3>Title block</h3>
-              <label className="drawing-field">
-                <span>Layout</span>
-                <select
-                  value={sheet.titleBlockLayout ?? ''}
-                  disabled={!editable}
-                  onChange={(event) =>
-                    updateSheet(
-                      {
-                        titleBlockLayout:
-                          event.target.value === 'shop' ? 'shop' : null
-                      },
-                      'Change title-block layout'
-                    )
-                  }
-                >
-                  <option value="">Compact</option>
-                  <option value="shop">Shop</option>
-                </select>
-              </label>
-              {sheet.titleBlockLayout === 'shop' && (
-                <p className="drawing-hint">
-                  Adds material, finish, checked and approved, the company and a
-                  general-tolerance note.
-                </p>
-              )}
-              {[
-                ...TITLE_FIELDS,
-                ...(sheet.titleBlockLayout === 'shop' ? SHOP_TITLE_FIELDS : [])
-              ].map(({ key, label }) => (
-                <TextField
-                  key={key}
-                  label={label}
-                  value={sheet.titleBlock[key] ?? ''}
-                  placeholder={
-                    key === 'title'
-                      ? document.name
-                      : key === 'date'
-                        ? autoDate
-                        : undefined
-                  }
-                  printed
-                  disabled={!editable}
-                  onCommit={(value) =>
-                    updateSheet({ titleBlock: { [key]: value } })
-                  }
-                />
-              ))}
-            </div>
-            <div className="drawing-panel-section">
-              <p className="drawing-hint">
-                Lines come from the display tessellation and exact edge samples;
-                curved outlines are approximate to the display tolerance.
-              </p>
-              <button
-                type="button"
-                className="secondary drawing-delete-sheet"
-                disabled={!editable}
-                onClick={() => deleteSheet(sheet.sheetId)}
-              >
-                <Trash2 size={13} aria-hidden="true" /> Delete sheet
-              </button>
-            </div>
+            {sheetFormat}
+            {generalTolerances}
+            {holeTable}
+            {titleBlock}
+            {deleteSheetSection}
           </>
         )}
       </aside>
+      )}
     </section>
   );
 }

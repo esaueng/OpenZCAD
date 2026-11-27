@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { BottomSheet, useSheet } from './BottomSheet';
 import {
@@ -457,6 +458,39 @@ describe('BottomSheet', () => {
     // With the page gone, Escape is the running tool's again.
     fireEvent.keyDown(outside, { key: 'Escape' });
     expect(onWindowKey).toHaveBeenCalledTimes(1);
+    window.removeEventListener('keydown', onWindowKey);
+  });
+
+  it('steps back on Escape from a control portalled into it from another tree', () => {
+    /** As Draw's tray: drawn by the stage, its DOM in the sheet's. */
+    function Portalled() {
+      const [host, setHost] = useState<HTMLElement | null>(null);
+      useEffect(() => {
+        setHost(document.querySelector<HTMLElement>('.compact-sheet'));
+      }, []);
+      return host
+        ? createPortal(<button type="button">Export PDF</button>, host)
+        : null;
+    }
+    const onWindowKey = vi.fn();
+    window.addEventListener('keydown', onWindowKey);
+    for (const detent of ['half', 'full'] as const) {
+      const { unmount } = render(
+        <>
+          <Harness hasRoot initial={[{ type: 'set-detent', detent }]} />
+          <Portalled />
+        </>
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Open more' }));
+      expect(screen.getByRole('heading', { name: 'More' })).toBeInTheDocument();
+      const control = screen.getByRole('button', { name: 'Export PDF' });
+      expect(sheet().contains(control)).toBe(true);
+      control.focus();
+      fireEvent.keyDown(control, { key: 'Escape' });
+      expect(screen.queryByRole('heading', { name: 'More' }), detent).toBeNull();
+      expect(onWindowKey, detent).not.toHaveBeenCalled();
+      unmount();
+    }
     window.removeEventListener('keydown', onWindowKey);
   });
 

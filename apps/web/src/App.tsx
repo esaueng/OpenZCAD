@@ -41454,12 +41454,16 @@ export function App() {
     }));
   // U12 slice 7: View's and Tweak's tray in the compact sheet, in place of
   // View's bar and rail and Tweak's rail and flyouts. Each control runs the
-  // handler those run.
+  // handler those run. U12 slice 9: Draw's tray is the drawing workspace's
+  // own, drawn from the stage into an anchor the sheet's tray slot holds.
   const compactModeTray =
     compactSketchTray ??
-    (!compactShell || !(viewMode || tweakMode || assembleMode) ? null : (
+    (!compactShell ||
+    !(viewMode || tweakMode || assembleMode || drawingMode) ? null : (
       <ErrorBoundary label="Mode tray" resetKey={resolvedWorkspaceMode}>
-        {assembleMode ? (
+        {drawingMode ? (
+          <LazyCompactModeTray mode="drawing" />
+        ) : assembleMode ? (
           // U12 slice 8: Assemble's sidebar, its timeline and the player as
           // the tray's pages, in place of the sidebar and the View bar.
           <LazyCompactAssembleTray

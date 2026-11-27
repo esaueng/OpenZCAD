@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastHost } from './Toast';
+import { CompactNoticeHostContext } from './compact/compactSlots';
 import {
   TOAST_EXIT_MS,
   TOAST_LIFETIME_MS,
@@ -238,5 +239,37 @@ describe('ToastHost after an action', () => {
     act(() => hostSetToast(toast({ id: 3, message: 'Suppressed Sketch 01' })));
     expect(screen.getByRole('status')).toBe(region);
     expect(region).toHaveTextContent('Suppressed Sketch 01');
+  });
+
+  it('draws the card in the compact notice host, outside an inert stage', () => {
+    // The compact frame makes its stage inert while the sheet stands at
+    // full height; the notice is drawn in the host on the sheet's layer,
+    // so its Undo can still be tapped and focused (U12).
+    const stage = document.createElement('div');
+    const host = document.createElement('div');
+    document.body.append(stage, host);
+    stage.setAttribute('inert', '');
+    const run = vi.fn();
+    try {
+      render(
+        <CompactNoticeHostContext.Provider value={host}>
+          <ToastHost
+            toast={toast({ action: { label: 'Undo', run } })}
+            onDismiss={vi.fn()}
+          />
+        </CompactNoticeHostContext.Provider>,
+        { container: stage }
+      );
+      const undo = screen.getByRole('button', { name: 'Undo' });
+      expect(host).toContainElement(undo);
+      expect(undo.closest('[inert]')).toBeNull();
+      // The live region stays where it was mounted.
+      expect(stage).toContainElement(screen.getByRole('status'));
+      fireEvent.click(undo);
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally {
+      stage.remove();
+      host.remove();
+    }
   });
 });

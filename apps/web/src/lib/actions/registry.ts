@@ -237,7 +237,17 @@ export const COMPACT_ENTRIES: Readonly<
   'motion-key-pose': 'assemble-sheet',
   'motion-previous-key': 'assemble-sheet',
   'motion-next-key': 'assemble-sheet',
-  'motion-delete-key': 'assemble-sheet'
+  'motion-delete-key': 'assemble-sheet',
+  // Slice 9, Draw's tray: every annotation tool from Annotate's five
+  // groups, and the section, detail and auxiliary view tools from Views.
+  // Draw's sheets, properties and exports are its own controls, not
+  // registry actions.
+  ...Object.fromEntries(
+    ANNOTATION_TOOLS.map((kind) => [`drawing-${kind}`, 'draw-tray' as const])
+  ),
+  'drawing-section-view': 'draw-tray',
+  'drawing-detail-view': 'draw-tray',
+  'drawing-auxiliary-view': 'draw-tray'
 };
 
 // ── Sources ────────────────────────────────────────────────────────────

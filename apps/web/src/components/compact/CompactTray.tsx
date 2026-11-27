@@ -1,6 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react';
 import { createPortal } from 'react-dom';
-import { useCompactTray } from './compactSlots';
+import { useCompactTray, useCompactTrayHost } from './compactSlots';
 
 /** One verb in a mode's tray: a 44 px icon with its name for assistive tech. */
 export interface TrayItem {
@@ -134,6 +140,25 @@ export function TrayPage({
     return whenSheetSettles(host, () => coveredRef.current?.());
   }, [host]);
   return host ? createPortal(children, host) : null;
+}
+
+/**
+ * The tray slot's anchor for a mode whose tray is drawn from the stage
+ * (U12 slice 9: Draw): it hands its element and the tray's page controls
+ * to the compact frame, and the drawing workspace portals its tray into
+ * it. Leaving, it takes its open page with it, as a tray does.
+ */
+export function CompactTrayAnchor() {
+  const tray = useCompactTray();
+  const setHost = useCompactTrayHost()?.setHost;
+  const [element, setElement] = useState<HTMLElement | null>(null);
+  useTrayPagesLeaveWithTray();
+  useLayoutEffect(() => {
+    if (!setHost) return;
+    setHost(element && tray ? { element, tray } : null);
+  }, [element, setHost, tray]);
+  useLayoutEffect(() => () => setHost?.(null), [setHost]);
+  return <div ref={setElement} className="compact-tray-anchor" />;
 }
 
 /**

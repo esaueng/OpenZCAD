@@ -149,6 +149,21 @@ export function useCompactOverlayHost(): CompactOverlayHost {
 }
 
 /**
+ * Where the action notice (a delete's Undo, as `ToastHost` draws it) goes in
+ * the compact workspace: a host on the sheet's own layer, over the sheet and
+ * outside the stage. The stage is inert while the sheet stands at full, so a
+ * notice drawn on it could be neither tapped nor focused there. Null in the
+ * regular workspace and until the compact chrome is up, where the notice
+ * stays on the stage.
+ */
+export const CompactNoticeHostContext = createContext<HTMLElement | null>(null);
+
+/** The compact notice host; null in the regular workspace. */
+export function useCompactNoticeHost(): HTMLElement | null {
+  return useContext(CompactNoticeHostContext);
+}
+
+/**
  * Marks what the compact sheet made inert while it stands at full height
  * (U12 slice 5). The workspace keymap reads it: a stage held behind the
  * sheet is out of reach of the model's keys, but the global ones (Ctrl+\,
@@ -385,6 +400,35 @@ export const CompactTrayContext = createContext<CompactTraySlot | null>(null);
 /** The tray's page controls; null outside the compact sheet's tray. */
 export function useCompactTray(): CompactTraySlot | null {
   return useContext(CompactTrayContext);
+}
+
+/**
+ * Where a mode that keeps its own state on the stage draws its tray (U12
+ * slice 9: Draw). The drawing workspace owns its sheets, tools and
+ * selection, so its tray cannot be drawn by the workspace the way View's
+ * and Tweak's are: the compact sheet's tray slot holds an anchor element
+ * instead, and the drawing workspace portals its tray there, under the
+ * tray's own page controls. The compact frame provides this slot (null in
+ * the regular workspace, which is how the drawing workspace knows which
+ * layout it is in); `host` is null until the anchor is up.
+ */
+export interface CompactTrayHost {
+  element: HTMLElement;
+  tray: CompactTraySlot;
+}
+
+export interface CompactTrayHostSlot {
+  host: CompactTrayHost | null;
+  setHost(host: CompactTrayHost | null): void;
+}
+
+export const CompactTrayHostContext = createContext<CompactTrayHostSlot | null>(
+  null
+);
+
+/** The compact frame's tray host slot; null in the regular workspace. */
+export function useCompactTrayHost(): CompactTrayHostSlot | null {
+  return useContext(CompactTrayHostContext);
 }
 
 /**

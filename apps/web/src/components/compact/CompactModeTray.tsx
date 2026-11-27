@@ -1,3 +1,4 @@
+import { CompactTrayAnchor } from './CompactTray';
 import {
   CompactSketchTray,
   type CompactSketchTrayProps
@@ -15,18 +16,22 @@ export type {
   CompactViewTrayProps
 };
 
-/** View's or Tweak's tray, or an open sketch's, by mode. */
+/** View's or Tweak's tray, an open sketch's, by mode, or Draw's anchor. */
 export type CompactModeTrayProps =
   | ({ mode: 'view' } & CompactViewTrayProps)
   | ({ mode: 'tweak' } & CompactTweakTrayProps)
-  | ({ mode: 'sketch' } & CompactSketchTrayProps);
+  | ({ mode: 'sketch' } & CompactSketchTrayProps)
+  | { mode: 'drawing' };
 
 /**
- * The compact workspace's tray for View and Tweak (U12 slice 7) and for an
- * open sketch (slice 6), loaded only where the compact workspace is in
- * force: the regular workspace's entry chunk does not carry it.
+ * The compact workspace's tray for View and Tweak (U12 slice 7), for an open
+ * sketch (slice 6) and for Draw (slice 9), loaded only where the compact
+ * workspace is in force: the regular workspace's entry chunk does not carry
+ * it. Draw keeps its state on the stage, so its tray here is only the anchor
+ * the drawing workspace draws its own tray into.
  */
 export default function CompactModeTray(props: CompactModeTrayProps) {
+  if (props.mode === 'drawing') return <CompactTrayAnchor />;
   if (props.mode === 'view') {
     const { mode: _mode, ...view } = props;
     return <CompactViewTray {...view} />;

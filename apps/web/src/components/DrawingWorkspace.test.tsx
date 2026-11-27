@@ -34,6 +34,10 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { DrawingWorkspace, resetRetainedProjections } from './DrawingWorkspace';
+import { AppShell } from './AppShell';
+import CompactModeTray from './compact/CompactModeTray';
+import { ANNOTATION_TOOLS } from '../lib/drawing/toolKeys';
+import { ANNOTATION_TOOL_LABELS } from '../lib/drawing/annotationPicking';
 import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
 import { WHEEL_DEVICE_STORAGE_KEY } from '../lib/wheelDeviceMemory';
 import { viewConfigurationRows } from '../lib/drawing/viewConfigurations';
@@ -49,6 +53,7 @@ import {
   type ProjectionBodyInput
 } from '../lib/drawing/projectView';
 import type * as SheetSources from '../lib/drawing/sheetSources';
+import { COMPACT_PANEL_ORDER } from './compact/panelSheet';
 
 // Pass-through, counted: fingerprinting is the costly step a drag must skip.
 vi.mock('../lib/drawing/sheetSources', async (importOriginal) => {
@@ -2987,6 +2992,330 @@ describe('DrawingWorkspace section views (D03)', () => {
     });
     expect(view.centerMm.y).toBe(front.centerMm.y);
   });
+
+  describe('by touch (U12 slice 9)', () => {
+    /** The section or detail tool armed on the cube's sheet, for a finger. */
+    async function armed(toolName: 'Section view' | 'Detail view') {
+      resetRetainedProjections();
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      const sheet = starter(fingerprint);
+      const { onCommand } = renderSheet(sheet, () =>
+        Promise.resolve({ [bodyId]: halfCube() })
+      );
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      await waitFor(() =>
+        expect(
+          canvas.querySelectorAll('.drawing-view.is-placeholder')
+        ).toHaveLength(0)
+      );
+      fireEvent.click(screen.getByRole('button', { name: toolName }));
+      const surface = canvas.querySelector('.drawing-section-surface')!;
+      Object.defineProperty(canvas, 'getScreenCTM', {
+        configurable: true,
+        value: () => ({
+          a: 1,
+          b: 0,
+          c: 0,
+          d: 1,
+          e: 0,
+          f: 0,
+          inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 })
+        })
+      });
+      const front = sheet.views.find((view) => view.orientation === 'front')!;
+      let nextPointer = 1;
+      const finger = (x: number, y: number, pointerId = nextPointer++) => ({
+        clientX: x,
+        clientY: 297 - y,
+        button: 0,
+        pointerId,
+        pointerType: 'touch'
+      });
+      const added = () =>
+        onCommand.mock.calls
+          .map(([command]) => command)
+          .filter((command) => command.kind === 'drawing.view.add');
+      /** Two fingers land, spread and lift: a pinch. */
+      const pinch = (
+        a: { x: number; y: number },
+        b: { x: number; y: number }
+      ) => {
+        const first = finger(a.x, a.y);
+        const second = finger(b.x, b.y);
+        fireEvent.pointerDown(surface, first);
+        fireEvent.pointerDown(surface, second);
+        fireEvent.pointerMove(surface, {
+          ...first,
+          clientX: first.clientX - 20
+        });
+        fireEvent.pointerMove(surface, {
+          ...second,
+          clientX: second.clientX + 20
+        });
+        fireEvent.pointerUp(surface, { ...first, clientX: first.clientX - 20 });
+        fireEvent.pointerUp(surface, {
+          ...second,
+          clientX: second.clientX + 20
+        });
+      };
+      /** One finger dragged across the paper. */
+      const drag = (
+        a: { x: number; y: number },
+        b: { x: number; y: number }
+      ) => {
+        const down = finger(a.x, a.y);
+        const up = { ...finger(b.x, b.y, down.pointerId) };
+        fireEvent.pointerDown(surface, down);
+        fireEvent.pointerMove(surface, up);
+        fireEvent.pointerUp(surface, up);
+      };
+      const tap = (at: { x: number; y: number }) => {
+        const point = finger(at.x, at.y);
+        fireEvent.pointerDown(surface, point);
+        fireEvent.pointerUp(surface, point);
+      };
+      /** Whether the tool shows a view to place, the pointer at `at`. */
+      const ghostAt = (at: { x: number; y: number }) => {
+        fireEvent.pointerMove(surface, {
+          clientX: at.x,
+          clientY: 297 - at.y,
+          pointerId: 99,
+          pointerType: 'mouse'
+        });
+        return canvas.querySelector('.drawing-section-ghost') !== null;
+      };
+      return {
+        surface,
+        front: front.centerMm,
+        added,
+        pinch,
+        drag,
+        tap,
+        ghostAt
+      };
+    }
+
+    it('lets a pinch over a section line being drawn draw none, and places the section on a tap', async () => {
+      const { front, added, pinch, drag, tap, ghostAt } =
+        await armed('Section view');
+      const place = { x: front.x - 50, y: front.y };
+      // The first finger lands in the view and its release lands across it:
+      // the line it would draw on its own is dropped by the second finger.
+      pinch({ x: front.x, y: front.y + 8 }, { x: front.x, y: front.y - 8 });
+      expect(ghostAt(place)).toBe(false);
+      drag(
+        { x: front.x + 0.8, y: front.y + 8 },
+        { x: front.x + 0.8, y: front.y - 8 }
+      );
+      expect(ghostAt(place)).toBe(true);
+      // Armed to place: a pinch places nothing.
+      pinch(place, { x: place.x, y: place.y - 30 });
+      expect(added()).toHaveLength(0);
+      expect(ghostAt(place)).toBe(true);
+      // A finger that drags places nothing either.
+      drag(place, { x: place.x + 30, y: place.y });
+      expect(added()).toHaveLength(0);
+      tap(place);
+      expect(added()).toHaveLength(1);
+      expect(
+        (added()[0]!.payload as { view: DrawingSheet['views'][number] }).view
+          .section
+      ).toBeTruthy();
+    });
+
+    it('lets a pinch over a detail circle being drawn draw none, and places the detail on a tap', async () => {
+      const { front, added, pinch, drag, tap, ghostAt } =
+        await armed('Detail view');
+      const place = { x: front.x + 70, y: front.y };
+      pinch(front, { x: front.x + 6, y: front.y });
+      expect(ghostAt(place)).toBe(false);
+      drag(front, { x: front.x + 4, y: front.y });
+      expect(ghostAt(place)).toBe(true);
+      pinch(place, { x: place.x, y: place.y - 30 });
+      expect(added()).toHaveLength(0);
+      expect(ghostAt(place)).toBe(true);
+      tap(place);
+      expect(added()).toHaveLength(1);
+      expect(
+        (added()[0]!.payload as { view: DrawingSheet['views'][number] }).view
+          .detail
+      ).toBeTruthy();
+    });
+  });
+});
+
+describe('DrawingWorkspace auxiliary view by touch (U12 slice 9)', () => {
+  /** The straight-edged cube turned 30° about Y: its front view slopes. */
+  function tiltedCube(): BodyRepresentation {
+    const body = straightCube();
+    const c = Math.cos(Math.PI / 6);
+    const s = Math.sin(Math.PI / 6);
+    const turn = (values: ArrayLike<number>) =>
+      Array.from(values, (value, index) => {
+        const base = index - (index % 3);
+        const x = values[base]!;
+        const z = values[base + 2]!;
+        return index % 3 === 0
+          ? x * c + z * s
+          : index % 3 === 2
+            ? -x * s + z * c
+            : value;
+      });
+    const vertices = turn(body.mesh.vertices);
+    const xs = vertices.filter((_, index) => index % 3 === 0);
+    const zs = vertices.filter((_, index) => index % 3 === 2);
+    return {
+      ...body,
+      mesh: { ...body.mesh, vertices: Float32Array.from(vertices) },
+      bbox: {
+        min: { x: Math.min(...xs), y: 0, z: Math.min(...zs) },
+        max: { x: Math.max(...xs), y: 10, z: Math.max(...zs) }
+      },
+      topology: {
+        ...body.topology!,
+        edges: body.topology!.edges.map((edge) => ({
+          ...edge,
+          points: turn(edge.points)
+        }))
+      }
+    };
+  }
+
+  it('picks the edge and places the view on a release, never under a pinch', async () => {
+    resetRetainedProjections();
+    const tilted = tiltedCube();
+    const bodies = { [bodyId]: tilted };
+    const sheet = createStarterSheet({
+      name: 'Sheet 1',
+      bodyIds: [bodyId],
+      bodies,
+      units: 'mm',
+      paper: { size: 'A3', orientation: 'landscape' },
+      projectionAngle: 'first',
+      fingerprint: drawingSourceFingerprint(bodies, [bodyId])!
+    });
+    const base = createProjectDocument('Bracket', toUserId('test'));
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    const onStatus = vi.fn();
+    render(
+      <DrawingWorkspace
+        document={{
+          ...base,
+          bodyOrder: [bodyId],
+          drawings: { sheets: [sheet] }
+        }}
+        bodies={bodies}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={displayTessellation(bodies)}
+        editDisabledReason={null}
+        onCommand={onCommand}
+        onStatus={onStatus}
+      />
+    );
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Auxiliary view' }));
+    const surface = canvas.querySelector('.drawing-section-surface')!;
+    Object.defineProperty(canvas, 'getScreenCTM', {
+      configurable: true,
+      value: () => ({
+        a: 1,
+        b: 0,
+        c: 0,
+        d: 1,
+        e: 0,
+        f: 0,
+        inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 })
+      })
+    });
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    const k = drawingPaperPerModelUnit(sheet.scale, 'mm');
+    const cu = (tilted.bbox.min.x + tilted.bbox.max.x) / 2;
+    const cv = (tilted.bbox.min.z + tilted.bbox.max.z) / 2;
+    /** A point of the front view, in its model (x, z), on the paper. */
+    const onPaper = (u: number, v: number) => ({
+      x: front.centerMm.x + (u - cu) * k,
+      y: front.centerMm.y + (v - cv) * k
+    });
+    let nextPointer = 1;
+    const finger = (
+      at: { x: number; y: number },
+      pointerId = nextPointer++
+    ) => ({
+      clientX: at.x,
+      clientY: 297 - at.y,
+      button: 0,
+      pointerId,
+      pointerType: 'touch'
+    });
+    const pinch = (at: { x: number; y: number }) => {
+      const first = finger(at);
+      const second = finger({ x: at.x, y: at.y - 30 });
+      fireEvent.pointerDown(surface, first);
+      fireEvent.pointerDown(surface, second);
+      fireEvent.pointerMove(surface, { ...first, clientY: first.clientY - 20 });
+      fireEvent.pointerMove(surface, {
+        ...second,
+        clientY: second.clientY + 20
+      });
+      fireEvent.pointerUp(surface, { ...first, clientY: first.clientY - 20 });
+      fireEvent.pointerUp(surface, { ...second, clientY: second.clientY + 20 });
+    };
+    const tap = (at: { x: number; y: number }) => {
+      const point = finger(at);
+      fireEvent.pointerDown(surface, point);
+      fireEvent.pointerUp(surface, point);
+    };
+    const ghostAt = (at: { x: number; y: number }) => {
+      fireEvent.pointerMove(surface, {
+        clientX: at.x,
+        clientY: 297 - at.y,
+        pointerId: 99,
+        pointerType: 'mouse'
+      });
+      return canvas.querySelector('.drawing-section-ghost') !== null;
+    };
+    const added = () =>
+      onCommand.mock.calls
+        .map(([command]) => command)
+        .filter((command) => command.kind === 'drawing.view.add');
+    // The bottom front edge, (0, 0) to (10, 0) turned: it slopes down.
+    const edge = onPaper(
+      (10 * Math.cos(Math.PI / 6)) / 2,
+      (-10 * Math.sin(Math.PI / 6)) / 2
+    );
+    // Beside it, square to it, above and to the right on the page.
+    const place = {
+      x: edge.x + 0.5 * 40,
+      y: edge.y + Math.cos(Math.PI / 6) * 40
+    };
+    // A pinch landing on the edge picks nothing.
+    pinch(edge);
+    expect(ghostAt(place)).toBe(false);
+    // A finger landing on it picks it on release.
+    tap(edge);
+    expect(ghostAt(place)).toBe(true);
+    // A pinch where the view goes places nothing.
+    pinch(place);
+    expect(added()).toHaveLength(0);
+    expect(ghostAt(place)).toBe(true);
+    // A tap does.
+    tap(place);
+    expect(added()).toHaveLength(1);
+    expect(
+      (added()[0]!.payload as { view: DrawingSheet['views'][number] }).view
+        .auxiliary
+    ).toBeTruthy();
+  });
 });
 
 describe('DrawingWorkspace geometry annotations (D02 v73)', () => {
@@ -3043,6 +3372,115 @@ describe('DrawingWorkspace geometry annotations (D02 v73)', () => {
       .annotation;
     expect(annotation.kind).toBe('intersection-mark');
     expect(annotation.viewId).toBe(front.viewId);
+  });
+});
+
+describe('DrawingWorkspace touch placement (U12 slice 9)', () => {
+  /** A horizontal dimension picked by touch, waiting for its place. */
+  async function pickedHorizontal() {
+    resetRetainedProjections();
+    const sheet = starter(
+      drawingSourceFingerprint({ [bodyId]: straightCube() }, [bodyId])!
+    );
+    const { onCommand } = setup({ sheet, straightEdges: true });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    Object.defineProperty(canvas, 'getScreenCTM', {
+      configurable: true,
+      value: () => ({
+        a: 1,
+        b: 0,
+        c: 0,
+        d: 1,
+        e: 0,
+        f: 0,
+        inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 })
+      })
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Horizontal' }));
+    const surface = canvas.querySelector('.drawing-pick-surface')!;
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    const k = drawingPaperPerModelUnit(sheet.scale, 'mm');
+    let nextPointer = 1;
+    const finger = (u: number, v: number, pointerId = nextPointer++) => ({
+      clientX: front.centerMm.x + (u - 5) * k,
+      clientY: 297 - (front.centerMm.y + (v - 5) * k),
+      button: 0,
+      pointerId,
+      pointerType: 'touch'
+    });
+    const tap = (point: ReturnType<typeof finger>) => {
+      fireEvent.pointerDown(surface, point);
+      fireEvent.pointerUp(surface, point);
+    };
+    // The cube's top edge, tapped: its length is the span to place.
+    tap(finger(5, 10));
+    const added = () =>
+      onCommand.mock.calls
+        .map(([command]) => command)
+        .filter((command) => command.kind === 'drawing.annotation.add');
+    expect(added()).toHaveLength(0);
+    expect(canvas.querySelector('.drawing-pick-surface')).toBe(surface);
+    return { surface, finger, tap, added };
+  }
+
+  it('lets a pinch zoom while a dimension waits for its place, then a tap places it', async () => {
+    const { surface, finger, tap, added } = await pickedHorizontal();
+    // A pinch: the first finger lands, a second joins, both spread and lift.
+    const first = finger(5, 20);
+    const second = finger(5, 30);
+    fireEvent.pointerDown(surface, first);
+    expect(added()).toHaveLength(0);
+    fireEvent.pointerDown(surface, second);
+    fireEvent.pointerMove(surface, { ...first, clientY: first.clientY + 20 });
+    fireEvent.pointerMove(surface, { ...second, clientY: second.clientY - 20 });
+    fireEvent.pointerUp(surface, first);
+    fireEvent.pointerUp(surface, second);
+    expect(added()).toHaveLength(0);
+    expect(surface.isConnected).toBe(true);
+    expect(surface.getAttribute('data-tool')).toBe('horizontal');
+    // One finger tapped on its own places it.
+    tap(finger(5, 20));
+    expect(added()).toHaveLength(1);
+    expect(
+      (added()[0]!.payload as { annotation: DrawingAnnotation }).annotation
+        .kind
+    ).toBe('linear');
+  });
+
+  it('places nothing when a finger drags instead of tapping', async () => {
+    const { surface, finger, tap, added } = await pickedHorizontal();
+    const drag = finger(5, 20);
+    fireEvent.pointerDown(surface, drag);
+    fireEvent.pointerMove(surface, { ...drag, clientX: drag.clientX + 40 });
+    fireEvent.pointerUp(surface, { ...drag, clientX: drag.clientX + 40 });
+    expect(added()).toHaveLength(0);
+    expect(surface.getAttribute('data-tool')).toBe('horizontal');
+    tap(finger(5, 20));
+    expect(added()).toHaveLength(1);
+  });
+
+  it('drops a touch held over a change of tool, placing nothing with the new one', async () => {
+    const { surface, finger, tap, added } = await pickedHorizontal();
+    // A finger held on the paper while a key changes the tool to Note.
+    const held = finger(5, 20);
+    fireEvent.pointerDown(surface, held);
+    fireEvent.keyDown(document.body, { key: 'n' });
+    expect(surface.getAttribute('data-tool')).toBe('note');
+    fireEvent.pointerUp(surface, held);
+    expect(added()).toHaveLength(0);
+    expect(surface.getAttribute('data-tool')).toBe('note');
+    // A tap of its own places the note.
+    tap(finger(5, 20));
+    expect(added()).toHaveLength(1);
+    expect(
+      (added()[0]!.payload as { annotation: DrawingAnnotation }).annotation
+        .kind
+    ).toBe('note');
   });
 });
 
@@ -3492,5 +3930,417 @@ describe('DrawingWorkspace dimension check (D06)', () => {
     const auto = await screen.findByRole('button', { name: 'Auto-dimension' });
     expect(auto).toBeDisabled();
     expect(auto).toHaveAttribute('title', 'Viewers cannot edit drawings.');
+  });
+});
+
+describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
+  /**
+   * The drawing workspace on the compact frame's stage, its tray in the
+   * sheet's tray slot, as App draws them: the tray is the anchor, and the
+   * workspace portals its own tray into it.
+   */
+  function compactSetup(
+    options: {
+      sheet?: DrawingSheet;
+      sheets?: DrawingSheet[];
+      /** The cube's size: another than the sheet's makes it outdated. */
+      size?: number;
+      /** Keep the drawings an earlier render of this project drew. */
+      keepProjections?: boolean;
+      /** The project, to show again (its drawings are kept by its id). */
+      document?: ProjectDocument;
+    } = {}
+  ) {
+    if (!options.keepProjections) resetRetainedProjections();
+    const sheets = options.sheets ?? (options.sheet ? [options.sheet] : []);
+    const document: ProjectDocument = options.document ?? {
+      ...createProjectDocument('Bracket', toUserId('test')),
+      bodyOrder: [bodyId],
+      ...(sheets.length > 0 ? { drawings: { sheets } } : {})
+    };
+    const bodies = { [bodyId]: cube(options.size) };
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    const onStatus = vi.fn();
+    const onAnnounceUndoable = vi.fn();
+    const rendered = render(
+      <AppShell
+        topBar={<header className="topbar">top</header>}
+        toolBar={null}
+        sidebar={null}
+        viewer={<div className="viewer-shell">viewer</div>}
+        inspector={null}
+        assistant={null}
+        sidebarWidth={252}
+        assistantWidth={360}
+        compact={{
+          projectName: 'Bracket',
+          saveState: 'synced',
+          workspaceMode: 'drawing',
+          modeLockedReason: () => null,
+          shareLink: false,
+          onWorkspaceMode: vi.fn(),
+          canUndo: false,
+          canRedo: false,
+          onUndo: vi.fn(),
+          onRedo: vi.fn(),
+          onHome: vi.fn(),
+          onSearch: vi.fn(),
+          onSettings: vi.fn(),
+          onHelp: vi.fn(),
+          fileCommands: [],
+          selectionLabel: null,
+          reducedMotion: true,
+          panels: {
+            open: null,
+            available: COMPACT_PANEL_ORDER,
+            disabledReason: null,
+            content: null,
+            onOpen: vi.fn(),
+            warningCount: 0
+          },
+          selection: null,
+          editRefusal: null,
+          sheetKey: ''
+        }}
+        compactTray={<CompactModeTray mode="drawing" />}
+        stage={
+          <DrawingWorkspace
+            document={document}
+            bodies={bodies}
+            geometryPending={false}
+            defaultBodyIds={[bodyId]}
+            requestTessellation={displayTessellation(bodies)}
+            editDisabledReason={null}
+            onCommand={onCommand}
+            onStatus={onStatus}
+            onAnnounceUndoable={onAnnounceUndoable}
+          />
+        }
+      />
+    );
+    return {
+      onCommand,
+      onStatus,
+      onAnnounceUndoable,
+      document,
+      unmount: rendered.unmount
+    };
+  }
+  const fingerprint = () =>
+    drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!;
+  const tray = () =>
+    // The tray is lazy: a cold first load takes longer than findBy's 1 s.
+    screen.findByRole('toolbar', { name: 'Draw tools' }, { timeout: 5000 });
+  const sheetPanel = () =>
+    document.querySelector<HTMLElement>('.compact-sheet')!;
+  async function openPage(name: string) {
+    fireEvent.click(within(await tray()).getByRole('button', { name }));
+    return within(sheetPanel());
+  }
+
+  it('fills the stage with the sheet and moves its chrome into the tray', async () => {
+    compactSetup({ sheet: starter(fingerprint()) });
+    const toolbar = await tray();
+    expect(
+      within(toolbar)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+    ).toEqual(['Annotate', 'Views', 'Sheets', 'Properties', 'Export']);
+    // The sheet itself, with its own zoom; none of the regular chrome.
+    expect(
+      screen.getByRole('application', { name: 'Sheet Sheet 1' })
+    ).toBeTruthy();
+    expect(screen.getByRole('toolbar', { name: 'Sheet zoom' })).toBeTruthy();
+    expect(
+      screen.queryByRole('toolbar', { name: 'Annotation tools' })
+    ).toBeNull();
+    expect(
+      screen.queryByRole('complementary', { name: 'Drawing properties' })
+    ).toBeNull();
+    expect(document.querySelector('.drawing-stage-bar')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Export PDF' })).toBeNull();
+    expect(document.querySelector('.drawing-tool-hint')).toBeNull();
+  });
+
+  it('puts all 22 annotation tools in five groups, and starts one as the toolbar does', async () => {
+    const { onStatus } = compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Annotate');
+    const groups = page
+      .getAllByRole('heading', { level: 3 })
+      .map((heading) => heading.textContent)
+      .slice(0, 5);
+    expect(groups).toEqual([
+      'Dimensions',
+      'Symbols and marks',
+      'Notes and balloons',
+      'Tables',
+      'Tolerances'
+    ]);
+    for (const kind of ANNOTATION_TOOLS) {
+      expect(
+        page.getByRole('button', {
+          name: ANNOTATION_TOOL_LABELS[kind]
+        }),
+        kind
+      ).toBeTruthy();
+    }
+    // Auto-dimension, with its preview, is reachable from the same page.
+    expect(page.getByText('Dimension check')).toBeTruthy();
+    const horizontal = page.getByRole('button', {
+      name: 'Horizontal'
+    });
+    await waitFor(() =>
+      expect(horizontal).toHaveAttribute('aria-disabled', 'false')
+    );
+    fireEvent.click(horizontal);
+    expect(onStatus).toHaveBeenCalledWith('Horizontal placement started.', {
+      immediate: true
+    });
+    // The tool's row stands in for the tray: its step, Cancel and Done.
+    const run = await screen.findByRole('group', {
+      name: 'Horizontal placement'
+    });
+    expect(run.querySelector('.compact-step-chip')?.textContent).toBe(
+      'Point 1'
+    );
+    expect(screen.queryByRole('toolbar', { name: 'Draw tools' })).toBeNull();
+    fireEvent.click(within(run).getByRole('button', { name: 'Done' }));
+    expect(onStatus).toHaveBeenLastCalledWith('Placement finished.', {
+      immediate: true
+    });
+    expect(await tray()).toBeTruthy();
+    fireEvent.click(
+      within(await tray()).getByRole('button', { name: 'Annotate' })
+    );
+    fireEvent.click(
+      within(sheetPanel()).getByRole('button', { name: 'Radius' })
+    );
+    const radius = await screen.findByRole('group', {
+      name: 'Radius placement'
+    });
+    fireEvent.click(within(radius).getByRole('button', { name: 'Cancel' }));
+    expect(onStatus).toHaveBeenLastCalledWith('Placement canceled.', {
+      immediate: true
+    });
+  });
+
+  it('says why a tool is refused when it is tapped', async () => {
+    compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Annotate');
+    const image = page.getByRole('button', { name: 'Image' });
+    expect(image).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(image);
+    expect(page.getByRole('status').textContent).toMatch(/^Image: /);
+    expect(screen.queryByRole('group', { name: 'Image placement' })).toBeNull();
+  });
+
+  it('offers the view tools, the views and their configuration on Views', async () => {
+    const { onCommand } = compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Views');
+    for (const name of ['Section view', 'Detail view', 'Auxiliary view']) {
+      expect(page.getByRole('button', { name })).toBeTruthy();
+    }
+    const views = page.getByRole('listbox', { name: 'Views on this sheet' });
+    fireEvent.click(within(views).getByRole('option', { name: /^Front/ }));
+    const remove = page.getByRole('button', { name: 'Delete view' });
+    fireEvent.click(remove);
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    expect(page.getByRole('button', { name: 'Add view' })).toBeTruthy();
+  });
+
+  it('lists every sheet with new, rename, duplicate, move and delete', async () => {
+    const first = starter(fingerprint());
+    const second = { ...starter(fingerprint()), name: 'Sheet 2' };
+    second.sheetId = 'dsheet_two' as DrawingSheet['sheetId'];
+    const { onCommand } = compactSetup({ sheets: [first, second] });
+    const page = await openPage('Sheets');
+    const list = page.getByRole('list', { name: 'Sheets' });
+    expect(
+      within(list)
+        .getAllByRole('button', { pressed: true })
+        .map((button) => button.textContent)
+    ).toEqual(['Sheet 1']);
+    expect(
+      page.getByRole('button', { name: 'Move Sheet 1 up' })
+    ).toBeDisabled();
+    expect(
+      page.getByRole('button', { name: 'Move Sheet 2 down' })
+    ).toBeDisabled();
+    fireEvent.click(page.getByRole('button', { name: 'Rename Sheet 2' }));
+    const name = page.getByRole('textbox', { name: 'Sheet name' });
+    fireEvent.change(name, { target: { value: 'Details' } });
+    fireEvent.click(page.getByRole('button', { name: 'Save name' }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    expect(onCommand.mock.calls[0]![0].label).toBe('Rename drawing to Details');
+    fireEvent.click(page.getByRole('button', { name: 'Move Sheet 1 down' }));
+    expect(onCommand.mock.calls[1]![0].label).toBe('Move sheet');
+    fireEvent.click(page.getByRole('button', { name: 'Duplicate Sheet 1' }));
+    expect(onCommand.mock.calls[2]![0].label).toBe('Duplicate Sheet 1');
+    fireEvent.click(page.getByRole('button', { name: 'Delete Sheet 2' }));
+    expect(onCommand).toHaveBeenCalledTimes(4);
+    fireEvent.click(page.getByRole('button', { name: 'New drawing sheet' }));
+    expect(onCommand).toHaveBeenCalledTimes(5);
+  });
+
+  it('keeps the title block, paper, projection, units and decimals on Properties', async () => {
+    const { onCommand } = compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Properties');
+    for (const label of [
+      'Paper',
+      'Projection',
+      'Dimension units',
+      'Length decimals',
+      'Title',
+      'Drawing no.'
+    ]) {
+      expect(page.getByLabelText(label), label).toBeTruthy();
+    }
+    const title = page.getByLabelText('Title');
+    fireEvent.change(title, { target: { value: 'Clamp' } });
+    fireEvent.blur(title);
+    expect(onCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('exports PDF, SVG and DXF from Export', async () => {
+    compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Export');
+    for (const name of ['Export PDF', 'Export SVG', 'Export DXF']) {
+      await waitFor(() =>
+        expect(page.getByRole('button', { name })).toBeEnabled()
+      );
+    }
+  });
+
+  it('warns that an outdated sheet exports as drawn, and offers its Update on Export', async () => {
+    const first = compactSetup({ sheet: starter(fingerprint()) });
+    const drawn = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        drawn.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    // Leave Draw, change the model in Build, come back.
+    first.unmount();
+    const { onCommand } = compactSetup({
+      document: first.document,
+      size: 12,
+      keepProjections: true
+    });
+    const page = await openPage('Export');
+    expect(
+      page.getByText(
+        'The model changed since this sheet was drawn. Update it to redraw the views. Export now writes this sheet as drawn, before the latest model change.'
+      )
+    ).toBeTruthy();
+    // It exports the earlier drawing, as the regular buttons do, and says so.
+    const pdf = page.getByRole('button', { name: 'Export PDF' });
+    expect(pdf).toBeEnabled();
+    expect(pdf).toHaveAttribute(
+      'title',
+      'Export this sheet as drawn, before the latest model change'
+    );
+    fireEvent.click(page.getByRole('button', { name: 'Update' }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    expect(onCommand.mock.calls[0]![0].kind).toBe('drawing.sheet.update');
+  });
+
+  it('steps a page back on Escape from its own controls', async () => {
+    compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Export');
+    const pdf = await page.findByRole('button', { name: 'Export PDF' });
+    expect(sheetPanel().getAttribute('data-detent')).toBe('half');
+    pdf.focus();
+    fireEvent.keyDown(pdf, { key: 'Escape' });
+    await waitFor(() =>
+      expect(sheetPanel().getAttribute('data-detent')).toBe('peek')
+    );
+    expect(within(sheetPanel()).queryByRole('button', { name: 'Export PDF' }))
+      .toBeNull();
+  });
+
+  it('lets a field take Escape for its edit before the page steps back', async () => {
+    compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Properties');
+    const title = await page.findByRole('textbox', { name: 'Title' });
+    const saved = (title as HTMLInputElement).value;
+    title.focus();
+    fireEvent.change(title, { target: { value: 'Draft title' } });
+    // The first Escape puts the title back, and the page stays.
+    fireEvent.keyDown(title, { key: 'Escape' });
+    expect(title).toHaveValue(saved);
+    expect(
+      within(sheetPanel()).getByRole('heading', { name: 'Properties' })
+    ).toBeTruthy();
+    expect(sheetPanel().getAttribute('data-detent')).toBe('half');
+    // With nothing left to put back, the next one steps back.
+    fireEvent.keyDown(title, { key: 'Escape' });
+    await waitFor(() =>
+      expect(sheetPanel().getAttribute('data-detent')).toBe('peek')
+    );
+  });
+
+  it('offers Undo in the notice after deleting a sheet, a view or the broken annotations', async () => {
+    const first = starter(fingerprint());
+    const front = first.views.find((view) => view.orientation === 'front')!;
+    // A dimension on an edge the cube has not got: broken.
+    first.annotations = [
+      {
+        annotationId: 'dann_lost' as DrawingAnnotationId,
+        kind: 'linear',
+        viewId: front.viewId,
+        direction: 'horizontal',
+        from: { edge: { bodyId, hash: 999_999 }, anchor: 'first' },
+        to: { edge: { bodyId, hash: 999_999 }, anchor: 'second' },
+        placementMm: { x: 0, y: -15 }
+      }
+    ];
+    const second = { ...starter(fingerprint()), name: 'Sheet 2' };
+    second.sheetId = 'dsheet_two' as DrawingSheet['sheetId'];
+    const { onCommand, onStatus, onAnnounceUndoable } = compactSetup({
+      sheets: [first, second]
+    });
+    let page = await openPage('Export');
+    const cleanup = await page.findByRole('button', {
+      name: 'Delete all broken'
+    });
+    await waitFor(() => expect(cleanup).toBeEnabled());
+    fireEvent.click(cleanup);
+    expect(onCommand.mock.calls.at(-1)![0].label).toBe(
+      'Delete broken annotations'
+    );
+    expect(onAnnounceUndoable).toHaveBeenLastCalledWith(
+      'Deleted 1 broken annotation.'
+    );
+    expect(onStatus).not.toHaveBeenCalledWith(
+      expect.stringMatching(/broken annotation/)
+    );
+    fireEvent.click(page.getByRole('button', { name: 'Back' }));
+    page = await openPage('Views');
+    fireEvent.click(
+      within(
+        page.getByRole('listbox', { name: 'Views on this sheet' })
+      ).getAllByRole('option')[0]!
+    );
+    fireEvent.click(await page.findByRole('button', { name: 'Delete view' }));
+    expect(onCommand.mock.calls.at(-1)![0].kind).toBe('drawing.view.delete');
+    expect(onAnnounceUndoable).toHaveBeenCalledTimes(2);
+    fireEvent.click(page.getByRole('button', { name: 'Back' }));
+    page = await openPage('Sheets');
+    fireEvent.click(page.getByRole('button', { name: 'Delete Sheet 2' }));
+    expect(onCommand.mock.calls.at(-1)![0].kind).toBe('drawing.sheet.delete');
+    expect(onAnnounceUndoable).toHaveBeenLastCalledWith(
+      expect.stringMatching(/^Deleted Sheet 2 and its \d views\.$/)
+    );
+  });
+
+  it('offers only a new sheet before the first one', async () => {
+    const { onCommand } = compactSetup();
+    const toolbar = await tray();
+    for (const name of ['Annotate', 'Views', 'Properties', 'Export']) {
+      expect(within(toolbar).getByRole('button', { name })).toBeDisabled();
+    }
+    const page = await openPage('Sheets');
+    fireEvent.click(page.getByRole('button', { name: 'New drawing sheet' }));
+    expect(onCommand).toHaveBeenCalledTimes(1);
   });
 });

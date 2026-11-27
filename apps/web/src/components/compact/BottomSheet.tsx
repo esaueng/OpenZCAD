@@ -300,23 +300,21 @@ export function BottomSheet({
   // While a page is open, Escape is the page's wherever focus is (the
   // header's More, the stage): it steps back rather than reaching the
   // workspace, where it would cancel the tool under the page. Inside the
-  // sheet the sheet's own handler has it first; a dialog or the command
-  // bar that takes Escape for itself keeps it.
+  // sheet the sheet's own handler has it first and stops it there; what
+  // still arrives from inside came from a control portalled in from
+  // another React tree (Draw's tray, drawn by the stage), which that
+  // handler never sees. A dialog or the command bar that takes Escape for
+  // itself keeps it; the sheet, a dialog itself at full, does not count.
   const hasPages = stack.length > 0;
   useEffect(() => {
     if (!hasPages) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       const target = event.target instanceof Element ? event.target : null;
-      const sheet = sheetRef.current;
-      if (target && sheet?.contains(target)) return;
-      if (
-        target?.closest(
-          `[role="dialog"], [role="alertdialog"], .command-bar, [${SHEET_OVERLAY_ATTRIBUTE}]`
-        )
-      ) {
-        return;
-      }
+      const owner = target?.closest(
+        `[role="dialog"], [role="alertdialog"], .command-bar, [${SHEET_OVERLAY_ATTRIBUTE}]`
+      );
+      if (owner && owner !== sheetRef.current) return;
       event.preventDefault();
       event.stopPropagation();
       dispatch({ type: 'pop' });

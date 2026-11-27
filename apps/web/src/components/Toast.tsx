@@ -1,5 +1,13 @@
 import { X } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode
+} from 'react';
+import { createPortal } from 'react-dom';
+import { useCompactNoticeHost } from './compact/compactSlots';
 import { useDelayedUnmount } from '../hooks/useDelayedUnmount';
 import {
   TOAST_EXIT_MS,
@@ -27,6 +35,9 @@ export function ToastHost({ toast, onDismiss }: ToastHostProps) {
   // The toast whose action has run: the card stays mounted for its exit
   // fade, and a double-click's second press undid a second step.
   const actedRef = useRef<number | null>(null);
+  // The compact workspace draws the card over its sheet, outside the stage
+  // it makes inert at full height, so Undo stays in reach there (U12).
+  const noticeHost = useCompactNoticeHost();
 
   useEffect(() => {
     if (!toast || held) {
@@ -77,54 +88,63 @@ export function ToastHost({ toast, onDismiss }: ToastHostProps) {
       <div className="visually-hidden" role="status" aria-live="polite">
         {toast?.message ?? ''}
       </div>
-      {rendered ? (
-        <div
-          ref={cardRef}
-          className={`toast${rendered.tone === 'warning' ? ' warning' : ''}${closing ? ' closing' : ''}`}
-          inert={closing}
-          onMouseEnter={() => setHeld(true)}
-          onMouseLeave={() => setHeld(false)}
-          onFocus={(event) => {
-            const from = event.relatedTarget;
-            if (!(from instanceof Node && event.currentTarget.contains(from))) {
-              returnFocusRef.current =
-                from instanceof HTMLElement ? from : null;
-            }
-            setHeld(true);
-          }}
-          onBlur={() => setHeld(false)}
-          onKeyDown={onKeyDown}
-        >
-          <span className="toast-message" title={rendered.message}>
-            {rendered.message}
-          </span>
-          {rendered.action && (
-            <button
-              type="button"
-              className="toast-action"
-              onClick={(event) => {
-                if (closing || actedRef.current === rendered.id) {
-                  return;
+      {rendered
+        ? withHost(
+            noticeHost,
+            <div
+              ref={cardRef}
+              className={`toast${rendered.tone === 'warning' ? ' warning' : ''}${closing ? ' closing' : ''}`}
+              inert={closing}
+              onMouseEnter={() => setHeld(true)}
+              onMouseLeave={() => setHeld(false)}
+              onFocus={(event) => {
+                const from = event.relatedTarget;
+                if (!(
+                  from instanceof Node && event.currentTarget.contains(from)
+                )) {
+                  returnFocusRef.current =
+                    from instanceof HTMLElement ? from : null;
                 }
-                actedRef.current = rendered.id;
-                rendered.action?.run();
-                // A keyboard press is a click with no pointer count.
-                dismiss(event.detail === 0);
+                setHeld(true);
               }}
+              onBlur={() => setHeld(false)}
+              onKeyDown={onKeyDown}
             >
-              {rendered.action.label}
-            </button>
-          )}
-          <button
-            type="button"
-            className="toast-dismiss"
-            aria-label="Dismiss"
-            onClick={(event) => dismiss(event.detail === 0)}
-          >
-            <X size={12} aria-hidden="true" />
-          </button>
-        </div>
-      ) : null}
+              <span className="toast-message" title={rendered.message}>
+                {rendered.message}
+              </span>
+              {rendered.action && (
+                <button
+                  type="button"
+                  className="toast-action"
+                  onClick={(event) => {
+                    if (closing || actedRef.current === rendered.id) {
+                      return;
+                    }
+                    actedRef.current = rendered.id;
+                    rendered.action?.run();
+                    // A keyboard press is a click with no pointer count.
+                    dismiss(event.detail === 0);
+                  }}
+                >
+                  {rendered.action.label}
+                </button>
+              )}
+              <button
+                type="button"
+                className="toast-dismiss"
+                aria-label="Dismiss"
+                onClick={(event) => dismiss(event.detail === 0)}
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
+            </div>
+          )
+        : null}
     </>
   );
+}
+
+function withHost(host: HTMLElement | null, card: ReactNode): ReactNode {
+  return host ? createPortal(card, host) : card;
 }
