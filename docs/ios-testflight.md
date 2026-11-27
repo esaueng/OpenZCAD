@@ -74,6 +74,11 @@ TestFlight group with automatic distribution get it without further steps.
    expires after a year: make a new one, update both secrets, and revoke the
    old one.
 
+5. Register at least one iPhone or iPad under Certificates, Identifiers &
+   Profiles → Devices. Archiving signs for development first, and Xcode cannot
+   create a development provisioning profile for a team with no devices, so
+   the archive fails until one is registered.
+
 The repository is public: the workflow masks the certificate holder's name in
 the console and redacts the team, key and issuer IDs from failure logs before
 uploading them. Keep the `.p8` in a password manager, never in the repository.

@@ -20,7 +20,10 @@
 #                                  for example 2026.1.276
 #   SKIP_PREPARE=1                 reuse the bundle `pnpm prepare:ipad` staged
 #   UPLOAD=0                       export an .ipa instead of uploading it
-#   WORK_DIR                       where the archive and logs go
+#   WORK_DIR                       where the archive and logs go; it must be
+#                                  new, empty, or an earlier run's directory
+#   REQUIRE_MAIN_TIP=1             refuse to export unless HEAD is still
+#                                  origin's main tip (the workflow sets it)
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
@@ -49,8 +52,16 @@ case "$MARKETING_VERSION" in
 esac
 
 work="${WORK_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/openzcad-testflight}"
+marker=".openzcad-testflight"
+# Only clear a directory this script made: WORK_DIR pointed at an existing
+# folder must not lose what is already there.
+if [ -d "$work" ] && [ -n "$(ls -A "$work")" ] && [ ! -f "$work/$marker" ]; then
+  echo "WORK_DIR $work is not empty and not an earlier run's directory" >&2
+  exit 1
+fi
 rm -rf "$work"
 mkdir -p "$work"
+touch "$work/$marker"
 
 destination="upload"
 if [ "${UPLOAD:-1}" = 0 ]; then destination="export"; fi
@@ -98,6 +109,14 @@ plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$app/Info.plist"; }
   || { echo "Archived version is $(plist CFBundleShortVersionString)" >&2; exit 1; }
 [ "$(plist CFBundleVersion)" = "$BUILD_NUMBER" ] \
   || { echo "Archived build number is $(plist CFBundleVersion)" >&2; exit 1; }
+
+if [ "${REQUIRE_MAIN_TIP:-0}" = 1 ]; then
+  tip="$(git ls-remote origin refs/heads/main | cut -f1)"
+  if [ -z "$tip" ] || [ "$(git rev-parse HEAD)" != "$tip" ]; then
+    echo "main moved to ${tip:-an unknown commit} during the build; run the workflow again from main" >&2
+    exit 1
+  fi
+fi
 
 cat > "$work/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

@@ -107,9 +107,11 @@ jobs:
           security find-identity -v -p codesigning "$keychain" | grep -q "Apple Development" \
             || { echo "::error::APPLE_SIGNING_P12 holds no Apple Development identity."; exit 1; }
           subject="$(security find-certificate -c "Apple Development" -p "$keychain" \
-            | openssl x509 -noout -subject -nameopt multiline,utf8)"
+            | openssl x509 -noout -subject -nameopt multiline,utf8,-esc_msb)"
           common_name="$(printf '%s\n' "$subject" | sed -n 's/^ *commonName *= *//p')"
           team="$(printf '%s\n' "$subject" | sed -n 's/^ *organizationalUnitName *= *//p')"
+          # -esc_msb keeps a non-ASCII name as the UTF-8 that Xcode logs, not
+          # \C3\A9 escapes the redaction below would never match.
           # The certificate names its holder ("Apple Development: <name> (<id>)").
           # Mask it in the console and save it for the log redaction below; the
           # repository is public.
@@ -137,6 +139,9 @@ jobs:
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
           WORK_DIR: ${{ runner.temp }}/testflight
+          # Checked again just before export: a merge during the build must not
+          # ship an older commit's archive.
+          REQUIRE_MAIN_TIP: '1'
         run: scripts/testflight-ios.sh
 
       - name: Remove the API key
@@ -152,12 +157,14 @@ jobs:
       # The repository is public and artifacts are not masked like the console,
       # so take the account identifiers out of the logs before uploading them.
       - name: Redact the logs
+        id: redact
         if: failure()
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
+          set -euo pipefail
           shopt -s nullglob
           identity=()
           if [ -f "$RUNNER_TEMP/signing-redact" ]; then
@@ -170,8 +177,10 @@ jobs:
             done
           done
 
+      # Only when every log was redacted: a redaction that stopped part way
+      # would otherwise publish the rest unredacted.
       - name: Upload logs
-        if: failure()
+        if: failure() && steps.redact.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: testflight-logs
