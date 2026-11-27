@@ -216,11 +216,88 @@ for (const size of SIZES) {
       test.setTimeout(240_000);
       await page.setViewportSize(size);
       await openCompactLibrary(page);
-      for (const name of ['Alpha part', 'Beta part']) {
+      for (const name of ['Alpha part', 'Beta part', 'Gamma part']) {
         await newProject(page, name);
         await backToLibrary(page);
       }
       await expectTouchSized(page, '.compact-library-head');
+      // Each shelf's word whole beside its count (at 360px "Projects" read
+      // "Projec…"), and every row control a finger's size.
+      expect(
+        await page
+          .locator('.compact-segmented .compact-segment-label')
+          .evaluateAll((labels) =>
+            labels
+              .filter((label) => label.scrollWidth > label.clientWidth)
+              .map((label) => label.textContent)
+          )
+      ).toEqual([]);
+      await expectTouchSized(page, '.start-tile-grid');
+
+      // The list: each row's checkbox, pin and ⋯ inside its own row (they
+      // stood half a button low, over the next one), pin and ⋯ side by side
+      // (the card's corners split them to a row's top and bottom edges), at
+      // a finger's size. Every row kind: a folder below a pinned project, as
+      // well as the projects.
+      const layout = page.getByRole('group', { name: 'Layout' });
+      await layout.getByRole('button', { name: 'List' }).tap();
+      await expect(page.locator('.start-tile-grid.is-list')).toBeVisible();
+      await page.getByRole('checkbox', { name: 'Select Gamma part' }).tap();
+      await page.getByRole('button', { name: 'Move to', exact: true }).tap();
+      await page.getByRole('menuitem', { name: 'New folder' }).tap();
+      const folderName = page.getByRole('textbox', { name: 'Folder name' });
+      await folderName.fill('Holders');
+      await folderName.press('Enter');
+      await page.getByRole('button', { name: 'Pin Beta part' }).tap();
+      await expect(
+        page.getByRole('button', { name: 'Unpin Beta part' })
+      ).toBeVisible();
+      await settled(page);
+      const rows = await page
+        .locator('.start-tile-grid.is-list > .start-tile')
+        .evaluateAll((tiles) =>
+          tiles
+            .filter((tile) => tile.querySelector('.start-tile-action'))
+            .map((tile) => {
+              const row = tile.getBoundingClientRect();
+              const actions = [
+                ...tile.querySelectorAll<HTMLElement>('.start-tile-action')
+              ].map((action) => action.getBoundingClientRect());
+              return {
+                kind: tile.classList.contains('start-tile-folder')
+                  ? 'folder'
+                  : 'project',
+                top: Math.round(row.top),
+                outside: [
+                  ...tile.querySelectorAll<HTMLElement>(
+                    '.start-tile-select, .start-tile-action'
+                  )
+                ]
+                  .filter((control) => {
+                    const box = control.getBoundingClientRect();
+                    return (
+                      box.top < row.top - 0.5 || box.bottom > row.bottom + 0.5
+                    );
+                  })
+                  .map((control) => control.getAttribute('aria-label')),
+                oneLine: actions.every(
+                  (box) => Math.abs(box.top - actions[0]!.top) <= 0.5
+                )
+              };
+            })
+        );
+      const folderRow = rows.find((row) => row.kind === 'folder');
+      expect(folderRow, 'a folder row in the list').toBeDefined();
+      expect(
+        rows.some((row) => row.top < folderRow!.top),
+        'the folder below another row'
+      ).toBe(true);
+      expect(
+        rows.filter((row) => row.outside.length > 0 || !row.oneLine)
+      ).toEqual([]);
+      await expectTouchSized(page, '.start-tile-grid');
+      await layout.getByRole('button', { name: 'Grid' }).tap();
+      await expect(page.locator('.start-tile-grid.is-list')).toHaveCount(0);
 
       const shelves = page.getByRole('group', { name: 'Shelves' });
       const projects = shelves.getByRole('button', { name: 'Projects' });
@@ -317,10 +394,13 @@ for (const size of SIZES) {
         .getByRole('button', { name: 'Sheet renamed', exact: true })
     ).toBeVisible();
 
-    // Properties, as the library tile's.
+    // Properties, as the library tile's, under the name just given.
     await sheet.getByRole('button', { name: 'Properties', exact: true }).tap();
     const properties = page.getByRole('dialog', { name: 'Project properties' });
     await expect(properties).toBeVisible();
+    await expect(
+      properties.getByRole('textbox', { name: 'Project name' })
+    ).toHaveValue('Sheet renamed');
     await expectOnScreen(page, properties);
     await properties
       .getByRole('button', { name: 'Close project properties' })
@@ -351,7 +431,8 @@ for (const size of SIZES) {
     await settings.getByRole('button', { name: /^Close settings/ }).tap();
     await expect(settings).toHaveCount(0);
 
-    // Duplicate project, which the regular workspace has no button for.
+    // Duplicate project, which the regular workspace has no button for: the
+    // copy takes the name the project has now, not the library's old one.
     sheet = await openProjectSheet(page, 'Sheet renamed');
     await sheet
       .getByRole('button', { name: 'Duplicate project', exact: true })
@@ -367,6 +448,7 @@ for (const size of SIZES) {
         { timeout: 60_000 }
       )
       .toBe(1);
+    await expect(copyTiles(page, 'Sheet renamed (copy)')).toHaveCount(1);
   });
 
   test(`settings and search at ${at}: find a setting and change it, run a command`, async ({
@@ -389,6 +471,44 @@ for (const size of SIZES) {
       settings.getByRole('button', { name: 'Appearance', exact: true })
     ).toBeVisible();
     await expectTouchSized(page, '.settings-nav');
+    // A section's switches, segmented choices and toggle buttons take a
+    // finger. Opening one puts focus on its heading, and Back on its row.
+    for (const section of ['Appearance', 'Controls', 'Sketching']) {
+      const row = settings.getByRole('button', { name: section, exact: true });
+      await row.tap();
+      const heading = settings.getByRole('heading', {
+        level: 1,
+        name: section
+      });
+      await expect(heading).toBeFocused();
+      await settled(page);
+      expect(
+        await settings
+          .locator(
+            '.settings-content :is(.settings-toggle, .settings-segmented label, .space-mouse-axis-toggle, .relation-glyph-toggle)'
+          )
+          .evaluateAll((controls) =>
+            controls
+              .map((control) => {
+                const box = control.getBoundingClientRect();
+                return { control, box };
+              })
+              .filter(
+                ({ box }) =>
+                  box.width > 0 && (box.width < 44 || box.height < 44)
+              )
+              .map(
+                ({ control, box }) =>
+                  `${control.className} "${control.getAttribute('aria-label') ?? control.textContent?.trim()}" ${Math.round(box.width)}×${Math.round(box.height)}`
+              )
+          ),
+        `${section}'s choices under 44 px`
+      ).toEqual([]);
+      await settings
+        .getByRole('button', { name: 'Back to all settings' })
+        .tap();
+      await expect(row).toBeFocused();
+    }
     await settings.getByLabel('Find a setting').fill('Theme');
     await settings
       .getByRole('list', { name: 'Matching settings' })
@@ -616,6 +736,7 @@ test(`trash at ${PHONE.width}×${PHONE.height}: a swipe trashes with Undo, and n
     name: 'Delete “Trash part” forever?'
   });
   await expect(confirm).toBeVisible();
+  await expectDrawnSized(page, '.confirm-dialog-actions');
   await confirm.getByRole('button', { name: 'Cancel' }).tap();
   await expect(confirm).toHaveCount(0);
   await expect(trashed).toBeVisible();
