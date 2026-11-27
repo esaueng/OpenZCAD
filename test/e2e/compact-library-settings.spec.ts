@@ -829,9 +829,11 @@ test(
     const first = copyTiles(page, 'Pair part (copy)');
     await expect(first).toHaveCount(1, { timeout: 60_000 });
 
-    await page.getByRole('button', { name: 'Actions for Pair part' }).tap();
     await page
-      .getByRole('menu', { name: 'Actions for Pair part' })
+      .getByRole('button', { name: 'Actions for Pair part', exact: true })
+      .tap();
+    await page
+      .getByRole('menu', { name: 'Actions for Pair part', exact: true })
       .getByRole('menuitem', { name: 'Duplicate', exact: true })
       .tap();
     const copies = page
@@ -902,10 +904,13 @@ test(
           `/api/projects/${encodeURIComponent(copy.projectId)}/document`
     );
     await page
-      .getByRole('button', { name: 'Actions for Cloud part (copy)' })
+      .getByRole('button', {
+        name: 'Actions for Cloud part (copy)',
+        exact: true
+      })
       .tap();
     await page
-      .getByRole('menu', { name: 'Actions for Cloud part (copy)' })
+      .getByRole('menu', { name: 'Actions for Cloud part (copy)', exact: true })
       .getByRole('menuitem', { name: 'Rename' })
       .tap();
     const field = page.getByRole('textbox', {

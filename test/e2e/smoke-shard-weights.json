@@ -24,7 +24,7 @@
   "command-bar-names.spec.ts": 8,
   "compact-assemble.spec.ts": 22,
   "compact-build.spec.ts": 20,
-  "compact-library-settings.spec.ts": 20,
+  "compact-library-settings.spec.ts": 60,
   "compact-panel-gates.spec.ts": 30,
   "compact-panels.spec.ts": 30,
   "compact-shell.spec.ts": 12,

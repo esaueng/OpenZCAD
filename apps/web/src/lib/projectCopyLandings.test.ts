@@ -59,9 +59,7 @@ describe('createProjectCopyLandings', () => {
     const landings = createProjectCopyLandings();
     landings.land('acct', 'copy', true);
     expect(landings.size).toBe(0);
-    expect(landings.takeLandedSince(landings.beginListing('acct'))).toEqual(
-      []
-    );
+    expect(landings.takeLandedSince(landings.beginListing('acct'))).toEqual([]);
   });
 
   it('drops a record once no listing that began before it is out', () => {

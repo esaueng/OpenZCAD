@@ -94,7 +94,8 @@ export function createProjectCopyLandings(
       oldestStart = Math.min(oldestStart, listing.since);
     // A record is held while some listing that began before it is still out.
     records = records.filter(
-      (record) => record.sequence > oldestStart && at - record.landedAt < recordMs
+      (record) =>
+        record.sequence > oldestStart && at - record.landedAt < recordMs
     );
   };
 
@@ -154,9 +155,7 @@ export function withLandedCopies(
   landed: readonly LandedProjectCopy[]
 ): ProjectSummary[] {
   if (landed.length === 0) return listed;
-  const listedIds = new Set<string>(
-    listed.map((project) => project.projectId)
-  );
+  const listedIds = new Set<string>(listed.map((project) => project.projectId));
   const added: ProjectSummary[] = [];
   for (const { projectId } of landed) {
     if (listedIds.has(projectId)) continue;
