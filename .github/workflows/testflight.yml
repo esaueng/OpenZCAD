@@ -1,0 +1,205 @@
+name: TestFlight
+
+# Builds the universal iPhone and iPad app (apps/ipad) and uploads it to App
+# Store Connect. The internal TestFlight group gets each build automatically
+# once Apple has processed it (about 10-30 minutes).
+#
+# Manual only (Actions > TestFlight > Run workflow): it uses a paid macOS
+# runner, so it never runs on pull requests or merges. Each build's version is
+# the app version builds report (docs/versioning.md) and its build number the
+# UTC time. Uses scripts/testflight-ios.sh with these repository secrets:
+# APPLE_TEAM_ID, APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_ISSUER_ID,
+# APP_STORE_CONNECT_API_KEY (the .p8 contents), and APPLE_SIGNING_P12 with
+# APPLE_SIGNING_P12_PASSWORD (an Apple Development identity). See
+# docs/ios-testflight.md.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    name: Archive and upload
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+    steps:
+      - name: Show the Xcode version
+        run: xcodebuild -version
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # Full history: the version counts user-facing merges since the base.
+          fetch-depth: 0
+
+      # The version counts merges on main, so an upload from any commit other
+      # than main's current tip (another branch, or a re-run of an older run)
+      # would ship a lower version than one already uploaded.
+      - name: Require main's current tip
+        run: |
+          tip="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "$(git rev-parse HEAD)" != "$tip" ]; then
+            echo "::error::This commit is not main's current tip ($tip); run the workflow from main."
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Write the API key
+        env:
+          KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Set the App Store Connect secrets (docs/ios-testflight.md)."
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/AuthKey.p8"
+
+      # Each runner starts with an empty keychain. Without a signing identity,
+      # automatic signing creates a new Apple Development certificate on every
+      # run until the account hits Apple's limit and archiving fails. So the
+      # runner imports one long-lived certificate into a throwaway keychain, and
+      # Xcode reuses it. Distribution signing at export still uses Apple's
+      # cloud-managed certificate.
+      - name: Install the signing certificate
+        env:
+          P12: ${{ secrets.APPLE_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_SIGNING_P12_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$P12" ] || [ -z "$P12_PASSWORD" ]; then
+            echo "::error::Set the APPLE_SIGNING_P12 and APPLE_SIGNING_P12_PASSWORD secrets (docs/ios-testflight.md); without them every run creates a new Apple Development certificate."
+            exit 1
+          fi
+          umask 077
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$P12_PASSWORD" \
+            -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/xcodebuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          # Put it first in the search list, keeping the runner's own keychains after it.
+          existing=()
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            existing+=("${line//\"/}")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" "${existing[@]}"
+          rm -f "$RUNNER_TEMP/signing.p12"
+          security find-identity -v -p codesigning "$keychain" | grep -q "Apple Development" \
+            || { echo "::error::APPLE_SIGNING_P12 holds no Apple Development identity."; exit 1; }
+          subject="$(security find-certificate -c "Apple Development" -p "$keychain" \
+            | openssl x509 -noout -subject -nameopt multiline,utf8,-esc_msb)"
+          common_name="$(printf '%s\n' "$subject" | sed -n 's/^ *commonName *= *//p')"
+          team="$(printf '%s\n' "$subject" | sed -n 's/^ *organizationalUnitName *= *//p')"
+          # -esc_msb keeps a non-ASCII name as the UTF-8 that Xcode logs, not
+          # \C3\A9 escapes the redaction below would never match.
+          # The certificate names its holder ("Apple Development: <name> (<id>)").
+          # Mask it in the console and save it for the log redaction below; the
+          # repository is public.
+          holder="${common_name#Apple Development: }"
+          for value in "$common_name" "$holder" "${holder% (*}"; do
+            [ -n "$value" ] || continue
+            echo "::add-mask::$value"
+            printf '%s\n' "$value" >> "$RUNNER_TEMP/signing-redact"
+          done
+          # An identity from another team can't sign for DEVELOPMENT_TEAM, and
+          # Xcode would then create yet another certificate.
+          [ -n "$team" ] && [ "$team" = "$APPLE_TEAM_ID" ] \
+            || { echo "::error::APPLE_SIGNING_P12 is not a certificate of the APPLE_TEAM_ID team."; exit 1; }
+          echo "Signing identity: installed"
+
+      # Build numbers must increase across every upload, including re-runs of
+      # older runs, so they come from the UTC clock (YYYYMMDD.HHMMSS).
+      - name: Choose the build number
+        run: echo "BUILD_NUMBER=$(date -u +%Y%m%d).$((10#$(date -u +%H%M%S)))" >> "$GITHUB_ENV"
+
+      - name: Archive and upload
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
+          WORK_DIR: ${{ runner.temp }}/testflight
+          # Checked again just before export: a merge during the build must not
+          # ship an older commit's archive.
+          REQUIRE_MAIN_TIP: '1'
+        run: scripts/testflight-ios.sh
+
+      - name: Remove the API key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/signing.p12"
+
+      # The repository is public and artifacts are not masked like the console,
+      # so take the account identifiers out of the logs before uploading them.
+      - name: Redact the logs
+        id: redact
+        if: failure()
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          identity=()
+          if [ -f "$RUNNER_TEMP/signing-redact" ]; then
+            while IFS= read -r line; do identity+=("$line"); done < "$RUNNER_TEMP/signing-redact"
+          fi
+          values=()
+          for value in "$APPLE_TEAM_ID" "$APP_STORE_CONNECT_KEY_ID" "$APP_STORE_CONNECT_ISSUER_ID" ${identity[@]+"${identity[@]}"}; do
+            [ -n "$value" ] && values+=("$value")
+          done
+          # Redacted copies go to their own folder, and only that folder is
+          # uploaded, so an original log never leaves the runner.
+          out="$RUNNER_TEMP/testflight-redacted"
+          rm -rf "$out"
+          mkdir -p "$out"
+          for log in "$RUNNER_TEMP"/testflight/*.log; do
+            copy="$out/$(basename "$log")"
+            cp "$log" "$copy"
+            for value in ${values[@]+"${values[@]}"}; do
+              VALUE="$value" perl -pi -e 's/\Q$ENV{VALUE}\E/[redacted]/g' "$copy"
+            done
+          done
+          # Check the result rather than trust the rewrite's exit status.
+          for value in ${values[@]+"${values[@]}"}; do
+            if grep -rqF -- "$value" "$out"; then
+              echo "::error::A log still holds an account identifier; not uploading the logs."
+              rm -rf "$out"
+              exit 1
+            fi
+          done
+
+      # Only the redacted copies, and only once every one passed the check.
+      - name: Upload logs
+        if: failure() && steps.redact.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: testflight-logs
+          path: ${{ runner.temp }}/testflight-redacted/*.log
+          retention-days: 7

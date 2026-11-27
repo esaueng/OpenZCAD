@@ -4,8 +4,9 @@ This native Swift/WKWebView app runs on iPad and iPhone (one universal
 target, `TARGETED_DEVICE_FAMILY = 1,2`) and packages the existing React
 workspace and verified Remus WASM kernel. Its local projects use the existing document
 format, feature history, undo, and persistent IndexedDB store. This is an
-offline prototype: account login, cloud synchronization, native encryption
-keys, Pencil double-tap/squeeze, and App Store distribution are not included.
+offline app: account login, cloud synchronization, native encryption keys,
+Pencil double-tap/squeeze, and App Store review are not included. Release
+builds go to internal TestFlight ([setup](../../docs/ios-testflight.md)).
 
 ## Build and run
 
@@ -48,8 +49,8 @@ open apps/ipad/OpenZCAD.xcodeproj
 
 Select the **ZCADiPad** scheme and an iPad or iPhone destination, then Run. A
 physical device additionally requires a development team and device signing configured
-in Xcode. The prototype's separate bundle identifier is
-`app.esau.openzcad.ipad.prototype`. Regenerate its icon with `pnpm brand:generate`.
+in Xcode. Debug builds use the prototype's separate bundle identifier,
+`app.esau.openzcad.ipad.prototype`; Release builds are the TestFlight app. Regenerate its icon with `pnpm brand:generate`.
 Run `pnpm prepare:ipad` again after any shared web-source changes; Xcode copies
 that prepared bundle rather than downloading the hosted site.
 
@@ -105,9 +106,10 @@ work under L02/W01.
 
 ## Not done yet
 
-- **App Store identity and signing.** The prototype bundle identifier and
-  automatic signing stay as they are; a shipping identity is an owner
-  decision.
+- **App Store release.** Release builds ship to internal TestFlight as
+  OpenZCAD (`app.esau.openzcad.ios`) from the manual TestFlight workflow; see
+  [iPhone and iPad builds on TestFlight](../../docs/ios-testflight.md). Debug
+  builds keep the prototype identity. App Store review is not started.
 - **Sign-in and sync.** The app stays offline-only until the native
   AuthenticationServices sign-in bridge (U12 slice 13, behind its ADR).
 - **Real-iPhone memory and GPU budgets.** Device evidence under W01; the

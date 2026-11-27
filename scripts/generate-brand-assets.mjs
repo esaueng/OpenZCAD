@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { removePngAlpha } from './opaque-png.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const mark = JSON.parse(
@@ -163,9 +164,10 @@ if (!check) {
       'apps/ipad/Resources/Assets.xcassets/AppIcon.appiconset'
     );
     mkdirSync(ipadIconDirectory, { recursive: true });
-    copyFileSync(
-      join(temporary, 'ipad', '1024x1024.png'),
-      join(ipadIconDirectory, 'AppIcon.png')
+    // App Store Connect refuses an icon with an alpha channel (ITMS-90717).
+    writeFileSync(
+      join(ipadIconDirectory, 'AppIcon.png'),
+      removePngAlpha(readFileSync(join(temporary, 'ipad', '1024x1024.png')))
     );
   } finally {
     rmSync(temporary, { recursive: true, force: true });

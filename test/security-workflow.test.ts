@@ -16,6 +16,7 @@ describe('workflow runner policy', () => {
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'codeql.yml': ['ubuntu-24.04'],
       'macos-desktop.yml': ['macos-26'],
+      'testflight.yml': ['xcode-27'],
       'desktop-native.yml': ['ubuntu-latest'],
       'mls-wasm.yml': ['ubuntu-latest'],
       'production-health.yml': ['ubuntu-latest'],
@@ -59,6 +60,16 @@ describe('workflow runner policy', () => {
         expect(workflow).not.toMatch(
           /pull_request_target|workflow_run|secrets(?:\.|:)|id-token: write|contents: write/
         );
+      }
+      if (workflowPath === 'testflight.yml') {
+        // A paid macOS runner that signs and uploads a build: manual only,
+        // never on a pull request, push, merge group or schedule.
+        expect(workflow).toMatch(/^on:\n {2}workflow_dispatch:\n\n/m);
+        expect(workflow).not.toMatch(
+          /^ {2}(pull_request|pull_request_target|push|merge_group|schedule|workflow_run):/m
+        );
+        expect(workflow).toContain('contents: read');
+        expect(workflow).not.toMatch(/id-token: write|contents: write/);
       }
       if (workflowPath === 'codeql.yml') {
         // Advisory scanning follows main and must be able to finish there:
