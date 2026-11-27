@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
-import { ownProjectBehindShare } from './shareOwnProject';
+import {
+  ownProjectBehindShare,
+  shareBuildModeLockReason,
+  shareSessionKeepsView
+} from './shareOwnProject';
 
 const summary = (
   id: string,
@@ -30,16 +34,32 @@ describe('ownProjectBehindShare', () => {
     ).toBe(own);
   });
 
-  it('reads an account project the listing leaves unmarked as the owner’s', () => {
-    const unmarked = summary('proj_own');
+  it('offers a copy when the listing does not mark the project’s role', () => {
+    // The Worker returns the listing without sharing marks when its sharing
+    // lookup fails: a collaborator's project then looks like any other.
+    const unmarked = summary('proj_theirs');
+    expect(
+      ownProjectBehindShare({
+        signedIn: true,
+        projectId: 'proj_theirs',
+        projects: [unmarked],
+        accountProjectIds
+      })
+    ).toBeNull();
+  });
+
+  it('offers a copy for a role it does not know', () => {
+    const unknown = summary('proj_own', {
+      role: 'auditor' as never
+    });
     expect(
       ownProjectBehindShare({
         signedIn: true,
         projectId: 'proj_own',
-        projects: [unmarked],
+        projects: [unknown],
         accountProjectIds
       })
-    ).toBe(unmarked);
+    ).toBeNull();
   });
 
   it('finds nothing for a link to someone else’s project', () => {
@@ -73,5 +93,33 @@ describe('ownProjectBehindShare', () => {
         accountProjectIds
       })
     ).toBeNull();
+  });
+});
+
+describe('shareBuildModeLockReason', () => {
+  it('points the owner to their project and a visitor to a copy', () => {
+    expect(shareBuildModeLockReason(true)).toBe(
+      'This is your project’s share link — Open your project to open Build mode'
+    );
+    expect(shareBuildModeLockReason(false)).toBe(
+      'This is a shared link — Make a copy to open Build mode'
+    );
+  });
+});
+
+describe('shareSessionKeepsView', () => {
+  const projects = [summary('proj_own', { role: 'owner', linkCount: 1 })];
+
+  it('keeps no view for a project this device or account lists', () => {
+    expect(shareSessionKeepsView('proj_own', projects)).toBe(false);
+    // Listed without sharing marks (a failed lookup, or a device project).
+    expect(shareSessionKeepsView('proj_own', [summary('proj_own')])).toBe(
+      false
+    );
+  });
+
+  it('keeps a visitor’s view of a project they do not have', () => {
+    expect(shareSessionKeepsView('proj_elsewhere', projects)).toBe(true);
+    expect(shareSessionKeepsView(null, projects)).toBe(true);
   });
 });

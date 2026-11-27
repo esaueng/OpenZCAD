@@ -75,6 +75,50 @@ describe('project camera pose persistence', () => {
   });
 });
 
+describe('a view the caller keeps from this device', () => {
+  it('writes nothing while keepsView refuses, and writes again once it allows', async () => {
+    let keeps = false;
+    const asked: string[] = [];
+    const { result } = renderHook(() =>
+      useProjectView('proj_shared', undefined, (id) => {
+        asked.push(id);
+        return keeps;
+      })
+    );
+    const writes = vi.spyOn(localStorage, 'setItem');
+
+    act(() => result.current.onCameraSettled('proj_shared', settledPose));
+    act(() =>
+      result.current.setSettings((current) => ({
+        ...current,
+        showGrid: false
+      }))
+    );
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    act(() =>
+      result.current.apply({
+        camera: settledPose,
+        projection: 'orthographic',
+        settings: { showGrid: true, displayMode: 'shaded' },
+        hiddenBodyIds: []
+      })
+    );
+    expect(asked).toContain('proj_shared');
+    expect(writes).not.toHaveBeenCalled();
+    expect(workspaceSession.loadProjectView('proj_shared')).toBeNull();
+
+    keeps = true;
+    act(() => result.current.onCameraSettled('proj_shared', transientPose));
+    await waitFor(() =>
+      expect(workspaceSession.loadProjectView('proj_shared')?.camera).toEqual(
+        transientPose
+      )
+    );
+  });
+});
+
 describe('remembered views on this device', () => {
   const defaults = {
     projection: 'perspective' as const,

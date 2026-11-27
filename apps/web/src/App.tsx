@@ -245,7 +245,11 @@ import {
   type DrawingToolBridge
 } from './lib/drawing/toolActions';
 import { ANNOTATION_TOOL_ICONS } from './components/drawingToolIcons';
-import { ownProjectBehindShare } from './lib/shareOwnProject';
+import {
+  ownProjectBehindShare,
+  shareBuildModeLockReason,
+  shareSessionKeepsView
+} from './lib/shareOwnProject';
 import type { AutoDimensionPreview } from './lib/drawing/assistantPreflight';
 import type { PatchSource } from './components/modelPanels/modelPanelProps';
 import {
@@ -4611,6 +4615,10 @@ export function App() {
     bodyIsolation && bodyIsolation.projectId === doc?.projectId
       ? bodyIsolation
       : null;
+  // Read at write time: a share session begins and its view is restored in
+  // one step, before a render could pass the new session down.
+  const knownProjectsRef = useRef(projects);
+  knownProjectsRef.current = projects;
   const {
     projection,
     setProjection,
@@ -4633,8 +4641,14 @@ export function App() {
     persistSection: persistSectionView,
     rescale: rescaleProjectView,
     forget: forgetProjectView
-  } = useProjectView(doc?.projectId ?? null, (onScreen) =>
-    persistedHiddenBodyIds(onScreen, currentBodyIsolation)
+  } = useProjectView(
+    doc?.projectId ?? null,
+    (onScreen) => persistedHiddenBodyIds(onScreen, currentBodyIsolation),
+    // A public session's view is not remembered over a project this device
+    // or account has: Open your project would reopen it as the link left it.
+    (projectId) =>
+      !shareSessionRef.current ||
+      shareSessionKeepsView(projectId, knownProjectsRef.current)
   );
   // Read at callback time: the section slider's release handler runs after
   // the change that moved it.
@@ -8101,12 +8115,26 @@ export function App() {
       );
     }
   }, [projectMigrating, projectOpenElsewhere, setStatus]);
+  /**
+   * The signed-in viewer's own project behind the link they opened: offered
+   * in place of Make a copy, which made a second project of their model.
+   */
+  const ownSharedProject =
+    shareSession && doc
+      ? ownProjectBehindShare({
+          signedIn: Boolean(session),
+          projectId: doc.projectId,
+          projects,
+          accountProjectIds: cloudProjectIds
+        })
+      : null;
   // A read-only share has no build workspace to offer, so the mode switch is
   // pinned to View rather than presenting a Build mode that refuses every
   // edit. A shared-link session locks Build for its own reason: the visitor's
-  // workspace is the parameters, and Make a copy is the road to Build.
+  // workspace is the parameters, and Make a copy is the road to Build (Open
+  // your project, for the owner).
   const seatBuildModeDisabledReason = shareSession
-    ? 'This is a shared link — Make a copy to open Build mode'
+    ? shareBuildModeLockReason(Boolean(ownSharedProject))
     : !sharedProjectDisabled && pendingSharedProjectAccessReason
       ? pendingSharedProjectAccessReason
       : !sharedProjectDisabled && encryptedMemberEditReason
@@ -18603,19 +18631,6 @@ export function App() {
     accountEncrypts: boolean | null;
     error: string | null;
   } | null>(null);
-  /**
-   * The signed-in viewer's own project behind the link they opened: offered
-   * in place of Make a copy, which made a second project of their model.
-   */
-  const ownSharedProject =
-    shareSession && doc
-      ? ownProjectBehindShare({
-          signedIn: Boolean(session),
-          projectId: doc.projectId,
-          projects,
-          accountProjectIds: cloudProjectIds
-        })
-      : null;
   /**
    * Leaves the link for the project behind it, as accepting an invitation
    * from a link does: the public session closes completely first, so its

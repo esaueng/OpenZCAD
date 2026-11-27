@@ -141,8 +141,22 @@ export function useProjectView(
    * set, so a reload never keeps that temporary hiding. It should return a
    * stable set: the save effect re-runs when its identity changes.
    */
-  savedHiddenBodyIds?: (onScreen: ReadonlySet<string>) => ReadonlySet<string>
+  savedHiddenBodyIds?: (onScreen: ReadonlySet<string>) => ReadonlySet<string>,
+  /**
+   * Asked at each write: false keeps the view on screen without remembering
+   * it on this device. A share session whose snapshot carries the id of a
+   * project this device knows answers false, so the public session's view
+   * never becomes that project's (see `shareSessionKeepsView`).
+   */
+  keepsView?: (projectId: string) => boolean
 ): ProjectView {
+  const keepsViewRef = useRef(keepsView);
+  keepsViewRef.current = keepsView;
+  /** Every remembered-view write goes through here. */
+  function remember(id: string, view: ProjectViewState) {
+    if (keepsViewRef.current?.(id) === false) return;
+    saveProjectView(id, view);
+  }
   const [projection, setProjection] = useState<ProjectionMode>('perspective');
   const [settings, setSettings] = useState<ViewerSettings>({
     showGrid: true,
@@ -228,7 +242,7 @@ export function useProjectView(
   ) {
     const references = hiddenReferences();
     savedHiddenReferencesProject.current = references ? id : null;
-    saveProjectView(id, {
+    remember(id, {
       camera,
       projection: next?.projection ?? projection,
       settings: next?.settings ?? settings,
@@ -361,7 +375,7 @@ export function useProjectView(
             : factor !== 1
               ? scaledSectionView(savedSection, factor)
               : savedSection;
-        saveProjectView(id, {
+        remember(id, {
           ...saved,
           camera,
           settings: { ...unitFree, ...(sectionView ? { sectionView } : {}) },
@@ -437,7 +451,7 @@ export function useProjectView(
       const sketches = view.sketchVisibility ?? sketchVisibility;
       if (view.sketchVisibility) setSketchVisibility(view.sketchVisibility);
       if (projectId) {
-        saveProjectView(projectId, {
+        remember(projectId, {
           ...view,
           hiddenReferences: hiddenReferences(),
           ...(Object.keys(sketches).length > 0
