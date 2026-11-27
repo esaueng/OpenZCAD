@@ -239,6 +239,12 @@ import {
   shouldShowGroundShadow,
   snapTo,
   syncFatLineResolution,
+  createFatLineSegments,
+  drawFatLineOncePerPixel,
+  fatLineDepthBiasForExtent,
+  EDGE_SELECTED_COLOR,
+  EDGE_SELECTED_WIDTH,
+  SELF_HIDDEN_EDGE_OPACITY,
   updateAxesGizmo,
   updateStudioGrid,
   tuneShadowFrustum,
@@ -1670,6 +1676,13 @@ export interface ModelViewerProps {
    */
   datumAxes?: readonly DatumAxisDisplay[];
   /**
+   * M11 (D2): straight model edges a command holds by their exact ends (a
+   * Split plane's two edges), drawn in the picked-edge style from those ends
+   * whichever body is on screen: the committed body, a preview's halves, or
+   * the body under a refusal. Nothing here is picked or matched by id.
+   */
+  pickedEdgeLines?: readonly { start: Vector3; end: Vector3 }[];
+  /**
    * Committed R01 (schema v99) datum points and coordinate systems, at the
    * positions and frames the exact build resolved.
    */
@@ -2794,6 +2807,7 @@ export function ModelViewer({
   onFootprint,
   datumPlanes,
   datumAxes,
+  pickedEdgeLines,
   datumMarkers,
   referenceImages,
   loadReferenceImage,
@@ -2895,6 +2909,8 @@ export function ModelViewer({
     cylinderRadiusHandle,
     edgeHandle
   } = presentation!;
+  /** M11 (D2): whether a command holds edges drawn as picked lines. */
+  const holdsPickedEdgeLines = (pickedEdgeLines?.length ?? 0) > 0;
   const geometryTrace = preparing ? undefined : incomingGeometryTrace;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
@@ -15420,6 +15436,7 @@ export function ModelViewer({
       (selectedBodyIds.length > 0 ||
         selectedTopology !== null ||
         selectedEdges.length > 0 ||
+        holdsPickedEdgeLines ||
         focusFaces.length > 0 ||
         (focusGhostBodies?.length ?? 0) > 0);
     // The scene-wide recede eases on and off; which body is the pick cuts.
@@ -15592,7 +15609,12 @@ export function ModelViewer({
         (selectedTopology !== null &&
           selectedTopology.kind !== 'body' &&
           selectedTopology.bodyId === body.bodyId) ||
-        selectedEdges.some((edge) => edge.bodyId === body.bodyId);
+        selectedEdges.some((edge) => edge.bodyId === body.bodyId) ||
+        // M11 (D2): edges held as lines (a Split plane's) are a part picked
+        // on the body, as a Fillet's picked edges are: the body recedes
+        // rather than wearing the body pick's tint and edges, which would
+        // draw every edge as picked.
+        holdsPickedEdgeLines;
       const isSelected =
         (selectedBodyIds.includes(body.bodyId) &&
           !(selectionRecedes && partPicked)) ||
@@ -16334,6 +16356,7 @@ export function ModelViewer({
     selectedBodyIds,
     bodyPickRoles,
     selectedEdges,
+    holdsPickedEdgeLines,
     selectedTopology,
     previewFaceHighlights,
     focusFaces,
@@ -18120,6 +18143,72 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [datumAxisKey]);
+
+  // M11 (D2): held edges drawn from their exact ends, with the picked-edge
+  // colour and width and the hidden twin the edge overlay's picked tier
+  // draws, so they read the same as a Fillet's picked edges.
+  const pickedEdgeLineKey = JSON.stringify(pickedEdgeLines ?? []);
+  useEffect(() => {
+    const context = contextRef.current;
+    const lines = JSON.parse(pickedEdgeLineKey) as {
+      start: Vector3;
+      end: Vector3;
+    }[];
+    if (!context || lines.length === 0) {
+      return;
+    }
+    const positions = new Float32Array(
+      lines.flatMap(({ start, end }) => [
+        start.x,
+        start.y,
+        start.z,
+        end.x,
+        end.y,
+        end.z
+      ])
+    );
+    const extent = Math.max(
+      ...lines.map(({ start, end }) =>
+        Math.hypot(end.x - start.x, end.y - start.y, end.z - start.z)
+      )
+    );
+    const group = new THREE.Group();
+    group.name = 'picked-edge-lines';
+    const make = (hidden: boolean) => {
+      const segments = createFatLineSegments(positions, {
+        color: EDGE_SELECTED_COLOR,
+        linewidth: EDGE_SELECTED_WIDTH,
+        opacity: hidden ? SELF_HIDDEN_EDGE_OPACITY : 1,
+        resolution: context.fatLineResolution(),
+        depthBias: fatLineDepthBiasForExtent(extent)
+      });
+      if (hidden) {
+        segments.material.depthFunc = THREE.GreaterDepth;
+        drawFatLineOncePerPixel(segments.material);
+      }
+      segments.renderOrder =
+        VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY - (hidden ? 1 : 0);
+      segments.raycast = () => undefined;
+      group.add(segments);
+      return segments;
+    };
+    const drawn = [make(false), make(true)];
+    context.scene.add(group);
+    const canvas = context.renderer.domElement;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      canvas.dataset.e2ePickedEdgeLines = JSON.stringify(lines);
+    }
+    context.requestRender();
+    return () => {
+      context.scene.remove(group);
+      for (const segments of drawn) {
+        segments.geometry.dispose();
+        segments.material.dispose();
+      }
+      delete canvas.dataset.e2ePickedEdgeLines;
+      context.requestRender();
+    };
+  }, [pickedEdgeLineKey]);
 
   // Committed datum points and coordinate systems (viewer/datumMarkerRig),
   // rebuilt when the set, a position or frame, or the selection changes.

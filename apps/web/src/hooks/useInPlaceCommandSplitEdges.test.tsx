@@ -214,6 +214,24 @@ describe('Split plane through two edges in the in-place command', () => {
     expect(hook.result.current.slots.plane?.kind).toBe('face');
   });
 
+  it('takes a held edge back out when it is clicked on another body drawn over it', () => {
+    // A preview's half draws the block's edge under another body id and
+    // hash: the same edge by its ends, either way round.
+    const { hook } = setup();
+    act(() => hook.result.current.start('split', [], [], [BODY]));
+    act(() => {
+      hook.result.current.pickPlaneEdge(bottom);
+    });
+    act(() => {
+      hook.result.current.pickPlaneEdge(top);
+    });
+    const topOnHalf = edge(OTHER, 99, top.ends[1], top.ends[0]);
+    act(() => {
+      hook.result.current.pickPlaneEdge(topOnHalf);
+    });
+    expect(hook.result.current.slots.planeEdges).toEqual([bottom]);
+  });
+
   it('takes no edge before the body, nor in Mirror', () => {
     const { hook } = setup();
     act(() => hook.result.current.start('split'));

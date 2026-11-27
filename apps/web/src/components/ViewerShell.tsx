@@ -182,6 +182,8 @@ interface ViewerShellProps {
   selectedTopology: TopologySelection | null;
   previewFaceHighlights: TopologySelection[];
   selectedEdges: TopologySelection[];
+  /** M11 (D2): a Split plane's held edges, drawn from their exact ends. */
+  pickedEdgeLines?: readonly { start: Vector3; end: Vector3 }[];
   pickListEnabled: boolean;
   /** Settings → Advanced → Frame rate overlay, a movable floating panel. */
   frameRateOverlay?: boolean;
@@ -531,6 +533,7 @@ export function ViewerShell({
   selectedTopology,
   previewFaceHighlights,
   selectedEdges,
+  pickedEdgeLines,
   pickListEnabled,
   frameRateOverlay = false,
   onCloseFrameRateOverlay,
@@ -1022,6 +1025,7 @@ export function ViewerShell({
         {...(focusFaces ? { focusFaces } : {})}
         {...(measureHighlights ? { measureHighlights } : {})}
         selectedEdges={selectedEdges}
+        pickedEdgeLines={pickedEdgeLines}
         pickListEnabled={pickListEnabled}
         settings={settings}
         exactSection={exactSection}

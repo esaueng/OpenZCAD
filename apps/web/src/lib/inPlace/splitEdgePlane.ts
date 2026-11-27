@@ -1,4 +1,4 @@
-import { edgePairPlane } from '@openzcad/geometry';
+import { edgePairPlane, GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import type { BodyId, BodyTopology, Vector3 } from '@openzcad/shared';
 
 /**
@@ -12,11 +12,6 @@ import type { BodyId, BodyTopology, Vector3 } from '@openzcad/shared';
 export interface PlaneEdgePick {
   bodyId: BodyId;
   hash: number;
-  /**
-   * The edge's display identity, which the viewport's picked-edge highlight
-   * matches on (as a Fillet's picked edges carry it); not stored anywhere.
-   */
-  topologyId?: string;
   ends: [Vector3, Vector3];
 }
 
@@ -61,12 +56,7 @@ export function planeEdgeFromTopology(
   const start = vertex(startId) ?? drawn(0);
   const end = vertex(endId) ?? drawn(count - 1);
   if (!start || !end) return null;
-  return {
-    bodyId,
-    hash,
-    ...(edge.topologyId ? { topologyId: edge.topologyId } : {}),
-    ends: [{ ...start }, { ...end }]
-  };
+  return { bodyId, hash, ends: [{ ...start }, { ...end }] };
 }
 
 /** The plane through two held edges, or why there is none. */
@@ -80,9 +70,18 @@ export function splitPlaneFromEdges(
     : { refused: plane.code };
 }
 
-/** The same edge of the same body. */
+/**
+ * The same edge, by its exact ends (either way round) within the linear
+ * tolerance, not by body and hash: an edge clicked on a preview's half and
+ * the committed body's edge it was cut from are one pick, since the pick is
+ * only ever its ends.
+ */
 export function samePlaneEdge(a: PlaneEdgePick, b: PlaneEdgePick): boolean {
-  return a.bodyId === b.bodyId && a.hash === b.hash;
+  const near = (p: Vector3, q: Vector3) =>
+    Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) <= GEOMETRY_LINEAR_TOLERANCE;
+  const [a0, a1] = a.ends;
+  const [b0, b1] = b.ends;
+  return (near(a0, b0) && near(a1, b1)) || (near(a0, b1) && near(a1, b0));
 }
 
 /**

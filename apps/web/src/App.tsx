@@ -303,7 +303,6 @@ import type {
   AccountDeletionScope,
   ArtifactRecord,
   BodyId,
-  EdgeTopologyReferenceV5,
   BodyTopology,
   BodyRepresentation,
   EntityId,
@@ -30826,31 +30825,31 @@ export function App() {
   // The base version: command-owned selections are re-applied after an
   // undo or redo, which clears the selection while the command keeps them.
   const inPlaceBaseVersion = doc?.version ?? null;
-  // M11 (D2): a Split's edges held toward a plane through two edges are lit
-  // the same way, while it runs or edits.
-  const inPlaceLitEdges:
-    | readonly {
-        bodyId: BodyId;
-        hash: number;
-        topologyId?: string;
-        reference?: EdgeTopologyReferenceV5;
-      }[]
-    | null = !inPlace.active
-    ? null
-    : inPlaceSpec?.edgeMode && !inPlace.editing
-      ? inPlace.slots.edges
-      : inPlaceSpec?.planeFromEdges
-        ? (inPlace.slots.planeEdges ?? [])
-        : null;
   const inPlaceEdgeKey =
-    inPlaceLitEdges === null
-      ? null
-      : JSON.stringify(inPlaceLitEdges.map((edge) => [edge.bodyId, edge.hash]));
+    inPlace.active && inPlaceSpec?.edgeMode && !inPlace.editing
+      ? JSON.stringify(
+          inPlace.slots.edges.map((edge) => [edge.bodyId, edge.hash])
+        )
+      : null;
   const selectedEdgeKey = JSON.stringify(
     selectedEdges.map((edge) => [edge.bodyId, edge.hash])
   );
-  const inPlaceEdgesRef = useRef(inPlaceLitEdges ?? []);
-  inPlaceEdgesRef.current = inPlaceLitEdges ?? [];
+  const inPlaceEdgesRef = useRef(inPlace.slots.edges);
+  inPlaceEdgesRef.current = inPlace.slots.edges;
+  // M11 (D2): a Split's edges held toward a plane through two edges, drawn
+  // from their exact ends over whichever body shows (the committed body, the
+  // preview's halves): not a selection, which the viewport matches by an id
+  // only one of those bodies has.
+  const inPlacePlaneEdgeLines = useMemo(
+    () =>
+      inPlace.active && inPlaceSpec?.planeFromEdges
+        ? (inPlace.slots.planeEdges ?? []).map(({ ends: [start, end] }) => ({
+            start,
+            end
+          }))
+        : [],
+    [inPlace.active, inPlaceSpec?.planeFromEdges, inPlace.slots.planeEdges]
+  );
   const litInPlaceEdges = useRef(false);
   useEffect(() => {
     if (inPlaceEdgeKey === null) {
@@ -41342,6 +41341,7 @@ export function App() {
                 ? []
                 : selectedEdges
             }
+            pickedEdgeLines={inPlacePlaneEdgeLines}
             pickListEnabled={
               appSettings.experiments.directManipulation && !inPlace.active
             }

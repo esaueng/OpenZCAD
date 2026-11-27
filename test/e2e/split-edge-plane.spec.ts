@@ -115,17 +115,44 @@ async function storedSplitPlane(
   );
 }
 
+type Point = [number, number, number];
+
+/** An edge as its two ends to 1e-6 mm, ends in order: one key per edge. */
+function edgeKey(a: Point, b: Point): string {
+  const end = (p: Point) => p.map((value) => Math.round(value * 1e6) / 1e6 + 0);
+  return [end(a), end(b)]
+    .map((p) => p.join(','))
+    .sort()
+    .join(' – ');
+}
+
 /**
- * The edges the viewport lights as picked, by topology id: the hook the
- * Fillet and Chamfer edge-pick specs read. An entry with no id is one the
- * highlight cannot match, so it is kept here as '' to fail the check.
+ * The held plane edges the viewport has drawn, by their ends: what the
+ * picked-edge overlay put in the scene, whichever body is on screen.
  */
-async function litEdges(page: Page): Promise<string[]> {
+async function drawnPickedEdges(page: Page): Promise<string[]> {
   const value = await page
     .locator('.viewer-host canvas')
-    .getAttribute('data-e2e-selected-edges');
-  return value === null ? [] : value.split(',');
+    .getAttribute('data-e2e-picked-edge-lines');
+  if (value === null) return [];
+  return (
+    JSON.parse(value) as {
+      start: Record<'x' | 'y' | 'z', number>;
+      end: Record<'x' | 'y' | 'z', number>;
+    }[]
+  )
+    .map(({ start, end }) =>
+      edgeKey([start.x, start.y, start.z], [end.x, end.y, end.z])
+    )
+    .sort();
 }
+
+/** The block's edges this journey picks. */
+const BOTTOM_RIGHT = edgeKey([20, 0, 0], [20, 20, 0]);
+const TOP_LEFT = edgeKey([0, 0, 20], [0, 20, 20]);
+const TOP_FRONT = edgeKey([0, 0, 20], [20, 0, 20]);
+const FRONT_RIGHT = edgeKey([20, 0, 0], [20, 0, 20]);
+const both = (...keys: string[]) => [...keys].sort();
 
 const hint = (bar: Locator) => bar.getByRole('status');
 const done = (bar: Locator) => bar.getByRole('button', { name: /Done/ });
@@ -169,10 +196,8 @@ test(
     await clickWorldPoint(page, [20, 10, 0]);
     await expect(hint(bar)).toContainText('Pick a second edge for the plane');
     await expect(done(bar)).toBeDisabled();
-    // The held edge is lit as a picked edge (preview check of 2099cc5).
-    await expect.poll(() => litEdges(page)).toHaveLength(1);
-    const [firstLit] = await litEdges(page);
-    expect(firstLit).toBeTruthy();
+    // The held edge is drawn as a picked edge (preview check of 2099cc5).
+    await expect.poll(() => drawnPickedEdges(page)).toEqual([BOTTOM_RIGHT]);
 
     // 2. The top front edge along x is skew to it: refused by name, the
     // first edge kept, Done disabled, the block untouched.
@@ -183,12 +208,10 @@ test(
     );
     await expect(done(bar)).toBeDisabled();
     await expect.poll(() => drawnVolumes(page)).toEqual([8000]);
-    // Both held edges are lit, the first still first.
-    await expect.poll(() => litEdges(page)).toHaveLength(2);
-    const [stillFirst, skewLit] = await litEdges(page);
-    expect(stillFirst).toBe(firstLit);
-    expect(skewLit).toBeTruthy();
-    expect(skewLit).not.toBe(firstLit);
+    // Both held edges are drawn under the refusal.
+    await expect
+      .poll(() => drawnPickedEdges(page))
+      .toEqual(both(BOTTOM_RIGHT, TOP_FRONT));
 
     // 3. The top edge at x = 0 replaces the skew one: x + z = 20 halves the
     // block in the preview.
@@ -198,13 +221,47 @@ test(
     await expect
       .poll(() => drawnVolumes(page), { timeout: 30_000 })
       .toEqual([4000, 4000]);
+    // Both picked edges are drawn over the preview's halves, which carry
+    // no id of the committed block's (preview re-check of 68bd7b3, #1).
+    await expect
+      .poll(() => drawnPickedEdges(page))
+      .toEqual(both(BOTTOM_RIGHT, TOP_LEFT));
+
+    // 3b. From the preview, the front right vertical edge (clicked on a
+    // half) starts a new pair, and the top left edge then makes it skew:
+    // both picks are drawn under the refusal (re-check of 68bd7b3, #2).
+    await clickWorldPoint(page, [20, 0, 10]);
+    await expect(hint(bar)).toContainText('Pick a second edge for the plane');
+    await expect.poll(() => drawnPickedEdges(page)).toEqual([FRONT_RIGHT]);
+    await expect.poll(() => drawnVolumes(page)).toEqual([8000]);
+    await clickWorldPoint(page, [0, 10, 20]);
+    await expect(hint(bar)).toContainText(
+      `Plane: ${SPLIT_EDGE_PLANE_SENTENCES.skew}`
+    );
+    await expect
+      .poll(() => drawnPickedEdges(page))
+      .toEqual(both(FRONT_RIGHT, TOP_LEFT));
+
+    // 3c. The vertical edge, clicked again on the block (it was picked on a
+    // half), comes back out; the bottom right edge then makes the pair.
+    await clickWorldPoint(page, [20, 0, 10]);
+    await expect.poll(() => drawnPickedEdges(page)).toEqual([TOP_LEFT]);
+    await clickWorldPoint(page, [20, 10, 0]);
+    await expect(bar).not.toHaveClass(/\brefused\b/, { timeout: 30_000 });
+    await expect(done(bar)).toBeEnabled({ timeout: 30_000 });
+    await expect
+      .poll(() => drawnVolumes(page), { timeout: 30_000 })
+      .toEqual([4000, 4000]);
+    await expect
+      .poll(() => drawnPickedEdges(page))
+      .toEqual(both(BOTTOM_RIGHT, TOP_LEFT));
 
     // 4. Done: one History row, two bodies, the plane stored as numbers
     // through the four ends' centroid with the canonical normal.
     await done(bar).click();
     await expect(bar).toHaveCount(0);
     // The command's edges are no selection left behind.
-    await expect.poll(() => litEdges(page)).toEqual([]);
+    await expect.poll(() => drawnPickedEdges(page)).toEqual([]);
     await expect(historyRows(page)).toHaveCount(rowsBefore + 1, {
       timeout: 20_000
     });

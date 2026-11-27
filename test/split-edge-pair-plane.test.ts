@@ -27,6 +27,7 @@ import {
 } from '@openzcad/shared';
 import {
   planeEdgeFromTopology,
+  samePlaneEdge,
   splitPlaneFromEdges,
   type PlaneEdgePick
 } from '../apps/web/src/lib/inPlace/splitEdgePlane';
@@ -640,19 +641,42 @@ describe('Split on the plane through two block edges (exact)', () => {
     expect(negative).toBeCloseTo(4000, 6);
   });
 
-  // Preview check of #2261 at 2099cc5: picked edges were not lit, since the
-  // viewport's picked-edge highlight matches an edge by its topology id and
-  // the pick did not carry one.
-  it('carries each picked edge’s topology id for the picked-edge highlight', async () => {
+  // Preview re-check of #2261 at 68bd7b3: an edge clicked on a preview's
+  // half is the committed body's edge it was cut from, the same pick by its
+  // exact ends, so taking it back out or drawing it never depends on which
+  // body is on screen.
+  it('takes an edge on a split half and the committed edge it came from as one pick', async () => {
     const start = block(blank());
-    const derived = await adapter.syncDocument(start.document);
-    const topology = derived.bodyRepresentations[start.bodyId]!.topology!;
-    const pick = edgeBetween(derived, start.bodyId, bottom[0], bottom[1]);
-    const edge = topology.edges.find(
-      (candidate) => candidate.hash === pick.hash
-    )!;
-    expect(edge.topologyId).toBeTruthy();
-    expect(pick.topologyId).toBe(edge.topologyId);
+    const committed = await adapter.syncDocument(start.document);
+    const picked = splitPlaneFromEdges(
+      edgeBetween(committed, start.bodyId, bottom[0], bottom[1]),
+      edgeBetween(committed, start.bodyId, top[0], top[1])
+    );
+    if ('refused' in picked) throw new Error(picked.refused);
+    const split = addSplitFeature(start.document, {
+      name: 'Split',
+      targetBodyId: start.bodyId,
+      plane: picked
+    });
+    const halves = await adapter.syncDocument(split.document);
+    // The far-right vertical edge (x = 20, y = 0) lies whole in the half on
+    // the normal's side.
+    const vertical = [v(20, 0, 0), v(20, 0, 20)] as const;
+    const onBody = edgeBetween(
+      committed,
+      start.bodyId,
+      vertical[0],
+      vertical[1]
+    );
+    const onHalf = edgeBetween(halves, split.bodyId, vertical[1], vertical[0]);
+    expect(onHalf.bodyId).not.toBe(onBody.bodyId);
+    expect(samePlaneEdge(onHalf, onBody)).toBe(true);
+    expect(
+      samePlaneEdge(
+        onHalf,
+        edgeBetween(committed, start.bodyId, bottom[0], bottom[1])
+      )
+    ).toBe(false);
   });
 
   it('refuses a skew pair and a curved edge on real topology', async () => {
