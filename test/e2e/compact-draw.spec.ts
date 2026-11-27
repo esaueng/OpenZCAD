@@ -436,6 +436,15 @@ async function brokenDimensionsProject(): Promise<ProjectDocument> {
 async function tapNoticeUndo(page: Page) {
   const undo = page.locator('.toast').getByRole('button', { name: 'Undo' });
   await expectReachable(undo);
+  // Measured once the notice has finished coming in (it scales up).
+  await undo.evaluate((element) =>
+    Promise.all(
+      element
+        .closest('.toast')!
+        .getAnimations({ subtree: true })
+        .map((animation) => animation.finished)
+    )
+  );
   const box = (await undo.boundingBox())!;
   expect(box.width).toBeGreaterThanOrEqual(43.5);
   expect(box.height).toBeGreaterThanOrEqual(43.5);
