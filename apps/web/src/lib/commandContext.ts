@@ -126,7 +126,16 @@ const CONTEXTS: Record<
     // callout, which already offers the preferred one; the rail lights no
     // second primary beside it.
     primary: null,
-    applies: ['sketch', 'datum-plane', 'hole', 'draft', 'thicken', 'shell']
+    // Align starts from a flat face: the picked one is the face to move.
+    applies: [
+      'sketch',
+      'datum-plane',
+      'hole',
+      'draft',
+      'thicken',
+      'shell',
+      'align'
+    ]
   },
   edges: { primary: 'fillet', applies: ['fillet', 'chamfer'] },
   region: {
