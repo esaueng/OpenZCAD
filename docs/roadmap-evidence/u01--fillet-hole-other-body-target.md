@@ -8,7 +8,9 @@ Remus 2026.1.171 pin (`f210583`). `edgeRefusedInputs` and `holeRefusedInputs`
 another body, where they used to name "Edges" or "Face" and keep the old
 body's frame under the other body's refusal. The pick takes the old body's
 frame down in its own commit (`useInPlaceCommand.ts`, layout effect), whether
-the frame was kept under a refusal or had built. Left up while the other body
+the frame on screen was kept under a refusal, had built, or was a superseded
+request's (the take-down reads the frame drawn, not only the last one that
+built). Left up while the other body
 was checked, a frame that had built was still drawn for a paint under that
 body's refusal. A late frame of the old body is never drawn. Changes on the
 same body are named and kept as before. An input is now named only over the

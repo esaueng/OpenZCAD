@@ -3535,6 +3535,42 @@ describe('useInPlaceCommand: a Fillet or Hole picked on another body', () => {
     expect(publishPreview.mock.calls.length).toBe(shown);
   });
 
+  // Review of #2280, finding 1: a frame drawn as a superseded one (its
+  // request already replaced) is no `lastBuilt`, yet it is on screen: the
+  // pick on body B takes it down in its own commit too.
+  it("takes body A's superseded fillet down in the commit of the pick on body B", async () => {
+    const { hook, replies, publishPreview } = harness();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(A, 1)] })
+    );
+    await waitFor(() => expect(replies).toHaveLength(1));
+    // R 3 typed before R 2's verdict: R 2's frame lands superseded.
+    act(() => {
+      hook.result.current.setValue('radius', 3);
+    });
+    const before = publishPreview.mock.calls.length;
+    act(() => replies[0]!.release());
+    await waitFor(() =>
+      expect(publishPreview.mock.calls.length).toBeGreaterThan(before)
+    );
+    expect(publishPreview).not.toHaveBeenLastCalledWith(null);
+    expect(hook.result.current.canFinish).toBe(false);
+    await waitFor(() => expect(replies).toHaveLength(2));
+    expect(replies[1]).toMatchObject({ body: A, size: 3 });
+    flushSync(() => {
+      hook.result.current.pickEdge(edge(B, 7));
+    });
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    // R 3 on body A lands late and is not drawn; body B refuses.
+    act(() => replies[1]!.release());
+    expect((await settle(replies, 3)).body).toBe(B);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    const drawn = publishPreview.mock.calls.filter(([shown]) => shown !== null);
+    expect(drawn).toHaveLength(1);
+  });
+
   it('never draws a late fillet of body A once edges of body B are picked', async () => {
     const { hook, replies, publishPreview } = harness();
     act(() =>

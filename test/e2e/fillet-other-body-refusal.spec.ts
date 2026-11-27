@@ -38,8 +38,12 @@ interface RecordedFrame {
   bodies: number[][];
   bar: string;
   refused: boolean;
-  /** Done enabled: A's built fillet is the current request's verdict. */
-  done: boolean;
+  /**
+   * Sampled after the pointer released on B's edge, which is where the
+   * viewer takes the pick: the window starts there, by the input itself,
+   * not by anything the pick then changes on screen.
+   */
+  afterPick: boolean;
 }
 
 /** The drawn bodies as `[min x, max x, faces]`, sorted by min x. */
@@ -76,15 +80,30 @@ async function drawnBodies(page: Page): Promise<number[][]> {
   );
 }
 
-/** Starts recording each new (bodies, bar) pair the page renders. */
+/**
+ * Starts recording each new (bodies, bar) pair the page renders, marking
+ * the samples taken after the next pointer release (the pick).
+ */
 async function recordFrames(page: Page) {
   await page.locator('.viewer-host canvas').evaluate((element) => {
     const store = window as unknown as {
       __filletFrames: RecordedFrame[];
       __filletFramesStop: boolean;
+      __filletPicked: boolean;
     };
     store.__filletFrames = [];
     store.__filletFramesStop = false;
+    store.__filletPicked = false;
+    // Capture on the window runs ahead of the viewer's own pointerup, and
+    // the pick commits within that dispatch: every sample from here on is
+    // after it.
+    window.addEventListener(
+      'pointerup',
+      () => {
+        store.__filletPicked = true;
+      },
+      { capture: true, once: true }
+    );
     const sample = () => {
       if (store.__filletFramesStop) return;
       element.dispatchEvent(
@@ -113,10 +132,7 @@ async function recordFrames(page: Page) {
                   .sort((a, b) => a[0]! - b[0]!),
                 bar: bar?.querySelector('[role="status"]')?.textContent ?? '',
                 refused: bar?.classList.contains('refused') ?? false,
-                done: Array.from(bar?.querySelectorAll('button') ?? []).some(
-                  (button) =>
-                    /Done/.test(button.textContent ?? '') && !button.disabled
-                )
+                afterPick: store.__filletPicked
               };
               const last = store.__filletFrames.at(-1);
               if (JSON.stringify(last) !== JSON.stringify(frame)) {
@@ -141,6 +157,22 @@ async function recordedFrames(page: Page): Promise<RecordedFrame[]> {
     store.__filletFramesStop = true;
     return store.__filletFrames;
   });
+}
+
+/**
+ * From the pick on, no frame names A's inputs or draws A's fillet. The
+ * window opens at the pointer release, so a frame painted at the pick with
+ * A's label and fillet still up counts against it.
+ */
+function expectNothingOfA(frames: RecordedFrame[], round: string) {
+  const picked = frames.findIndex((frame) => frame.afterPick);
+  expect(picked, `${round}: ${JSON.stringify(frames)}`).toBeGreaterThan(0);
+  expect(
+    frames
+      .slice(picked)
+      .filter((frame) => NAMED.test(frame.bar) || filletsA(frame)),
+    `${round}: ${JSON.stringify(frames)}`
+  ).toEqual([]);
 }
 
 /** A frame that shows box A filleted. */
@@ -211,21 +243,13 @@ test("a Fillet refused on another body shows nothing of the first body's fillet"
 
   // A's fillet built, then B picked: R 8 is too big for B's 6 mm faces.
   // The pick takes A's frame down in its own commit, so no frame from the
-  // pick on (Done off) draws A's fillet or names A's inputs, B's refusal
-  // included: left up while B was checked, it was drawn for a paint under
-  // B's refusal.
+  // pick on draws A's fillet or names A's inputs, B's refusal included:
+  // left up while B was checked, it was drawn for a paint under B's
+  // refusal.
   await builtOnA(page, bar);
   await recordFrames(page);
   await refusedOnB(page, bar);
-  let frames = await recordedFrames(page);
-  const picked = frames.findIndex((frame) => !frame.done);
-  expect(picked, JSON.stringify(frames)).toBeGreaterThanOrEqual(0);
-  expect(
-    frames
-      .slice(picked)
-      .filter((frame) => NAMED.test(frame.bar) || filletsA(frame)),
-    JSON.stringify(frames)
-  ).toEqual([]);
+  expectNothingOfA(await recordedFrames(page), 'built');
 
   // A's fillet kept under A's own refused R 50, then B picked, three times:
   // from the pick on, no frame names A's radius or draws A's fillet.
@@ -239,14 +263,7 @@ test("a Fillet refused on another body shows nothing of the first body's fillet"
 
     await recordFrames(page);
     await refusedOnB(page, bar);
-    frames = await recordedFrames(page);
-    // Frames before the pick took effect still say A's "R:" refusal.
-    const taken = frames.findIndex((frame) => !NAMED.test(frame.bar));
-    expect(taken, JSON.stringify(frames)).toBeGreaterThanOrEqual(0);
-    const stale = frames
-      .slice(taken)
-      .filter((frame) => NAMED.test(frame.bar) || filletsA(frame));
-    expect(stale, `round ${round}: ${JSON.stringify(frames)}`).toEqual([]);
+    expectNothingOfA(await recordedFrames(page), `kept, round ${round}`);
     // Back to R 8 for the next round's build on A.
     await enterCommandValue(page, 'radius', '8');
   }
