@@ -2098,6 +2098,26 @@
   font-weight: var(--fw-semibold);
 }
 
+/* Beside the warning count, a phone's header has no room for the chip's
+   words as well as a finger's width of the name (at 360px the name was
+   squeezed to nothing): the chip keeps its icon, a 44px button, and its
+   label says what it is. In a header 430px wide and up (its content box),
+   the words fit beside a count. */
+.compact-header {
+  container: compact-header / inline-size;
+}
+
+@container compact-header (max-width: 429.98px) {
+  .compact-header:has(> .compact-warning-badge) .compact-refusal-chip {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .compact-header:has(> .compact-warning-badge) .compact-refusal-text {
+    display: none;
+  }
+}
+
 /* ── The panel sheet (slice 5) ──
    One segmented page for History, Objects, Parameters, Revisions,
    Diagnostics and Comments: icons, with the active segment's word. */
