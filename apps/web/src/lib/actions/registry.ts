@@ -178,6 +178,18 @@ export const COMPACT_ENTRIES: Readonly<
   'body-visibility': 'view-tray',
   'view-isolate-body': 'view-tray',
   'view-show-all': 'view-tray',
+  // Slice 8, Assemble's sheet: the Joints page's Add (the joint card), a
+  // part's Fix in place on the Parts page, and a joint's Play; the motion
+  // study timeline's buttons for what its keys do, Previous key and Next key
+  // among them.
+  'assembly-joint': 'assemble-sheet',
+  'assembly-ground': 'assemble-sheet',
+  'assembly-play': 'assemble-sheet',
+  'motion-play-pause': 'assemble-sheet',
+  'motion-key-pose': 'assemble-sheet',
+  'motion-previous-key': 'assemble-sheet',
+  'motion-next-key': 'assemble-sheet',
+  'motion-delete-key': 'assemble-sheet',
   // Slice 9, Draw's tray: every annotation tool from Annotate's five
   // groups, and the section, detail and auxiliary view tools from Views.
   // Draw's sheets, properties and exports are its own controls, not

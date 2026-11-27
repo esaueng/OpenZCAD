@@ -22,6 +22,7 @@
   "collaboration-lease-recovery.spec.ts": 19,
   "collaboration.spec.ts": 20,
   "command-bar-names.spec.ts": 8,
+  "compact-assemble.spec.ts": 22,
   "compact-build.spec.ts": 20,
   "compact-draw.spec.ts": 60,
   "compact-library-settings.spec.ts": 20,

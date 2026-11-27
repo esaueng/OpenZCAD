@@ -1459,6 +1459,10 @@ function MoveOverlay(props: ComponentProps<typeof LazyMoveOverlay>) {
 const LazyCompactModeTray = lazyWithStaleChunkNotice(
   () => import('./components/compact/CompactModeTray')
 );
+// Assemble's tray (U12 slice 8), likewise: it carries Assemble's sidebar.
+const LazyCompactAssembleTray = lazyWithStaleChunkNotice(
+  () => import('./components/compact/CompactAssembleTray')
+);
 const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
   import('./components/MeasurementDock').then((module) => ({
     default: module.MeasurementDock
@@ -20788,9 +20792,12 @@ export function App() {
   // foot (I47): once, as it opens, what it measures slides above it. Wider,
   // it floats beside the model and the camera stays. Build's workbench is a
   // command card and never moves the camera.
-  // The compact View and Tweak sheet asks once it has risen (U12 slice 7).
+  // The compact View, Tweak and Assemble sheet asks once it has risen (U12
+  // slices 7 and 8).
   const measuringOverStage =
-    measuring && modelingLocked && !(compactShell && (viewMode || tweakMode));
+    measuring &&
+    modelingLocked &&
+    !(compactShell && (viewMode || tweakMode || assembleMode));
   useEffect(() => {
     if (
       measuringOverStage &&
@@ -40730,10 +40737,37 @@ export function App() {
   // handler those run. U12 slice 9: Draw's tray is the drawing workspace's
   // own, drawn from the stage into an anchor the sheet's tray slot holds.
   const compactModeTray =
-    !compactShell || !(viewMode || tweakMode || drawingMode) ? null : (
+    !compactShell ||
+    !(viewMode || tweakMode || assembleMode || drawingMode) ? null : (
       <ErrorBoundary label="Mode tray" resetKey={resolvedWorkspaceMode}>
         {drawingMode ? (
           <LazyCompactModeTray mode="drawing" />
+        ) : assembleMode ? (
+          // U12 slice 8: Assemble's sidebar, its timeline and the player as
+          // the tray's pages, in place of the sidebar and the View bar.
+          <LazyCompactAssembleTray
+            measure={{
+              on: measuring,
+              toggle: toggleMeasure,
+              dock: measurementDock
+            }}
+            panel={{
+              document: doc,
+              displayDocument: configurationDisplayDocument,
+              execute: assembleApp.execute,
+              onStatus: assembleApp.onStatus,
+              onAnnounce: (message, options) =>
+                announce(
+                  message,
+                  options?.undo ? { label: 'Undo', run: handleUndo } : undefined
+                ),
+              bodyBounds: bodyMeshBounds,
+              reducedMotion: appSettings.appearance.reducedMotion,
+              checkInterference: geometry.assemblyInterference,
+              checkInterferenceSweep: geometry.assemblyInterferenceSweep
+            }}
+            onStageCovered={requestClearStage}
+          />
         ) : viewMode ? (
           <LazyCompactModeTray
             mode="view"
@@ -41994,7 +42028,7 @@ export function App() {
                       assembly={doc.assembly}
                     />
                   )}
-                  {assembleMode && (
+                  {assembleMode && !compactModeTray && (
                     <MotionStudyTimelineSlot
                       resetKey={doc.projectId}
                       floating
@@ -42514,7 +42548,9 @@ export function App() {
         </ErrorBoundary>
       }
       panels={
-        assembleMode ? (
+        // The compact workspace draws Assemble's sidebar in its sheet (U12
+        // slice 8).
+        assembleMode && compactModeTray ? null : assembleMode ? (
           <ErrorBoundary label="Assembly" resetKey={doc.projectId}>
             {/* One sidebar on the left: parts, joints, motion, the joint
                 tool and the first run all live here (AS01). */}

@@ -1,5 +1,11 @@
 import type { Locator, Page } from '@playwright/test';
-import { expect, pickPlanarFace, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  pickPlanarFace,
+  stubApi,
+  test,
+  waitForSurfacesToSettle
+} from './openzcad-fixtures';
 
 /**
  * The compact workspace's frame (U12 slice 2): a header, the mode tabs, the
@@ -223,6 +229,76 @@ test.describe('the compact workspace frame', () => {
       }
     );
   }
+
+  test('moves the undo pair with the sheet, never on a clock of its own', async ({
+    page
+  }) => {
+    // The undo pair rides the sheet's top edge through `--compact-sheet-h`,
+    // which the sheet writes on every drawn frame. The pair once eased its
+    // own `bottom` behind that height, so it stood inside the sheet whenever
+    // the sheet came up at once (at load), for as long as a busy main thread
+    // stalled the transition, and a settled read could miss it. The cause is
+    // the transition itself, so the pair must carry none on its position;
+    // reading the computed style needs no frame sampling, which could itself
+    // change how the page resizes. Then, settled at each height, the pair
+    // stands clear of the sheet.
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 430, height: 932 });
+    await openCompactProject(page, 'Undo pair');
+    const pair = page.locator('.compact-stage-controls');
+    const easedPosition = await pair.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const properties = style.transitionProperty
+        .split(',')
+        .map((name) => name.trim());
+      const durations = style.transitionDuration
+        .split(',')
+        .map((value) => parseFloat(value) || 0);
+      const delays = style.transitionDelay
+        .split(',')
+        .map((value) => parseFloat(value) || 0);
+      return properties.filter(
+        (name, index) =>
+          [
+            'all',
+            'bottom',
+            'top',
+            'inset',
+            'inset-block',
+            'transform',
+            'translate'
+          ].includes(name) &&
+          (durations[index % durations.length] ?? 0) +
+            (delays[index % delays.length] ?? 0) >
+            0
+      );
+    });
+    expect(easedPosition).toEqual([]);
+
+    const sheet = page.locator('.compact-sheet');
+    const grabber = sheet.getByRole('slider', { name: 'Sheet height' });
+    const surfaces = ['.compact-sheet', '.compact-stage-controls'];
+    const clearance = async (when: string) => {
+      await waitForSurfacesToSettle(page, surfaces);
+      const [pairBox, sheetBox] = await Promise.all([
+        pair.boundingBox(),
+        sheet.boundingBox()
+      ]);
+      expect(pairBox, `the undo pair ${when}`).not.toBeNull();
+      expect(sheetBox, `the sheet ${when}`).not.toBeNull();
+      expect(
+        pairBox!.y + pairBox!.height - sheetBox!.y,
+        `the undo pair's overlap with the sheet ${when}`
+      ).toBeLessThanOrEqual(1);
+    };
+    await clearance('after the project opens');
+    for (const detent of ['half', 'peek']) {
+      await grabber.focus();
+      await page.keyboard.press('Enter');
+      await expect(sheet).toHaveAttribute('data-detent', detent);
+      await clearance(`at ${detent}`);
+    }
+  });
 
   test(
     'runs Box to Done through the sheet, then undoes and redoes it',

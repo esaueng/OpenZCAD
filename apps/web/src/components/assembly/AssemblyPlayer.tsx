@@ -3,6 +3,7 @@ import { Pause, Play, Repeat, Square } from 'lucide-react';
 import {
   motionStudyDrivers,
   motionStudyValues,
+  type AssemblyCouplingEnd,
   type AssemblyMotionStudy,
   type AssemblyPlayback,
   type AssemblySet
@@ -36,6 +37,36 @@ function effectivePlayback(
 }
 
 /**
+ * What the player plays: the project's motion studies or, in a project
+ * without any, each joint's Animate sweep. Empty (the player hides) when
+ * nothing moves, as with only rigid joints.
+ */
+export function playerStudies(
+  assembly: AssemblySet | undefined
+): readonly AssemblyMotionStudy[] {
+  if (!assembly) return [];
+  if (assembly.studies.length > 0) return assembly.studies;
+  const { sweepS } = getAnimatePrefs();
+  // Each joint's sweep covers what it can really travel: a joint coupled
+  // to a limited one plays that narrower range, as Animate does.
+  return assembly.joints.flatMap(
+    (joint) => jointSweepStudy(joint, sweepS, assembly) ?? []
+  );
+}
+
+/** Shows a pose as the player's preview; false once that preview ended. */
+function showPose(
+  previewId: number | null,
+  overrides: ReadonlyMap<string, readonly number[]>,
+  drivers: readonly AssemblyCouplingEnd[]
+): boolean {
+  return (
+    previewId !== null &&
+    assemblyRuntime.showPreview(previewId, overrides, drivers)
+  );
+}
+
+/**
  * AS07 View mode player: a floating island that plays the project's motion
  * studies (or, in a project without any, each joint's Animate sweep) for
  * someone who only looks — the owner in View, or a visitor on a
@@ -50,18 +81,14 @@ function effectivePlayback(
  * or paused anywhere, 0 included — so pausing never makes the parts jump.
  * Stop (the square), leaving View mode (unmount) or another owner turning
  * the runtime off ends it; the player only turns off what it turned on.
+ *
+ * Its poses are the runtime's preview (`startPreview`), never an edit: where
+ * parts can be dragged (the compact Assemble sheet), a drag or anything
+ * else that writes joint values ends the preview, the player returns to
+ * the start, and only what the user moved is ever saved.
  */
 export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
-  const studies = useMemo(() => {
-    if (!assembly) return [];
-    if (assembly.studies.length > 0) return assembly.studies;
-    const { sweepS } = getAnimatePrefs();
-    // Each joint's sweep covers what it can really travel: a joint coupled
-    // to a limited one plays that narrower range, as Animate does.
-    return assembly.joints.flatMap(
-      (joint) => jointSweepStudy(joint, sweepS, assembly) ?? []
-    );
-  }, [assembly]);
+  const studies = useMemo(() => playerStudies(assembly), [assembly]);
   const [chosenId, setChosenId] = useState<string | null>(null);
   const study = studies.find((s) => s.id === chosenId) ?? studies[0];
   const [playing, setPlaying] = useState(false);
@@ -69,8 +96,10 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
   const [loop, setLoop] = useState<boolean | null>(null);
   const [showing, setShowing] = useState(false);
   const ownsActiveRef = useRef(false);
+  const previewRef = useRef<number | null>(null);
   const clockRef = useRef({ startedAtMs: 0, fromS: 0 });
   const active = useAssemblyRuntime((s) => s.active);
+  const previewId = useAssemblyRuntime((s) => s.previewId);
   const looping = loop ?? (study ? study.playback !== 'once' : true);
 
   // Someone else turned the runtime off (project switch, mode change).
@@ -82,11 +111,29 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
     }
   }, [active, showing]);
 
+  // Something else wrote joint values (a drag, an edit, motion playing):
+  // the preview is over and the parts are back at rest.
+  useEffect(() => {
+    if (
+      showing &&
+      previewRef.current !== null &&
+      previewId !== previewRef.current
+    ) {
+      previewRef.current = null;
+      setShowing(false);
+      setPlaying(false);
+      setT(0);
+    }
+  }, [previewId, showing]);
+
   // Leaving View mode drops the pose.
   useEffect(
     () => () => {
       if (ownsActiveRef.current) assemblyRuntime.setActive(false);
+      else if (previewRef.current !== null)
+        assemblyRuntime.endPreview(previewRef.current);
       ownsActiveRef.current = false;
+      previewRef.current = null;
     },
     []
   );
@@ -116,7 +163,8 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
         setPlaying(false);
         return;
       }
-      assemblyRuntime.setOverrides(next.overrides, next.drivers);
+      // The preview ended between frames: the effect above resets.
+      if (!showPose(previewRef.current, next.overrides, next.drivers)) return;
       setT(next.studyTimeS ?? 0);
       if (next.done) {
         setPlaying(false);
@@ -141,6 +189,11 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
       assemblyRuntime.setActive(true);
       ownsActiveRef.current = true;
     }
+    if (
+      previewRef.current === null ||
+      getAssemblyRuntime().previewId !== previewRef.current
+    )
+      previewRef.current = assemblyRuntime.startPreview();
     setShowing(true);
   }
 
@@ -160,7 +213,8 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
     setPlaying(false);
     const clamped = Math.min(duration, Math.max(0, at));
     setT(clamped);
-    assemblyRuntime.setOverrides(
+    showPose(
+      previewRef.current,
       motionStudyValues(set, current, clamped),
       motionStudyDrivers(current)
     );
@@ -173,6 +227,7 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
     if (ownsActiveRef.current) assemblyRuntime.setActive(false);
     else assemblyRuntime.clearOverrides();
     ownsActiveRef.current = false;
+    previewRef.current = null;
   }
 
   function choose(studyId: string) {
@@ -183,7 +238,8 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
     setLoop(null);
     setT(0);
     if (showing)
-      assemblyRuntime.setOverrides(
+      showPose(
+        previewRef.current,
         motionStudyValues(set, next, 0),
         motionStudyDrivers(next)
       );

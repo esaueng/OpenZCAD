@@ -284,7 +284,12 @@
   justify-content: space-between;
   gap: var(--sp-2);
   pointer-events: none;
-  transition: bottom var(--dur-base) var(--ease-out);
+  /* No transition of its own: `--compact-sheet-h` already follows the
+     sheet's drawn height every frame, through its spring and a drag, so the
+     controls ride its top edge. Easing `bottom` as well left them inside
+     the sheet for the transition's length whenever the sheet came up at
+     once (out of `hidden`), and for as long as a busy main thread
+     stalled that transition. */
 }
 
 .compact-history {
@@ -442,10 +447,6 @@
 
   .compact-sheet.fade-b {
     animation: compact-sheet-fade-b var(--dur-base) ease-out;
-  }
-
-  .compact-stage-controls {
-    transition: none;
   }
 }
 
@@ -1975,6 +1976,241 @@
 
 .compact-switch[aria-checked='true'] > span {
   transform: translateX(20px);
+}
+
+/* ── Assemble's pages (U12 slice 8) ──
+   Each page is Assemble's sidebar, a few sections at a time, with the
+   motion study timeline under Motion's animations and the player on its
+   own page. Their frames are reset to the page's flow and every control
+   takes a thumb. */
+
+.compact-assemble-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.compact-assemble-page > .assembly-panel,
+.compact-assemble-page > .motion-timeline,
+.compact-assemble-page > .assembly-player {
+  position: static;
+  inset: auto;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  overflow: visible;
+  transform: none;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 15px;
+}
+
+.compact-assemble-page .assembly-panel-body,
+.compact-assemble-page .assembly-first-run {
+  overflow: visible;
+}
+
+.compact-assemble-page .assembly-section-title {
+  font-size: 15px;
+}
+
+.compact-assemble-page .assembly-count {
+  font-size: 13px;
+}
+
+.compact-assemble-page :is(.assembly-row-line, .assembly-row-main) {
+  min-height: var(--compact-target);
+}
+
+.compact-assemble-page
+  :is(
+    .assembly-row-action,
+    .assembly-add-button,
+    .assembly-link-button,
+    .assembly-icon-button,
+    .assembly-position-apply,
+    .assembly-position-delete,
+    .assembly-study-action,
+    .assembly-row-text-action,
+    .assembly-player-play,
+    .assembly-player-toggle,
+    .motion-icon-button,
+    .motion-play,
+    .motion-speed,
+    .motion-toggle,
+    .motion-track-remove
+  ) {
+  box-sizing: border-box;
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+  justify-content: center;
+}
+
+/* Shown, not hover-revealed: there is no hover on a touch screen. */
+.compact-assemble-page :is(.assembly-row-action, .motion-track-remove) {
+  opacity: 1;
+}
+
+.compact-assemble-page .assembly-row-action > svg,
+.compact-assemble-page .motion-icon-button > svg,
+.compact-assemble-page .motion-play > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.compact-assemble-page summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: var(--compact-target);
+  cursor: pointer;
+}
+
+.compact-assemble-page .assembly-position-chip {
+  min-height: var(--compact-target);
+}
+
+.compact-assemble-page :is(.assembly-number input, .motion-number-input) {
+  box-sizing: border-box;
+  min-width: 64px;
+  font-size: 16px;
+}
+
+.compact-assemble-page input[type='range'] {
+  height: var(--compact-target);
+}
+
+/* A checkbox's box stays its size, centred in a thumb-sized target: the
+   transparent border is the target, the inset ring the box. */
+.compact-assemble-page input[type='checkbox'] {
+  appearance: none;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  margin: 0;
+  border: 11px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--color-surface) content-box;
+  box-shadow: inset 0 0 0 2px var(--color-border-strong);
+  cursor: pointer;
+}
+
+.compact-assemble-page input[type='checkbox']:checked {
+  background: var(--color-accent) content-box
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E")
+    center / 16px 16px no-repeat;
+  box-shadow: none;
+}
+
+.compact-assemble-page input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -9px;
+}
+
+/* The timeline: its transport wraps, its rows are a thumb high, and a
+   finger on a lane scrubs across it but still scrolls the page. */
+.compact-assemble-page .motion-timeline-transport {
+  gap: var(--sp-1);
+  padding: 0 0 var(--sp-2);
+}
+
+.compact-assemble-page .motion-key-editor {
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.compact-assemble-page :is(.assembly-animate, .assembly-dof-block) {
+  flex-wrap: wrap;
+}
+
+.compact-assemble-page .assembly-animate .assembly-select:last-child {
+  flex: 0 0 auto;
+}
+
+/* One column: each track's name over its lane, the lanes the page's full
+   width, where a phone has no room for a column of names beside them. */
+.compact-assemble-page .motion-timeline-grid {
+  grid-template-columns: minmax(0, 1fr);
+  overflow: visible;
+}
+
+.compact-assemble-page .motion-track-label {
+  padding-left: var(--sp-1);
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.compact-assemble-page :is(.motion-track-label, .motion-ruler, .motion-lane) {
+  min-height: var(--compact-target);
+}
+
+.compact-assemble-page .motion-track-name {
+  min-height: var(--compact-target);
+  font-size: 15px;
+}
+
+.compact-assemble-page :is(.motion-ruler, .motion-lane) {
+  margin: 0 22px;
+  touch-action: pan-y;
+}
+
+.compact-assemble-page .motion-track-add-button {
+  width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+/* Its Add menu opens in the page's flow: above the ruler it would rise
+   past the sheet's top. */
+.compact-assemble-page .motion-track-menu {
+  position: static;
+  min-width: 0;
+  max-height: none;
+  margin-top: var(--sp-1);
+}
+
+.compact-assemble-page .motion-track-menu-item {
+  min-height: var(--compact-target);
+}
+
+/* A key is a thumb-sized target around its small diamond. */
+.compact-assemble-page .motion-key {
+  width: var(--compact-target);
+  height: var(--compact-target);
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  transform: translate(-50%, -50%);
+}
+
+.compact-assemble-page .motion-key::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--color-surface);
+  background: var(--color-text-muted);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.compact-assemble-page .motion-key-selected::before {
+  background: var(--color-accent-hi);
+  box-shadow: 0 0 0 2px var(--color-accent-border);
+}
+
+.compact-assemble-page .assembly-player {
+  flex-wrap: wrap;
+  padding: 0;
+}
+
+.compact-assemble-page .assembly-player-slider {
+  flex: 1 1 160px;
 }
 
 /* ── Draw (U12 slice 9) ──────────────────────────────────────
