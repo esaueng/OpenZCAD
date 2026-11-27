@@ -5163,9 +5163,11 @@ export interface FeatureWarning {
  *
  * - `smaller-size`: the probe ladder BUILT `size` exactly, so it is safe to
  *   offer as a one-click remedy.
- * - `structural`: every smaller size on the ladder was refused too. `cause`
- *   names what the adapter could attribute, `unknown` when nothing was.
- *   Smaller sizes failing is evidence, not proof, that no size builds.
+ * - `structural`: no smaller size on the ladder built. `cause` names what
+ *   the adapter could attribute, `unknown` when nothing was. The ladder may
+ *   have had no rung small enough to run, so `reason` says smaller sizes
+ *   failed only when one ran and was refused the way the requested size
+ *   was. Smaller sizes failing is evidence, not proof, that no size builds.
  */
 export type BlendRefusalAdvice = {
   operation: 'fillet' | 'chamfer';

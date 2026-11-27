@@ -1,5 +1,0 @@
----
-row: L11
----
-
-Background invitation runner and "Shared with you" landing (plan `docs/plans/l11-sharing-and-encryption-overhaul.md` §3.2–§3.4, slices 3 and 4): an app-level, lazily loaded runner (`apps/web/src/lib/e2ee/invitationRunner.ts`, `invitationPass.ts`) adds ready invitees, joins welcomed projects and announces both, at startup, on encryption-state changes and every 60 s while visible, single-flight with backoff, behind the rollout gates and only with unlocked keys; Settings › Encryption › Invitations and the sharing dialog call it. Pending statements are re-signed before they lapse (`invitationRenewal.ts`; `GET /api/e2ee/invitations/pending`, `PUT …/invitations/:id`, migration 0068). An `#encrypted-invite=` link opens `SharedWithYouDialog`, which runs setup inline, accepts the link and opens the project once joined. Coverage: `invitationRunner.test.ts`, `invitationPass.test.ts`, `SharedWithYouDialog.test.tsx`, `test/e2ee-invitation-renewal.test.ts`, `encrypted-sharing.spec.ts`.

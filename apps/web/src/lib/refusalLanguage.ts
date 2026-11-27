@@ -152,6 +152,15 @@ const PARTIAL_WALL =
  */
 const DIAMETER_DOES_NOT_FIT =
   'That diameter does not fit the existing supports and fillets. Try a smaller diameter.';
+/**
+ * The adapter's `mirror_source_unavailable`: the body a Mirror reflects has
+ * no shape where the Mirror sits in the history. Written to stand alone on a
+ * feature card and to read on after a picked body's name ("Back block: …")
+ * in a Mirror of several bodies. It says what may have happened, not which,
+ * because the record does not say.
+ */
+export const MIRROR_SOURCE_UNAVAILABLE =
+  "The body to mirror isn't built at this point in the history. It may be suppressed, or its feature may have failed.";
 const FILLETS_NOT_REBUILT =
   "The fillets around this wall can't be rebuilt at that diameter. Change or remove those fillets in History, then resize the wall.";
 
@@ -240,6 +249,9 @@ function typedSentence(typed: RefusalClassification): string | null {
   const blendResize = typed.code ? BLEND_RESIZE_SENTENCES[typed.code] : null;
   if (blendResize) {
     return blendResize;
+  }
+  if (typed.code === 'mirror_source_unavailable') {
+    return MIRROR_SOURCE_UNAVAILABLE;
   }
   if (typed.code === 'cylinder-diameter-unbuildable') {
     return typed.reason === 'group_reblend_failed'
@@ -769,6 +781,22 @@ export function plainRefusal(
     ...(category ? { category } : {}),
     ...(typed?.code ? { code: typed.code } : {})
   };
+  // A typed code is read first: it is the branchable field, and the text
+  // rules below match the whole sentence, which can include a name the user
+  // gave a feature (a Mirror called "Body no longer exists" lost its
+  // typed sentence to the lost-selection rule).
+  const byCode = typed ? typedSentence(typed) : null;
+  if (byCode) {
+    const detail = [sentence, tail].filter(Boolean).join('\n');
+    return {
+      message: byCode,
+      detail,
+      ...classified,
+      ...(typed?.code === 'cylinder-diameter-unbuildable'
+        ? { headline: byCode }
+        : {})
+    };
+  }
   // A lost selection is read by the card to know that no value can help; a
   // parse error names the entity of the file that is broken. Both stay. So
   // do the STEP importer's own sentences, which name each solid it dropped
@@ -787,18 +815,6 @@ export function plainRefusal(
     return tail
       ? { message: sentence, detail: tail, ...classified }
       : { message: sentence, ...classified };
-  }
-  const byCode = typed ? typedSentence(typed) : null;
-  if (byCode) {
-    const detail = [sentence, tail].filter(Boolean).join('\n');
-    return {
-      message: byCode,
-      detail,
-      ...classified,
-      ...(typed?.code === 'cylinder-diameter-unbuildable'
-        ? { headline: byCode }
-        : {})
-    };
   }
   const translation = TRANSLATIONS.find(({ pattern }) =>
     pattern.test(sentence)

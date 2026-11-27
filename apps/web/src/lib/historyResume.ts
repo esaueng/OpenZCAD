@@ -10,6 +10,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import {
+  featureFailure,
   featureFailureReason,
   listNames,
   type RefusedDependent
@@ -175,9 +176,9 @@ export function resumeFailures(
 ): RefusedDependent[] {
   return resumed.flatMap((feature): RefusedDependent[] => {
     if (alreadyFailing.has(feature.featureId)) return [];
-    const reason = featureFailureReason(feature, derived);
-    return reason
-      ? [{ featureId: feature.featureId, name: feature.name, reason }]
+    const failure = featureFailure(feature, derived);
+    return failure
+      ? [{ featureId: feature.featureId, name: feature.name, ...failure }]
       : [];
   });
 }

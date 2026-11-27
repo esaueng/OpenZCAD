@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ResumeHistoryDialog } from './ResumeHistoryDialog';
+import { MIRROR_SOURCE_UNAVAILABLE } from '../lib/refusalLanguage';
 
 describe('ResumeHistoryDialog', () => {
   it('names each failing feature with its reason and focuses Keep rolled back', () => {
@@ -39,6 +40,32 @@ describe('ResumeHistoryDialog', () => {
     fireEvent.click(confirm);
     expect(onResume).toHaveBeenCalledOnce();
     expect(onKeep).not.toHaveBeenCalled();
+  });
+
+  // The dialog words a typed refusal from its code, as the command bar does,
+  // rather than relaying the adapter's sentence (preview check of f4c7f13).
+  it("words a failure from its typed code, whatever the feature's name", () => {
+    render(
+      <ResumeHistoryDialog
+        action="Resume Body no longer exists"
+        row={{ name: 'Body no longer exists', state: 'suppressed' }}
+        failures={[
+          {
+            name: 'Body no longer exists',
+            reason: 'Mirror target is unavailable.',
+            kernelRefusal: {
+              category: 'invalid_input',
+              code: 'mirror_source_unavailable'
+            }
+          }
+        ]}
+        onKeep={vi.fn()}
+        onResume={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('listitem').textContent).toBe(
+      `Body no longer exists: ${MIRROR_SOURCE_UNAVAILABLE}`
+    );
   });
 
   it('keeps the rollback on Escape and on Keep rolled back, and counts the rest', () => {

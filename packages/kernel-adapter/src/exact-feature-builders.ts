@@ -2067,7 +2067,12 @@ function buildMirrorFeature(
   }
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
-    throw new Error('Mirror target is unavailable.');
+    // Typed, so a Mirror of several bodies can word the refused body's
+    // sentence from the code rather than relaying this one.
+    throw new AdapterRefusal(
+      'mirror_source_unavailable',
+      'Mirror target is unavailable.'
+    );
   }
   const { planePoint, planeNormal } = resolveOperationPlane(
     ctx,
@@ -3824,7 +3829,9 @@ function buildEdgeModifierFeature(
         storedTarget.solids.length === 1 && storedTarget.solids[0] === target
           ? storedTarget.lineage
           : undefined
-      )
+      ),
+      // Assigned in the sink above, which narrowing does not follow.
+      (reportedKernelRefusal as BlendRefusal | null)?.kernelCode ?? null
     );
     throw new EdgeModifierRefusalError(
       refusal.message,

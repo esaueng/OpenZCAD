@@ -195,7 +195,16 @@ describe('InPlaceCommandBar', () => {
   // mirror, and says to take it out, around whatever the kernel's sentence
   // translates to; neither is left to Technical details.
   it.each([
-    ['an untyped', 'Feature "Mirror 3": Mirror target is unavailable.', null],
+    [
+      'an untyped',
+      'Feature "Mirror 3": Mirror plane normal must be finite and non-zero.',
+      null
+    ],
+    [
+      'the typed missing-source',
+      'Feature "Mirror 3": Mirror target is unavailable.',
+      { category: 'invalid_input', code: 'mirror_source_unavailable' }
+    ],
     [
       'a typed',
       'Remus mirror refused: the shell is open',
@@ -226,6 +235,31 @@ describe('InPlaceCommandBar', () => {
       );
     }
   );
+
+  // The typed sentence reads on after the body's name, then the advice.
+  it('reads a missing Mirror source as one line after its name', () => {
+    render(
+      <InPlaceCommandBar
+        title="Mirror"
+        hint="2 bodies · Slide the plane, or pick another"
+        refusal={'Feature "Mirror 3": Mirror target is unavailable.'}
+        refusalClassification={{
+          category: 'invalid_input',
+          code: 'mirror_source_unavailable'
+        }}
+        refusalPick={{
+          name: 'Back block',
+          advice: 'Remove it from the picks, or pick another plane.'
+        }}
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('status').textContent).toBe(
+      "Back block: The body to mirror isn't built at this point in the history. It may be suppressed, or its feature may have failed. Remove it from the picks, or pick another plane."
+    );
+  });
 
   it('shows an adapter sentence as it is, with nothing to disclose', () => {
     const sentence =
