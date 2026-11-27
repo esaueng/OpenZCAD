@@ -177,6 +177,7 @@
   "space-mouse.spec.ts": 4,
   "sphere-cylinder-union.spec.ts": 36,
   "split-recovery.spec.ts": 60,
+  "split-edge-plane.spec.ts": 60,
   "staged-geometry.spec.ts": 6,
   "standalone-gear-height.spec.ts": 24,
   "standard-parts-bom.spec.ts": 30,
