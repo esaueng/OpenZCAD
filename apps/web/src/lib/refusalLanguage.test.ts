@@ -3,6 +3,7 @@ import {
   FACE_SWEEP_BLOCKED,
   FACE_SWEEP_UNPROVEN,
   GENERIC_REFUSAL,
+  MIRROR_SOURCE_UNAVAILABLE,
   SPLIT_PLANE_MISSES,
   SPLIT_PLANE_ON_EDGE,
   SPLIT_PLANE_ON_FACE,
@@ -418,6 +419,32 @@ describe('plainRefusal with the kernel category', () => {
     expect(plainRefusal(raw, typed('unclassified')).message).toBe(
       'The exact kernel does not support this combination of shapes yet.'
     );
+  });
+});
+
+describe('a Mirror whose source body is not built', () => {
+  // The adapter's own record: the body to mirror has no shape at the
+  // Mirror's place in the history (suppressed, or its feature failed).
+  const record = {
+    category: 'invalid_input',
+    code: 'mirror_source_unavailable'
+  } as const;
+  const raw = 'Feature "Mirror 3": Mirror target is unavailable.';
+
+  it('is worded from its code, with the adapter sentence behind Why', () => {
+    expect(plainRefusal(raw, record)).toEqual({
+      message: MIRROR_SOURCE_UNAVAILABLE,
+      detail: raw,
+      ...record
+    });
+    expect(MIRROR_SOURCE_UNAVAILABLE).toBe(
+      "The body to mirror isn't built at this point in the history. It may be suppressed, or its feature may have failed."
+    );
+  });
+
+  it('does not read the code from the sentence', () => {
+    // The same prose without the record keeps the untyped path.
+    expect(plainRefusal(raw).message).not.toBe(MIRROR_SOURCE_UNAVAILABLE);
   });
 });
 

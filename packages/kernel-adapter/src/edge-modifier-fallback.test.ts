@@ -211,3 +211,146 @@ describe('a closed rim split into arcs', () => {
     expect(message).toContain('Smaller distances failed too');
   });
 });
+
+/**
+ * A body the probe ladder can run on: every rung reaches the kernel's typed
+ * fillet or chamfer and is refused with `code`. Any other question throws,
+ * so no cause is named and the diagnosis reaches its fallback. `calls`
+ * counts the rungs that ran.
+ */
+function ladderKernel(code: string): { kernel: RemusKernel; calls: number[] } {
+  const calls: number[] = [];
+  const refuse = (_target: number, _edges: Uint32Array, size: number) => {
+    calls.push(size);
+    return {
+      status: 'error',
+      code,
+      category: 'internal',
+      details: { kernelCode: code, message: 'an invented kernel sentence' }
+    };
+  };
+  const table: Record<string, unknown> = {
+    boundingBox: () => Float64Array.from([0, 0, 0, 10, 10, 10]),
+    filletDetailed: refuse,
+    chamferDetailed: refuse
+  };
+  const kernel = new Proxy(
+    {},
+    {
+      get: (_target, name: string) =>
+        table[name] ??
+        (() => {
+          throw new Error('refused');
+        })
+    }
+  ) as RemusKernel;
+  return { kernel, calls };
+}
+
+/**
+ * "Smaller sizes were refused too" is a claim about rungs of the ladder, so
+ * it is made only when a rung ran and the kernel refused it the way it
+ * refused the requested size (#2201's rule for its inner-loop cause, here
+ * for the older fallbacks). Otherwise the sentence makes no claim.
+ */
+describe('the fallback claims smaller sizes failed only when one was tried', () => {
+  it.each([
+    ['chamfer', [2], 'neighbor-faces'],
+    ['fillet', [2, 3], 'unknown']
+  ] as const)(
+    'makes no claim for a %s too small for any rung to run',
+    (kind, edges, cause) => {
+      // Every rung of 1.5e-9 is at or under GEOMETRY_EPSILON, so none runs.
+      const refusal = edgeModifierRefusal(
+        refusingKernel,
+        1,
+        [...edges],
+        kind,
+        1.5e-9,
+        false
+      );
+      expect(refusal.advice).toMatchObject({ kind: 'structural', cause });
+      expect(refusal.message).not.toMatch(/[Ss]maller/);
+      expect(refusal.message.endsWith(refusal.advice!.reason)).toBe(true);
+    }
+  );
+
+  it('words the no-claim fallbacks in full', () => {
+    expect(
+      edgeModifierRefusal(refusingKernel, 1, [2], 'chamfer', 1.5e-9, false)
+        .advice?.reason
+    ).toBe(
+      'The kernel could not build this edge with its current neighboring faces. Try a different edge or change the adjacent geometry.'
+    );
+    expect(
+      edgeModifierRefusal(refusingKernel, 1, [2, 3], 'chamfer', 1.5e-9, false)
+        .advice?.reason
+    ).toBe('Try chamfering fewer edges at once, or different edges.');
+  });
+
+  it('makes no claim when the smaller rungs were refused for another reason', () => {
+    const { kernel, calls } = ladderKernel('fillet-failed');
+    const refusal = edgeModifierRefusal(
+      kernel,
+      1,
+      [2],
+      'chamfer',
+      4,
+      false,
+      'cliff-encountered: an invented kernel sentence',
+      undefined,
+      undefined,
+      'cliff-encountered'
+    );
+    // The ladder did run, all three rungs, and every one was refused.
+    expect(calls).toEqual([2, 0.5, 0.0625]);
+    expect(refusal.advice).toMatchObject({
+      kind: 'structural',
+      cause: 'neighbor-faces'
+    });
+    expect(refusal.message).not.toMatch(/[Ss]maller/);
+  });
+
+  it('keeps the claim when a smaller rung was refused with the same code', () => {
+    const { kernel, calls } = ladderKernel('fillet-failed');
+    const refusal = edgeModifierRefusal(
+      kernel,
+      1,
+      [2, 3],
+      'fillet',
+      4,
+      false,
+      'fillet-failed: an invented kernel sentence',
+      undefined,
+      undefined,
+      'fillet-failed'
+    );
+    expect(calls).toHaveLength(3);
+    expect(refusal.advice).toEqual({
+      operation: 'fillet',
+      edges: 2,
+      kind: 'structural',
+      cause: 'unknown',
+      reason:
+        'Smaller radii were refused too, so a different size is unlikely to help. ' +
+        'Try rounding fewer edges at once, or different edges.'
+    });
+  });
+
+  it('drops the claim from a named cause too when no rung ran', () => {
+    const message = edgeModifierFailureMessage(
+      rimKernel(),
+      7,
+      [1, 2, 3, 4],
+      'chamfer',
+      1.5e-9,
+      false,
+      'trimming-failure: blend: trimming failure on face Id(8)'
+    );
+    expect(message).toContain('could not trim the flat face beside it.');
+    expect(message).not.toMatch(/[Ss]maller/);
+    expect(message).toMatch(
+      /could not trim the flat face beside it\. Try a different edge, or change the geometry next to it first\.$/
+    );
+  });
+});
