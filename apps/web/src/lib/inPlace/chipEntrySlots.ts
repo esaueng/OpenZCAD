@@ -35,19 +35,22 @@ export function chipEntryOpenedOver(
 
 /**
  * Whether a command value's entry (its viewport chip's editor and keypad)
- * has lost what it edits: picks it was opened over were taken back, and the
- * value has no chip left. Align's Offset sits on the face pair; a click on
- * the moving face in the preview takes the pair back, the Offset chip goes
- * with it, and the entry has nothing left to edit, so it closes as if
- * canceled. So does one whose target face alone was taken back.
+ * has lost what it edits: every pick it was opened over has been taken
+ * back, so the command is asking for its first pick again, and the value
+ * has no chip left. Align's Offset sits on the face pair; a click on the
+ * moving face in the preview takes the pair back, the Offset chip goes with
+ * it, and the entry has nothing left to edit, so it closes as if canceled.
  *
- * Both halves are needed, so nothing else closes an entry:
+ * Nothing short of that closes an entry, so a draft typed into it is never
+ * lost to a pick that only changes:
  * - An entry opened without a chip, or before any pick, is over no picks
  *   (`chipEntryOpenedOver`).
- * - A pick replaced (a new target face) or added keeps every slot's count.
+ * - A pick replaced keeps its draft even when the chip is gone meanwhile:
+ *   a Circular Pattern's new source body clears its axis, and the Count
+ *   chip comes back once the axis is picked again.
+ * - Some picks taken back, others kept (Align's target alone), leave the
+ *   command partway, not at its start.
  * - A chip briefly gone while a preview builds keeps every pick.
- * - A pick taken back while the value keeps its chip leaves it something
- *   to edit.
  */
 export function chipEntryLostItsPicks(
   openedOver: SlotPickCounts,
@@ -56,8 +59,8 @@ export function chipEntryLostItsPicks(
   valueId: string
 ): boolean {
   if (handles.some((handle) => handle.valueId === valueId)) return false;
+  const opened = Object.keys(openedOver) as InPlaceSlotName[];
+  if (opened.length === 0) return false;
   const now = slotPickCounts(slots);
-  return (Object.keys(openedOver) as InPlaceSlotName[]).some(
-    (name) => (now[name] ?? 0) < (openedOver[name] ?? 0)
-  );
+  return opened.every((name) => (now[name] ?? 0) === 0);
 }

@@ -504,6 +504,13 @@ describe('ObjectsPanel: Enter on a focused row', () => {
     };
   }
 
+  /** Focus arriving by keyboard: a Tab press, then the focus it moves. */
+  function tabTo(row: HTMLElement) {
+    fireEvent.keyDown(document.body, { key: 'Tab' });
+    row.focus();
+    fireEvent.keyUp(document.body, { key: 'Tab' });
+  }
+
   function renderTwoBodies() {
     const plate = body('body-1', 'Plate');
     const post = body('body-2', 'Post');
@@ -522,7 +529,7 @@ describe('ObjectsPanel: Enter on a focused row', () => {
     const workspace = workspaceEnter();
     try {
       const { props, row } = renderTwoBodies();
-      row.focus();
+      tabTo(row);
       expect(row).toHaveAttribute('data-own-enter');
       const fresh = fireEvent.keyDown(row, { key: 'Enter' });
       expect(fresh).toBe(false);
@@ -555,7 +562,7 @@ describe('ObjectsPanel: Enter on a focused row', () => {
       fireEvent.pointerDown(row);
       row.focus();
       fireEvent.pointerUp(row);
-      fireEvent.click(row);
+      fireEvent.click(row, { detail: 1 });
       expect(props.onSelectBody).toHaveBeenCalledTimes(1);
       expect(row).not.toHaveAttribute('data-own-enter');
       fireEvent.keyDown(row, { key: 'Enter' });
@@ -564,8 +571,61 @@ describe('ObjectsPanel: Enter on a focused row', () => {
 
       // Tabbing away and back is keyboard focus again: the row owns Enter.
       row.blur();
-      row.focus();
+      tabTo(row);
       expect(row).toHaveAttribute('data-own-enter');
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  it('leaves Enter to the workspace once a keyboard-focused row is clicked', () => {
+    const workspace = workspaceEnter();
+    try {
+      const { props, row } = renderTwoBodies();
+      tabTo(row);
+      // The click is the pick; focus never moved, so no focus event says so.
+      fireEvent.pointerDown(row);
+      fireEvent.pointerUp(row);
+      fireEvent.click(row, { detail: 1 });
+      expect(props.onSelectBody).toHaveBeenCalledTimes(1);
+      expect(row).not.toHaveAttribute('data-own-enter');
+      fireEvent.keyDown(row, { key: 'Enter' });
+      expect(props.onSelectBody).toHaveBeenCalledTimes(1);
+      expect(workspace.reached).toEqual([{ repeat: false }]);
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  it('keeps Enter on a keyboard-focused row after a mouse press there is abandoned off the list', () => {
+    const workspace = workspaceEnter();
+    try {
+      const { props, row } = renderTwoBodies();
+      tabTo(row);
+      // Pressed on the row, dragged away, released outside: no click.
+      fireEvent.pointerDown(row);
+      fireEvent.pointerUp(document.body);
+      expect(row).toHaveAttribute('data-own-enter');
+      fireEvent.keyDown(row, { key: 'Enter' });
+      expect(props.onSelectBody).toHaveBeenCalledTimes(1);
+      expect(workspace.reached).toEqual([]);
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  it('does not read the next Tab focus as a mouse focus after a press released off the list', () => {
+    const workspace = workspaceEnter();
+    try {
+      const { props, row } = renderTwoBodies();
+      // A press on the list itself (no row under it), released outside.
+      fireEvent.pointerDown(screen.getByRole('list', { name: 'Objects' }));
+      fireEvent.pointerUp(document.body);
+      tabTo(row);
+      expect(row).toHaveAttribute('data-own-enter');
+      fireEvent.keyDown(row, { key: 'Enter' });
+      expect(props.onSelectBody).toHaveBeenCalledTimes(1);
+      expect(workspace.reached).toEqual([]);
     } finally {
       workspace.dispose();
     }
@@ -573,7 +633,7 @@ describe('ObjectsPanel: Enter on a focused row', () => {
 
   it('leaves a modified Enter alone', () => {
     const { props, row } = renderTwoBodies();
-    row.focus();
+    tabTo(row);
     expect(fireEvent.keyDown(row, { key: 'Enter', ctrlKey: true })).toBe(true);
     expect(fireEvent.keyDown(row, { key: 'Enter', shiftKey: true })).toBe(true);
     expect(props.onSelectBody).not.toHaveBeenCalled();

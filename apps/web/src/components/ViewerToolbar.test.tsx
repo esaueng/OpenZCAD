@@ -1207,7 +1207,10 @@ describe('touch modifier toggles', () => {
       expect(help).toContain(
         'Ctrl- or ⌘-click does so only for sketch entities and profiles'
       );
-      expect(help).toContain('and for any row in Objects');
+      // In Objects only body and folder rows read the keys; sketch, plane
+      // and image rows select alone.
+      expect(help).not.toContain('any row');
+      expect(help).toContain('and for body and folder rows in Objects');
     } finally {
       vi.unstubAllGlobals();
     }

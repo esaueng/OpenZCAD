@@ -47,7 +47,8 @@ describe('chip entry over its picks (U11)', () => {
     expect(openedOver).toEqual({ faces: 2 });
     // The pair taken back: the Offset chip goes with it.
     expect(chipEntryLostItsPicks(openedOver, EMPTY, [], 'offset')).toBe(true);
-    // The target alone taken back: the chip goes too, nothing to edit.
+    // The target alone taken back: Align still holds its moving face and
+    // asks for a target, not for its first pick, so the entry stays.
     expect(
       chipEntryLostItsPicks(
         openedOver,
@@ -55,7 +56,34 @@ describe('chip entry over its picks (U11)', () => {
         [],
         'offset'
       )
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("keeps a Circular Pattern's Count draft while its source body is replaced", () => {
+    // A body and an axis picked; Count opened on its chip, 8 typed.
+    const picked: InPlaceSlots = {
+      ...EMPTY,
+      bodies: [{ bodyId: 'post' } as unknown as InPlaceSlots['bodies'][0]],
+      axis: { id: 'axis-z' } as unknown as InPlaceSlots['axis']
+    };
+    const openedOver = chipEntryOpenedOver(
+      picked,
+      [{ valueId: 'count' }],
+      'count'
+    );
+    expect(openedOver).toEqual({ bodies: 1, axis: 1 });
+    // Another source body from Objects: the replacement clears the axis, so
+    // the Count chip is gone until an axis is picked again. A pick replaced
+    // is not the entry's picks taken back.
+    const replaced: InPlaceSlots = {
+      ...EMPTY,
+      bodies: [{ bodyId: 'block' } as unknown as InPlaceSlots['bodies'][0]]
+    };
+    expect(chipEntryLostItsPicks(openedOver, replaced, [], 'count')).toBe(
+      false
+    );
+    // Every pick taken back: back to asking for the first, so it closes.
+    expect(chipEntryLostItsPicks(openedOver, EMPTY, [], 'count')).toBe(true);
   });
 
   it('keeps an entry whose chip is still drawn, or whose picks are all there', () => {

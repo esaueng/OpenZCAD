@@ -132,6 +132,35 @@ test('Enter on a keyboard-focused Objects row picks it, over an armed face and d
   await expect(bar).toBeVisible();
   await expect(keypad).toHaveCount(0);
 
+  // A mouse press on the focused row, dragged off the list and released
+  // there, is no click: the row keeps Enter, which takes Post back off
+  // rather than finishing the Subtract. A second Enter picks it again.
+  const pressAt = await row(post).boundingBox();
+  const releaseAt = await objects
+    .getByLabel('Find an object by name')
+    .boundingBox();
+  await page.mouse.move(
+    pressAt!.x + pressAt!.width / 2,
+    pressAt!.y + pressAt!.height / 2
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    releaseAt!.x + releaseAt!.width / 2,
+    releaseAt!.y + releaseAt!.height / 2,
+    { steps: 4 }
+  );
+  await page.mouse.up();
+  await expect(row(post)).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', block);
+  await expect(bar).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-bodies',
+    `${block},${post}`
+  );
+  await expect(bar).toBeVisible();
+
   // A row focused by a click leaves Enter to the command: Post clicked off
   // and back on, then Enter is Done.
   await row(post).click();

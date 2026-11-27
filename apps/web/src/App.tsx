@@ -30398,9 +30398,9 @@ export function App() {
     return true;
   }
   // A chip's entry (its editor and keypad) closes, as if canceled, once
-  // picks it was opened over are taken back and its chip goes with them:
-  // Align's Offset after a click on the moving face in the preview cleared
-  // the pair. It used to stay open over nothing, so the first Escape only
+  // every pick it was opened over is taken back and its chip goes with
+  // them: Align's Offset after a click on the moving face in the preview
+  // cleared the pair. A pick replaced or partly taken back keeps the draft. It used to stay open over nothing, so the first Escape only
   // closed it. The rule is every command's; see chipEntryLostItsPicks for
   // why nothing else closes an entry.
   useEffect(() => {

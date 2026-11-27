@@ -177,11 +177,12 @@ export { SECTION_PLANE_LABELS };
  * The touch Multi-select toggle's help. The toggle acts on the model only,
  * as Shift: face, edge and body picks add or remove with Shift alone
  * (ModelViewer's `addsToSelection`). Ctrl and ⌘ reach only sketch entities
- * and profiles there (`togglesSelection`); in Objects they add or remove any
- * row, as Shift does. The help names exactly that.
+ * and profiles there (`togglesSelection`); in Objects they add or remove a
+ * body or folder row, as Shift does, while sketch, plane and image rows
+ * select alone. The help names exactly that.
  */
 export const MULTI_SELECT_DESCRIPTION =
-  'Taps on the model add to or remove from the selection, as Shift-click does. Ctrl- or ⌘-click does so only for sketch entities and profiles there, and for any row in Objects';
+  'Taps on the model add to or remove from the selection, as Shift-click does. Ctrl- or ⌘-click does so only for sketch entities and profiles there, and for body and folder rows in Objects';
 
 /** Cased like the display modes the rail's other "Now:" lines name. */
 const ORBIT_MODE_LABELS = {

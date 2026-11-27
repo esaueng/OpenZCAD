@@ -3,7 +3,7 @@ import {
   useRef,
   type FocusEvent,
   type KeyboardEvent,
-  type PointerEvent
+  type MouseEvent
 } from 'react';
 import { OWN_ENTER_ATTRIBUTE } from './exactEntryShortcut';
 
@@ -24,18 +24,31 @@ import { OWN_ENTER_ATTRIBUTE } from './exactEntryShortcut';
  *   row carries `data-own-enter` while it has that focus, so every other
  *   Enter handler (the workspace's, the viewport's capture listener) leaves
  *   the key to it.
- * - A row focused by a pointer press does not. Clicking a row is the pick;
- *   Enter afterwards still finishes the command or opens the pick's value
- *   entry, as it does after clicking a rail tool (U01).
+ * - A row focused by a pointer press does not, nor one clicked while it
+ *   had focus. Clicking a row is the pick; Enter afterwards still finishes
+ *   the command or opens the pick's value entry, as it does after clicking
+ *   a rail tool (U01).
+ * - How focus arrived is the most recent input's kind, read from the whole
+ *   window: a key pressed anywhere makes the next focus a keyboard one, a
+ *   pointer pressed anywhere a pointer one. A press abandoned off the list
+ *   (pressed on the row, released elsewhere, so no click) changes nothing
+ *   about a row that already has focus, and cannot leave a flag set for the
+ *   next Tab. It is the same in every engine: WebKit, which never focuses a
+ *   button on click, only ever focuses a row by keyboard or script.
  * - Only a fresh press acts. A held Enter's auto-repeat keydowns are
  *   swallowed until the key is released, so holding Enter cannot toggle the
  *   pick off again or reach Done once the row has acted.
  * - Enter with a modifier is left to whoever else reads it.
  */
 export function useKeyboardRowEnter() {
-  const pointerPending = useRef(false);
   const stopSwallowing = useRef<(() => void) | null>(null);
-  useEffect(() => () => stopSwallowing.current?.(), []);
+  useEffect(() => {
+    const release = trackInputModality();
+    return () => {
+      stopSwallowing.current?.();
+      release();
+    };
+  }, []);
 
   function swallowRestOfPress() {
     stopSwallowing.current?.();
@@ -62,24 +75,10 @@ export function useKeyboardRowEnter() {
   }
 
   return {
-    onPointerDown(event: PointerEvent<HTMLElement>) {
-      pointerPending.current = true;
-      rowOf(event.currentTarget, event.target)?.removeAttribute(
-        OWN_ENTER_ATTRIBUTE
-      );
-    },
-    onPointerUp() {
-      pointerPending.current = false;
-    },
-    onPointerCancel() {
-      pointerPending.current = false;
-    },
     onFocus(event: FocusEvent<HTMLElement>) {
       const row = rowOf(event.currentTarget, event.target);
-      const byPointer = pointerPending.current;
-      pointerPending.current = false;
       if (!row) return;
-      if (!byPointer && focusVisible(row)) {
+      if (lastInput !== 'pointer') {
         row.setAttribute(OWN_ENTER_ATTRIBUTE, '');
       } else {
         row.removeAttribute(OWN_ENTER_ATTRIBUTE);
@@ -89,6 +88,15 @@ export function useKeyboardRowEnter() {
       rowOf(event.currentTarget, event.target)?.removeAttribute(
         OWN_ENTER_ATTRIBUTE
       );
+    },
+    onClick(event: MouseEvent<HTMLElement>) {
+      // A pointer's click (detail counts its clicks); a key's activation and
+      // this list's own `click()` have none, and keep the row's Enter.
+      if (event.detail > 0) {
+        rowOf(event.currentTarget, event.target)?.removeAttribute(
+          OWN_ENTER_ATTRIBUTE
+        );
+      }
     },
     onKeyDown(event: KeyboardEvent<HTMLElement>) {
       if (
@@ -113,18 +121,40 @@ export function useKeyboardRowEnter() {
   };
 }
 
+/**
+ * The kind of the most recent input anywhere in the window: what the next
+ * focus arrived by. Before any input, focus is a script's or the
+ * keyboard's.
+ */
+let lastInput: 'keyboard' | 'pointer' = 'keyboard';
+let modalityUsers = 0;
+const onKeyInput = () => {
+  lastInput = 'keyboard';
+};
+const onPointerInput = () => {
+  lastInput = 'pointer';
+};
+
+/** Listens for input kinds while any list uses this; returns its release. */
+function trackInputModality(): () => void {
+  if (modalityUsers++ === 0) {
+    window.addEventListener('keydown', onKeyInput, true);
+    window.addEventListener('pointerdown', onPointerInput, true);
+    // A mouse without pointer events still says so.
+    window.addEventListener('mousedown', onPointerInput, true);
+  }
+  return () => {
+    if (--modalityUsers === 0) {
+      window.removeEventListener('keydown', onKeyInput, true);
+      window.removeEventListener('pointerdown', onPointerInput, true);
+      window.removeEventListener('mousedown', onPointerInput, true);
+    }
+  };
+}
+
 /** The list's button that `target` is, or is inside. */
 function rowOf(list: HTMLElement, target: EventTarget): HTMLElement | null {
   if (!(target instanceof Element)) return null;
   const row = target.closest('button');
   return row instanceof HTMLElement && list.contains(row) ? row : null;
-}
-
-/** Whether the browser says focus reached `element` by keyboard. */
-function focusVisible(element: HTMLElement): boolean {
-  try {
-    return element.matches(':focus-visible');
-  } catch {
-    return true;
-  }
 }
