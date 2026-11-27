@@ -335,12 +335,14 @@ function Harness({
   hasRoot = false,
   initial = [],
   children,
-  background
+  background,
+  companions
 }: {
   hasRoot?: boolean;
   initial?: SheetAction[];
   children?: ReactNode;
   background?: () => Element[];
+  companions?: () => (Element | null)[];
 }) {
   const { state, dispatch } = useSheet(hasRoot);
   useEffect(() => {
@@ -358,6 +360,7 @@ function Harness({
         hasRoot={hasRoot}
         renderPage={renderPage}
         background={background}
+        companions={companions}
       >
         {children}
       </BottomSheet>
@@ -652,6 +655,43 @@ describe('BottomSheet', () => {
     expect(sheet().dataset.detent).toBe('half');
     expect(stage).not.toHaveAttribute('inert');
     stage.remove();
+  });
+
+  it('takes the notice beside the sheet into the trap at full (review case)', () => {
+    // The notice host stands outside the sheet, beside an inert stage: a
+    // trap over the sheet alone wrapped past its Undo, which the keyboard
+    // then could not reach at all.
+    const notice = document.createElement('div');
+    const undo = document.createElement('button');
+    undo.type = 'button';
+    undo.textContent = 'Undo';
+    notice.append(undo);
+    document.body.append(notice);
+    render(
+      <Harness
+        hasRoot
+        initial={[{ type: 'set-detent', detent: 'full' }]}
+        companions={() => [notice]}
+      >
+        <button type="button">Last</button>
+      </Harness>
+    );
+    const grabber = screen.getByRole('slider', { name: 'Sheet height' });
+    const last = screen.getByRole('button', { name: 'Last' });
+    // Tab on the sheet's last control steps on to the notice's Undo...
+    last.focus();
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(document.activeElement).toBe(undo);
+    // ...and on from there wraps round to the sheet's first control.
+    fireEvent.keyDown(undo, { key: 'Tab' });
+    expect(document.activeElement).toBe(grabber);
+    // Shift+Tab goes the other way round: first control to the Undo, and
+    // from the Undo back into the sheet.
+    fireEvent.keyDown(grabber, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(undo);
+    fireEvent.keyDown(undo, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+    notice.remove();
   });
 
   it('leaves controls that are not drawn out of the trap', () => {

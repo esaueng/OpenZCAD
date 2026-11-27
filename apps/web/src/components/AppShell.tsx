@@ -20,6 +20,7 @@ import {
   CompactCommandRowContext,
   COMPACT_OVERLAY_HOST_PENDING,
   CompactNoticeHostContext,
+  CompactStatusHostContext,
   CompactOverlayHostContext,
   CompactTrayHostContext,
   type CompactChromeProps,
@@ -307,6 +308,8 @@ function CompactAppShell({
   const [commandRowPresent, setCommandRowPresent] = useState(false);
   const [overlayHost, setOverlayHost] = useState<HTMLElement | null>(null);
   const [noticeHost, setNoticeHost] = useState<HTMLElement | null>(null);
+  // The sheet at full height: the status line joins the notice over it.
+  const [sheetFull, setSheetFull] = useState(false);
   // A running command's bar, drawn as the tray, takes the keypad under its
   // pinned row (U12 slice 4).
   const [keypadSlot, setKeypadSlot] = useState<HTMLElement | null>(null);
@@ -375,7 +378,11 @@ function CompactAppShell({
                         <div className="palette-float">{toolBar}</div>
                       )}
                       {panels}
-                      {readout}
+                      <CompactStatusHostContext.Provider
+                        value={sheetFull ? noticeHost : null}
+                      >
+                        {readout}
+                      </CompactStatusHostContext.Provider>
                       {onDropFiles && (
                         <Suspense fallback={null}>
                           <LazyFileDropTarget
@@ -403,6 +410,7 @@ function CompactAppShell({
                       onCommandRowHost={setCommandRowHost}
                       onOverlayHost={setOverlayHost}
                       onNoticeHost={setNoticeHost}
+                      onSheetFull={setSheetFull}
                       sheetContent={
                         hasSheetContent ? (
                           <>

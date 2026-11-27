@@ -114,8 +114,14 @@ export interface CompactSketchTrayProps {
     kind: string;
     fitting: readonly SketchConstraintToolKind[];
   } | null;
-  /** A spline is being placed: the tray offers ✓ to finish it. */
+  /** A spline is being placed. */
   splineInProgress: boolean;
+  /**
+   * The spline being placed can finish now (three distinct points): the
+   * tray offers ✓ for it. Its slot is held from the Spline tool being armed,
+   * so the row does not move under a finger as ✓ arrives.
+   */
+  splineCanFinish: boolean;
   /** The sketch's plane and overview, at the head of the palette. */
   workflow: ReactNode;
   /** The palette's body: display, snapping, constraints and DOF. */
@@ -419,6 +425,7 @@ export function CompactSketchTray(props: CompactSketchTrayProps) {
     canConstrain,
     relationSelection,
     splineInProgress,
+    splineCanFinish,
     textCard,
     onStageCovered
   } = props;
@@ -426,6 +433,7 @@ export function CompactSketchTray(props: CompactSketchTrayProps) {
   const page = tray?.page ?? null;
   useTrayPagesLeaveWithTray();
   const [chooser, setChooser] = useState<VariantSlot | null>(null);
+  const toolsRef = useRef<HTMLDivElement | null>(null);
 
   // A canvas press puts the tools back, as the rail's type strips fold.
   useEffect(() => {
@@ -521,7 +529,7 @@ export function CompactSketchTray(props: CompactSketchTrayProps) {
   const ShapeIcon = shapeSpec.icon;
   const CurveIcon = curveSpec.icon;
   const tools = (
-    <div className="compact-sketch-tools">
+    <div ref={toolsRef} className="compact-sketch-tools">
       {SKETCH_RAIL_TOOLS.slice(0, 3).map(drawTool)}
       <ToolButton
         label={`Circle: ${circleSpec.label}`}
@@ -687,6 +695,41 @@ export function CompactSketchTray(props: CompactSketchTrayProps) {
         )
       : null;
 
+  // The live tool's tile in view: at 360 px the row scrolls, and it comes
+  // back from a type chooser scrolled to its start, which left a Curve or
+  // Project armed there out of sight past the row's end, under All sketch
+  // tools. Only a change of tool or row moves it, never a tap on the canvas.
+  const finishSlotShown = tool === 'spline' || splineInProgress;
+  useLayoutEffect(() => {
+    const row = toolsRef.current;
+    const live = row?.querySelector<HTMLElement>('[aria-pressed="true"]');
+    if (!row || !live) return;
+    const room = row.getBoundingClientRect();
+    const tile = live.getBoundingClientRect();
+    if (tile.left < room.left) row.scrollLeft -= room.left - tile.left;
+    else if (tile.right > room.right) row.scrollLeft += tile.right - room.right;
+  }, [tool, chooser, finishSlotShown, curveOn, shapeOn]);
+
+  // ✓'s slot, held while the Spline tool is armed: the row keeps its place
+  // as ✓ arrives with the third point, so a tap meant for a tool never
+  // lands on it.
+  const finishSlot = finishSlotShown ? (
+    splineInProgress && splineCanFinish ? (
+      <button
+        type="button"
+        className="compact-tray-button is-confirm"
+        aria-label="Finish spline"
+        title="Finish the spline through the points placed"
+        {...OWN_ENTER}
+        onClick={props.onFinishSpline}
+      >
+        <Check aria-hidden="true" />
+      </button>
+    ) : (
+      <span className="compact-sketch-finish-slot" aria-hidden="true" />
+    )
+  ) : null;
+
   return (
     <>
       <div
@@ -694,18 +737,7 @@ export function CompactSketchTray(props: CompactSketchTrayProps) {
         role="toolbar"
         aria-label="Sketch tools"
       >
-        {splineInProgress ? (
-          <button
-            type="button"
-            className="compact-tray-button is-confirm"
-            aria-label="Finish spline"
-            title="Finish the spline through the points placed"
-            {...OWN_ENTER}
-            onClick={props.onFinishSpline}
-          >
-            <Check aria-hidden="true" />
-          </button>
-        ) : null}
+        {finishSlot}
         {typeRow ?? tools}
         <button
           type="button"

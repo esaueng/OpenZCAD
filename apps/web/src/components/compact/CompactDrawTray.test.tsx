@@ -140,8 +140,8 @@ function shell(props: Parameters<typeof Stage>[0]) {
 const panel = () => document.querySelector<HTMLElement>('.compact-sheet')!;
 const detent = () => panel().getAttribute('data-detent');
 const tray = () =>
-    // The tray is lazy: a cold first load takes longer than findBy's 1 s.
-    screen.findByRole('toolbar', { name: 'Draw tools' }, { timeout: 5000 });
+  // The tray is lazy: a cold first load takes longer than findBy's 1 s.
+  screen.findByRole('toolbar', { name: 'Draw tools' }, { timeout: 5000 });
 
 describe('CompactDrawTray (U12 slice 9)', () => {
   it('rests at peek and opens each page over the tray', async () => {
@@ -156,9 +156,7 @@ describe('CompactDrawTray (U12 slice 9)', () => {
       fireEvent.click(within(await tray()).getByRole('button', { name }));
       expect(await within(panel()).findByText(text)).toBeTruthy();
       expect(detent()).toBe('half');
-      fireEvent.click(
-        within(panel()).getByRole('button', { name: 'Back' })
-      );
+      fireEvent.click(within(panel()).getByRole('button', { name: 'Back' }));
       await waitFor(() => expect(detent()).toBe('peek'));
     }
   });
@@ -202,6 +200,115 @@ describe('CompactDrawTray (U12 slice 9)', () => {
     fireEvent.click(within(row).getByRole('button', { name: 'Done' }));
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onDone).toHaveBeenCalledTimes(1);
+
+    // A finger's tap after a drag on the sheet (a section line, a pan): on
+    // Linux and ChromeOS the browser makes no click of it, as the drag
+    // flung. Cancel and Done run on the lift, and a click that does come
+    // after it runs nothing twice (review case: the tool kept running).
+    for (const [name, handler] of [
+      ['Cancel', onCancel],
+      ['Done', onDone]
+    ] as const) {
+      const button = within(row).getByRole('button', { name });
+      const finger = {
+        pointerId: 7,
+        pointerType: 'touch',
+        clientX: 10,
+        clientY: 10
+      };
+      fireEvent.pointerDown(button, finger);
+      fireEvent.pointerUp(button, finger);
+      expect(handler).toHaveBeenCalledTimes(2);
+      fireEvent.click(button);
+      expect(handler).toHaveBeenCalledTimes(2);
+    }
+    // A finger that slid off its press runs nothing.
+    const cancel = within(row).getByRole('button', { name: 'Cancel' });
+    fireEvent.pointerDown(cancel, {
+      pointerId: 8,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10
+    });
+    fireEvent.pointerUp(cancel, {
+      pointerId: 8,
+      pointerType: 'touch',
+      clientX: 60,
+      clientY: 10
+    });
+    expect(onCancel).toHaveBeenCalledTimes(2);
+
+    // Done on a lift ends the tool, and its row: the click the browser may
+    // still make of that tap lands on the tray drawn in Done's place, and
+    // opens nothing there.
+    const done = within(row).getByRole('button', { name: 'Done' });
+    const lift = { pointerId: 9, pointerType: 'touch', clientX: 10, clientY: 10 };
+    fireEvent.pointerDown(done, lift);
+    fireEvent.pointerUp(done, lift);
+    expect(onDone).toHaveBeenCalledTimes(3);
+    rerender(shell({ sheets: sheets(), sheet, run: null }));
+    const shown = within(await tray()).getByRole('button', {
+      name: 'Export'
+    });
+    fireEvent.click(shown);
+    expect(within(panel()).queryByRole('heading', { name: 'Export' })).toBeNull();
+    // The next tap is a tap again.
+    fireEvent.pointerDown(shown, { ...lift, pointerId: 10 });
+    fireEvent.click(shown);
+    expect(
+      await within(panel()).findByRole('heading', { name: 'Export' })
+    ).toBeTruthy();
+  });
+
+  it('brings the settings of a newly added view into sight on Views', async () => {
+    const seen: string[] = [];
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(function (this: Element) {
+        seen.push(this.textContent ?? '');
+      });
+    try {
+      const { rerender } = render(
+        shell({ sheets: sheets(), sheet: content(), run: null })
+      );
+      fireEvent.click(
+        within(await tray()).getByRole('button', { name: 'Views' })
+      );
+      expect(await within(panel()).findByText('Views list')).toBeTruthy();
+      expect(seen).toEqual([]);
+      // Add view selects the new view: its settings stand above the list,
+      // out of sight of the Add view under it, until brought into view.
+      rerender(
+        shell({
+          sheets: sheets(),
+          sheet: content({
+            selectedView: <p>Right view settings</p>,
+            selectedViewId: 'dview_right'
+          }),
+          run: null
+        })
+      );
+      expect(
+        await within(panel()).findByText('Right view settings')
+      ).toBeTruthy();
+      expect(seen).toEqual(['Right view settings']);
+      // Another view, another scroll; the same one again, none.
+      rerender(
+        shell({
+          sheets: sheets(),
+          sheet: content({
+            selectedView: <p>Top view settings</p>,
+            selectedViewId: 'dview_top'
+          }),
+          run: null
+        })
+      );
+      await waitFor(() =>
+        expect(seen).toEqual(['Right view settings', 'Top view settings'])
+      );
+    } finally {
+      scrollIntoView.mockRestore();
+    }
   });
 
   it('opens Properties when the workspace asks for them', async () => {
@@ -273,7 +380,10 @@ describe('CompactDrawTray (U12 slice 9)', () => {
     const page = within(panel());
     expect(await page.findByText(warning)).toBeTruthy();
     const pdf = page.getByRole('button', { name: 'Export PDF' });
-    expect(pdf).toHaveAttribute('title', 'pdf as drawn before the model change');
+    expect(pdf).toHaveAttribute(
+      'title',
+      'pdf as drawn before the model change'
+    );
     fireEvent.click(page.getByRole('button', { name: 'Update' }));
     expect(onUpdate).toHaveBeenCalledTimes(1);
     fireEvent.click(pdf);

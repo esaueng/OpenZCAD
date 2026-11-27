@@ -123,6 +123,11 @@ export interface CompactWorkspaceProps extends CompactChromeProps {
   onOverlayHost(element: HTMLElement | null): void;
   /** Where the action notice goes: over the sheet, outside the stage. */
   onNoticeHost?(element: HTMLElement | null): void;
+  /**
+   * The sheet stands at full height, or no longer does: the stage under it
+   * is inert, and the status line moves to the notice host meanwhile.
+   */
+  onSheetFull?(full: boolean): void;
 }
 
 /**
@@ -188,7 +193,8 @@ export default function CompactWorkspace({
   tray = null,
   onCommandRowHost,
   onOverlayHost,
-  onNoticeHost
+  onNoticeHost,
+  onSheetFull
 }: CompactWorkspaceProps) {
   const chromeRef = useRef<HTMLDivElement | null>(null);
   const projectNameHintId = useId();
@@ -230,6 +236,13 @@ export default function CompactWorkspace({
   const { state, dispatch } = useSheet(hasRoot);
   const stateRef = useRef(state);
   stateRef.current = state;
+  // The stage goes inert under a full sheet: the shell moves the status
+  // line (and its Undo) over the sheet meanwhile, as the notice is.
+  const sheetFull = state.detent === 'full';
+  useEffect(() => {
+    onSheetFull?.(sheetFull);
+  }, [onSheetFull, sheetFull]);
+  useEffect(() => () => onSheetFull?.(false), [onSheetFull]);
 
   // Content arriving brings the sheet up to half (a running tool's row
   // alone to peek); content leaving closes a sheet that holds nothing else,
@@ -374,6 +387,18 @@ export default function CompactWorkspace({
     ],
     []
   );
+  // The notice host stands beside the sheet, outside the stage it makes
+  // inert at full height: its Undo (a toast's, the status line's) is part
+  // of the sheet's focus trap there.
+  const noticeHostRef = useRef<HTMLDivElement | null>(null);
+  const noticeHostCallback = useCallback(
+    (element: HTMLDivElement | null) => {
+      noticeHostRef.current = element;
+      onNoticeHost?.(element);
+    },
+    [onNoticeHost]
+  );
+  const companions = useCallback(() => [noticeHostRef.current], []);
   const onHeight = useCallback((px: number) => {
     (shell() as HTMLElement | null)?.style.setProperty(
       '--compact-sheet-h',
@@ -474,8 +499,14 @@ export default function CompactWorkspace({
     key: string
   ): { title: string; content: ReactNode } | null => {
     if (key.startsWith(TRAY_PAGE)) {
+      const trayKey = key.slice(TRAY_PAGE.length);
       return {
-        title: trayTitles.current.get(key.slice(TRAY_PAGE.length)) ?? '',
+        // The sketch's selection page names the pick as it is now: a paste
+        // or an undo changes it under the open page.
+        title:
+          trayKey === SKETCH_SELECTION_PAGE
+            ? (selectionLabel ?? 'Nothing picked')
+            : (trayTitles.current.get(trayKey) ?? ''),
         // The tray draws the page's content in here (a portal), so it keeps
         // the tray's own state and handlers.
         content: <div ref={setTrayPageHost} className="compact-tray-page" />
@@ -851,6 +882,7 @@ export default function CompactWorkspace({
           renderPage={renderPage}
           reducedMotion={reducedMotion}
           background={background}
+          companions={companions}
           onHeight={onHeight}
         >
           {/* The mode's tray first: the row the sheet shows at peek. A
@@ -898,7 +930,7 @@ export default function CompactWorkspace({
         {/* The action notice (a delete's Undo): over the sheet and outside
             the stage, which is inert while the sheet stands at full. */}
         <div
-          ref={onNoticeHost}
+          ref={noticeHostCallback}
           className="compact-notice-host"
           {...{ [SHEET_OVERLAY_ATTRIBUTE]: '' }}
         />

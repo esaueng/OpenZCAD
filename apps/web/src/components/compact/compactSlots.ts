@@ -164,6 +164,21 @@ export function useCompactNoticeHost(): HTMLElement | null {
 }
 
 /**
+ * Where the status line ("Added box." and its Undo, as `WorkspaceReadout`
+ * draws it) goes while the compact sheet stands at full height: the notice
+ * host, outside the stage the full sheet makes inert, so its Undo still
+ * takes a tap and focus there. Null at peek and half, where the status line
+ * stays on the stage as it was (nothing else floats over the model), and in
+ * the regular workspace.
+ */
+export const CompactStatusHostContext = createContext<HTMLElement | null>(null);
+
+/** The status line's host over a full compact sheet, or null. */
+export function useCompactStatusHost(): HTMLElement | null {
+  return useContext(CompactStatusHostContext);
+}
+
+/**
  * Marks what the compact sheet made inert while it stands at full height
  * (U12 slice 5). The workspace keymap reads it: a stage held behind the
  * sheet is out of reach of the model's keys, but the global ones (Ctrl+\,

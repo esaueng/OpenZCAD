@@ -6,6 +6,7 @@ import {
   test,
   waitForSurfacesToSettle
 } from './openzcad-fixtures';
+import { tabTo } from './compactHelpers';
 import { smallTouchTargets } from './touch-hit-area';
 
 /**
@@ -529,6 +530,50 @@ test.describe('the compact workspace frame', () => {
       await expect(sheet).toHaveAttribute('data-detent', 'full');
     }
   );
+
+  test('keeps the status line and its Undo in reach over a full-height sheet', async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openCompactProject(page, 'Compact status');
+    await placeBox(page);
+    // "Added box." offers its Undo on the status line.
+    const undo = page
+      .getByRole('contentinfo')
+      .getByRole('button', { name: /^Undo: Added box/ });
+    await expect(undo).toHaveCount(1);
+
+    // Raised to full, the stage under the sheet is inert; the status line
+    // is no longer on it, and stands at the sheet's foot, its Undo taking a
+    // tap and focus there.
+    const sheet = page.locator('.compact-sheet');
+    const grabber = sheet.getByRole('slider', { name: 'Sheet height' });
+    await grabber.focus();
+    await grabber.press('End');
+    await expect(sheet).toHaveAttribute('data-detent', 'full');
+    await expect(page.locator('.app-shell > .workspace')).toHaveAttribute(
+      'inert',
+      ''
+    );
+    await expect(undo).toBeVisible();
+    expect(
+      await undo.evaluate((element) => element.closest('[inert]') === null)
+    ).toBe(true);
+    await expectReachable(undo);
+    // By keyboard from inside the sheet: its focus trap takes the notice
+    // layer in, both ways round, and Enter runs the Undo (review case: the
+    // trap wrapped inside the sheet, leaving the Undo out of reach).
+    await grabber.focus();
+    await tabTo(page, undo, 'Tab');
+    await grabber.focus();
+    await tabTo(page, undo, 'Shift+Tab');
+    await expect(sheet).toHaveAttribute('data-detent', 'full');
+    await page.keyboard.press('Enter');
+    await expect(
+      page.getByRole('button', { name: 'Redo', exact: true })
+    ).toBeEnabled();
+  });
 
   test('Escape with More open steps back the page and leaves the tool running', async ({
     page

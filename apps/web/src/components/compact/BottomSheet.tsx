@@ -137,6 +137,12 @@ interface BottomSheetProps {
    * and taps stay in the sheet: the stage, the header, the tabs.
    */
   background?(): readonly (Element | null | undefined)[];
+  /**
+   * Layers outside the sheet that belong to it at full height: the notice
+   * over it (a toast's Undo, the status line's). Their controls join the
+   * focus trap after the sheet's own, so the keyboard reaches them too.
+   */
+  companions?(): readonly (Element | null | undefined)[];
   /** The sheet's drawn height in CSS pixels, as it changes. */
   onHeight?(px: number): void;
 }
@@ -159,6 +165,7 @@ export function BottomSheet({
   renderPage,
   reducedMotion = false,
   background,
+  companions,
   onHeight
 }: BottomSheetProps) {
   const sheetRef = useRef<HTMLElement | null>(null);
@@ -178,6 +185,8 @@ export function BottomSheet({
   const drawn = page ? renderPage(page.key) : null;
   const backgroundRef = useRef(background);
   backgroundRef.current = background;
+  const companionsRef = useRef(companions);
+  companionsRef.current = companions;
   const onHeightRef = useRef(onHeight);
   onHeightRef.current = onHeight;
 
@@ -449,27 +458,57 @@ export function BottomSheet({
         else dispatch({ type: 'set-detent', detent: next.detent });
         return;
       }
-      // The trap: at full, Tab wraps inside the sheet.
-      if (event.key === 'Tab' && detent === 'full' && sheetRef.current) {
-        const items = focusables(sheetRef.current);
-        if (items.length === 0) return;
-        const first = items[0]!;
-        const last = items[items.length - 1]!;
-        const active = document.activeElement;
-        if (
-          event.shiftKey &&
-          (active === first || !sheetRef.current.contains(active))
-        ) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && active === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
     },
-    [detent, dispatch, hasRoot, state]
+    [dispatch, hasRoot, state]
   );
+
+  // The trap: at full, Tab wraps inside the sheet and its companion layers
+  // (the notice over it). Those stand outside the sheet, beside an inert
+  // stage, so a trap over the sheet alone left their Undo out of reach of
+  // the keyboard. Listened for on the document, as a key pressed on a
+  // companion never reaches the sheet's own handler.
+  useEffect(() => {
+    if (detent !== 'full') return;
+    const onTab = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || event.defaultPrevented) return;
+      const sheet = sheetRef.current;
+      if (!sheet) return;
+      const layers = (companionsRef.current?.() ?? []).filter(
+        (element): element is HTMLElement =>
+          element instanceof HTMLElement && !sheet.contains(element)
+      );
+      const within = (node: unknown) =>
+        node instanceof Node &&
+        [sheet, ...layers].some((layer) => layer.contains(node));
+      if (!within(event.target)) return;
+      const own = focusables(sheet);
+      const extra = layers.flatMap((layer) => focusables(layer));
+      const items = [...own, ...extra];
+      if (items.length === 0) return;
+      const active = document.activeElement;
+      const at = items.indexOf(active as HTMLElement);
+      let next: HTMLElement | undefined;
+      if (event.shiftKey) {
+        if (at === 0 || !within(active)) {
+          next = items[items.length - 1];
+        } else if (own.length > 0 && at === own.length) {
+          // The first companion control steps back into the sheet.
+          next = own[own.length - 1];
+        }
+      } else if (at === items.length - 1) {
+        next = items[0];
+      } else if (extra.length > 0 && at === own.length - 1) {
+        // The sheet's last control steps on to the notice over it.
+        next = extra[0];
+      }
+      if (next) {
+        event.preventDefault();
+        next.focus();
+      }
+    };
+    document.addEventListener('keydown', onTab);
+    return () => document.removeEventListener('keydown', onTab);
+  }, [detent]);
 
   const level = SHEET_DETENTS.indexOf(detent as 'peek');
   const style =

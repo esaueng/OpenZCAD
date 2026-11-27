@@ -101,6 +101,7 @@ function props(
     selectedObjectCount: 0,
     relationSelection: null,
     splineInProgress: false,
+    splineCanFinish: false,
     workflow: <div className="sketch-workflow">Top plane</div>,
     palette: {
       settings: {
@@ -297,13 +298,65 @@ describe('the compact sketch', () => {
     ).toBeInTheDocument();
   });
 
-  it('offers ✓ to finish a spline while one is placed', async () => {
-    const p = props({ tool: 'spline', splineInProgress: true });
+  it('offers ✓ to finish a spline once it can finish', async () => {
+    const p = props({
+      tool: 'spline',
+      splineInProgress: true,
+      splineCanFinish: true
+    });
     render(shell(<CompactModeTray mode="sketch" {...p} />));
     fireEvent.click(
       within(await tools()).getByRole('button', { name: 'Finish spline' })
     );
     expect(p.onFinishSpline).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds ✓ back until the spline can finish, in a slot kept from arming', async () => {
+    /** The row's direct children, as the layout places them. */
+    const layout = (row: HTMLElement) =>
+      [...row.children].map(
+        (child) => child.getAttribute('aria-label') ?? child.className
+      );
+    const { rerender } = render(
+      shell(<CompactModeTray mode="sketch" {...props({ tool: 'line' })} />)
+    );
+    const row = await tools();
+    expect(row.querySelector('.compact-sketch-finish-slot')).toBeNull();
+    // Armed, with no point down: the slot is held, empty.
+    rerender(
+      shell(<CompactModeTray mode="sketch" {...props({ tool: 'spline' })} />)
+    );
+    const armed = layout(row);
+    expect(armed[0]).toBe('compact-sketch-finish-slot');
+    // One and two points: no ✓ yet, nothing moved.
+    rerender(
+      shell(
+        <CompactModeTray
+          mode="sketch"
+          {...props({ tool: 'spline', splineInProgress: true })}
+        />
+      )
+    );
+    expect(
+      within(row).queryByRole('button', { name: 'Finish spline' })
+    ).toBeNull();
+    expect(layout(row)).toEqual(armed);
+    // The third point: ✓ takes the slot, and everything else stays put.
+    rerender(
+      shell(
+        <CompactModeTray
+          mode="sketch"
+          {...props({
+            tool: 'spline',
+            splineInProgress: true,
+            splineCanFinish: true
+          })}
+        />
+      )
+    );
+    const finished = layout(row);
+    expect(finished[0]).toBe('Finish spline');
+    expect(finished.slice(1)).toEqual(armed.slice(1));
   });
 
   it('runs modify, construction, dimension, solve, diagnostics and extrude from the page', async () => {
@@ -391,6 +444,41 @@ describe('the compact sketch', () => {
     expect(p.onSelectAll).toHaveBeenCalledTimes(1);
   });
 
+  it('names the pick as it is now on its open page, after a paste or an undo', async () => {
+    const p = props({ selectedObjectCount: 1 });
+    const { rerender } = render(
+      shell(<CompactModeTray mode="sketch" {...p} />, undefined, 'Line 1')
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Selection: Line 1' })
+    );
+    expect(
+      await screen.findByRole('heading', { name: 'Line 1' })
+    ).toBeVisible();
+    // Paste picks what it pasted, with the page still open.
+    rerender(
+      shell(
+        <CompactModeTray
+          mode="sketch"
+          {...props({ selectedObjectCount: 2 })}
+        />,
+        undefined,
+        '2 entities'
+      )
+    );
+    expect(
+      await screen.findByRole('heading', { name: '2 entities' })
+    ).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Line 1' })).toBeNull();
+    // An undo that takes the pick away leaves nothing to name.
+    rerender(
+      shell(<CompactModeTray mode="sketch" {...props()} />, undefined, null)
+    );
+    expect(
+      await screen.findByRole('heading', { name: 'Nothing picked' })
+    ).toBeVisible();
+  });
+
   it('shows only the relations that fit the pick, as chips on the stage', async () => {
     const p = props({
       relationSelection: {
@@ -470,6 +558,7 @@ describe('the compact sketch', () => {
     const p = props({
       tool: 'spline',
       splineInProgress: true,
+      splineCanFinish: true,
       relationSelection: { kind: 'line', fitting: ['horizontal'] }
     });
     render(shell(<CompactModeTray mode="sketch" {...p} />));

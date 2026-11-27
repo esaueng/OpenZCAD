@@ -17,7 +17,14 @@ import {
   X,
   ZoomIn
 } from 'lucide-react';
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode
+} from 'react';
 import {
   MAX_DRAWING_TEXT_LENGTH,
   type DrawingSheet,
@@ -33,6 +40,7 @@ import {
 } from '../../lib/drawing/compactDraw';
 import { ANNOTATION_TOOL_ICONS } from '../drawingToolIcons';
 import { useCompactTray } from './compactSlots';
+import { SwipeActionTaps } from './swipeActionTap';
 import { TrayPage, TrayRow, type TrayItem } from './CompactTray';
 
 /** A view tool (section, detail, auxiliary), as the drawing toolbar has it. */
@@ -91,6 +99,11 @@ export interface CompactDrawSheet {
   views: ReactNode;
   /** The selected view's configuration and Delete view, or null. */
   selectedView: ReactNode | null;
+  /**
+   * Which view `selectedView` configures: a newly picked or added one
+   * brings its settings into the page's view.
+   */
+  selectedViewId?: string | null;
   /** The selected annotation's properties, or the sheet's. */
   properties: ReactNode;
   /** A view or an annotation is selected. */
@@ -269,6 +282,18 @@ function ViewsPage({
   onStart(start: () => void): void;
 }) {
   const [reasonLine, showReason] = useReason();
+  // The settings stand above the list, and Add view is under it: a view
+  // just added (or picked in the list) brings its settings into sight
+  // rather than leaving them scrolled off the page's top.
+  const selectedRef = useRef<HTMLDivElement | null>(null);
+  const shownViewId = sheet.selectedView
+    ? (sheet.selectedViewId ?? null)
+    : null;
+  useEffect(() => {
+    if (shownViewId === null) return;
+    // Its head first: the settings run taller than a half sheet.
+    selectedRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [shownViewId]);
   return (
     <div className="compact-draw-page">
       {reasonLine}
@@ -290,7 +315,12 @@ function ViewsPage({
         })}
       </ul>
       {sheet.selectedView ? (
-        <div className="compact-draw-section">{sheet.selectedView}</div>
+        <div
+          ref={selectedRef}
+          className="compact-draw-section compact-draw-selected"
+        >
+          {sheet.selectedView}
+        </div>
       ) : null}
       <div className="compact-draw-section">{sheet.views}</div>
     </div>
@@ -570,8 +600,69 @@ function ExportPage({ sheet }: { sheet: CompactDrawSheet }) {
   );
 }
 
-/** The running tool's row: its icon, its step, Cancel and Done. */
+/**
+ * The tray before the first sheet: its one action, New sheet, at peek. The
+ * tools that need a sheet are not shown greyed: there is nothing to pick
+ * on yet. A refused New sheet says why on a tap: a phone has no hover.
+ */
+function EmptyRow({ control }: { control: CompactDrawSheets }) {
+  const [reasonLine, showReason] = useReason();
+  const reason = control.createDisabledReason;
+  return (
+    <div className="compact-draw-empty">
+      <div
+        className="compact-tray is-mode"
+        role="toolbar"
+        aria-label="Draw tools"
+      >
+        <button
+          type="button"
+          className="compact-draw-new-sheet"
+          aria-disabled={reason !== null}
+          title={reason ?? undefined}
+          onClick={() =>
+            reason === null ? control.onCreate() : showReason(reason)
+          }
+        >
+          <Plus size={20} aria-hidden="true" />
+          New sheet
+        </button>
+      </div>
+      {reasonLine}
+    </div>
+  );
+}
+
+/**
+ * The running tool's row: its icon, its step, Cancel and Done.
+ *
+ * A finger or pen runs Cancel and Done as it lifts, not on the click the
+ * browser may make of the tap: the press before it is often a drag on the
+ * sheet (a section line, a detail circle, a pan), which flings, and
+ * Chromium on Linux and ChromeOS drops the tap that stops a fling, as it
+ * does after a row's swipe (`SwipeActionTaps`). A mouse, the keyboard and
+ * a screen reader click.
+ */
 function RunRow({ run }: { run: CompactDrawRun }) {
+  // Not disposed as the row goes: Cancel and Done end the tool, and the
+  // row with it, on the lift, and the click that may follow must still be
+  // swallowed then, not land on the tray button drawn in Done's place. The
+  // swallow ends itself on that click, the next press or a key.
+  const [taps] = useState(() => new SwipeActionTaps<'cancel' | 'done'>());
+  const tapAction = (key: 'cancel' | 'done', action: () => void) => ({
+    onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+      taps.press();
+      taps.pressAction(event, key);
+    },
+    onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (taps.release(event) !== key) return;
+      taps.ran();
+      action();
+    },
+    onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) =>
+      taps.cancel(event),
+    onClick: action
+  });
   return (
     <div
       className="compact-tray-row compact-draw-run"
@@ -591,7 +682,7 @@ function RunRow({ run }: { run: CompactDrawRun }) {
         type="button"
         className="compact-draw-run-button"
         aria-label="Cancel"
-        onClick={run.onCancel}
+        {...tapAction('cancel', run.onCancel)}
       >
         <X size={22} aria-hidden="true" />
       </button>
@@ -599,7 +690,7 @@ function RunRow({ run }: { run: CompactDrawRun }) {
         type="button"
         className="compact-draw-run-button is-done"
         aria-label="Done"
-        onClick={run.onDone}
+        {...tapAction('done', run.onDone)}
       >
         <Check size={22} aria-hidden="true" />
       </button>
@@ -639,11 +730,17 @@ export default function CompactDrawTray({
     shown?.();
     if (page !== 'properties') tray?.openPage('properties', 'Properties');
   }, [page, requested, shown, tray]);
+  // The last sheet deleted: its page goes, and New sheet is the tray.
+  const empty = !sheet && sheets.sheets.length === 0;
+  useEffect(() => {
+    if (empty && page) tray?.closePage();
+  }, [empty, page, tray]);
   const start = (begin: () => void) => {
     tray?.closePage();
     begin();
   };
   if (run) return <RunRow run={run} />;
+  if (empty) return <EmptyRow control={sheets} />;
   const missing = sheet ? null : NO_SHEET;
   const items: TrayItem[] = [
     {

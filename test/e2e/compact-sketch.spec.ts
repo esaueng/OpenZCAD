@@ -596,6 +596,130 @@ test.describe('the compact sketch', () => {
     }
   );
 
+  for (const size of [SIZES[1], SIZES[2]]) {
+    test(`places a spline by touch at ${size.width}×${size.height}: ✓ once it can finish, the row still, its words on the status line`, async ({
+      page
+    }) => {
+      test.setTimeout(180_000);
+      await openCompact(page, size, `Compact spline ${size.width}`);
+      await sketchOnTop(page);
+
+      // A lone line: its open ends are the overview's profile issues, each
+      // a row to tap, with Highlight gaps under them, at a finger's size.
+      await tapTool(page, 'Line');
+      await tapPlane(page, [
+        [-20, -4],
+        [20, -4]
+      ]);
+      await tapTool(page, 'Select');
+      const drawn = await expectMoreThan(page, 0);
+      await openAllSketchTools(page);
+      const issues = sheet(page).locator('.sketch-workflow-problems');
+      const summary = issues.locator('summary');
+      await summary.scrollIntoViewIfNeeded();
+      await summary.tap();
+      const gaps = issues.getByRole('button', { name: 'Highlight gaps' });
+      await gaps.scrollIntoViewIfNeeded();
+      await expect(gaps).toBeVisible();
+      await expect(issues.locator('li button').first()).toBeVisible();
+      await expectLargeTargets(page);
+      await sheet(page)
+        .getByRole('button', { name: 'Back', exact: true })
+        .tap();
+
+      // Fit spline, from the Curve tile's types: the row comes back with
+      // the live tile in view, not past the row's end under All sketch
+      // tools.
+      const curve = await tapTool(page, /^Curve:/);
+      await curve.tap();
+      await sketchTools(page)
+        .getByRole('radiogroup', { name: 'Curve type' })
+        .getByRole('radio', { name: 'Fit spline' })
+        .tap();
+      const live = sketchTools(page).getByRole('button', { name: /^Curve:/ });
+      await expect(live).toHaveAttribute('aria-pressed', 'true');
+      await expectReachable(live);
+
+      // ✓ waits for a spline it can finish, in a slot held from the start:
+      // nothing in the row moves under a finger as it arrives.
+      const finishSpline = sketchTools(page).getByRole('button', {
+        name: 'Finish spline'
+      });
+      const select = sketchTools(page).getByRole('button', {
+        name: 'Select',
+        exact: true
+      });
+      const row = async () =>
+        JSON.stringify([await select.boundingBox(), await live.boundingBox()]);
+      const before = await row();
+      // The count and a refusal are said on the status line, worded for a
+      // finger, never at the pointer, whose label ran off the stage here.
+      const said = page.locator('.workspace-toast-body');
+      const label = page.locator('.sketch-dim-label');
+      await tapPlane(page, [[-22, 10]]);
+      await expect(said).toHaveText('Spline · 1 point · tap the next point');
+      await expect(said).toBeInViewport({ ratio: 1 });
+      await tapPlane(page, [[-12, 16]]);
+      await expect(said).toHaveText('Spline · 2 points · tap the next point');
+      await expect(finishSpline).toHaveCount(0);
+      expect(await row()).toBe(before);
+      // The last point again asks to finish two points: refused, and said.
+      await tapPlane(page, [[-12, 16]]);
+      await expect(said).toHaveText(
+        'A spline needs at least three distinct points.'
+      );
+      await expect(said).toBeInViewport({ ratio: 1 });
+      await expect(label).not.toContainText(/points|Enter/);
+      expect(await entityCount(page)).toBe(drawn);
+      await tapPlane(page, [[-2, 10]]);
+      await expect(finishSpline).toBeVisible();
+      await expect(said).toHaveText(
+        'Spline · 3 points · Finish, or tap the first point to close'
+      );
+      expect(await row()).toBe(before);
+      await expectReachable(finishSpline);
+      await finishSpline.tap();
+      await expectEntities(page, drawn + 1);
+      await expect(finishSpline).toHaveCount(0);
+    });
+  }
+
+  test('finishes a spline that ends where it began, open, on its last point again', async ({
+    page
+  }) => {
+    test.setTimeout(180_000);
+    await openCompact(page, SIZES[1], 'Compact spline back to its start');
+    await sketchOnTop(page);
+    const curve = await tapTool(page, /^Curve:/);
+    await curve.tap();
+    await sketchTools(page)
+      .getByRole('radiogroup', { name: 'Curve type' })
+      .getByRole('radio', { name: 'Fit spline' })
+      .tap();
+    const finishSpline = sketchTools(page).getByRole('button', {
+      name: 'Finish spline'
+    });
+    const drawn = await entityCount(page);
+    // A, B, then A again, snapped onto the first point: an open spline
+    // that can finish. Its close would add a zero-length chord.
+    await tapPlane(page, [
+      [-20, 6],
+      [0, 16],
+      [-20, 6]
+    ]);
+    await expect(finishSpline).toBeVisible();
+    // A once more is the last point again: it finishes the spline open,
+    // rather than retrying a close that is refused and hiding Finish.
+    await tapPlane(page, [[-20, 6]]);
+    await expectEntities(page, drawn + 1);
+    const spline = (await sketchState(page)).objects.find(
+      (object) => object.data.objectKind === 'spline'
+    ) as { data: { closed?: boolean; points: unknown[] } } | undefined;
+    expect(spline?.data.points).toHaveLength(3);
+    expect(spline?.data.closed ?? false).toBe(false);
+    await expect(finishSpline).toHaveCount(0);
+  });
+
   test('keeps Enter, a text draft and the pick true to what is on the sketch', async ({
     page
   }) => {
