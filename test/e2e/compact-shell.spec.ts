@@ -236,6 +236,41 @@ test.describe('the compact workspace frame', () => {
     );
   }
 
+  test('keeps the header’s “Edit not applied” whole at 360px, giving way with the name', async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 360, height: 640 });
+    await openCompactProject(page, 'A long project name for a phone header');
+    // The chip CompactWorkspace draws for a refused edit, where it draws it
+    // (after the name, before the search): a held kernel refusal is what
+    // raises it for real, and only its fit in the header is measured here.
+    await page.locator('.compact-header').evaluate((header) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'compact-refusal-chip';
+      chip.setAttribute('aria-label', 'Edit not applied: reopen it');
+      chip.innerHTML =
+        '<svg width="16" height="16" aria-hidden="true"></svg><span class="compact-refusal-text">Edit not applied</span>';
+      header.insertBefore(
+        chip,
+        header.querySelector('[aria-label="Open the command bar"]')
+      );
+    });
+    const fit = await page.locator('.compact-header').evaluate((header) => {
+      const words = header.querySelector('.compact-refusal-text')!;
+      const name = header.querySelector('.compact-project-button')!;
+      return {
+        wordsWhole: words.scrollWidth <= words.clientWidth,
+        nameShown: name.getBoundingClientRect().width,
+        headerFits: header.scrollWidth <= header.clientWidth
+      };
+    });
+    expect(fit.wordsWhole).toBe(true);
+    expect(fit.nameShown).toBeGreaterThanOrEqual(44);
+    expect(fit.headerFits).toBe(true);
+  });
+
   test('moves the undo pair with the sheet, never on a clock of its own', async ({
     page
   }) => {

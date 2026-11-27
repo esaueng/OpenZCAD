@@ -2066,7 +2066,8 @@
 /* The top bar's "Edit not applied" in the header: it brings back the
    refused edit, as the top bar's chip does. */
 .compact-refusal-chip {
-  flex: 0 1 auto;
+  /* Its words are whole: the project's name gives way first. */
+  flex: 0 0 auto;
   box-sizing: border-box;
   min-width: var(--compact-target);
   height: var(--compact-target);
@@ -2092,8 +2093,6 @@
 }
 
 .compact-refusal-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
   font-weight: var(--fw-semibold);
@@ -2109,26 +2108,38 @@
   min-width: 0;
 }
 
-.compact-segments {
+/* The tabs' bar stays at the top of the sheet's scroll, opaque from edge
+   to edge (over the sheet body's side padding, and the gap under it), so
+   the rows scrolled under it never show around the rounded tabs. */
+.compact-segments-bar {
   position: sticky;
-  top: 0;
+  top: calc(var(--sp-1) * -1);
   z-index: 1;
+  margin: calc(var(--sp-1) * -1) calc(var(--sp-2) * -1) 0;
+  padding: var(--sp-1) var(--sp-1) var(--sp-1);
+  background: var(--color-surface);
+}
+
+/* Every tab a finger's size, at 360px too: the inactive ones are 44px
+   squares and the active one takes the rest for its word. These rules are
+   the panel tabs' own (the library's shelves share the class name). */
+.compact-segments {
   display: flex;
-  gap: var(--sp-1);
-  padding: var(--sp-1);
+  gap: 2px;
+  padding: 2px;
   border-radius: 999px;
   background: var(--color-surface-raised);
 }
 
-.compact-segment {
-  flex: 1 1 0;
+.compact-segments > .compact-segment {
+  flex: 0 0 var(--compact-target);
   min-width: var(--compact-target);
   min-height: var(--compact-target);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--sp-1);
-  padding: 0 var(--sp-2);
+  padding: 0;
   border: 0;
   border-radius: 999px;
   background: transparent;
@@ -2136,14 +2147,23 @@
   cursor: pointer;
 }
 
-.compact-segment.active {
-  flex: 2 1 auto;
+.compact-segments > .compact-segment.active {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 6px;
   background: var(--color-accent-dim);
   color: var(--color-accent);
 }
 
-.compact-segment-label {
-  font-size: 15px;
+.compact-segments > .compact-segment > svg {
+  flex: 0 0 auto;
+}
+
+.compact-segments .compact-segment-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 14px;
   font-weight: var(--fw-semibold);
   white-space: nowrap;
 }
@@ -2461,6 +2481,157 @@
   min-height: var(--compact-target);
 }
 
+.compact-panel-list .object-color-swatch {
+  flex-basis: var(--compact-target);
+  width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+/* Parameters: the name over its field, its value and type, with the
+   Tweak toggle and Delete beside the name. A touch screen has no hover, so
+   Delete and the Tweak toggle always show; each control takes a finger.
+   The regular row's five tracks squeezed the name to a letter a line at
+   360px. */
+.compact-panel-list .param-row {
+  grid-template-columns:
+    minmax(0, 1fr) minmax(0, max-content) var(--compact-target)
+    var(--compact-target);
+  grid-template-areas:
+    'name name expose delete'
+    'field value value value';
+  gap: var(--sp-1);
+  padding-block: var(--sp-1);
+}
+
+.compact-panel-list .param-row > :first-child {
+  grid-area: name;
+}
+
+.compact-panel-list .param-row > :is(.param-expression, .param-toggle) {
+  grid-area: field;
+}
+
+.compact-panel-list .param-row > .param-value {
+  grid-area: value;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.compact-panel-list .param-row > .param-expose {
+  grid-area: expose;
+}
+
+.compact-panel-list .param-row > .row-delete {
+  grid-area: delete;
+}
+
+.compact-panel-list .param-name,
+.compact-panel-list .param-readable-name {
+  font-size: 15px;
+}
+
+.compact-panel-list .param-name-button {
+  min-height: var(--compact-target);
+}
+
+.compact-panel-list :is(.param-row, .param-add) input,
+.compact-panel-list .param-description {
+  height: var(--compact-target);
+  /* The no-zoom size: no field is drawn above it (touchContracts). */
+  font-size: 16px;
+}
+
+.compact-panel-list .param-row .param-expression {
+  field-sizing: fixed;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.compact-panel-list .param-toggle {
+  height: var(--compact-target);
+  font-size: 15px;
+}
+
+.compact-panel-list .param-quantity-chip {
+  /* Its picker fills the chip inside its 1px border. */
+  height: calc(var(--compact-target) + 2px);
+  min-width: calc(var(--compact-target) + 2px);
+}
+
+.compact-panel-list :is(.param-expose, .row-delete) {
+  width: var(--compact-target);
+  height: var(--compact-target);
+  opacity: 1;
+}
+
+.compact-panel-list :is(.param-expose, .row-delete) svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* The add row and print clearance: their fields share the width, and
+   each button after them is a finger's square. */
+.compact-panel-list .param-add {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-auto-columns: var(--compact-target);
+  grid-auto-flow: column;
+  gap: var(--sp-1);
+}
+
+.compact-panel-list .param-add .icon-button {
+  width: var(--compact-target);
+  height: var(--compact-target);
+}
+
+/* Revisions: each row's name and its actions at a finger's size, the
+   actions shown without a hover. */
+.compact-panel-list .revision-reason {
+  min-height: var(--compact-target);
+  font-size: 15px;
+}
+
+.compact-panel-list .revision-actions {
+  gap: 0;
+  opacity: 1;
+}
+
+.compact-panel-list .revision-detail-actions {
+  gap: var(--sp-1);
+}
+
+.compact-panel-list .revision-action {
+  min-width: var(--compact-target);
+  height: var(--compact-target);
+  padding: 0 6px;
+}
+
+.compact-panel-list .revision-rename-input {
+  min-height: var(--compact-target);
+  font-size: 16px;
+}
+
+/* The confirmations these panels ask (a step's dependents, a reset): their
+   answers at a finger's size, side by side or one over the other. */
+[data-shell='compact'] :is(.confirm-dialog-actions, .delete-feature-actions) {
+  flex-wrap: wrap;
+}
+
+[data-shell='compact']
+  :is(.confirm-dialog-actions, .delete-feature-actions)
+  > button {
+  flex: 1 1 auto;
+  /* Portalled to the body, outside the shell that sets the target. */
+  min-width: var(--compact-target, 44px);
+  height: auto;
+  min-height: var(--compact-target, 44px);
+  font-size: 15px;
+}
+
 /* ── The selection sheet (slice 5) ── */
 .compact-selection-page {
   display: flex;
@@ -2565,15 +2736,17 @@
   transition: opacity var(--dur-fast) ease-out;
 }
 
+/* Never taller than the scrim's box (the screen less its safe areas): the
+   heading and Cancel stay put and the items scroll between them. */
 .compact-action-sheet {
   box-sizing: border-box;
   width: 100%;
   max-width: 480px;
-  max-height: calc(100dvh - var(--sp-4) * 2);
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  overflow: auto;
+  overflow: hidden;
   padding: var(--sp-2);
   border-radius: 24px;
   background: var(--color-surface);
@@ -2593,8 +2766,18 @@
 }
 
 .compact-action-sheet-items {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.compact-action-sheet-heading,
+.compact-action-sheet > .compact-action-sheet-item.is-cancel,
+.compact-action-sheet-items > .compact-action-sheet-item {
+  flex: 0 0 auto;
 }
 
 .compact-action-sheet-item {
