@@ -1385,6 +1385,34 @@ describe('Options-only refusals in another tool (gear)', () => {
   });
 });
 
+// A value whose label opens with the tool's last word is named once:
+// "Solid offset", not "Solid offset offset"; "Draft", not "Draft draft".
+describe('a refused typed value names its tool once', () => {
+  const FACE: FacePick = {
+    bodyId: 'body_a' as BodyId,
+    hash: 11,
+    topologyId: 'f11',
+    surfaceType: 'plane',
+    normal: { x: 0, y: 0, z: 1 },
+    centroid: { x: 10, y: 5, z: 4 },
+    point: { x: 12, y: 6, z: 4 }
+  };
+
+  it.each([
+    ['solid-offset', 'distance', -1, '-1; Solid offset takes more than 0.'],
+    ['draft', 'angle', 90, '90; Draft takes more than -90 and less than 90.']
+  ] as const)('%s', (tool, valueId, value, message) => {
+    const { hook } = setup();
+    act(() => hook.result.current.start(tool, [], [FACE]));
+    let accepted = true;
+    act(() => {
+      accepted = hook.result.current.setValue(valueId, value);
+    });
+    expect(accepted).toBe(false);
+    expect(hook.result.current.refusal).toBe(message);
+  });
+});
+
 describe('useInPlaceCommand: hole step chips', () => {
   const FACE: FacePick = {
     bodyId: 'body_a' as BodyId,

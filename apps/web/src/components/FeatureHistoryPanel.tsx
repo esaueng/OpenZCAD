@@ -4,6 +4,7 @@ import {
   isFeatureRollbackSuppressed,
   isFeatureSuppressed,
   type FeatureId,
+  type FeatureWarning,
   type ProjectDocument,
   type FeatureNode
 } from '@openzcad/shared';
@@ -11,9 +12,10 @@ import { featureHistory } from '../lib/featureHistory';
 import { datumPlaneDescription } from '../lib/datumPlanes';
 import { builtOnFailedFeatures } from '../lib/featureRepair';
 import {
-  refusingWarning,
+  refusingWarningDetail,
   type FeatureBuildError
 } from '../lib/featureValidation';
+import { plainRefusal } from '../lib/refusalLanguage';
 
 interface Props {
   document: ProjectDocument;
@@ -22,6 +24,13 @@ interface Props {
   selectedId: string | null;
   /** Features the current rebuild reported as failed or refused. */
   failedFeatureIds?: ReadonlySet<FeatureId>;
+  /**
+   * The typed warnings the rebuild attributed to `document.derived`. A
+   * committed projection keeps only the warning strings (the records are
+   * advice to this session, not saved state), so without these a typed
+   * refusal could only be shown in the adapter's words.
+   */
+  featureWarnings?: readonly FeatureWarning[];
   failure: FeatureBuildError | null;
   onSelect(id: string): void;
   onDismissFailure(): void;
@@ -32,6 +41,7 @@ export function FeatureHistoryPanel({
   scope = {},
   selectedId,
   failedFeatureIds,
+  featureWarnings,
   failure,
   onSelect,
   onDismissFailure
@@ -59,15 +69,21 @@ export function FeatureHistoryPanel({
   const culprit = failure?.featureId
     ? graph.features.find((feature) => feature.featureId === failure.featureId)
     : undefined;
-  const warning =
+  // Worded as the command bar words it: a typed code by its code, kernel
+  // text in plain words, an adapter sentence as it is.
+  const refusing =
     selected && !isFeatureSuppressed(selected)
-      ? refusingWarning(
+      ? refusingWarningDetail(
           selected.name,
           document.derived.warnings,
-          document.derived.featureWarnings,
+          featureWarnings ?? document.derived.featureWarnings,
           selected.featureId
         )
       : null;
+  const warning = refusing
+    ? plainRefusal(refusing.reason, refusing.kernelRefusal ?? refusing.category)
+        .message
+    : null;
   const link = (feature: FeatureNode) => (
     <li key={feature.featureId}>
       <button

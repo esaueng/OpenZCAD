@@ -66,6 +66,10 @@ interface AdapterRefusalSpec {
  *   less.
  * - `cylinder_dimension_not_positive`: a cylinder primitive with a
  *   nonpositive radius or height.
+ * - `mirror_source_unavailable`: the body a Mirror reflects has no shape at
+ *   the Mirror's place in the history (it is suppressed, or the feature that
+ *   makes it failed and handed nothing through). No kernel call is made, so
+ *   no kernel code exists for it.
  */
 export const ADAPTER_REFUSALS = {
   union_not_solid: {
@@ -106,7 +110,8 @@ export const ADAPTER_REFUSALS = {
   cylinder_dimension_not_positive: {
     family: 'validation',
     category: 'invalid_input'
-  }
+  },
+  mirror_source_unavailable: { family: 'reference', category: 'invalid_input' }
 } as const satisfies Record<string, AdapterRefusalSpec>;
 
 export type AdapterRefusalCode = keyof typeof ADAPTER_REFUSALS;

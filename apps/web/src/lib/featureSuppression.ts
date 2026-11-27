@@ -6,10 +6,11 @@ import {
   isFeatureSuppressed,
   type FeatureId,
   type FeatureNode,
+  type FeatureWarning,
   type ProjectDocument
 } from '@openzcad/shared';
 import { featureHistory, featureResultBodyIds } from './featureHistory';
-import { FeatureBuildError, refusingWarning } from './featureValidation';
+import { FeatureBuildError, refusingWarningDetail } from './featureValidation';
 
 /** A later feature that cannot rebuild once the source is suppressed. */
 export interface RefusedDependent {
@@ -17,6 +18,12 @@ export interface RefusedDependent {
   name: string;
   /** The rebuild's own reason. Kernel wording: for logs, never the UI. */
   reason: string;
+  /**
+   * The refusal's typed record, when the rebuild classified it. A surface
+   * that shows `reason` words it with `plainRefusal(reason, kernelRefusal)`,
+   * so a typed code reads the same there as on the command bar.
+   */
+  kernelRefusal?: FeatureWarning['kernelRefusal'];
 }
 
 /** How many dependents a refusal sentence names before it counts the rest. */
@@ -71,19 +78,33 @@ export function featureFailureReason(
   feature: FeatureNode,
   derived: ProjectDocument['derived']
 ): string | null {
-  return (
-    refusingWarning(
-      feature.name,
-      derived.warnings,
-      derived.featureWarnings,
-      feature.featureId
-    ) ??
-    (featureResultBodyIds(feature).some(
-      (id) => !ownEntry(derived.bodyRepresentations, id)
-    )
-      ? 'The dependent feature did not produce its result body.'
-      : null)
+  return featureFailure(feature, derived)?.reason ?? null;
+}
+
+/**
+ * {@link featureFailureReason} with the refusal's typed record beside it,
+ * when the rebuild classified one.
+ */
+export function featureFailure(
+  feature: FeatureNode,
+  derived: ProjectDocument['derived']
+): Pick<RefusedDependent, 'reason' | 'kernelRefusal'> | null {
+  const warning = refusingWarningDetail(
+    feature.name,
+    derived.warnings,
+    derived.featureWarnings,
+    feature.featureId
   );
+  if (warning) {
+    return warning.kernelRefusal
+      ? { reason: warning.reason, kernelRefusal: warning.kernelRefusal }
+      : { reason: warning.reason };
+  }
+  return featureResultBodyIds(feature).some(
+    (id) => !ownEntry(derived.bodyRepresentations, id)
+  )
+    ? { reason: 'The dependent feature did not produce its result body.' }
+    : null;
 }
 
 /**
@@ -124,9 +145,9 @@ export function suppressionRefusal(
     (a, b) => (order.get(a.featureId) ?? 0) - (order.get(b.featureId) ?? 0)
   );
   const refused = dependents.flatMap((feature): RefusedDependent[] => {
-    const reason = featureFailureReason(feature, derived);
-    return reason
-      ? [{ featureId: feature.featureId, name: feature.name, reason }]
+    const failure = featureFailure(feature, derived);
+    return failure
+      ? [{ featureId: feature.featureId, name: feature.name, ...failure }]
       : [];
   });
   return refused.length

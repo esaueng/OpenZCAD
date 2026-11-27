@@ -35,6 +35,10 @@ import {
 } from '../apps/web/src/lib/inPlace/mirrorBodies';
 import { validatedFeatureRejection } from '../apps/web/src/lib/featureValidation';
 import {
+  MIRROR_SOURCE_UNAVAILABLE,
+  plainRefusal
+} from '../apps/web/src/lib/refusalLanguage';
+import {
   buildModelingOperationSubmission,
   type ModelingOperationFormState
 } from '../apps/web/src/lib/modelingOperations';
@@ -354,8 +358,20 @@ describe('M11: Mirror of several bodies, one feature each, one transaction', () 
       )
     ).toMatchObject({
       kind: 'build-failed',
-      message: `Feature "${refused?.featureName}": Mirror target is unavailable.`
+      message: `Feature "${refused?.featureName}": Mirror target is unavailable.`,
+      // Typed, so the bar words it from the code, never from this prose.
+      kernelRefusal: {
+        family: 'reference',
+        category: 'invalid_input',
+        code: 'mirror_source_unavailable'
+      }
     });
+    const warning = derived.featureWarnings?.find(
+      (candidate) => candidate.featureId === refused?.featureId
+    );
+    expect(plainRefusal(warning!.message, warning!.kernelRefusal).message).toBe(
+      MIRROR_SOURCE_UNAVAILABLE
+    );
     // The others did build: only that body holds the set.
     expect(refusedMirrorMember(members.slice(0, 2), derived)).toBeNull();
     // Done's commit gate judges every body's Mirror as a target of its own,

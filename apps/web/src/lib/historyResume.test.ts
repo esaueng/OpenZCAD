@@ -217,6 +217,30 @@ describe('resume preflight decision', () => {
     ]);
   });
 
+  it("carries each failure's typed record, so the dialog can word it", () => {
+    const { features, derived } = rolledBackChain();
+    const resumed = rollbackMarkerMove(features, null).resumed;
+    const kernelRefusal = {
+      family: 'reference',
+      category: 'invalid_input',
+      code: 'mirror_source_unavailable'
+    } as const;
+    derived.featureWarnings = [
+      {
+        ...failed(features[1]!, 'Mirror target is unavailable.'),
+        kernelRefusal
+      }
+    ];
+    expect(resumeFailures(resumed, derived)).toEqual([
+      {
+        featureId: features[1]!.featureId,
+        name: 'Copy',
+        reason: 'Mirror target is unavailable.',
+        kernelRefusal
+      }
+    ]);
+  });
+
   it('passes a clean candidate', () => {
     const { features, derived } = rolledBackChain();
     const resumed = rollbackMarkerMove(features, null).resumed;

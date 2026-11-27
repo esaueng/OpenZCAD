@@ -50,6 +50,7 @@ import { placeImage as placedImage } from '../lib/inPlace/image';
 import type { RevolveAxisCandidate } from '../lib/inPlace/revolve';
 import type { InPlaceEditSeed } from '../lib/inPlace/edit';
 import { inPlacePanelState } from '../lib/inPlace/panel';
+import { toolValueName } from '../lib/inPlace/valueName';
 import { findFeature } from '@openzcad/document-core';
 import type { PlacementPick } from '../lib/inPlace/primitives';
 import {
@@ -2462,7 +2463,7 @@ export function useInPlaceCommand(
             : `${whole}${valueSpec.min ?? 0} to ${valueSpec.max}`;
         refuseEntry({
           valueId,
-          message: `${raw === undefined ? value : `${raw} is ${value}`}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
+          message: `${raw === undefined ? value : `${raw} is ${value}`}; ${toolValueName(IN_PLACE_TOOL_SPECS[current.tool].title, valueSpec.label)} takes ${range}.`
         });
         return false;
       }
