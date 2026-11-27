@@ -477,3 +477,105 @@ describe('ObjectsPanel', () => {
     expect(screen.getByRole('button', { name: 'Box 1' })).toBeInTheDocument();
   });
 });
+
+describe('ObjectsPanel: Enter on a focused row', () => {
+  /**
+   * Stands in for the workspace's window key handler: Enter it is given is
+   * Done (or a pick's value entry), and it prevents the key's default, which
+   * cancels a focused button's own activation. It leaves a control that owns
+   * Enter alone, as App.tsx does.
+   */
+  function workspaceEnter() {
+    const reached: { repeat: boolean }[] = [];
+    const listener = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter') return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[data-own-enter]')
+      )
+        return;
+      reached.push({ repeat: event.repeat });
+      event.preventDefault();
+    };
+    window.addEventListener('keydown', listener);
+    return {
+      reached,
+      dispose: () => window.removeEventListener('keydown', listener)
+    };
+  }
+
+  function renderTwoBodies() {
+    const plate = body('body-1', 'Plate');
+    const post = body('body-2', 'Post');
+    const rendered = renderPanel({
+      features: [
+        feature(1, { bodyId: plate.bodyId }),
+        feature(2, { bodyId: post.bodyId })
+      ],
+      representations: { [plate.bodyId]: plate, [post.bodyId]: post }
+    });
+    const list = within(screen.getByRole('list', { name: 'Objects' }));
+    return { ...rendered, row: list.getByRole('button', { name: 'Post' }) };
+  }
+
+  it('picks a keyboard-focused row once, and the workspace never sees the press', () => {
+    const workspace = workspaceEnter();
+    try {
+      const { props, row } = renderTwoBodies();
+      row.focus();
+      expect(row).toHaveAttribute('data-own-enter');
+      const fresh = fireEvent.keyDown(row, { key: 'Enter' });
+      expect(fresh).toBe(false);
+      expect(props.onSelectBody).toHaveBeenCalledTimes(1);
+      expect(props.onSelectBody).toHaveBeenCalledWith('body-2', false);
+      expect(workspace.reached).toEqual([]);
+      expect(row).toHaveFocus();
+
+      // A held Enter: its repeats neither pick again (which would take a
+      // command's pick back off) nor reach the workspace's Done.
+      fireEvent.keyDown(row, { key: 'Enter', repeat: true });
+      fireEvent.keyDown(document.body, { key: 'Enter', repeat: true });
+      expect(props.onSelectBody).toHaveBeenCalledTimes(1);
+      expect(workspace.reached).toEqual([]);
+
+      // Released: the next fresh press picks again.
+      fireEvent.keyUp(row, { key: 'Enter' });
+      fireEvent.keyDown(row, { key: 'Enter' });
+      expect(props.onSelectBody).toHaveBeenCalledTimes(2);
+      expect(workspace.reached).toEqual([]);
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  it('leaves Enter to the workspace after a pointer press focused the row', () => {
+    const workspace = workspaceEnter();
+    try {
+      const { props, row } = renderTwoBodies();
+      fireEvent.pointerDown(row);
+      row.focus();
+      fireEvent.pointerUp(row);
+      fireEvent.click(row);
+      expect(props.onSelectBody).toHaveBeenCalledTimes(1);
+      expect(row).not.toHaveAttribute('data-own-enter');
+      fireEvent.keyDown(row, { key: 'Enter' });
+      expect(props.onSelectBody).toHaveBeenCalledTimes(1);
+      expect(workspace.reached).toEqual([{ repeat: false }]);
+
+      // Tabbing away and back is keyboard focus again: the row owns Enter.
+      row.blur();
+      row.focus();
+      expect(row).toHaveAttribute('data-own-enter');
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  it('leaves a modified Enter alone', () => {
+    const { props, row } = renderTwoBodies();
+    row.focus();
+    expect(fireEvent.keyDown(row, { key: 'Enter', ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(row, { key: 'Enter', shiftKey: true })).toBe(true);
+    expect(props.onSelectBody).not.toHaveBeenCalled();
+  });
+});

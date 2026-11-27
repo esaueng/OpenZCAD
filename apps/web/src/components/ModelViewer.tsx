@@ -5052,8 +5052,10 @@ export function ModelViewer({
      */
     const sketchMovePointerGate = new SketchMovePointerGate();
     // L02: on a touch screen the selection card's toggles stand in for the
-    // keys a finger does not have. Multi-select is Ctrl/⌘ (and Shift's
-    // additive pick); Free values is Shift's "no snaps, exact value".
+    // keys a finger does not have. Multi-select is Shift's additive pick,
+    // and Ctrl/⌘'s toggle where one is read (sketch entities and profiles;
+    // face, edge and body picks read Shift alone); Free values is Shift's
+    // "no snaps, exact value".
     const addsToSelection = (event: MouseEvent) =>
       event.shiftKey || touchModifiersRef.current.multiSelect;
     const togglesSelection = (event: MouseEvent) =>

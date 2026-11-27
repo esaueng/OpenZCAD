@@ -490,6 +490,11 @@ import {
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
+import {
+  chipEntryLostItsPicks,
+  chipEntryOpenedOver,
+  type SlotPickCounts
+} from './lib/inPlace/chipEntrySlots';
 import { commandChipName } from './lib/inPlace/chipNames';
 import { loneBodyFor } from './lib/inPlace/loneBody';
 import {
@@ -30087,6 +30092,8 @@ export function App() {
   }, [inPlace.tool]);
   /** Whether the value a command keypad opened on had been set by the user. */
   const commandKeypadTouchedRef = useRef(false);
+  /** The picks a command chip's open entry was opened over, per slot. */
+  const commandKeypadSlotsRef = useRef<SlotPickCounts>({});
   /** The keypad moves a command handle through this, without a render. */
   const commandSetterRef = useRef<
     ((valueId: string, value: number) => void) | null
@@ -30367,6 +30374,11 @@ export function App() {
     if (!valueSpec) return false;
     const raw = inPlace.raws[valueId];
     commandKeypadTouchedRef.current = inPlace.touched.includes(valueId);
+    commandKeypadSlotsRef.current = chipEntryOpenedOver(
+      inPlace.slots,
+      inPlace.handles,
+      valueId
+    );
     setKeypad({
       kind: 'command',
       commandValueId: valueId,
@@ -30385,6 +30397,30 @@ export function App() {
     });
     return true;
   }
+  // A chip's entry (its editor and keypad) closes, as if canceled, once
+  // picks it was opened over are taken back and its chip goes with them:
+  // Align's Offset after a click on the moving face in the preview cleared
+  // the pair. It used to stay open over nothing, so the first Escape only
+  // closed it. The rule is every command's; see chipEntryLostItsPicks for
+  // why nothing else closes an entry.
+  useEffect(() => {
+    const open = keypadRef.current;
+    if (
+      !inPlace.active ||
+      open?.kind !== 'command' ||
+      !open.commandValueId ||
+      !chipEntryLostItsPicks(
+        commandKeypadSlotsRef.current,
+        inPlace.slots,
+        inPlace.handles,
+        open.commandValueId
+      )
+    )
+      return;
+    commandKeypadSlotsRef.current = {};
+    cancelOpenKeypad();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- cancelOpenKeypad reads refs
+  }, [keypad, inPlace.active, inPlace.slots, inPlace.handles]);
   /**
    * The values a running command takes from the keyboard, in the order its
    * Options list them: those with a chip in the viewport (a box's Width,

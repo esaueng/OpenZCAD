@@ -1195,6 +1195,24 @@ describe('touch modifier toggles', () => {
     }
   });
 
+  it("says Multi-select is Shift's pick, and promises Ctrl/⌘ only where it is read", () => {
+    try {
+      renderWithModifiers(true);
+      fireEvent.focus(screen.getByRole('button', { name: 'Multi-select' }));
+      const help = screen.getByRole('tooltip').textContent ?? '';
+      // Face, edge and body clicks add only with Shift (or this toggle):
+      // the help used to say "as Shift or Ctrl does".
+      expect(help).not.toMatch(/as Shift or Ctrl/);
+      expect(help).toContain('as Shift-click does');
+      expect(help).toContain(
+        'Ctrl- or ⌘-click does so only for sketch entities and profiles'
+      );
+      expect(help).toContain('and for any row in Objects');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps them off a mouse or trackpad rail, which has the keys', () => {
     try {
       renderWithModifiers(false);
