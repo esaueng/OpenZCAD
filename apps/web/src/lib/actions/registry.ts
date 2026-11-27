@@ -114,6 +114,29 @@ export const COMPACT_ENTRIES: Readonly<
   'file-export-mesh': 'overflow-menu',
   'file-export-image': 'overflow-menu',
   'file-export-cnc-layout': 'overflow-menu',
+  // Slice 5, panels: the segmented panel sheet (More › Panels, the command
+  // bar's panel rows, Ctrl+\, the header's warning count) and History as a
+  // touch list: a tap edits a step, a swipe suppresses, deletes or rolls
+  // back. `compact-panels.spec.ts` reaches each of these by taps.
+  'panel-history': 'panel-sheet',
+  'panel-objects': 'panel-sheet',
+  'panel-parameters': 'panel-sheet',
+  'panel-revisions': 'panel-sheet',
+  'panel-diagnostics': 'panel-sheet',
+  'panel-comments': 'panel-sheet',
+  'panels-hide-all': 'panel-sheet',
+  'feature-edit': 'panel-sheet',
+  'feature-suppress': 'panel-sheet',
+  'feature-delete': 'panel-sheet',
+  'history-rollback': 'panel-sheet',
+  // A History row's long press, and the model's, open the same menus as
+  // action sheets. Those menus also run Fit, the display toggles and a
+  // body's visibility, whose home is View's tray below.
+  'feature-rename': 'action-sheet',
+  'view-normal-to-face': 'action-sheet',
+  // The selection chip's sheet: the double-click picks and the filter.
+  'selection-whole-body': 'selection-sheet',
+  'selection-filter': 'selection-sheet',
   // Slice 10: the project sheet (a tap on the header's project name) holds
   // the name field, the File menu's units and Duplicate project; Settings
   // › Advanced the support exports; the header's search, full-screen, takes
@@ -224,7 +247,14 @@ const COMMAND_BAR_ONLY: readonly (readonly [id: string, label: string])[] = [
   ['workspace-mode-drawing', 'Switch to Draw mode'],
   ['app-help', 'Help & keyboard shortcuts'],
   ['project-rename', 'Rename project'],
-  ['project-duplicate', 'Duplicate project']
+  ['project-duplicate', 'Duplicate project'],
+  // The model panels and Comments by name (U12 slice 5).
+  ['panel-history', 'Open History'],
+  ['panel-objects', 'Open Objects'],
+  ['panel-parameters', 'Open Parameters'],
+  ['panel-revisions', 'Open Revisions'],
+  ['panel-diagnostics', 'Open Diagnostics'],
+  ['panel-comments', 'Open Comments']
 ];
 
 /** Keymap commands that also have a command-bar row of the same id. */

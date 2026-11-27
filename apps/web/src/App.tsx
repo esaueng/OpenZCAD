@@ -207,6 +207,7 @@ import {
   SlidersHorizontal,
   SquareDashed,
   ListOrdered,
+  MessageSquare,
   Spline,
   Trash2,
   TriangleRight,
@@ -347,6 +348,7 @@ import {
   duplicateProjectName,
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureManuallySuppressed,
+  isFeatureRollbackSuppressed,
   isFeatureSuppressed,
   patternSourceProblem,
   projectBranchPoint,
@@ -902,7 +904,10 @@ import {
   relocateMovePivot,
   translationForRoundedMove
 } from '@openzcad/viewport/move-transform';
-import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
+import {
+  closedCircleLoopSelections,
+  edgeRunSelections
+} from '@openzcad/viewport/edge-chain';
 import {
   faceBoundaryEdges,
   outlineChamferChain,
@@ -1120,7 +1125,6 @@ import {
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
-import type { CompactProjectSheet } from './components/compact/compactSlots';
 import {
   listedStoredFiles,
   projectCommentsOffered,
@@ -1128,6 +1132,20 @@ import {
 } from './lib/projectMenuGates';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { useWorkspaceShell } from './hooks/useWorkspaceShell';
+import {
+  COMPACT_PANEL_ORDER,
+  togglePanelSheet,
+  type CompactPanelId
+} from './components/compact/panelSheet';
+import {
+  SHEET_INERT_ATTRIBUTE,
+  yieldCompactSheet,
+  type CompactProjectSheet,
+  type CompactSelectionAction,
+  type CompactSelectionSheet
+} from './components/compact/compactSlots';
+import type CompactPanelBodyComponent from './components/compact/CompactPanels';
+import type { ModelPanelSource } from './components/modelPanels/modelPanelProps';
 import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
@@ -1521,6 +1539,22 @@ const ModelPanel = createLazyPanel<ComponentProps<typeof ModelPanelComponent>>(
       default: module.ModelPanel
     }))
 );
+// U12 slice 5: the compact panel sheet's bodies and the compact workspace's
+// action sheets load only where the compact workspace is in force.
+const CompactPanelBody = createLazyPanel<
+  ComponentProps<typeof CompactPanelBodyComponent>
+>('Panels', () => import('./components/compact/CompactPanels'));
+const LazyCompactActionSheet = lazyWithStaleChunkNotice(
+  () => import('./components/compact/CompactActionSheet')
+);
+/** A context menu as the compact workspace draws one: an action sheet. */
+function CompactActionSheet(props: ComponentProps<typeof ContextMenu>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyCompactActionSheet {...props} />
+    </Suspense>
+  );
+}
 /**
  * Focuses a field inside a model panel once it exists. The panels' bodies
  * are lazy: on the first open the chunk loads and the panel mounts some
@@ -2138,6 +2172,7 @@ import {
   refusedMirrorMember,
   type MirrorSetMember
 } from './lib/inPlace/mirrorBodies';
+import { planeEdgeFromTopology } from './lib/inPlace/splitEdgePlane';
 import { imagePlacementPlane, placeImage } from './lib/inPlace/image';
 import {
   FIXED_POINT_OPTION,
@@ -3528,6 +3563,19 @@ export function App() {
   // U12 slice 2: the compact workspace, where this device's layout
   // preference puts it in force (Settings › Appearance › Layout).
   const compactShell = useWorkspaceShell().shell === 'compact';
+  // U12 slice 5: the compact workspace's panel sheet, which panel it shows
+  // (null while shut) and the one shown last, for Ctrl+\ to bring back.
+  // Never stored: it is where this visit is, not the device's layout.
+  const [compactPanel, setCompactPanel] = useState<CompactPanelId | null>(null);
+  const lastCompactPanelRef = useRef<CompactPanelId | null>(null);
+  /** Opens the compact panel sheet on a panel, or shuts it with null. */
+  function openCompactPanel(id: CompactPanelId | null) {
+    if (id !== null) lastCompactPanelRef.current = id;
+    setCompactPanel(id);
+    // Comments load and pin while their segment shows, as while the
+    // regular workspace's Comments panel is open.
+    setCommentsOpen(id === 'comments');
+  }
   // The compact workspace reads the panels as the regular one does but never
   // stores what it changes: the regular layout taken as it comes into force
   // is put back as it leaves, and the state it left behind is never saved.
@@ -3549,6 +3597,7 @@ export function App() {
     const regular = regularPanelsRef.current;
     if (!regular) return;
     regularPanelsRef.current = null;
+    setCompactPanel(null);
     const left = latestPanelsRef.current;
     compactPanelsLeftRef.current = { state: left.state, layout: left.layout };
     setPanelLayout(regular.layout);
@@ -5326,6 +5375,17 @@ export function App() {
   /** Opens exact entry for the armed handle, as tapping its chip would. */
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
+  /**
+   * The History step a row menu was opened on (U12 review). Its items are
+   * drawn, and the chosen one runs, from the document as it is then, not as
+   * it was when the menu opened: an undo or redo while it stands open must
+   * not leave Delete checking dependents against an older document.
+   */
+  const featureMenuSourceRef = useRef<{
+    menu: ViewportMenuState;
+    featureId: FeatureId;
+    row?: HistoryRowActions;
+  } | null>(null);
   /** Counts tool launches, so a launch held for its panel's chunk can tell
    * whether another has superseded it. */
   const toolLaunchRef = useRef(0);
@@ -5336,7 +5396,8 @@ export function App() {
     handleDeleteFeature,
     handleDeleteImportedFace,
     toggleBodyVisibility,
-    isolateBody
+    isolateBody,
+    openFlatPattern
   });
   viewportMenuHandlersRef.current = {
     launchTool,
@@ -5345,7 +5406,23 @@ export function App() {
     handleDeleteFeature,
     handleDeleteImportedFace,
     toggleBodyVisibility,
-    isolateBody
+    isolateBody,
+    openFlatPattern
+  };
+  /**
+   * What a History row's own actions run, through the latest render (U12
+   * review): a row menu holds the row's actions from when it opened, and a
+   * delete or rollback must still check the document as it is when chosen.
+   */
+  const historyRowHandlersRef = useRef({
+    handleDeleteFeatures,
+    handleRollbackAfterFeature,
+    handleResumeHistory
+  });
+  historyRowHandlersRef.current = {
+    handleDeleteFeatures,
+    handleRollbackAfterFeature,
+    handleResumeHistory
   };
   const managerRef = useRef<CommandManager | null>(null);
   /** The latest patch Apply, by token (see patchApplyReport). */
@@ -8776,6 +8853,17 @@ export function App() {
         : migrationEditReason
           ? `${migrationEditReason}. This device’s version can’t replace the live one now.`
           : null;
+
+  // The model panels are Build's: in the compact workspace a mode without
+  // them shuts the panel sheet on one (U12 slice 5). Comments are not
+  // Build's: as the regular workspace's floating Comments panel stays open
+  // in every mode, so does their segment.
+  useEffect(() => {
+    if (!compactShell || !modelingLocked) return;
+    setCompactPanel((open) =>
+      open === null || open === 'comments' ? open : null
+    );
+  }, [compactShell, modelingLocked]);
 
   useEffect(() => {
     if (compactShell) return;
@@ -23676,6 +23764,10 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [commentsOpen, doc?.projectId, commentsUnavailableReason]);
   function openComments() {
+    if (compactShell) {
+      openCompactPanel('comments');
+      return;
+    }
     setCommentsOpen(true);
   }
   /** Runs one comment change, then reloads the list; false when it failed. */
@@ -23894,6 +23986,30 @@ export function App() {
           !representations[selection.bodyId] ||
           (command.editing?.data.featureKind === 'boolean' &&
             command.editing.ownBodyIds.includes(selection.bodyId));
+        // M11 (D2): with the body picked, a straight edge is half of a plane
+        // through two edges (Split). The plane is read once from the edges
+        // as they stand on screen, the preview's first, and stored by its
+        // numbers like a face's: nothing follows the edges afterwards.
+        if (
+          selection.kind === 'edge' &&
+          command.spec.planeFromEdges &&
+          command.slots.bodies.length > 0 &&
+          command.options.planeMode !== 'typed' &&
+          !additive
+        ) {
+          const edge =
+            selection.hash === undefined
+              ? null
+              : planeEdgeFromTopology(
+                  (
+                    previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+                    representations[selection.bodyId]
+                  )?.topology,
+                  selection.bodyId,
+                  selection.hash
+                );
+          return edge ? command.pickPlaneEdge(edge) : true;
+        }
         // With the body picked, a flat face is the plane to mirror or split
         // across; otherwise any face names its body. M11 (D4): Shift on
         // Mirror, which takes several bodies, toggles the clicked body.
@@ -30907,6 +31023,20 @@ export function App() {
   );
   const inPlaceEdgesRef = useRef(inPlace.slots.edges);
   inPlaceEdgesRef.current = inPlace.slots.edges;
+  // M11 (D2): a Split's edges held toward a plane through two edges, drawn
+  // from their exact ends over whichever body shows (the committed body, the
+  // preview's halves): not a selection, which the viewport matches by an id
+  // only one of those bodies has.
+  const inPlacePlaneEdgeLines = useMemo(
+    () =>
+      inPlace.active && inPlaceSpec?.planeFromEdges
+        ? (inPlace.slots.planeEdges ?? []).map(({ ends: [start, end] }) => ({
+            start,
+            end
+          }))
+        : [],
+    [inPlace.active, inPlaceSpec?.planeFromEdges, inPlace.slots.planeEdges]
+  );
   const litInPlaceEdges = useRef(false);
   useEffect(() => {
     if (inPlaceEdgeKey === null) {
@@ -36439,13 +36569,15 @@ export function App() {
     contextMenuActionsRef.current = Object.fromEntries(
       entries.map((entry) => [entry.item.id, entry.run])
     );
-    setContextMenu({
+    const menu: ViewportMenuState = {
       x,
       y,
       items: entries.map((entry) => entry.item),
       ...(heading ? { heading } : {}),
       ...(face ? { face } : {})
-    });
+    };
+    setContextMenu(menu);
+    return menu;
   }
 
   function handleViewportContextMenu(
@@ -36727,7 +36859,9 @@ export function App() {
                   icon: <SquareDashed size={13} aria-hidden="true" />,
                   section: true
                 },
-                run: () => openFlatPattern(sheetSource.featureId)
+                run: runCurrent((handlers) =>
+                  handlers.openFlatPattern(sheetSource.featureId)
+                )
               }
             ]
           : []),
@@ -37122,6 +37256,60 @@ export function App() {
     feature: FeatureNode,
     row?: HistoryRowActions
   ) {
+    // The heading names the feature these actions touch, and names the menu.
+    const menu = openContextMenu(
+      at.clientX,
+      at.clientY,
+      featureMenuEntries(feature, row),
+      feature.name
+    );
+    featureMenuSourceRef.current = { menu, featureId: feature.featureId, row };
+  }
+
+  /**
+   * A History row menu as this render's document gives it, or undefined
+   * for any other menu. Drawn on every render while it stands open, and
+   * read again when an item is chosen, so each item's checks (Delete's
+   * dependents, Duplicate's refusal) are the live document's. An empty list
+   * when the step is gone. So is where the row stands against the rollback
+   * marker: an undo or redo that moves the marker under an open menu turns
+   * its "Roll back to here" into "Resume full history", or back.
+   */
+  function liveFeatureMenu(menu: ViewportMenuState) {
+    const source = featureMenuSourceRef.current;
+    if (!source || source.menu !== menu) return undefined;
+    const index = features.findIndex(
+      (candidate) => candidate.featureId === source.featureId
+    );
+    const feature = index >= 0 ? features[index] : undefined;
+    if (!feature) return [];
+    const row = source.row
+      ? { ...source.row, endOfHistory: liveEndOfHistory(index) }
+      : undefined;
+    return featureMenuEntries(feature, row);
+  }
+
+  /**
+   * Where the step at `index` stands against the end of history in this
+   * render's document, as History's rows read it (`findRollbackMarkerIndex`):
+   * `marker` when history is rolled back to just after it, `last` when it is
+   * the final step with nothing rolled back, otherwise null.
+   */
+  function liveEndOfHistory(index: number): HistoryRowActions['endOfHistory'] {
+    let built = features.length - 1;
+    while (built >= 0 && isFeatureRollbackSuppressed(features[built]!)) {
+      built -= 1;
+    }
+    const last = features.length - 1;
+    if (built >= 0 && built < last) return index === built ? 'marker' : null;
+    return index === last ? 'last' : null;
+  }
+
+  /** What a History row's menu (or a model feature's) offers for it. */
+  function featureMenuEntries(
+    feature: FeatureNode,
+    row?: HistoryRowActions
+  ): Parameters<typeof openContextMenu>[2] {
     const bodyId = feature.bodyId ?? null;
     const body = bodyId ? representations[bodyId] : null;
     const repair = staleDirectEditFaceRepair(feature, warnings);
@@ -37130,7 +37318,11 @@ export function App() {
     const entries: Parameters<typeof openContextMenu>[2] = [
       {
         item: { id: 'edit', label: 'Edit properties' },
-        run: () => handleSelectFeatureFromTree(feature.id)
+        run: () => {
+          // In the compact workspace the edit form is the sheet's next page.
+          if (compactShell) openCompactPanel(null);
+          handleSelectFeatureFromTree(feature.id);
+        }
       },
       ...(featureEditsInPlace(feature)
         ? [
@@ -37140,7 +37332,10 @@ export function App() {
                 label: 'Measurements',
                 icon: <Ruler size={13} aria-hidden="true" />
               },
-              run: () => showFeatureMeasurements(feature)
+              run: () => {
+                if (compactShell) openCompactPanel(null);
+                showFeatureMeasurements(feature);
+              }
             }
           ]
         : []),
@@ -37471,8 +37666,7 @@ export function App() {
             : handleDeleteFeature(feature.featureId, feature.name)
       }
     ];
-    // The heading names the feature these actions touch, and names the menu.
-    openContextMenu(at.clientX, at.clientY, entries, feature.name);
+    return entries;
   }
 
   // `previewDoc` renders geometry from a proposal nobody has applied, and only
@@ -37577,11 +37771,20 @@ export function App() {
   const workspaceKeyDownRef = useRef<(event: KeyboardEvent) => void>(() => {});
   useLayoutEffect(() => {
     workspaceKeyDownRef.current = function onKeyDown(event: KeyboardEvent) {
+      const inertHolder = workspaceRef.current?.closest('[inert]') ?? null;
+      // The compact sheet at full height holds the stage inert, and nothing
+      // else does (U12 review): the model's keys wait, but the global ones
+      // (Ctrl+\ for the panels, Ctrl+K, Undo, Save and the rest) still
+      // apply, as they do over the regular workspace's panels.
+      const sheetHoldsStage =
+        compactShell &&
+        inertHolder !== null &&
+        inertHolder.hasAttribute(SHEET_INERT_ATTRIBUTE) &&
+        !inertHolder.parentElement?.closest('[inert]');
       if (
         sharePage !== null ||
         !workspaceInputEnabled ||
-        (workspaceRef.current?.closest('[inert]') &&
-          !modalLendsWorkspaceKeys()) ||
+        (inertHolder && !sheetHoldsStage && !modalLendsWorkspaceKeys()) ||
         modalHoldsKeyboard()
       ) {
         return;
@@ -37605,6 +37808,20 @@ export function App() {
         chord && (!typing || chordLeavesTypingAlone(chord))
           ? keymap.commandFor(chord, ['global'])?.id
           : undefined;
+      // Over the full compact sheet only a global command goes on, through
+      // the same branches below as anywhere else, in the same order. So a
+      // global command bound to a bare digit (Save on 1) waits where the
+      // regular workspace's does: a digit typed at an armed command is that
+      // command's first size there (see the in-place branch below), and it
+      // is here too, its entry drawn in the sheet.
+      if (sheetHoldsStage && !global) return;
+      // The command bar and the assistant are drawn on the stage, which the
+      // full sheet holds inert: the sheet comes down to half first, at once,
+      // so what the key opens takes focus and typing. Settings and the named
+      // save are dialogs over the whole frame, usable at any height.
+      const yieldStage = () => {
+        if (sheetHoldsStage) flushSync(() => yieldCompactSheet(inertHolder));
+      };
 
       if (global === 'app-settings') {
         event.preventDefault();
@@ -37614,6 +37831,9 @@ export function App() {
 
       if (global === 'assistant-toggle') {
         event.preventDefault();
+        if (assistantAvailable && !assistantHidden && assistantCollapsed) {
+          yieldStage();
+        }
         setPanelState((current) => ({
           ...current,
           assistantCollapsed: !current.assistantCollapsed
@@ -37653,6 +37873,16 @@ export function App() {
       // Tweak leave it as it is.
       if (global === 'panels-hide-all') {
         event.preventDefault();
+        // The compact workspace's panels are one sheet: the key opens it on
+        // the panel last shown, or shuts it.
+        if (compactShell) {
+          if (!modelingLocked) {
+            openCompactPanel(
+              togglePanelSheet(compactPanel, lastCompactPanelRef.current)
+            );
+          }
+          return;
+        }
         if (!modelingLocked) {
           // Showing the panels is asked for; hiding them leaves the drawer.
           if (panelLayout.options.hidden) {
@@ -37670,6 +37900,7 @@ export function App() {
       }
       if (global === 'command-palette') {
         event.preventDefault();
+        if (!paletteOpen) yieldStage();
         actionHandlers['command-palette']();
         return;
       }
@@ -39045,9 +39276,12 @@ export function App() {
    * and the top bar's warning count do: unpinned if it was closed, forward
    * if it was open.
    */
-  const showModelPanel = (
-    id: 'history' | 'parameters' | 'revisions' | 'diagnostics'
-  ) => {
+  const showModelPanel = (id: PanelId) => {
+    // The compact workspace has one panel sheet (U12 slice 5).
+    if (compactShell) {
+      if (!modelingLocked) openCompactPanel(id);
+      return;
+    }
     presentPanelChange(
       (current) => presentPanel(current, id, panelStageOrUndefined),
       id
@@ -39137,6 +39371,17 @@ export function App() {
     regionCount: selectedProfiles.length
   };
   const commandContext = commandContextFor(commandSelection);
+  /** A command-bar row that opens a model panel (U12 slice 5). */
+  const panelRow = (id: PanelId, keywords: string[]) => {
+    const Icon = PANEL_ICONS[id];
+    return {
+      label: PANEL_TITLES[id],
+      group: 'Panel',
+      keywords: ['panel', ...keywords],
+      icon: <Icon size={16} aria-hidden="true" />,
+      run: () => showModelPanel(id)
+    } satisfies Omit<PaletteCommand, 'id'>;
+  };
   // No two rows share a name: a repeated one is numbered.
   const paletteCommands = withDistinctLabels<PaletteCommand>([
     // Typed search reaches tools across modes, with the destination stated
@@ -39688,6 +39933,45 @@ export function App() {
       icon: <SettingsIcon size={16} aria-hidden="true" />,
       run: actionHandlers['app-settings']
     },
+    // The model panels and Comments by name (U12 slice 5): the compact
+    // workspace has no rail, and a search for "history" found nothing. Each
+    // opens its panel in either workspace; the panels are Build's.
+    ...(!modelingLocked
+      ? [
+          {
+            id: 'panel-history',
+            ...panelRow('history', ['timeline', 'steps', 'features', 'tree'])
+          },
+          {
+            id: 'panel-objects',
+            ...panelRow('bodies', ['bodies', 'parts', 'sketches', 'browser'])
+          },
+          {
+            id: 'panel-parameters',
+            ...panelRow('parameters', ['variables', 'configurations'])
+          },
+          {
+            id: 'panel-revisions',
+            ...panelRow('revisions', ['checkpoints', 'versions', 'saves'])
+          },
+          {
+            id: 'panel-diagnostics',
+            ...panelRow('diagnostics', ['warnings', 'errors', 'problems'])
+          }
+        ]
+      : []),
+    ...(doc && (!shareSession || shareSession.comments)
+      ? [
+          {
+            id: 'panel-comments',
+            label: 'Comments',
+            group: 'Panel',
+            keywords: ['panel', 'review', 'notes', 'pins', 'discussion'],
+            icon: <MessageSquare size={16} aria-hidden="true" />,
+            run: openComments
+          } satisfies PaletteCommand
+        ]
+      : []),
     // What the model is made of: every feature and parameter by name, last,
     // so a search that names one lands on it in its panel.
     ...(!modelingLocked
@@ -40305,6 +40589,165 @@ export function App() {
         }}
       />
     ) : null;
+  /**
+   * Everything the model panels read and every action they offer, once for
+   * both homes: the regular workspace's docks and the compact panel sheet.
+   */
+  const modelPanelSource = (): ModelPanelSource => ({
+    parameters,
+    parameterValues: parameterScope.scope,
+    parameterMinimums: liveParameterMinimums,
+    features,
+    representations,
+    objectRepresentations: inPlaceEditObjectRows?.representations,
+    pickOnlyBodyIds: inPlaceEditObjectRows?.pickOnly,
+    failedFeatureIds: failedHistoryFeatureIds,
+    geometryPending: panelGeometryPending,
+    geometryPendingShown: panelGeometryPendingShown,
+    previewPending: !currentGeometrySnapshot,
+    relatedFeatureIds: historyRelatedFeatureIds,
+    selectedFeatureNodeId,
+    localAppend:
+      latestLocalAppend?.projectId === doc?.projectId
+        ? latestLocalAppend
+        : null,
+    selectedSketchProfileId,
+    hiddenBodyIds,
+    hiddenSketchIds,
+    document: doc,
+    hiddenDatumIds,
+    onHiddenDatumIdsChange: setHiddenDatumIds,
+    hiddenReferenceImageIds,
+    onHiddenReferenceImageIdsChange: setHiddenReferenceImageIds,
+    selectedReferenceImageId:
+      tool === 'reference-image' ? openReferenceImageId : null,
+    onSelectReferenceImage: (imageId) =>
+      openReferenceImage(imageId as ReferenceImageId),
+    onPmiCommand: executeCommand,
+    warnings: diagnostics,
+    pendingHistoryStep:
+      pendingHistoryStepFor(commandSession) ??
+      (shownParkedRefusal
+        ? {
+            title: shownParkedRefusal.title,
+            message: shownParkedRefusal.message,
+            onReopen: reopenEditRefusal
+          }
+        : null),
+    editingHistoryFeatureId: shownParkedRefusal?.parked
+      ? editedFeatureIdFor(
+          shownParkedRefusal.parked.interaction,
+          offsetPlanEdit
+        )
+      : editedFeatureIdFor(interaction, offsetPlanEdit),
+    historyDetails: (
+      <FeatureHistoryPanel
+        document={doc}
+        scope={parameterScope.scope}
+        selectedId={selectedFeatureNodeId}
+        failedFeatureIds={failedHistoryFeatureIds}
+        failure={
+          historyFailure?.projectId === doc.projectId &&
+          historyFailure.version === doc.version
+            ? historyFailure.error
+            : null
+        }
+        onSelect={handleOpenHistoryFeature}
+        onDismissFailure={() => setHistoryFailure(null)}
+      />
+    ),
+    checkpoints: doc?.checkpoints ?? [],
+    projectId:
+      navigationBusyRef.current || shareSession ? undefined : doc.projectId,
+    documentVersion: doc?.version ?? 0,
+    restorableCheckpointIds,
+    accountCheckpointIds,
+    currentUserId: session?.userId ?? null,
+    onSelectFeature: handleSelectFeatureFromTree,
+    onSelectBody: handleSelectBodyFromTree,
+    selectedBodyIds,
+    onToggleBodyVisibility: toggleBodyVisibility,
+    onIsolateBody: isolateBody,
+    isolatedBodyId,
+    onRenameBody: editDisabledReason ? undefined : handleRenameBody,
+    bodyAppearancePreview,
+    onPreviewBodyAppearance: previewBodyAppearance,
+    onCommitBodyAppearance: editDisabledReason
+      ? undefined
+      : commitBodyAppearance,
+    objectFolderActions,
+    onToggleSketchVisibility: toggleSketchVisibility,
+    onFeatureContextMenu: handleFeatureContextMenu,
+    onToggleFeatureSuppression: handleToggleFeatureSuppression,
+    onRollbackAfterFeature: (featureId, name) =>
+      historyRowHandlersRef.current.handleRollbackAfterFeature(featureId, name),
+    onResumeHistory: () => historyRowHandlersRef.current.handleResumeHistory(),
+    onRenameFeature: handleRenameFeature,
+    onDeleteFeatures: editDisabledReason
+      ? undefined
+      : (featureIds) =>
+          historyRowHandlersRef.current.handleDeleteFeatures(featureIds),
+    onEditSketch: editDisabledReason ? undefined : editSketchFeatureInViewport,
+    units: doc?.units ?? 'mm',
+    onConfigureToggle: (name, bodyIds) => {
+      if (ensureCanEdit('configure an on/off parameter')) {
+        executeCommand(
+          commandFactories.configureParameterToggle({ name, bodyIds })
+        );
+      }
+    },
+    onPreviewParameter: handlePreviewParameter,
+    onSetParameter: (name, expression) => handleSetParameter(name, expression),
+    printClearance,
+    configurationTable: {
+      configurations: configurationView,
+      features,
+      onExportRow: handleExportConfigurationRow,
+      ...(editDisabledReason ? {} : { actions: configurationActions })
+    },
+    onSetPrintClearance: editDisabledReason
+      ? undefined
+      : handleSetPrintClearance,
+    onParameterAddRefused: (name, message) =>
+      setStatus(`Parameter ${name} was not added.`, { detail: message }),
+    onSetParameterQuantity: (name, quantity, expression) => {
+      const current = parameters.find((entry) => entry.name === name);
+      return current
+        ? handleSetParameter(
+            name,
+            expression ?? current.expression,
+            false,
+            quantity
+          )
+        : Promise.resolve(`Parameter ${name} does not exist.`);
+    },
+    parameterQuantitySuggestions,
+    onViewActivityLog: openActivityLog,
+    refusalReproductionFor: (name, message) =>
+      saveRefusalReproduction(`parameter:${name}`, message),
+    onDeleteParameter: (name) =>
+      executeCommand(commandFactories.deleteParameter({ name })),
+    onRenameParameter: handleRenameParameter,
+    onExposeParameter: (name, exposed) =>
+      executeCommand(commandFactories.setParameterExposed({ name, exposed })),
+    onDescribeParameter: (name, description) =>
+      executeCommand(
+        commandFactories.setParameterDescription({ name, description })
+      ),
+    exposedParameterNames,
+    onReorderFeature: handleReorderFeature,
+    reorderBusy: validatedBusy,
+    onRestoreCheckpoint: (checkpoint) =>
+      void handleRestoreSaveState(checkpoint),
+    onBranchCheckpoint: (checkpoint) => void handleBranchSaveState(checkpoint),
+    onPreviewCheckpoint: (checkpoint) =>
+      void handlePreviewSaveState(checkpoint),
+    onCompareCheckpoint: setComparingSave,
+    previewingCheckpointId: savePreviewActive
+      ? savePreview.checkpoint.checkpointId
+      : null,
+    onRenameCheckpoint: editDisabledReason ? undefined : handleRenameCheckpoint
+  });
   const renderModelPanel = (
     id: PanelId,
     placement: PanelPlacement,
@@ -40317,177 +40760,7 @@ export function App() {
         ...(dock ? { dock } : {})
       }}
       views={modelPanelViews}
-      parameters={parameters}
-      parameterValues={parameterScope.scope}
-      parameterMinimums={liveParameterMinimums}
-      features={features}
-      representations={representations}
-      objectRepresentations={inPlaceEditObjectRows?.representations}
-      pickOnlyBodyIds={inPlaceEditObjectRows?.pickOnly}
-      failedFeatureIds={failedHistoryFeatureIds}
-      geometryPending={panelGeometryPending}
-      geometryPendingShown={panelGeometryPendingShown}
-      previewPending={!currentGeometrySnapshot}
-      relatedFeatureIds={historyRelatedFeatureIds}
-      selectedFeatureNodeId={selectedFeatureNodeId}
-      localAppend={
-        latestLocalAppend?.projectId === doc?.projectId
-          ? latestLocalAppend
-          : null
-      }
-      selectedSketchProfileId={selectedSketchProfileId}
-      hiddenBodyIds={hiddenBodyIds}
-      hiddenSketchIds={hiddenSketchIds}
-      document={doc}
-      hiddenDatumIds={hiddenDatumIds}
-      onHiddenDatumIdsChange={setHiddenDatumIds}
-      hiddenReferenceImageIds={hiddenReferenceImageIds}
-      onHiddenReferenceImageIdsChange={setHiddenReferenceImageIds}
-      selectedReferenceImageId={
-        tool === 'reference-image' ? openReferenceImageId : null
-      }
-      onSelectReferenceImage={(imageId) =>
-        openReferenceImage(imageId as ReferenceImageId)
-      }
-      onPmiCommand={executeCommand}
-      warnings={diagnostics}
-      pendingHistoryStep={
-        pendingHistoryStepFor(commandSession) ??
-        (shownParkedRefusal
-          ? {
-              title: shownParkedRefusal.title,
-              message: shownParkedRefusal.message,
-              onReopen: reopenEditRefusal
-            }
-          : null)
-      }
-      editingHistoryFeatureId={
-        shownParkedRefusal?.parked
-          ? editedFeatureIdFor(
-              shownParkedRefusal.parked.interaction,
-              offsetPlanEdit
-            )
-          : editedFeatureIdFor(interaction, offsetPlanEdit)
-      }
-      historyDetails={
-        <FeatureHistoryPanel
-          document={doc}
-          scope={parameterScope.scope}
-          selectedId={selectedFeatureNodeId}
-          failedFeatureIds={failedHistoryFeatureIds}
-          failure={
-            historyFailure?.projectId === doc.projectId &&
-            historyFailure.version === doc.version
-              ? historyFailure.error
-              : null
-          }
-          onSelect={handleOpenHistoryFeature}
-          onDismissFailure={() => setHistoryFailure(null)}
-        />
-      }
-      checkpoints={doc?.checkpoints ?? []}
-      projectId={
-        navigationBusyRef.current || shareSession ? undefined : doc.projectId
-      }
-      documentVersion={doc?.version ?? 0}
-      restorableCheckpointIds={restorableCheckpointIds}
-      accountCheckpointIds={accountCheckpointIds}
-      currentUserId={session?.userId ?? null}
-      onSelectFeature={handleSelectFeatureFromTree}
-      onSelectBody={handleSelectBodyFromTree}
-      selectedBodyIds={selectedBodyIds}
-      onToggleBodyVisibility={toggleBodyVisibility}
-      onIsolateBody={isolateBody}
-      isolatedBodyId={isolatedBodyId}
-      onRenameBody={editDisabledReason ? undefined : handleRenameBody}
-      bodyAppearancePreview={bodyAppearancePreview}
-      onPreviewBodyAppearance={previewBodyAppearance}
-      onCommitBodyAppearance={
-        editDisabledReason ? undefined : commitBodyAppearance
-      }
-      objectFolderActions={objectFolderActions}
-      onToggleSketchVisibility={toggleSketchVisibility}
-      onFeatureContextMenu={handleFeatureContextMenu}
-      onToggleFeatureSuppression={handleToggleFeatureSuppression}
-      onRollbackAfterFeature={handleRollbackAfterFeature}
-      onResumeHistory={handleResumeHistory}
-      onRenameFeature={handleRenameFeature}
-      onDeleteFeatures={editDisabledReason ? undefined : handleDeleteFeatures}
-      onEditSketch={
-        editDisabledReason ? undefined : editSketchFeatureInViewport
-      }
-      units={doc?.units ?? 'mm'}
-      onConfigureToggle={(name, bodyIds) => {
-        if (ensureCanEdit('configure an on/off parameter')) {
-          executeCommand(
-            commandFactories.configureParameterToggle({ name, bodyIds })
-          );
-        }
-      }}
-      onPreviewParameter={handlePreviewParameter}
-      onSetParameter={(name, expression) =>
-        handleSetParameter(name, expression)
-      }
-      printClearance={printClearance}
-      configurationTable={{
-        configurations: configurationView,
-        features,
-        onExportRow: handleExportConfigurationRow,
-        ...(editDisabledReason ? {} : { actions: configurationActions })
-      }}
-      onSetPrintClearance={
-        editDisabledReason ? undefined : handleSetPrintClearance
-      }
-      onParameterAddRefused={(name, message) =>
-        setStatus(`Parameter ${name} was not added.`, { detail: message })
-      }
-      onSetParameterQuantity={(name, quantity, expression) => {
-        const current = parameters.find((entry) => entry.name === name);
-        return current
-          ? handleSetParameter(
-              name,
-              expression ?? current.expression,
-              false,
-              quantity
-            )
-          : Promise.resolve(`Parameter ${name} does not exist.`);
-      }}
-      parameterQuantitySuggestions={parameterQuantitySuggestions}
-      onViewActivityLog={openActivityLog}
-      refusalReproductionFor={(name, message) =>
-        saveRefusalReproduction(`parameter:${name}`, message)
-      }
-      onDeleteParameter={(name) =>
-        executeCommand(commandFactories.deleteParameter({ name }))
-      }
-      onRenameParameter={handleRenameParameter}
-      onExposeParameter={(name, exposed) =>
-        executeCommand(commandFactories.setParameterExposed({ name, exposed }))
-      }
-      onDescribeParameter={(name, description) =>
-        executeCommand(
-          commandFactories.setParameterDescription({ name, description })
-        )
-      }
-      exposedParameterNames={exposedParameterNames}
-      onReorderFeature={handleReorderFeature}
-      reorderBusy={validatedBusy}
-      onRestoreCheckpoint={(checkpoint) =>
-        void handleRestoreSaveState(checkpoint)
-      }
-      onBranchCheckpoint={(checkpoint) =>
-        void handleBranchSaveState(checkpoint)
-      }
-      onPreviewCheckpoint={(checkpoint) =>
-        void handlePreviewSaveState(checkpoint)
-      }
-      onCompareCheckpoint={setComparingSave}
-      previewingCheckpointId={
-        savePreviewActive ? savePreview.checkpoint.checkpointId : null
-      }
-      onRenameCheckpoint={
-        editDisabledReason ? undefined : handleRenameCheckpoint
-      }
+      {...modelPanelSource()}
     />
   );
   const commandPaletteKey = commandPaletteShortcut(
@@ -40721,6 +40994,164 @@ export function App() {
     phoneStage && (commandCardKey || inspectorKey || inPlaceKey)
       ? `${commandCardKey}|${inspectorKey}|${inPlaceKey}`
       : null;
+  // U12 slice 5: right-click and long-press menus are action sheets in the
+  // compact workspace, with the same items.
+  const ContextMenuHost = compactShell ? CompactActionSheet : ContextMenu;
+  // A History row's menu, drawn from the document as it is now; empty when
+  // its step has gone, when the old items stay drawn but none runs.
+  const liveRowMenu = contextMenuExit.rendered
+    ? liveFeatureMenu(contextMenuExit.rendered)
+    : undefined;
+  const shownContextMenu =
+    contextMenuExit.rendered && liveRowMenu
+      ? {
+          ...contextMenuExit.rendered,
+          items:
+            liveRowMenu.length > 0
+              ? liveRowMenu.map((entry) => entry.item)
+              : contextMenuExit.rendered.items.map((item) => ({
+                  ...item,
+                  disabled: true
+                }))
+        }
+      : contextMenuExit.rendered;
+  /** What the compact selection sheet offers for the pick (U12 slice 5). */
+  const compactSelectionSheet = (): CompactSelectionSheet => {
+    const pick = selectedTopology;
+    const picks: CompactSelectionAction[] = [];
+    // The picks a double-click makes on the regular stage.
+    if (pick && pick.kind !== 'body') {
+      picks.push({
+        id: 'select-body',
+        label: 'Select body',
+        icon: <Box size={18} aria-hidden="true" />,
+        run: () =>
+          handleSelectTopologyFromViewer(
+            { bodyId: pick.bodyId, kind: 'body' },
+            false
+          )
+      });
+    }
+    if (pick?.kind === 'edge' && pick.topologyId) {
+      const seed = pick.topologyId;
+      picks.push({
+        id: 'select-connected',
+        label: 'Select connected',
+        icon: <Spline size={18} aria-hidden="true" />,
+        run: () => {
+          const edges = viewerBodies.find((body) => body.bodyId === pick.bodyId)
+            ?.topology?.edges;
+          const run = edges ? edgeRunSelections(edges, seed, pick.bodyId) : [];
+          if (run.length > 1) handleViewportEdgeRun(run);
+          else setStatus('This edge has no smooth run to add.');
+        }
+      });
+    }
+    const verbs =
+      calloutWithOperation?.anchor === 'selection'
+        ? calloutWithOperation.verbs
+        : [];
+    return {
+      verbs,
+      onVerb: (id) => calloutWithOperation?.onVerb(id),
+      picks,
+      // Assemble picks whole parts, and a vertex repair picks edges only.
+      filter:
+        assembleMode || datumRepair?.vertices
+          ? null
+          : {
+              options: SELECTION_FILTERS.map((id) => ({
+                id,
+                label: SELECTION_FILTER_LABELS[id]
+              })),
+              current: selectionFilter,
+              onChange: (id) => {
+                const next = id as SelectionFilter;
+                setManualSelectionFilter(next);
+                setStatus(
+                  `Selecting ${SELECTION_FILTER_LABELS[next].toLowerCase()}.`,
+                  { unlogged: true }
+                );
+              }
+            }
+    };
+  };
+  // L08 review comments: a floating panel in the regular workspace, the
+  // panel sheet's Comments segment in the compact one (U12 slice 5).
+  const commentsOffered = Boolean(doc) && projectCommentsOffered(shareSession);
+  const commentsPanel =
+    commentsOpen && commentsOffered ? (
+      <CommentsPanel
+        comments={
+          projectComments?.projectId === doc.projectId
+            ? projectComments.comments
+            : null
+        }
+        error={commentsError}
+        unavailableReason={commentsUnavailableReason}
+        currentUserId={session?.userId ?? null}
+        role={commentRole}
+        activeId={activeCommentId}
+        onSelect={setActiveCommentId}
+        placing={commentPlacing}
+        onStartPlacing={() => {
+          setCommentDraft(null);
+          setCommentPlacing(true);
+        }}
+        onCancelPlacing={() => setCommentPlacing(false)}
+        hasDraft={commentDraft !== null}
+        {...(shareSession
+          ? {
+              visitor: {
+                name: commentVisitorName,
+                onNameChange: setCommentVisitorName
+              }
+            }
+          : {})}
+        onPostThread={(text) =>
+          commentDraft
+            ? runCommentAction(async (projectId, api) => {
+                const created = await postComment(projectId, api, {
+                  anchor: commentDraft,
+                  text
+                });
+                setCommentDraft(null);
+                setActiveCommentId(created?.commentId ?? null);
+              })
+            : Promise.resolve(false)
+        }
+        onCancelDraft={() => setCommentDraft(null)}
+        onReply={(threadId, text) =>
+          runCommentAction((projectId, api) =>
+            postComment(projectId, api, {
+              parentId: threadId,
+              text
+            }).then(() => undefined)
+          )
+        }
+        onResolve={(threadId, resolved) =>
+          void runCommentAction((projectId, { memberComments }) =>
+            memberComments.resolve(
+              projectId,
+              commentContext(),
+              threadId,
+              resolved
+            )
+          )
+        }
+        onDelete={(commentId) =>
+          void runCommentAction((projectId, { memberComments }) =>
+            memberComments.remove(projectId, commentContext(), commentId)
+          )
+        }
+        onClose={() => {
+          if (compactShell) setCompactPanel(null);
+          setCommentsOpen(false);
+          setCommentPlacing(false);
+          setCommentDraft(null);
+        }}
+      />
+    ) : null;
   // The open project as the library lists it, for its Properties.
   const compactPropertiesSummary = (current: ProjectDocument) =>
     projects.find((summary) => summary.projectId === current.projectId) ??
@@ -41010,6 +41441,50 @@ export function App() {
               // draw: the More page carries it for every share visitor.
               ...(shareSession ? { onMakeCopy: requestShareCopy } : {}),
               reducedMotion: appSettings.appearance.reducedMotion,
+              panels: {
+                // The model panels are Build's; Comments open in any mode,
+                // with the regular Comments panel's gate (a share link
+                // with comments on offers them to its visitor).
+                open:
+                  modelingLocked && compactPanel !== 'comments'
+                    ? null
+                    : compactPanel,
+                available: COMPACT_PANEL_ORDER.filter((id) =>
+                  id === 'comments' ? commentsOffered : !modelingLocked
+                ),
+                disabledReason:
+                  modelingLocked && !commentsOffered
+                    ? 'The panels are in Build mode.'
+                    : null,
+                content:
+                  compactPanel === 'comments' ? (
+                    commentsPanel
+                  ) : compactPanel !== null ? (
+                    <CompactPanelBody
+                      id={compactPanel}
+                      views={modelPanelViews}
+                      onLeave={() => openCompactPanel(null)}
+                      {...modelPanelSource()}
+                    />
+                  ) : null,
+                onOpen: openCompactPanel,
+                warningCount: modelingLocked ? 0 : diagnostics.length
+              },
+              selection: compactSelectionSheet(),
+              // The top bar's "Edit not applied", on the same terms.
+              editRefusal:
+                !(
+                  isOperationState(interaction) &&
+                  interaction.phase === 'validating'
+                ) &&
+                ['local', 'synced', 'syncing'].includes(presentedSaveState) &&
+                lastDirectEditFailure?.projectId === doc.projectId &&
+                lastDirectEditFailure.version === doc.version
+                  ? {
+                      message: lastDirectEditFailure.message,
+                      onReview: reopenEditRefusal
+                    }
+                  : null,
               // U12 slice 4: Build's tray and its All tools sheet, which
               // launch through the verb rail's own path.
               build:
@@ -41424,6 +41899,7 @@ export function App() {
                 ? []
                 : selectedEdges
             }
+            pickedEdgeLines={inPlacePlaneEdgeLines}
             pickListEnabled={
               appSettings.experiments.directManipulation && !inPlace.active
             }
@@ -42569,7 +43045,11 @@ export function App() {
                   selectedEdges.length > 0 ||
                   selectedBodyIds.length > 0
                 }
-                historyOpen={panelShowing('history')}
+                historyOpen={
+                  compactShell
+                    ? compactPanel === 'history'
+                    : panelShowing('history')
+                }
                 exportSeen={tourExportSeen}
                 // The step reached, kept per device: the card unmounts while
                 // a command or a sketch runs, and a second empty project
@@ -42674,7 +43154,8 @@ export function App() {
         ) : null
       }
       panelLane={
-        !modelingLocked && !panelsHidden && phonePanel
+        // The compact workspace's panels are its panel sheet (slice 5).
+        !compactShell && !modelingLocked && !panelsHidden && phonePanel
           ? renderModelPanel(phonePanel, 'phone')
           : null
       }
@@ -43214,6 +43695,11 @@ export function App() {
             // A refusal with no editor open (a refused drag) is explained in
             // the guidance row: the same line, remedies and Why? the control
             // shows, where the eye returns when the model has nothing to say.
+            // The compact workspace has no guidance row: it is in the sheet.
+            noticeInSheet={
+              !savePreviewActive &&
+              Boolean(!keypad && calloutWithOperation?.operation?.error)
+            }
             notice={
               savePreviewActive ? (
                 <SaveStatePreviewNotice
@@ -43257,7 +43743,9 @@ export function App() {
               ) : !keypad && calloutWithOperation?.operation?.error ? (
                 <EditRefusal
                   operation={calloutWithOperation.operation}
-                  variant="bar"
+                  // The compact sheet has the width for the whole line, and
+                  // its explanation opens in the sheet's flow (U12).
+                  variant={compactShell ? 'control' : 'bar'}
                   revealRequest={
                     refusalReveal?.interaction === interaction
                       ? refusalReveal.count
@@ -43911,10 +44399,10 @@ export function App() {
               }}
             />
           )}
-          {contextMenuExit.rendered ? (
-            <ContextMenu
+          {shownContextMenu ? (
+            <ContextMenuHost
               menu={withFaceVerbs(
-                contextMenuExit.rendered,
+                shownContextMenu,
                 renderedSelectedTopology?.kind === 'face'
                   ? renderedSelectedTopology
                   : null,
@@ -43939,6 +44427,17 @@ export function App() {
                   );
                 } else if (itemId === LOOK_AT_FACE_ITEM_ID) {
                   requestNormalToSelectedFace();
+                } else if (liveRowMenu) {
+                  // The item as the live document gives it, never as it was
+                  // when the menu opened (U12 review).
+                  const entry = liveRowMenu.find(
+                    (candidate) => candidate.item.id === itemId
+                  );
+                  if (entry && !entry.item.disabled) entry.run();
+                  else
+                    setStatus(
+                      'This step changed while its menu was open. Open the menu again.'
+                    );
                 } else {
                   contextMenuActionsRef.current[itemId]?.();
                 }
@@ -43946,77 +44445,7 @@ export function App() {
               onClose={() => setContextMenu(null)}
             />
           ) : null}
-          {commentsOpen && doc && (!shareSession || shareSession.comments) ? (
-            <CommentsPanel
-              comments={
-                projectComments?.projectId === doc.projectId
-                  ? projectComments.comments
-                  : null
-              }
-              error={commentsError}
-              unavailableReason={commentsUnavailableReason}
-              currentUserId={session?.userId ?? null}
-              role={commentRole}
-              activeId={activeCommentId}
-              onSelect={setActiveCommentId}
-              placing={commentPlacing}
-              onStartPlacing={() => {
-                setCommentDraft(null);
-                setCommentPlacing(true);
-              }}
-              onCancelPlacing={() => setCommentPlacing(false)}
-              hasDraft={commentDraft !== null}
-              {...(shareSession
-                ? {
-                    visitor: {
-                      name: commentVisitorName,
-                      onNameChange: setCommentVisitorName
-                    }
-                  }
-                : {})}
-              onPostThread={(text) =>
-                commentDraft
-                  ? runCommentAction(async (projectId, api) => {
-                      const created = await postComment(projectId, api, {
-                        anchor: commentDraft,
-                        text
-                      });
-                      setCommentDraft(null);
-                      setActiveCommentId(created?.commentId ?? null);
-                    })
-                  : Promise.resolve(false)
-              }
-              onCancelDraft={() => setCommentDraft(null)}
-              onReply={(threadId, text) =>
-                runCommentAction((projectId, api) =>
-                  postComment(projectId, api, {
-                    parentId: threadId,
-                    text
-                  }).then(() => undefined)
-                )
-              }
-              onResolve={(threadId, resolved) =>
-                void runCommentAction((projectId, { memberComments }) =>
-                  memberComments.resolve(
-                    projectId,
-                    commentContext(),
-                    threadId,
-                    resolved
-                  )
-                )
-              }
-              onDelete={(commentId) =>
-                void runCommentAction((projectId, { memberComments }) =>
-                  memberComments.remove(projectId, commentContext(), commentId)
-                )
-              }
-              onClose={() => {
-                setCommentsOpen(false);
-                setCommentPlacing(false);
-                setCommentDraft(null);
-              }}
-            />
-          ) : null}
+          {compactShell ? null : commentsPanel}
           {projectPropertiesOpen && compactShell && doc ? (
             <Suspense fallback={null}>
               <LazyProjectPropertiesDialog

@@ -207,6 +207,20 @@ const SPLIT_PLANE_NOT_CUT =
  */
 const SPLIT_PLANE_TOUCHES =
   'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.';
+/**
+ * M11 (owner decision D2): why two picked edges give Split no plane, by the
+ * pick's own code. The pick is refused before any rebuild, so no kernel
+ * words are involved; the edges stay held so one can be picked again.
+ */
+export const SPLIT_EDGE_PLANE_SENTENCES: Readonly<
+  Record<'collinear' | 'skew' | 'curved-edge', string>
+> = {
+  collinear:
+    'The edges lie on one line, so they do not fix a plane. Pick a second edge off that line.',
+  skew: "The edges don't lie in one plane. Pick two edges that meet or run side by side.",
+  'curved-edge':
+    'A plane through edges needs straight edges, and this edge is curved. Pick a straight edge.'
+};
 const SPLIT_SENTENCES: Readonly<Record<string, string>> = {
   plane_misses_body: SPLIT_PLANE_MISSES,
   plane_on_face: SPLIT_PLANE_ON_FACE,

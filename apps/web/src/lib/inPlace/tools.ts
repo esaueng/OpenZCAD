@@ -99,6 +99,7 @@ import {
   type ThreadRequest
 } from './thread';
 import { referenceImage, type ImageSlot } from './image';
+import type { PlaneEdgePick } from './splitEdgePlane';
 import { faceAlignSpec } from './faceAlign';
 import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
 import { standardPartSpec, type StandardPartRequest } from './standardPart';
@@ -358,6 +359,11 @@ export interface InPlaceSlots {
   refs: RefPick[];
   /** The picture an Image command is placing. */
   image: ImageSlot | null;
+  /**
+   * M11 (D2): straight edges held toward a plane through two edges, in pick
+   * order. Absent until one is picked; a resolved pair's plane is `plane`.
+   */
+  planeEdges?: readonly PlaneEdgePick[];
 }
 
 /** A choice too rare for a handle: it lives in the bar's Options menu. */
@@ -961,6 +967,11 @@ export interface InPlaceToolSpec {
   edgeMode?: 'many';
   /** Takes a plane: a ghost principal plane, a datum plane or a flat face. */
   wantsPlane?: boolean;
+  /**
+   * M11 (D2): with the body picked, two straight edges clicked in turn are
+   * the plane (`nextPlaneEdges`), stored by its numbers like a picked face.
+   */
+  planeFromEdges?: boolean;
   /**
    * A flat face's plane stands where it was clicked (a standard part), not
    * on the face's centroid (a new gear).
@@ -5598,13 +5609,19 @@ function planeFields(plane: PlanePick): {
 function planeHint(
   slots: InPlaceSlots,
   what: string,
-  options?: Record<string, string>
+  options?: Record<string, string>,
+  fromEdges = false
 ): string | null {
   if (slots.bodies.length === 0) return `Click the body to ${what}`;
   if (options?.planeMode === 'typed') {
     return 'Slide the plane, or tap its chips to type';
   }
-  if (!slots.plane) return 'Pick a plane or flat face';
+  if (!slots.plane) {
+    if (!fromEdges) return 'Pick a plane or flat face';
+    return slots.planeEdges?.length === 1
+      ? 'Pick a second edge for the plane (a straight one)'
+      : 'Pick a plane or flat face, or two straight edges';
+  }
   return null;
 }
 
@@ -5664,6 +5681,7 @@ const split: InPlaceToolSpec = {
   profileMode: 'none',
   bodyMode: 'one',
   wantsPlane: true,
+  planeFromEdges: true,
   wantsAxis: false,
   wantsPath: false,
   values: [PLANE_OFFSET, ...TYPED_PLANE_VALUES],
@@ -5680,7 +5698,8 @@ const split: InPlaceToolSpec = {
     }
   ],
   hint: (slots, options) =>
-    planeHint(slots, 'split', options) ?? 'Slide the plane, or pick another',
+    planeHint(slots, 'split', options, true) ??
+    'Slide the plane, or pick another',
   ready: (slots, options) =>
     slots.bodies.length > 0 &&
     (slots.plane !== null || options?.planeMode === 'typed'),
