@@ -227,6 +227,31 @@ describe('action registry', () => {
     expect(withSource('fixed-key')).toHaveLength(fixed.length);
   });
 
+  it('gives Assemble’s sheet what slice 8 builds, and nothing it does not', () => {
+    const assembleSheet = Object.entries(COMPACT_ENTRIES)
+      .filter(([, surface]) => surface === 'assemble-sheet')
+      .map(([id]) => id)
+      .sort();
+    expect(assembleSheet).toEqual(
+      [
+        'assembly-joint',
+        'assembly-ground',
+        'assembly-play',
+        'motion-play-pause',
+        'motion-key-pose',
+        'motion-previous-key',
+        'motion-next-key',
+        'motion-delete-key'
+      ].sort()
+    );
+    // Every Assemble command and every timeline key has its compact entry.
+    expect(
+      pendingCompactActions()
+        .map((entry) => entry.id)
+        .filter((id) => id.startsWith('assembly-') || id.startsWith('motion-'))
+    ).toEqual([]);
+  });
+
   it('gives View’s tray what slice 7 builds, and nothing it does not', () => {
     const viewTray = Object.entries(COMPACT_ENTRIES)
       .filter(([, surface]) => surface === 'view-tray')

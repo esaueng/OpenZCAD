@@ -9,7 +9,7 @@ import {
 } from '../../lib/assembly/assemblyRuntime';
 import { setAnimatePrefs } from '../../lib/assembly/assemblyUi';
 import { createDefaultStudy } from '../../lib/assembly/motionStudy';
-import { AssemblyPanel } from './AssemblyPanel';
+import { AssemblyPanel, type AssemblyPanelProps } from './AssemblyPanel';
 
 afterEach(() => {
   act(() => {
@@ -25,6 +25,8 @@ function renderPanel(
   extra: {
     saveBomCsv?: (fileName: string, csv: string) => void;
     onAnnounce?: (message: string, options?: { undo?: boolean }) => void;
+    sections?: AssemblyPanelProps['sections'];
+    touch?: boolean;
   } = {}
 ) {
   const recorder = recordingExecute(manager.manager);
@@ -553,5 +555,82 @@ describe('AssemblyPanel (one left sidebar)', () => {
     expect(
       screen.getByRole('heading', { name: 'Start an assembly' })
     ).toBeInTheDocument();
+  });
+
+  it('shows only the sections a compact page asks for, without its header (U12)', () => {
+    const fixture = scissorsManager({ joint: true });
+    const { onStatus } = renderPanel(fixture, {
+      sections: ['motion', 'positions', 'studies']
+    });
+    expect(
+      screen.queryByRole('heading', { name: 'Assembly' })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Parts' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Joints' })).toBeNull();
+    expect(
+      screen.queryByRole('region', { name: 'Bill of materials' })
+    ).toBeNull();
+    expect(
+      screen.getByRole('region', { name: 'Positions' })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: 'Animations' })
+    ).toBeInTheDocument();
+    // Motion's own section: Set up motion, which says why it has nothing
+    // to set up rather than opening a card in an error.
+    const motion = screen.getByRole('region', { name: 'Make it move' });
+    const setup = within(motion).getByRole('button', { name: 'Set up motion' });
+    expect(setup).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(setup);
+    expect(onStatus).toHaveBeenCalledWith(
+      'Every part is fixed or already moves on a joint. Open a joint to change its motion.'
+    );
+    expect(getAssemblyRuntime().motionSetup).toBeNull();
+  });
+
+  it('opens Set up motion from the compact Motion section', () => {
+    const fixture = scissorsManager({ components: true });
+    renderPanel(fixture, { sections: ['motion'] });
+    const motion = screen.getByRole('region', { name: 'Make it move' });
+    fireEvent.click(
+      within(motion).getByRole('button', { name: 'Set up motion' })
+    );
+    expect(getAssemblyRuntime().motionSetup).not.toBeNull();
+  });
+
+  it('never draws the compact Motion section in the full sidebar', () => {
+    renderPanel(scissorsManager({ joint: true }));
+    expect(screen.queryByRole('region', { name: 'Make it move' })).toBeNull();
+    // Nor a touch Rename: a mouse renames by double-click or the menu.
+    fireEvent.click(screen.getByRole('button', { name: /^Blade B/ }));
+    expect(screen.queryByRole('button', { name: 'Rename part' })).toBeNull();
+  });
+
+  it('renames a part and a joint from their details by touch', () => {
+    const fixture = scissorsManager({ joint: true });
+    const { rerender } = renderPanel(fixture, {
+      sections: ['parts', 'joints'],
+      touch: true
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Blade B/ }));
+    rerender();
+    fireEvent.click(screen.getByRole('button', { name: 'Rename part' }));
+    rerender();
+    const field = screen.getByRole('textbox', { name: 'Rename Blade B' });
+    fireEvent.change(field, { target: { value: 'Lower blade' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(fixture.manager.document.assembly?.components[1]?.name).toBe(
+      'Lower blade'
+    );
+    rerender();
+    const joints = screen.getByRole('region', { name: 'Joints' });
+    fireEvent.click(within(joints).getByRole('button', { name: /^Pivot/ }));
+    rerender();
+    fireEvent.click(screen.getByRole('button', { name: 'Rename joint' }));
+    rerender();
+    const jointField = screen.getByRole('textbox', { name: 'Rename Pivot' });
+    fireEvent.change(jointField, { target: { value: 'Hinge' } });
+    fireEvent.keyDown(jointField, { key: 'Enter' });
+    expect(fixture.manager.document.assembly?.joints[0]?.name).toBe('Hinge');
   });
 });

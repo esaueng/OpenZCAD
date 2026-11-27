@@ -121,7 +121,33 @@ export interface AssemblyPanelProps {
   checkInterference?: CheckInterference;
   /** AS04 through motion: the same query at positions along a motion. */
   checkInterferenceSweep?: AssemblySweepCheck;
+  /**
+   * Only these sections, in the panel's order, without its header (U12
+   * slice 8: each page of the compact sheet shows a few). All of them, with
+   * the header, when absent.
+   */
+  sections?: readonly AssemblyPanelSection[];
+  /**
+   * Touch: each part and joint offers Rename in its details, which a mouse
+   * reaches by double-click or the row's right-click menu.
+   */
+  touch?: boolean;
 }
+
+/**
+ * The panel's sections. `motion` (Set up motion and Place gears as a
+ * section of their own) is drawn only when asked for: the full panel
+ * offers both from its header and its Joints section.
+ */
+export type AssemblyPanelSection =
+  | 'parts'
+  | 'joints'
+  | 'motion'
+  | 'positions'
+  | 'studies'
+  | 'explode'
+  | 'interference'
+  | 'bom';
 
 type MenuTarget =
   { kind: 'component'; id: string } | { kind: 'joint'; id: string };
@@ -177,13 +203,17 @@ function Section({
   title,
   count,
   action,
+  shown = true,
   children
 }: {
   title: string;
   count?: number;
   action?: ReactNode;
+  /** False leaves the section out (a compact page shows only its own). */
+  shown?: boolean;
   children: ReactNode;
 }) {
+  if (!shown) return null;
   return (
     <section className="assembly-section" aria-label={title}>
       <div className="assembly-section-head">
@@ -211,7 +241,9 @@ function AssemblyLists({
   reducedMotion,
   saveBomCsv,
   checkInterference,
-  checkInterferenceSweep
+  checkInterferenceSweep,
+  sections,
+  touch = false
 }: AssemblyPanelProps) {
   const model = useAssemblyModel(displayDocument ?? document);
   const selectedComponentId = useAssemblyRuntime((s) => s.selectedComponentId);
@@ -378,47 +410,51 @@ function AssemblyLists({
   const isRenaming = (kind: MenuTarget['kind'], id: string) =>
     renaming?.kind === kind && renaming.id === id;
   const detailProps = { document, execute, onStatus, model };
+  const shows = (section: AssemblyPanelSection) =>
+    sections ? sections.includes(section) : section !== 'motion';
 
   return (
     <>
-      <header className="assembly-panel-header">
-        <h2 className="assembly-panel-title">Assembly</h2>
-        <span
-          className={`assembly-chip is-${chip.tone}`}
-          role="status"
-          aria-label={`Assembly status: ${chip.label}`}
-        >
-          {chip.label}
-        </span>
-        {/* With no joints yet, the Joints section offers Set up motion. */}
-        {set.joints.length > 0 ? (
+      {sections ? null : (
+        <header className="assembly-panel-header">
+          <h2 className="assembly-panel-title">Assembly</h2>
+          <span
+            className={`assembly-chip is-${chip.tone}`}
+            role="status"
+            aria-label={`Assembly status: ${chip.label}`}
+          >
+            {chip.label}
+          </span>
+          {/* With no joints yet, the Joints section offers Set up motion. */}
+          {set.joints.length > 0 ? (
+            <button
+              type="button"
+              className="assembly-tool-button"
+              title={motionUnavailable ?? 'Make another part slide or turn'}
+              aria-disabled={motionUnavailable !== null}
+              onClick={() =>
+                motionUnavailable
+                  ? onStatus(motionUnavailable)
+                  : startMotionSetup()
+              }
+            >
+              <MoveVertical size={13} aria-hidden="true" />
+              Make it move
+            </button>
+          ) : null}
           <button
             type="button"
             className="assembly-tool-button"
-            title={motionUnavailable ?? 'Make another part slide or turn'}
-            aria-disabled={motionUnavailable !== null}
-            onClick={() =>
-              motionUnavailable
-                ? onStatus(motionUnavailable)
-                : startMotionSetup()
-            }
+            title="Join two parts (J)"
+            disabled={set.components.length < 2}
+            onClick={openJointTool}
           >
-            <MoveVertical size={13} aria-hidden="true" />
-            Make it move
+            <Link2 size={13} aria-hidden="true" />
+            Joint
           </button>
-        ) : null}
-        <button
-          type="button"
-          className="assembly-tool-button"
-          title="Join two parts (J)"
-          disabled={set.components.length < 2}
-          onClick={openJointTool}
-        >
-          <Link2 size={13} aria-hidden="true" />
-          Joint
-        </button>
-      </header>
-      {solution.grounded === 0 && firstComponent ? (
+        </header>
+      )}
+      {solution.grounded === 0 && firstComponent && shows('parts') ? (
         <div className="assembly-banner" role="alert">
           <TriangleAlert size={14} aria-hidden="true" />
           <span>Nothing is fixed, so everything floats.</span>
@@ -439,7 +475,11 @@ function AssemblyLists({
         </div>
       ) : null}
       <div className="assembly-panel-body">
-        <Section title="Parts" count={set.components.length}>
+        <Section
+          title="Parts"
+          count={set.components.length}
+          shown={shows('parts')}
+        >
           <ul className="assembly-list">
             {set.components.map((component) => {
               const missing = bodyByComponent.get(component.id) === null;
@@ -541,7 +581,19 @@ function AssemblyLists({
                     </button>
                   </div>
                   {expanded ? (
-                    <ComponentDetails {...detailProps} component={component} />
+                    <ComponentDetails
+                      {...detailProps}
+                      component={component}
+                      {...(touch
+                        ? {
+                            onRename: () =>
+                              setRenaming({
+                                kind: 'component',
+                                id: component.id
+                              })
+                          }
+                        : {})}
+                    />
                   ) : null}
                 </li>
               );
@@ -604,6 +656,7 @@ function AssemblyLists({
         <Section
           title="Joints"
           count={set.joints.length}
+          shown={shows('joints')}
           action={
             set.components.length >= 2 ? (
               <button
@@ -763,6 +816,12 @@ function AssemblyLists({
                         {...detailProps}
                         joint={joint}
                         onDelete={() => deleteJoint(joint.id)}
+                        {...(touch
+                          ? {
+                              onRename: () =>
+                                setRenaming({ kind: 'joint', id: joint.id })
+                            }
+                          : {})}
                       />
                     ) : null}
                   </li>
@@ -772,10 +831,46 @@ function AssemblyLists({
           )}
         </Section>
 
+        <Section title="Make it move" shown={shows('motion')}>
+          <div className="assembly-actions">
+            <button
+              type="button"
+              className="secondary"
+              title={motionUnavailable ?? 'Make a part slide or turn'}
+              aria-disabled={motionUnavailable !== null}
+              onClick={() =>
+                motionUnavailable
+                  ? onStatus(motionUnavailable)
+                  : startMotionSetup()
+              }
+            >
+              <MoveVertical size={13} aria-hidden="true" />
+              Set up motion
+            </button>
+            {gearCount >= 2 || selectedPair ? (
+              <button
+                type="button"
+                className="secondary"
+                onClick={startGearMesh}
+              >
+                <Cog size={13} aria-hidden="true" />
+                Place gears
+              </button>
+            ) : null}
+          </div>
+          {motionUnavailable ? (
+            <p className="assembly-muted">{motionUnavailable}</p>
+          ) : null}
+        </Section>
+
         {set.joints.some(
           (joint) => ASSEMBLY_JOINT_DOFS[joint.kind].length > 0
         ) || set.positions.length > 0 ? (
-          <Section title="Positions" count={set.positions.length}>
+          <Section
+            title="Positions"
+            count={set.positions.length}
+            shown={shows('positions')}
+          >
             <AssemblyPositions execute={execute} model={model} />
           </Section>
         ) : null}
@@ -788,6 +883,7 @@ function AssemblyLists({
             <Section
               title="Animations"
               count={set.studies.length}
+              shown={shows('studies')}
               action={
                 <AddStudyButton
                   assembly={document.assembly}
@@ -806,6 +902,7 @@ function AssemblyLists({
           <Section
             title="Exploded view"
             count={Object.keys(set.explode?.offsets ?? {}).length}
+            shown={shows('explode')}
           >
             <AssemblyExplodedSection
               set={set}
@@ -816,7 +913,7 @@ function AssemblyLists({
         ) : null}
 
         {checkInterference && set.components.length > 0 ? (
-          <Section title="Interference">
+          <Section title="Interference" shown={shows('interference')}>
             <AssemblyInterferenceSection
               document={document}
               check={checkInterference}
@@ -831,6 +928,7 @@ function AssemblyLists({
         <Section
           title="Bill of materials"
           count={bom.rows.length}
+          shown={shows('bom')}
           action={
             bom.rows.length > 0 ? (
               <button
