@@ -179,10 +179,12 @@ export { SECTION_PLANE_LABELS };
  * (ModelViewer's `addsToSelection`). Ctrl and ⌘ reach only sketch entities
  * and profiles there (`togglesSelection`); in Objects they add or remove a
  * body or folder row, as Shift does, while sketch, plane and image rows
- * select alone. The help names exactly that.
+ * select alone. The help names exactly that, on wrapping lines: one line
+ * ends in an ellipsis at the tooltip's 320 px cap, which on a phone cut it
+ * off before the keys.
  */
 export const MULTI_SELECT_DESCRIPTION =
-  'Taps on the model add to or remove from the selection, as Shift-click does. Ctrl- or ⌘-click does so only for sketch entities and profiles there, and for body and folder rows in Objects';
+  'Taps on the model add or remove picks, as Shift-click does. Ctrl/⌘-click adds only sketch entities and profiles there. In Objects, Shift or Ctrl/⌘ adds body and folder rows.';
 
 /** Cased like the display modes the rail's other "Now:" lines name. */
 const ORBIT_MODE_LABELS = {
@@ -626,6 +628,7 @@ export function ViewerToolbar({
             <Tooltip
               label="Multi-select"
               description={MULTI_SELECT_DESCRIPTION}
+              multiline
             >
               <button
                 type="button"

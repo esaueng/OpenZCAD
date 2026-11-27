@@ -7,7 +7,7 @@ import {
   within
 } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { ViewerToolbar } from './ViewerToolbar';
+import { MULTI_SELECT_DESCRIPTION, ViewerToolbar } from './ViewerToolbar';
 import { TOOLTIP_OPEN_DELAY_MS } from './Tooltip';
 import { UNDO_FLOOR_TRIMMED_REASON } from '../lib/toasts';
 import {
@@ -1199,18 +1199,27 @@ describe('touch modifier toggles', () => {
     try {
       renderWithModifiers(true);
       fireEvent.focus(screen.getByRole('button', { name: 'Multi-select' }));
-      const help = screen.getByRole('tooltip').textContent ?? '';
+      const tooltip = screen.getByRole('tooltip');
+      const help = tooltip.textContent ?? '';
       // Face, edge and body clicks add only with Shift (or this toggle):
       // the help used to say "as Shift or Ctrl does".
       expect(help).not.toMatch(/as Shift or Ctrl/);
+      expect(help).toContain('Taps on the model add or remove picks');
       expect(help).toContain('as Shift-click does');
       expect(help).toContain(
-        'Ctrl- or ⌘-click does so only for sketch entities and profiles'
+        'Ctrl/⌘-click adds only sketch entities and profiles there'
       );
       // In Objects only body and folder rows read the keys; sketch, plane
       // and image rows select alone.
       expect(help).not.toContain('any row');
-      expect(help).toContain('and for body and folder rows in Objects');
+      expect(help).toContain(
+        'In Objects, Shift or Ctrl/⌘ adds body and folder rows'
+      );
+      // Read in full at phone width: a one-line tooltip ends in an ellipsis
+      // at its 320 px cap (cut at "…remove fro…" on a 390 px phone), so the
+      // help wraps, and stays short enough to stay a tooltip.
+      expect(tooltip).toHaveAttribute('data-multiline');
+      expect(MULTI_SELECT_DESCRIPTION.length).toBeLessThanOrEqual(180);
     } finally {
       vi.unstubAllGlobals();
     }
