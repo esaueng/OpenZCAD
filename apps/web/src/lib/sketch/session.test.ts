@@ -1460,6 +1460,14 @@ describe('the Spline tool’s clicks', () => {
     expect(splineClickAction(placed, a, 0.5)).toBe('finish');
   });
 
+  it('still closes when the last point is near the first but not on it', () => {
+    // A loop whose last point landed just short of the start: a click on
+    // the start closes it, on desktop as on a phone.
+    const placed = [at(0, 0), at(10, 5), at(20, 0), at(0.3, 0)];
+    expect(splineObjectFromPoints('fit', placed, true)).not.toBeNull();
+    expect(splineClickAction(placed, at(0, 0), 0.5)).toBe('close');
+  });
+
   it('keeps an open spline finishable when its close is refused', () => {
     const placed = [at(0, 0), at(10, 5), at(0, 0)];
     expect(splineFinishRefusal('fit', placed, true)).toEqual({

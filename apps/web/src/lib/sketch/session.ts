@@ -413,10 +413,11 @@ export function splineObjectFromPoints(
  * click on the last point again finishes it open, a click on the first point
  * (with three already down) closes the spline, and any other click adds a
  * point — finishing at once when that point is the last a spline may hold,
- * since a further one would leave a list no commit accepts. The last point
- * wins over the first: when the spline already ends where it began (A, B,
- * A), a close would add a zero-length chord no spline accepts, and a finger
- * tapping that point again would retry it forever with no Enter to escape.
+ * since a further one would leave a list no commit accepts. A click near
+ * both ends closes, as it always has, unless the spline already ends exactly
+ * where it began (A, B, A): a close would add a zero-length chord no spline
+ * accepts, and a finger tapping that point again would retry it forever with
+ * no Enter to escape, so it finishes open.
  */
 export function splineClickAction(
   points: readonly SketchPoint[],
@@ -427,11 +428,18 @@ export function splineClickAction(
     Math.hypot(point.x - other.x, point.y - other.y) <= reach;
   const first = points[0];
   const last = points[points.length - 1];
+  // A spline that already ends on its first point (A, B, A) has no chord
+  // left to close: a click there finishes it open.
+  const endsWhereItBegan =
+    first !== undefined &&
+    last !== undefined &&
+    first.x === last.x &&
+    first.y === last.y;
+  if (first && points.length >= 3 && near(first) && !endsWhereItBegan) {
+    return 'close';
+  }
   if (last && near(last)) {
     return 'finish';
-  }
-  if (first && points.length >= 3 && near(first)) {
-    return 'close';
   }
   return points.length + 1 >= MAX_SKETCH_SPLINE_POINTS
     ? 'append-and-finish'
