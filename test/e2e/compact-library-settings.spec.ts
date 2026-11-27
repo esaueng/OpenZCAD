@@ -216,7 +216,7 @@ for (const size of SIZES) {
       test.setTimeout(240_000);
       await page.setViewportSize(size);
       await openCompactLibrary(page);
-      for (const name of ['Alpha part', 'Beta part']) {
+      for (const name of ['Alpha part', 'Beta part', 'Gamma part']) {
         await newProject(page, name);
         await backToLibrary(page);
       }
@@ -235,27 +235,65 @@ for (const size of SIZES) {
       await expectTouchSized(page, '.start-tile-grid');
 
       // The list: each row's checkbox, pin and ⋯ inside its own row (they
-      // stood half a button low, over the next one), at a finger's size.
+      // stood half a button low, over the next one), pin and ⋯ side by side
+      // (the card's corners split them to a row's top and bottom edges), at
+      // a finger's size. Every row kind: a folder below a pinned project, as
+      // well as the projects.
       const layout = page.getByRole('group', { name: 'Layout' });
       await layout.getByRole('button', { name: 'List' }).tap();
       await expect(page.locator('.start-tile-grid.is-list')).toBeVisible();
+      await page.getByRole('checkbox', { name: 'Select Gamma part' }).tap();
+      await page.getByRole('button', { name: 'Move to', exact: true }).tap();
+      await page.getByRole('menuitem', { name: 'New folder' }).tap();
+      const folderName = page.getByRole('textbox', { name: 'Folder name' });
+      await folderName.fill('Holders');
+      await folderName.press('Enter');
+      await page.getByRole('button', { name: 'Pin Beta part' }).tap();
+      await expect(
+        page.getByRole('button', { name: 'Unpin Beta part' })
+      ).toBeVisible();
       await settled(page);
+      const rows = await page
+        .locator('.start-tile-grid.is-list > .start-tile')
+        .evaluateAll((tiles) =>
+          tiles
+            .filter((tile) => tile.querySelector('.start-tile-action'))
+            .map((tile) => {
+              const row = tile.getBoundingClientRect();
+              const actions = [
+                ...tile.querySelectorAll<HTMLElement>('.start-tile-action')
+              ].map((action) => action.getBoundingClientRect());
+              return {
+                kind: tile.classList.contains('start-tile-folder')
+                  ? 'folder'
+                  : 'project',
+                top: Math.round(row.top),
+                outside: [
+                  ...tile.querySelectorAll<HTMLElement>(
+                    '.start-tile-select, .start-tile-action'
+                  )
+                ]
+                  .filter((control) => {
+                    const box = control.getBoundingClientRect();
+                    return (
+                      box.top < row.top - 0.5 || box.bottom > row.bottom + 0.5
+                    );
+                  })
+                  .map((control) => control.getAttribute('aria-label')),
+                oneLine: actions.every(
+                  (box) => Math.abs(box.top - actions[0]!.top) <= 0.5
+                )
+              };
+            })
+        );
+      const folderRow = rows.find((row) => row.kind === 'folder');
+      expect(folderRow, 'a folder row in the list').toBeDefined();
       expect(
-        await page.locator('.start-tile-project').evaluateAll((tiles) =>
-          tiles.flatMap((tile) => {
-            const row = tile.getBoundingClientRect();
-            return [
-              ...tile.querySelectorAll<HTMLElement>(
-                '.start-tile-select, .start-tile-action'
-              )
-            ]
-              .filter((control) => {
-                const box = control.getBoundingClientRect();
-                return box.top < row.top - 0.5 || box.bottom > row.bottom + 0.5;
-              })
-              .map((control) => control.getAttribute('aria-label'));
-          })
-        )
+        rows.some((row) => row.top < folderRow!.top),
+        'the folder below another row'
+      ).toBe(true);
+      expect(
+        rows.filter((row) => row.outside.length > 0 || !row.oneLine)
       ).toEqual([]);
       await expectTouchSized(page, '.start-tile-grid');
       await layout.getByRole('button', { name: 'Grid' }).tap();

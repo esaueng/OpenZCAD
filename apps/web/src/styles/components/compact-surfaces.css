@@ -281,16 +281,31 @@
 
 /* The row's buttons and checkbox span its height, centred on it. The
    regular list centres them with a translate, which the row's swipe offset
-   replaces here: they stood half a button low, into the next row. */
+   replaces here: they stood half a button low, into the next row. Every
+   row kind (project, folder) takes the swipe offset, 0 where it does not
+   swipe, so none keeps that translate with the stretched box. */
 .start-screen[data-shell='compact']
   .start-tile-grid.is-list
   .start-tile-actions {
   top: 0;
   bottom: 0;
   align-items: center;
+  transform: translateX(var(--swipe-x, 0px));
 }
 
-.start-screen[data-shell='compact'] .start-tile-grid.is-list .start-tile-select {
+/* Side by side on the row's middle line: the card's corner placement
+   (pin at the top, ⋯ at the foot) split them to the stretched box's top
+   and bottom edges. */
+.start-screen[data-shell='compact']
+  .start-tile-grid.is-list
+  .start-tile-actions
+  > .start-tile-action {
+  align-self: center;
+}
+
+.start-screen[data-shell='compact']
+  .start-tile-grid.is-list
+  .start-tile-select {
   top: calc(50% - var(--compact-target) / 2);
   left: 0;
 }
