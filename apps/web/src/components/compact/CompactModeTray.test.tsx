@@ -21,6 +21,7 @@ import CompactModeTray, {
 } from './CompactModeTray';
 import { parameterStep, steppedParameter } from './CompactTweakTray';
 import type { CompactChromeProps } from './compactSlots';
+import { COMPACT_PANEL_ORDER } from './panelSheet';
 
 function chrome(mode: 'view' | 'tweak'): CompactChromeProps & {
   sheetKey: string;
@@ -43,6 +44,16 @@ function chrome(mode: 'view' | 'tweak'): CompactChromeProps & {
     fileCommands: [],
     selectionLabel: null,
     reducedMotion: true,
+    panels: {
+      open: null,
+      available: COMPACT_PANEL_ORDER,
+      disabledReason: null,
+      content: null,
+      onOpen: vi.fn(),
+      warningCount: 0
+    },
+    selection: null,
+    editRefusal: null,
     sheetKey: ''
   };
 }

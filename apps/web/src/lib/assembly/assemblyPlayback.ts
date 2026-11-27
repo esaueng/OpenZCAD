@@ -190,7 +190,7 @@ export function useAssemblyPlaybackDriver(set: AssemblySet | undefined): void {
           );
           if (!values) {
             previewStart = 0;
-            if (runtime.overrides.has(TOOL_PREVIEW_JOINT_ID))
+            if (runtime.editOverrides.has(TOOL_PREVIEW_JOINT_ID))
               assemblyRuntime.setOverride(TOOL_PREVIEW_JOINT_ID, null);
             return;
           }
@@ -203,7 +203,7 @@ export function useAssemblyPlaybackDriver(set: AssemblySet | undefined): void {
           );
           if (!values) {
             previewStart = 0;
-            if (runtime.overrides.has(MOTION_SETUP_PREVIEW_JOINT_ID))
+            if (runtime.editOverrides.has(MOTION_SETUP_PREVIEW_JOINT_ID))
               assemblyRuntime.setOverride(MOTION_SETUP_PREVIEW_JOINT_ID, null);
             return;
           }
@@ -239,7 +239,7 @@ export function useAssemblyPlaybackDriver(set: AssemblySet | undefined): void {
 function stopClockKeepPose(): void {
   const runtime = getAssemblyRuntime();
   if (!runtime.playback) return;
-  const { overrides, drivers } = runtime;
+  const { editOverrides: overrides, editDrivers: drivers } = runtime;
   assemblyRuntime.stop();
   assemblyRuntime.setOverrides(overrides, drivers);
 }

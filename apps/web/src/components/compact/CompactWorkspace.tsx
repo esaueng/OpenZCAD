@@ -1,12 +1,13 @@
 import {
+  AlertTriangle,
   Check,
   ChevronLeft,
-  ChevronRight,
   CircleHelp,
   Copy,
   Ellipsis,
   FileText,
   FolderOpen,
+  PanelsTopLeft,
   Map as MapIcon,
   Redo2,
   Search,
@@ -39,8 +40,12 @@ import {
   analysisRuntime,
   useAnalysisRuntime
 } from '../../lib/analysis/analysisRuntime';
+import { MenuList, type MenuRow } from './CompactMenuList';
+import { CompactPanelSheet } from './CompactPanelSheet';
+import { CompactSelectionPage } from './CompactSelectionPage';
 import {
   COMPACT_SHEET_RAISE_EVENT,
+  COMPACT_SHEET_YIELD_EVENT,
   CompactAnalysisSlotContext,
   CompactTrayContext,
   SHEET_OVERLAY_ATTRIBUTE,
@@ -49,6 +54,7 @@ import {
   type CompactSheetRaise,
   type CompactTraySlot
 } from './compactSlots';
+import { COMPACT_PANEL_TITLES, PANEL_SHEET_PAGE } from './panelSheet';
 import { ContextTray } from './ContextTray';
 import { ProjectSheet } from './ProjectSheet';
 
@@ -66,53 +72,6 @@ function saveTone(state: WorkspaceSaveState): 'ok' | 'busy' | 'local' | 'warn' {
     default:
       return 'warn';
   }
-}
-
-interface MenuRow {
-  id: string;
-  label: string;
-  icon?: ReactNode;
-  disabledReason?: string | null;
-  /** Opens a page rather than running something. */
-  drillIn?: boolean;
-  run(): void;
-}
-
-function MenuList({
-  label,
-  rows
-}: {
-  label: string;
-  rows: readonly MenuRow[];
-}) {
-  return (
-    <ul className="compact-menu" aria-label={label}>
-      {rows.map((row) => (
-        <li key={row.id}>
-          <button
-            type="button"
-            className="compact-menu-row"
-            data-sheet-row={row.id}
-            disabled={Boolean(row.disabledReason)}
-            title={row.disabledReason ?? undefined}
-            onClick={row.run}
-          >
-            <span className="compact-menu-icon" aria-hidden="true">
-              {row.icon}
-            </span>
-            <span className="compact-menu-label">{row.label}</span>
-            {row.drillIn ? (
-              <ChevronRight
-                className="compact-menu-chevron"
-                size={18}
-                aria-hidden="true"
-              />
-            ) : null}
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 function fileRows(
@@ -172,7 +131,13 @@ export interface CompactWorkspaceProps extends CompactChromeProps {
 const OWN_ENTER = { [OWN_ENTER_ATTRIBUTE]: '' };
 
 /** The pages the compact chrome pushes onto the sheet, by id. */
-type CompactPage = 'more' | 'file' | 'project' | 'selection' | 'all-tools';
+type CompactPage =
+  | 'more'
+  | 'file'
+  | 'project'
+  | 'selection'
+  | 'all-tools'
+  | typeof PANEL_SHEET_PAGE;
 
 /** A tray's page in the back stack: this prefix, then the tray's own key. */
 const TRAY_PAGE = 'tray:';
@@ -208,6 +173,9 @@ export default function CompactWorkspace({
   onClearSelection,
   onMakeCopy,
   reducedMotion,
+  panels,
+  selection,
+  editRefusal,
   build = null,
   sketch = null,
   sheetContent,
@@ -264,12 +232,21 @@ export default function CompactWorkspace({
   // alone to peek); content leaving closes a sheet that holds nothing else,
   // and brings one that keeps a tray back down to its peek (under an open
   // page, once the page goes).
+  //
+  // A running command's row arriving takes the sheet, wherever the command
+  // was run from (the command bar, a key, the tray, All tools, a selection
+  // verb, an action sheet): every page goes, as for an edit started from a
+  // page, and the sheet stands at the root's height, so the row's Cancel and
+  // Done show at once rather than under History until Back.
   const lastKey = useRef('');
+  const lastRow = useRef(false);
   useEffect(() => {
     const key = hasSheetContent ? sheetKey : '';
     const arrived = key !== '' && key !== lastKey.current;
     const left = key === '' && lastKey.current !== '';
+    const rowArrived = commandRowPresent && !lastRow.current;
     lastKey.current = key;
+    lastRow.current = commandRowPresent;
     if (left && trayShown) {
       dispatch({ type: 'settle' });
       return;
@@ -280,7 +257,16 @@ export default function CompactWorkspace({
       arrived,
       at: rowOnly ? 'peek' : 'half'
     });
-  }, [dispatch, hasRoot, hasSheetContent, rowOnly, sheetKey, trayShown]);
+    if (rowArrived) dispatch({ type: 'leave', toRoot: true });
+  }, [
+    commandRowPresent,
+    dispatch,
+    hasRoot,
+    hasSheetContent,
+    rowOnly,
+    sheetKey,
+    trayShown
+  ]);
 
   // The keypad needs the room of half height at least.
   useEffect(() => {
@@ -297,6 +283,20 @@ export default function CompactWorkspace({
     };
     chrome.addEventListener(COMPACT_SHEET_RAISE_EVENT, onRaise);
     return () => chrome.removeEventListener(COMPACT_SHEET_RAISE_EVENT, onRaise);
+  }, [dispatch]);
+
+  // What a global key opens on the stage (the command bar) needs the stage
+  // live: a full sheet comes down to half for it, pages and all.
+  useEffect(() => {
+    const shell = chromeRef.current?.closest('.app-shell');
+    if (!shell) return;
+    const onYield = () => {
+      if (stateRef.current.detent === 'full') {
+        dispatch({ type: 'set-detent', detent: 'half' });
+      }
+    };
+    shell.addEventListener(COMPACT_SHEET_YIELD_EVENT, onYield);
+    return () => shell.removeEventListener(COMPACT_SHEET_YIELD_EVENT, onYield);
   }, [dispatch]);
 
   // The keypad's host: in the sheet while Build's tray holds it up, so the
@@ -440,6 +440,31 @@ export default function CompactWorkspace({
   const projectOpen = state.stack.some((page) => page.key === 'project');
   const allToolsOpen = state.stack.some((page) => page.key === 'all-tools');
 
+  // The panel sheet follows the workspace's open panel (every route to a
+  // panel sets it), and a sheet put away by Back, Close or Escape shuts it.
+  const panelsInStack = state.stack.some(
+    (page) => page.key === PANEL_SHEET_PAGE
+  );
+  const panelsWereInStack = useRef(false);
+  const panelOpen = panels.open;
+  const onPanelOpen = panels.onOpen;
+  useEffect(() => {
+    if (panelsWereInStack.current && !panelsInStack) {
+      panelsWereInStack.current = false;
+      if (panelOpen !== null) onPanelOpen(null);
+      return;
+    }
+    panelsWereInStack.current = panelsInStack;
+    if (panelOpen !== null && !panelsInStack) {
+      dispatch({ type: 'push', page: { key: PANEL_SHEET_PAGE } });
+    } else if (panelOpen === null && panelsInStack) {
+      // Shut from outside the sheet: an edit, a tool or an inspector started
+      // from a panel (a History tap), or Ctrl+\. Every page goes with it, so
+      // More, under Panels, never covers the edit form that took its place.
+      dispatch({ type: 'leave' });
+    }
+  }, [dispatch, onPanelOpen, panelOpen, panelsInStack]);
+
   // Each page is drawn from the workspace's state as it is now, so a row
   // disabled while the model was updating comes back when it finishes.
   const renderPage = (
@@ -534,6 +559,14 @@ export default function CompactWorkspace({
                   run: () => push('project')
                 },
                 {
+                  id: 'panels',
+                  label: 'Panels',
+                  icon: <PanelsTopLeft size={18} />,
+                  drillIn: true,
+                  disabledReason: panels.disabledReason,
+                  run: () => panels.onOpen(panels.available[0] ?? 'history')
+                },
+                {
                   id: 'file',
                   label: 'File',
                   icon: <FileText size={18} />,
@@ -571,22 +604,34 @@ export default function CompactWorkspace({
       case 'selection':
         return {
           title: selectionLabel ?? 'Nothing picked',
-          content:
-            selectionLabel && onClearSelection ? (
-              <MenuList
-                label="Selection"
-                rows={[
-                  {
-                    id: 'clear',
-                    label: 'Clear selection',
-                    run: () => {
+          content: selectionLabel ? (
+            <CompactSelectionPage
+              selection={selection}
+              onDetails={
+                hasSheetContent
+                  ? () => {
+                      // The pick's inspector is the sheet's own content.
+                      closePages();
+                      dispatch({ type: 'set-detent', detent: 'half' });
+                    }
+                  : null
+              }
+              onClear={
+                onClearSelection
+                  ? () => {
                       closePages();
                       onClearSelection();
                     }
-                  }
-                ]}
-              />
-            ) : null
+                  : null
+              }
+              done={closePages}
+            />
+          ) : null
+        };
+      case PANEL_SHEET_PAGE:
+        return {
+          title: panels.open ? COMPACT_PANEL_TITLES[panels.open] : 'Panels',
+          content: <CompactPanelSheet panels={panels} />
         };
       default:
         return null;
@@ -599,12 +644,6 @@ export default function CompactWorkspace({
       if (trayPage === SKETCH_SELECTION_PAGE) traySlot.closePage();
       else
         traySlot.openPage(SKETCH_SELECTION_PAGE, selectionLabel ?? 'Selection');
-      return;
-    }
-    if (hasSheetContent) {
-      // The pick's inspector is the sheet's own content: bring it up.
-      dispatch({ type: 'close' });
-      dispatch({ type: 'set-detent', detent: 'half' });
       return;
     }
     if (!selectionLabel) return;
@@ -681,6 +720,40 @@ export default function CompactWorkspace({
           >
             <Check size={20} aria-hidden="true" />
             <span aria-hidden="true">Finish</span>
+          </button>
+        ) : null}
+        {editRefusal ? (
+          // The top bar's "Edit not applied", with its handler: it brings
+          // back the refused edit, its value and why it was refused.
+          <button
+            type="button"
+            className="compact-refusal-chip"
+            aria-label="Edit not applied: reopen it"
+            title={`${editRefusal.message} Reopen the edit to see why and choose what to do.`}
+            onClick={() => {
+              // The edit comes back as the sheet's content: no page stays
+              // over it.
+              dispatch({ type: 'leave' });
+              editRefusal.onReview();
+            }}
+          >
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span className="compact-refusal-text">Edit not applied</span>
+          </button>
+        ) : null}
+        {panels.warningCount > 0 ? (
+          <button
+            type="button"
+            className="compact-warning-badge"
+            aria-label={`${panels.warningCount} ${
+              panels.warningCount === 1 ? 'warning' : 'warnings'
+            }: show Diagnostics`}
+            onClick={() => panels.onOpen('diagnostics')}
+          >
+            <AlertTriangle size={18} aria-hidden="true" />
+            <span className="compact-warning-count mono">
+              {panels.warningCount}
+            </span>
           </button>
         ) : null}
         {searchOpen && onCloseSearch ? (

@@ -7,6 +7,7 @@ import {
   type RefObject
 } from 'react';
 import { createPortal } from 'react-dom';
+import { SwipeActionTaps } from './swipeActionTap';
 
 /** The compact library's shelves: the three stores, and Shared beside them. */
 export type CompactShelf = 'active' | 'archived' | 'deleted' | 'shared';
@@ -71,15 +72,6 @@ interface Press {
   hold: number | null;
 }
 
-/** A finger or pen on a revealed action, which runs when it lifts. */
-interface ActionPress {
-  pointerId: number;
-  projectId: string;
-  key: string;
-  startX: number;
-  startY: number;
-}
-
 /**
  * Swipe and hold on the library's rows (U12 slice 10). A finger dragged
  * left across a project reveals its shelf actions (Archive and Trash on
@@ -121,12 +113,9 @@ function SwipeLayer({
     const root = rootRef.current;
     if (!root) return;
     let press: Press | null = null;
-    let actionPress: ActionPress | null = null;
-    // The click a swipe or a hold ends with is not a tap on the row, and the
-    // one after an action already run on release is not a second tap on
-    // anything. Each press starts clear: a click the browser never sent must
-    // not eat the next tap.
-    let swallowClick: 'none' | 'row' | 'all' = 'none';
+    // A revealed action runs on its finger's lift, and the clicks a swipe,
+    // a hold or such a run end with are not taps (see swipeActionTap).
+    const taps = new SwipeActionTaps<{ projectId: string; key: string }>();
 
     const width = (projectId: string) =>
       actionsRef.current(projectId).length * ACTION_PX;
@@ -138,8 +127,7 @@ function SwipeLayer({
 
     const onPointerDown = (event: PointerEvent) => {
       if (!event.isPrimary) return;
-      swallowClick = 'none';
-      actionPress = null;
+      taps.press();
       if (event.pointerType === 'mouse') return;
       const target = event.target instanceof Element ? event.target : null;
       const current = openRef.current;
@@ -149,21 +137,22 @@ function SwipeLayer({
       const action = target?.closest<HTMLElement>(
         '.compact-swipe-action[data-action]'
       );
-      if (current && action && current.tile.contains(action)) {
-        actionPress = {
-          pointerId: event.pointerId,
+      if (
+        current &&
+        action &&
+        current.tile.contains(action) &&
+        taps.pressAction(event, {
           projectId: current.projectId,
-          key: action.dataset.action!,
-          startX: event.clientX,
-          startY: event.clientY
-        };
+          key: action.dataset.action!
+        })
+      ) {
         return;
       }
       // A press anywhere but on the open row's actions puts it back, and
       // only that: its click opens nothing.
       if (current && !target?.closest('.compact-swipe-actions')) {
         close();
-        swallowClick = 'row';
+        taps.swallowRowClick();
         if (current.tile.contains(target)) return;
       }
       if (!target || target.closest(NOT_A_SWIPE)) return;
@@ -183,7 +172,7 @@ function SwipeLayer({
         hold: window.setTimeout(() => {
           if (!press || press.mode !== 'pending') return;
           press.hold = null;
-          swallowClick = 'row';
+          taps.swallowRowClick();
           holdRef.current(projectId);
           press.mode = 'scroll';
         }, HOLD_MS)
@@ -218,18 +207,15 @@ function SwipeLayer({
     };
 
     const onPointerUp = (event: PointerEvent) => {
-      if (actionPress && event.pointerId === actionPress.pointerId) {
-        const { projectId, key, startX, startY } = actionPress;
-        actionPress = null;
-        const still =
-          Math.abs(event.clientX - startX) < SLOP_PX &&
-          Math.abs(event.clientY - startY) < SLOP_PX;
+      const tapped = taps.release(event);
+      if (tapped) {
+        const { projectId, key } = tapped;
         const action = actionsRef
           .current(projectId)
           .find((entry) => entry.key === key);
-        if (!still || openRef.current?.projectId !== projectId) return;
+        if (openRef.current?.projectId !== projectId) return;
         if (!action || action.disabled) return;
-        swallowClick = 'all';
+        taps.ran();
         close();
         action.run();
         return;
@@ -238,7 +224,7 @@ function SwipeLayer({
       const { tile, projectId, mode, startX } = press;
       end();
       if (mode !== 'swipe') return;
-      swallowClick = 'row';
+      taps.swallowRowClick();
       tile.classList.remove('is-swiping');
       const room = width(projectId);
       if (event.clientX - startX < -room / 2) {
@@ -250,7 +236,7 @@ function SwipeLayer({
     };
 
     const onPointerCancel = (event: PointerEvent) => {
-      if (actionPress?.pointerId === event.pointerId) actionPress = null;
+      taps.cancel(event);
       if (!press || event.pointerId !== press.pointerId) return;
       const { tile, mode } = press;
       end();
@@ -258,11 +244,9 @@ function SwipeLayer({
     };
 
     const onClick = (event: MouseEvent) => {
-      if (swallowClick === 'none') return;
-      const all = swallowClick === 'all';
-      swallowClick = 'none';
       const target = event.target instanceof Element ? event.target : null;
-      if (!all && target?.closest('.compact-swipe-actions')) return;
+      const onActions = Boolean(target?.closest('.compact-swipe-actions'));
+      if (!taps.takeClick(onActions)) return;
       event.preventDefault();
       event.stopPropagation();
     };
@@ -281,6 +265,7 @@ function SwipeLayer({
     root.addEventListener('contextmenu', onContextMenu);
     return () => {
       end();
+      taps.dispose();
       root.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);

@@ -19,6 +19,7 @@ import {
   sketchSelectAllReason
 } from './CompactSketchTray';
 import type { CompactChromeProps, CompactSketchChrome } from './compactSlots';
+import { COMPACT_PANEL_ORDER } from './panelSheet';
 
 function chrome(
   sketch: CompactSketchChrome | null,
@@ -42,6 +43,16 @@ function chrome(
     fileCommands: [],
     selectionLabel,
     reducedMotion: true,
+    panels: {
+      open: null,
+      available: COMPACT_PANEL_ORDER,
+      disabledReason: null,
+      content: null,
+      onOpen: vi.fn(),
+      warningCount: 0
+    },
+    selection: null,
+    editRefusal: null,
     sketch,
     sheetKey: ''
   };

@@ -70,11 +70,12 @@ export function AddStudyButton({
   );
   if (!moves || studies.length >= MAX_ASSEMBLY_STUDIES) return null;
   function create() {
-    const shown = getAssemblyRuntime();
+    // The edit pose, never a player preview's (AS06).
+    const runtime = getAssemblyRuntime();
     const study = createDefaultStudy(
       assembly,
       newStudyId(),
-      shownJointValues(assembly, shown.overrides, shown.drivers)
+      shownJointValues(assembly, runtime.editOverrides, runtime.editDrivers)
     );
     if (
       !execute(

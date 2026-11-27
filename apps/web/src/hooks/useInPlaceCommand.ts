@@ -57,6 +57,12 @@ import {
   newExactWarnings
 } from '../lib/exactWarnings';
 import { refusingWarningDetail } from '../lib/featureValidation';
+import {
+  nextPlaneEdges,
+  type PlaneEdgePick,
+  type PlaneEdgeState
+} from '../lib/inPlace/splitEdgePlane';
+import { SPLIT_EDGE_PLANE_SENTENCES } from '../lib/refusalLanguage';
 
 /**
  * Runs whichever in-place command (U09) is active.
@@ -354,6 +360,11 @@ interface Session {
   /** The stored feature this command edits; null while creating one. */
   edit: InPlaceEditSeed | null;
   /**
+   * M11 (D2): the straight edges held for a plane picked as two edges, and
+   * why the last edge pick gave none. Absent until an edge is picked.
+   */
+  planeEdges?: PlaneEdgeState;
+  /**
    * Whether a later direct edit reshapes the edited body, as the feature
    * stands now (its seed said so when armed; an undo may change it).
    */
@@ -473,6 +484,12 @@ export interface InPlaceCommand {
   setEdges(edges: readonly EdgePick[]): boolean;
   pickPlane(plane: PlanePick): boolean;
   /**
+   * M11 (D2): a straight edge toward a plane through two edges (a curved one
+   * refused by name); false when the tool takes no such plane or no body
+   * is picked yet. See `nextPlaneEdges`.
+   */
+  pickPlaneEdge(edge: PlaneEdgePick | { refused: 'curved-edge' }): boolean;
+  /**
    * A primitive's footprint drag: where it was drawn, and the values it set
    * (the pressed point and the footprint's sizes). Refused (false) when the
    * command is placed some other way.
@@ -562,6 +579,31 @@ function faceFilterAccepts(
   if (filter === 'revolution')
     return surface === 'cylinder' || surface === 'cone';
   return surface === 'cylinder';
+}
+
+/**
+ * `latest` with its plane slot set. A new plane starts unslid: an offset
+ * measured from the old one means nothing on it.
+ */
+function withPlane(latest: Session, plane: PlanePick | null): Session {
+  const offsetSpec = IN_PLACE_TOOL_SPECS[latest.tool].values.find(
+    (value) => value.id === 'offset'
+  );
+  return {
+    ...latest,
+    slots: { ...latest.slots, plane },
+    ...(offsetSpec
+      ? {
+          values: { ...latest.values, offset: offsetSpec.initial },
+          // A typed offset goes too, or it would still stand in for the
+          // reset value on the new plane.
+          raws: Object.fromEntries(
+            Object.entries(latest.raws).filter(([id]) => id !== 'offset')
+          ),
+          touched: latest.touched.filter((id) => id !== 'offset')
+        }
+      : {})
+  };
 }
 
 export function useInPlaceCommand(
@@ -813,7 +855,10 @@ export function useInPlaceCommand(
             edges: session.slots.edges,
             placement: session.slots.placement,
             refs: session.slots.refs,
-            image: session.slots.image
+            image: session.slots.image,
+            ...(session.planeEdges
+              ? { planeEdges: session.planeEdges.picks }
+              : {})
           }
         : EMPTY_SLOTS,
     [session, axisCandidates]
@@ -2103,29 +2148,41 @@ export function useInPlaceCommand(
     if (!current || !toolSpec?.wantsPlane) return false;
     setSession((latest) => {
       if (!latest) return latest;
-      // A new plane starts unslid: an offset measured from the old one
-      // means nothing on it.
-      const offsetSpec = IN_PLACE_TOOL_SPECS[latest.tool].values.find(
-        (value) => value.id === 'offset'
-      );
-      return {
-        ...latest,
-        slots: { ...latest.slots, plane },
-        ...(offsetSpec
-          ? {
-              values: { ...latest.values, offset: offsetSpec.initial },
-              // A typed offset goes too, or it would still stand in for the
-              // reset value on the new plane.
-              raws: Object.fromEntries(
-                Object.entries(latest.raws).filter(([id]) => id !== 'offset')
-              ),
-              touched: latest.touched.filter((id) => id !== 'offset')
-            }
-          : {})
-      };
+      // Any other plane picked lets go of edges held for one.
+      const next = withPlane(latest, plane);
+      delete next.planeEdges;
+      return next;
     });
     return true;
   }, []);
+
+  const pickPlaneEdge = useCallback(
+    (edge: PlaneEdgePick | { refused: 'curved-edge' }) => {
+      if (committingRef.current) return false;
+      const current = sessionRef.current;
+      const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
+      if (
+        !current ||
+        !toolSpec?.planeFromEdges ||
+        current.slots.bodies.length === 0 ||
+        current.options.planeMode === 'typed'
+      ) {
+        return false;
+      }
+      setSession((latest) => {
+        if (!latest) return latest;
+        const next = nextPlaneEdges(latest.planeEdges, edge);
+        const held = { ...latest, planeEdges: next.state };
+        if (next.plane === 'keep') return held;
+        return withPlane(
+          held,
+          next.plane ? { kind: 'face', ...next.plane } : null
+        );
+      });
+      return true;
+    },
+    []
+  );
 
   const placeFootprint = useCallback(
     (placement: PlacementPick, placed: Record<string, number>) => {
@@ -2501,9 +2558,15 @@ export function useInPlaceCommand(
 
   // Done waits for a valid preview of exactly what it would commit: a pick
   // that changed the request since the last frame has not been shown yet.
+  // M11 (D2): an edge pick that gave no plane holds Done like a refusal.
+  const planeEdgeRefusal =
+    session?.planeEdges?.refused && session.options.planeMode !== 'typed'
+      ? SPLIT_EDGE_PLANE_SENTENCES[session.planeEdges.refused]
+      : null;
   const canFinish = Boolean(
     !committing &&
     entryRefusals.length === 0 &&
+    planeEdgeRefusal === null &&
     request &&
     (instant ||
       (previewValid && previewedKey !== null && previewedKey === requestKey))
@@ -2681,17 +2744,26 @@ export function useInPlaceCommand(
           .filter(Boolean)
           .join(' · ')
       : '',
-    refusal: entryRefusal?.message ?? refusal,
+    refusal: entryRefusal?.message ?? planeEdgeRefusal ?? refusal,
     refusalClassification:
-      !entryRefusal && refusal !== null && typedRefusal?.message === refusal
+      !entryRefusal &&
+      !planeEdgeRefusal &&
+      refusal !== null &&
+      typedRefusal?.message === refusal
         ? typedRefusal.record
         : null,
-    refusalInput:
-      entryRefusal || refusal === null || refusalInputs.length === 0
-        ? null
-        : refusalInputs.join(' and '),
+    refusalInput: entryRefusal
+      ? null
+      : planeEdgeRefusal
+        ? 'Plane'
+        : refusal === null || refusalInputs.length === 0
+          ? null
+          : refusalInputs.join(' and '),
     refusalPick:
-      !entryRefusal && refusal !== null && refusalPickFor?.message === refusal
+      !entryRefusal &&
+      !planeEdgeRefusal &&
+      refusal !== null &&
+      refusalPickFor?.message === refusal
         ? refusalPickFor.pick
         : null,
     // An entry refused meanwhile (a 0 typed over the refused radius) leaves
@@ -2714,6 +2786,7 @@ export function useInPlaceCommand(
     pickEdge,
     setEdges,
     pickPlane,
+    pickPlaneEdge,
     placeFootprint,
     pickRef,
     placeImage,
@@ -2823,7 +2896,8 @@ function slotsOf(session: Session): InPlaceSlots {
     plane: session.slots.plane,
     refs: session.slots.refs,
     image: session.slots.image,
-    edges: session.slots.edges
+    edges: session.slots.edges,
+    ...(session.planeEdges ? { planeEdges: session.planeEdges.picks } : {})
   };
 }
 
