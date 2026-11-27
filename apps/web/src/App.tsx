@@ -40857,6 +40857,9 @@ export function App() {
         scope={parameterScope.scope}
         selectedId={selectedFeatureNodeId}
         failedFeatureIds={failedHistoryFeatureIds}
+        {...(featureAttribution?.derived === doc.derived
+          ? { featureWarnings: featureAttribution.featureWarnings }
+          : {})}
         failure={
           historyFailure?.projectId === doc.projectId &&
           historyFailure.version === doc.version

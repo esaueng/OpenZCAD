@@ -1043,6 +1043,8 @@ function trimmingFailureAdvice(
   target: number,
   reported: string | null,
   featureKind: 'fillet' | 'chamfer',
+  /** Whether a smaller rung ran and was refused the same way. */
+  smallerRefused: boolean,
   priorBlendFace?: (face: number) => boolean
 ): { text: string; besideBlend: boolean } | null {
   if (!reported?.includes('trimming-failure')) return null;
@@ -1068,11 +1070,14 @@ function trimmingFailureAdvice(
     }
   }
   const sizes = featureKind === 'fillet' ? 'radii' : 'distances';
+  const alsoSmaller = smallerRefused
+    ? ` Smaller ${sizes} failed too, so a different size is unlikely to help.`
+    : '';
   return {
     besideBlend,
     text: besideBlend
-      ? `The modeling engine could not trim the ${surface}face beside it, which also meets an earlier fillet or chamfer. Smaller ${sizes} failed too, so a different size is unlikely to help. Try a different edge, or try adding this edge to that earlier feature so both are built together.`
-      : `The modeling engine could not trim the ${surface}face beside it. Smaller ${sizes} failed too, so a different size is unlikely to help. Try a different edge, or change the geometry next to it first.`
+      ? `The modeling engine could not trim the ${surface}face beside it, which also meets an earlier fillet or chamfer.${alsoSmaller} Try a different edge, or try adding this edge to that earlier feature so both are built together.`
+      : `The modeling engine could not trim the ${surface}face beside it.${alsoSmaller} Try a different edge, or change the geometry next to it first.`
   };
 }
 
@@ -1241,7 +1246,15 @@ export function edgeModifierRefusal(
    * Which blend-shaped faces of the target an earlier fillet or chamfer
    * made (`priorBlendFaceTest`). Without it every one counts.
    */
-  priorBlendFace?: (face: number) => boolean
+  priorBlendFace?: (face: number) => boolean,
+  /**
+   * The kernel code of the requested size's typed refusal, or `null` when
+   * it was not a typed kernel refusal (an acceptance rule declined the
+   * result, or the call threw). A sentence says smaller sizes failed too
+   * only when this is a code and a smaller rung ran and was refused with it;
+   * two missing codes are never the same refusal.
+   */
+  reportedCode: string | null = null
 ): { message: string; advice: BlendRefusalAdvice | null } {
   const label = featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
@@ -1283,6 +1296,14 @@ export function edgeModifierRefusal(
   // Whether a smaller rung actually ran and the kernel refused it with the
   // same catch-all code as the requested size.
   let smallerRungCatchAll = false;
+  // Whether a smaller rung actually ran and the kernel refused it with the
+  // same typed code as the requested size. Every "smaller sizes failed too"
+  // below rests on this, never on the ladder returning null, which it also
+  // does when no rung was small enough to run (#2201). A rung with no code is
+  // not a refusal: the exact-only probe discards an approximate or otherwise
+  // unaccepted result without one, and that result may well be a size the
+  // normal build accepts.
+  let smallerRungRefusedAlike = false;
   try {
     const laddered = acceptedEdgeModifierProbe(
       kernel,
@@ -1295,6 +1316,13 @@ export function edgeModifierRefusal(
       (refusal) => {
         if (refusal?.kernelCode === CATCH_ALL_BLEND_CODE) {
           smallerRungCatchAll = true;
+        }
+        if (
+          reportedCode !== null &&
+          refusal !== null &&
+          refusal.kernelCode === reportedCode
+        ) {
+          smallerRungRefusedAlike = true;
         }
       }
     );
@@ -1348,6 +1376,7 @@ export function edgeModifierRefusal(
       };
     }
     smallerSizesRefused = true;
+    const sizes = featureKind === 'fillet' ? 'radii' : 'distances';
     // Named before the topology causes because it explains the whole body
     // rather than one selection: measured on an r=2..3, h=1 annulus, a 90
     // degree wedge refuses all 12 of its edges at every radius from 0.4 down
@@ -1361,7 +1390,7 @@ export function edgeModifierRefusal(
     if (selected.some((edge) => edgeSampleOf(kernel, edge).closed)) {
       return structural(
         'closed-rim',
-        `Closed rim edges (such as hole rims) could not be ${verb} on this body, and smaller ${featureKind === 'fillet' ? 'radii' : 'distances'} failed too — deselect the rim edge and try again.`
+        `Closed rim edges (such as hole rims) could not be ${verb} on this body${smallerRungRefusedAlike ? `, and smaller ${sizes} failed too` : ''} — deselect the rim edge and try again.`
       );
     }
     // Sharing a corner is NOT itself a refusal: all twelve edges of a plain
@@ -1384,7 +1413,7 @@ export function edgeModifierRefusal(
       if (featureKind === 'chamfer') {
         return structural(
           'ends-on-blend',
-          'The modeling engine could not join this chamfer to the existing fillet or chamfer. Smaller distances were refused too. The last valid body is unchanged.'
+          `The modeling engine could not join this chamfer to the existing fillet or chamfer.${smallerRungRefusedAlike ? ' Smaller distances were refused too.' : ''} The last valid body is unchanged.`
         );
       }
       return structural(
@@ -1397,6 +1426,7 @@ export function edgeModifierRefusal(
       target,
       reported,
       featureKind,
+      smallerRungRefusedAlike,
       priorBlendFace
     );
     if (trimming) {
@@ -1421,19 +1451,22 @@ export function edgeModifierRefusal(
     // Diagnosis is best-effort; fall through to the generic message.
   }
   if (smallerSizesRefused) {
-    // No cause was named, but every smaller size on the ladder refused too:
-    // telling the user to shrink the value sent them round the same refusal.
+    // No cause was named, and no smaller size on the ladder built: telling
+    // the user to shrink the value would send them round the same refusal.
+    // That smaller sizes were refused is said only when one was tried and
+    // refused alike; a ladder with no rung small enough to run, or whose
+    // rungs failed some other way, proves nothing about them.
     const sizes = featureKind === 'fillet' ? 'radii' : 'distances';
     if (named.count === 1) {
       return structural(
         'neighbor-faces',
-        `Smaller ${sizes} were refused too. The kernel could not build this edge with its current neighboring faces. Try a different edge or change the adjacent geometry.`
+        `${smallerRungRefusedAlike ? `Smaller ${sizes} were refused too. ` : ''}The kernel could not build this edge with its current neighboring faces. Try a different edge or change the adjacent geometry.`
       );
     }
     const gerund = featureKind === 'fillet' ? 'rounding' : 'chamfering';
     return structural(
       'unknown',
-      `Smaller ${sizes} were refused too, so a different size is unlikely to help. Try ${gerund} fewer edges at once, or different edges.`
+      `${smallerRungRefusedAlike ? `Smaller ${sizes} were refused too, so a different size is unlikely to help. ` : ''}Try ${gerund} fewer edges at once, or different edges.`
     );
   }
   return { message: `${prefix} Try a smaller ${dimension}.`, advice: null };

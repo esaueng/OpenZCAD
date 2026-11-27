@@ -1069,6 +1069,11 @@ describe('Cell 4b: the inner-loop refusal is typed only where its sentence holds
     expect(warning?.blendAdvice).not.toMatchObject({
       cause: 'face-inner-loop'
     });
+    // No rung ran, so no sentence may say smaller distances were refused:
+    // the older fallback causes follow the same rule as this one.
+    expect(warning?.blendAdvice?.kind).toBe('structural');
+    expect(warning?.blendAdvice?.reason).not.toMatch(/[Ss]maller/);
+    expect(warning?.message).not.toMatch(/[Ss]maller/);
   });
 });
 
