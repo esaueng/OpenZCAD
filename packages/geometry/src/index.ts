@@ -559,33 +559,109 @@ function canonicalEdgePair(
 }
 
 /**
+ * The eigenvalues and unit eigenvectors of a symmetric 3 × 3 matrix, by
+ * cyclic Jacobi rotations, largest value first (index order on a tie). The
+ * rotations are orthogonal, so the vectors stay orthonormal to rounding.
+ */
+function symmetricEigen3(matrix: readonly (readonly number[])[]): {
+  values: number[];
+  vectors: DatumVector[];
+} {
+  const a = matrix.map((row) => [...row]);
+  const v = [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1]
+  ];
+  const pairs = [
+    [0, 1],
+    [0, 2],
+    [1, 2]
+  ] as const;
+  for (let sweep = 0; sweep < 64; sweep += 1) {
+    if (a[0]![1] === 0 && a[0]![2] === 0 && a[1]![2] === 0) break;
+    for (const [p, q] of pairs) {
+      const apq = a[p]![q]!;
+      if (apq === 0) continue;
+      const theta = (a[q]![q]! - a[p]![p]!) / (2 * apq);
+      const t =
+        (theta >= 0 ? 1 : -1) /
+        (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+      const c = 1 / Math.sqrt(t * t + 1);
+      const s = t * c;
+      for (let k = 0; k < 3; k += 1) {
+        const akp = a[k]![p]!;
+        const akq = a[k]![q]!;
+        a[k]![p] = c * akp - s * akq;
+        a[k]![q] = s * akp + c * akq;
+      }
+      for (let k = 0; k < 3; k += 1) {
+        const apk = a[p]![k]!;
+        const aqk = a[q]![k]!;
+        a[p]![k] = c * apk - s * aqk;
+        a[q]![k] = s * apk + c * aqk;
+      }
+      // Exactly zero, as the rotation makes it, so the sweep ends.
+      a[p]![q] = 0;
+      a[q]![p] = 0;
+      for (let k = 0; k < 3; k += 1) {
+        const vkp = v[k]![p]!;
+        const vkq = v[k]![q]!;
+        v[k]![p] = c * vkp - s * vkq;
+        v[k]![q] = s * vkp + c * vkq;
+      }
+    }
+  }
+  const order = [0, 1, 2].sort((i, j) => a[j]![j]! - a[i]![i]! || i - j);
+  return {
+    values: order.map((i) => a[i]![i]!),
+    vectors: order.map((i) => ({ x: v[0]![i]!, y: v[1]![i]!, z: v[2]![i]! }))
+  };
+}
+
+/**
+ * A plane normal's sign, fixed by its largest component (positive), the
+ * first of x, y, z within a relative 1e-9 of the largest on a tie. Near an
+ * axis, the commonest CAD normal, that component is near 1 and cannot flip;
+ * the sign can change only where two components are nearly equal in size.
+ */
+function signedByLargest(normal: DatumVector): DatumVector {
+  const parts = [normal.x, normal.y, normal.z];
+  const largest = Math.max(...parts.map(Math.abs));
+  const lead = parts.find((part) => Math.abs(part) >= largest * (1 - 1e-9))!;
+  return lead < 0 ? datumScale(normal, -1) : normal;
+}
+
+/**
  * M11 (owner decision D2): the plane through two straight edges, each given
  * by its two ends, for a Split plane picked as a pair of edges. The result is
  * plain numbers, computed once at pick time; nothing links it to the edges.
  *
- * The edges are put in a canonical order first ({@link canonicalEdgePair}),
- * so swapping the picks or reversing either edge gives a bit-identical
- * result, origin included. With `P` the first edge of that order, `Q` the
- * second, and `t` the linear tolerance:
+ * The plane is fitted to the four ends: through their centroid, its normal
+ * the scatter matrix's eigenvector of least spread. Every test reads that
+ * fit, which turns with the edges, so a rigid motion of both edges moves the
+ * result with them and never changes the outcome (beyond rounding at a
+ * threshold). With `t` the linear tolerance:
  *
- * - The directions are parallel when their difference rises by at most `t`
- *   over the longer edge (`sin θ · max length ≤ t`), so a short edge turned
- *   well away from a long one is never taken for parallel.
- * - `collinear`: parallel, and both ends of `Q` within `t` of `P`'s line
- *   (coincident, overlapping and reversed edges among them). An edge no
- *   longer than `t` has no line of its own and is refused the same way.
- * - The normal is `P × Q` for edges that are not parallel, and `P` crossed
- *   with the step between the edges' middles for parallel ones apart.
- * - `skew`: an end of either edge lies farther than `t` from the plane
- *   through the four ends' centroid with that normal. Two crossing edges a
- *   distance `d` apart along the normal put each end `d / 2` off it.
+ * - `collinear`: every end lies within `t` of the fitted line (through the
+ *   centroid along the direction of most spread). Then every plane through
+ *   that line holds all four ends within `t`, so none is the plane: two
+ *   edges on one line, coincident or overlapping, but also a short edge
+ *   whose ends stay within `t` of a long edge's line whatever its
+ *   direction. An edge no longer than `t` has no line of its own and is
+ *   refused the same way.
+ * - `skew`: some end lies farther than `t` from the fitted plane. This is
+ *   the three-point plane's point-to-plane tolerance; for two edges that
+ *   cross a distance `d` apart, the fit puts each end `d / 2` off the
+ *   plane, so lines up to `2t` apart are taken as meeting.
  *
  * `t` is the three-point plane's: {@link geometryTolerance} of the ends'
  * span, floored at the rounding noise of their coordinates.
  *
- * The origin is the centroid of the four ends, on the plane by construction.
- * The normal is canonical (its first component beyond the direction quantum
- * is positive, as {@link canonicalAxisDirection}).
+ * The edges are taken in a canonical order first ({@link canonicalEdgePair})
+ * only so that sums run in one order: either pick order and either edge
+ * direction then give a bit-identical result. The origin is the centroid;
+ * the normal's largest component is positive ({@link signedByLargest}).
  */
 export function edgePairPlane(
   first: readonly [DatumVector, DatumVector],
@@ -607,45 +683,37 @@ export function edgePairPlane(
     geometryTolerance(span),
     magnitude * 8 * Number.EPSILON
   );
-  const alongP = datumSub(p[1], p[0]);
-  const alongQ = datumSub(q[1], q[0]);
-  const lengthP = datumLength(alongP);
-  const lengthQ = datumLength(alongQ);
-  if (lengthP <= tolerance || lengthQ <= tolerance) {
+  if (
+    datumLength(datumSub(p[1], p[0])) <= tolerance ||
+    datumLength(datumSub(q[1], q[0])) <= tolerance
+  ) {
     return { ok: false, code: 'collinear' };
-  }
-  const unitP = datumScale(alongP, 1 / lengthP);
-  const unitQ = datumScale(alongQ, 1 / lengthQ);
-  const across = datumCross(unitP, unitQ);
-  const sine = datumLength(across);
-  let normal: DatumVector;
-  if (sine * Math.max(lengthP, lengthQ) <= tolerance) {
-    // Parallel: on one line, or apart in the plane they share.
-    const offLine = (point: DatumVector): DatumVector => {
-      const from = datumSub(point, p[0]);
-      return datumSub(from, datumScale(unitP, datumDot(from, unitP)));
-    };
-    if (
-      datumLength(offLine(q[0])) <= tolerance &&
-      datumLength(offLine(q[1])) <= tolerance
-    ) {
-      return { ok: false, code: 'collinear' };
-    }
-    const middle = (edge: [DatumVector, DatumVector]) =>
-      datumScale(datumAdd(edge[0], edge[1]), 0.5);
-    const step = datumCross(unitP, datumSub(middle(q), middle(p)));
-    normal = datumScale(step, 1 / datumLength(step));
-  } else {
-    normal = datumScale(across, 1 / sine);
   }
   const centroid = datumScale(
     datumAdd(datumAdd(p[0], p[1]), datumAdd(q[0], q[1])),
     0.25
   );
-  for (const point of points) {
-    if (Math.abs(datumDot(datumSub(point, centroid), normal)) > tolerance) {
-      return { ok: false, code: 'skew' };
-    }
+  const offsets = points.map((point) => datumSub(point, centroid));
+  const scatter = [0, 1, 2].map((row) =>
+    [0, 1, 2].map((column) =>
+      offsets.reduce((sum, offset) => {
+        const parts = [offset.x, offset.y, offset.z];
+        return sum + parts[row]! * parts[column]!;
+      }, 0)
+    )
+  );
+  const {
+    vectors: [line, , normal]
+  } = symmetricEigen3(scatter);
+  const offLine = (offset: DatumVector) =>
+    datumLength(datumSub(offset, datumScale(line!, datumDot(offset, line!))));
+  if (offsets.every((offset) => offLine(offset) <= tolerance)) {
+    return { ok: false, code: 'collinear' };
+  }
+  if (
+    offsets.some((offset) => Math.abs(datumDot(offset, normal!)) > tolerance)
+  ) {
+    return { ok: false, code: 'skew' };
   }
   // `+ 0` turns a negative zero into zero, so the stored plane reads and
   // round-trips the same whichever way the edges were drawn.
@@ -657,7 +725,7 @@ export function edgePairPlane(
   return {
     ok: true,
     origin: plain(centroid),
-    normal: plain(canonicalAxisDirection(normal))
+    normal: plain(signedByLargest(normal!))
   };
 }
 

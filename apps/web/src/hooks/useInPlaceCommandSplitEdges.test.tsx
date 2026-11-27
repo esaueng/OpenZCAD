@@ -65,7 +65,12 @@ const top = edge(BLOCK, 2, v(0, 0, 20), v(0, 20, 20));
 const across = edge(BLOCK, 3, v(0, 0, 20), v(20, 0, 20));
 /** Another body's edge on the line of `bottom`. */
 const inLine = edge(OTHER, 7, v(20, 30, 0), v(20, 40, 0));
-const S = String(Math.SQRT1_2);
+/** A stored normal's text as numbers, against (1, 0, 1)/√2 to 1e-12. */
+function expectDiagonal(normal: { x: string; y: string; z: string }) {
+  expect(Number(normal.x)).toBeCloseTo(Math.SQRT1_2, 12);
+  expect(Number(normal.y)).toBe(0);
+  expect(Number(normal.z)).toBeCloseTo(Math.SQRT1_2, 12);
+}
 
 function splitValue(request: InPlaceRequest | undefined) {
   if (request?.tool !== 'modeling' || request.state.operation !== 'split') {
@@ -96,11 +101,12 @@ describe('Split plane through two edges in the in-place command', () => {
     expect(hook.result.current.refusal).toBeNull();
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
     // The plane x + z = 20, through the four ends' centroid, as numbers.
-    expect(splitValue(built.at(-1))).toMatchObject({
+    const value = splitValue(built.at(-1));
+    expect(value).toMatchObject({
       targetBodyId: BLOCK,
-      origin: { x: '10', y: '10', z: '10' },
-      normal: { x: S, y: '0', z: S }
+      origin: { x: '10', y: '10', z: '10' }
     });
+    expectDiagonal(value.normal);
     act(() => {
       expect(hook.result.current.done()).toBe(true);
     });
@@ -125,7 +131,7 @@ describe('Split plane through two edges in the in-place command', () => {
     // The centroid (10, 10, 10), slid 2 along (1, 0, 1)/√2.
     expect(Number(value.origin.x)).toBeCloseTo(10 + Math.SQRT2, 12);
     expect(Number(value.origin.z)).toBeCloseTo(10 + Math.SQRT2, 12);
-    expect(value.normal).toEqual({ x: S, y: '0', z: S });
+    expectDiagonal(value.normal);
   });
 
   it.each([

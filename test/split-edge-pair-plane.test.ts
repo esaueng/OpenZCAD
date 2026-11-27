@@ -117,15 +117,17 @@ describe('edgePairPlane (pure)', () => {
     });
   });
 
-  it('refuses collinear at the linear tolerance and takes just past it', () => {
+  it('refuses side-by-side edges within 2t of one line and takes them past it', () => {
+    // Side by side over the same span, h apart: the fitted line runs midway,
+    // each end h / 2 off it, so h = 2t is the last offset that is one line.
     const a: [Vec3, Vec3] = [v(0, 0, 0), v(10, 0, 0)];
-    expect(edgePairPlane(a, [v(20, tol, 0), v(30, tol, 0)])).toEqual({
+    const beside = (h: number): [Vec3, Vec3] => [v(0, h, 0), v(10, h, 0)];
+    expect(edgePairPlane(a, beside(2 * tol))).toEqual({
       ok: false,
       code: 'collinear'
     });
-    expect(edgePairPlane(a, [v(20, 2 * tol, 0), v(30, 2 * tol, 0)]).ok).toBe(
-      true
-    );
+    const apart = plane(a, beside(2.2 * tol));
+    expectVec(apart.normal, v(0, 0, 1));
     // Turned off the line by a rise of 0.5 t over the edge: still one line.
     expect(edgePairPlane(a, [v(20, 0, 0), v(30, 0.5 * tol, 0)])).toEqual({
       ok: false,
@@ -135,7 +137,9 @@ describe('edgePairPlane (pure)', () => {
 
   it('refuses skew edges just past the linear tolerance and takes them at it', () => {
     // Crossing at right angles, h apart along z: each end sits h / 2 off the
-    // plane through the centroid, so h = 2t is the last height taken.
+    // fitted plane, so h = 2t is the last height taken. Two lines up to 2t
+    // apart therefore count as meeting: the three-point plane's
+    // point-to-plane tolerance, kept on purpose (re-check #3).
     const a: [Vec3, Vec3] = [v(0, 0, 0), v(10, 0, 0)];
     const at = (h: number): [Vec3, Vec3] => [v(5, -5, h), v(5, 5, h)];
     expect(edgePairPlane(a, at(2 * tol)).ok).toBe(true);
@@ -153,11 +157,10 @@ describe('edgePairPlane (pure)', () => {
     ).toEqual({ ok: false, code: 'skew' });
   });
 
-  it('gives a deterministic origin and a canonical normal', () => {
+  it('gives a deterministic origin and a normal signed by its largest part', () => {
     const a: [Vec3, Vec3] = [v(0, 0, 0), v(10, 0, 0)];
     const b: [Vec3, Vec3] = [v(0, -5, 0), v(10, -5, 0)];
     const forward = plane(a, b);
-    // The raw cross product points down -z; the stored normal is canonical.
     expectVec(forward.normal, v(0, 0, 1));
     expectVec(forward.origin, v(5, -2.5, 0));
     // Neither the pick order nor either edge's direction changes a bit.
@@ -167,12 +170,19 @@ describe('edgePairPlane (pure)', () => {
   });
 
   // Review of #2261 at 3aeb4cd: each pair gave a different answer in the
-  // other pick order before the edges were put in a canonical order.
-  it('refuses a short edge 0.005 off a long one in either order (review 1)', () => {
+  // other pick order before the edges were put in a canonical order. Two
+  // answers changed again with the re-check's plane fit (2099cc5): see each.
+  it('takes a 10 µm edge 0.005 off a long one as the plane its ends fit (review 1)', () => {
+    // The short edge's ends lie within 5e-8 of the plane z = 0.005 y through
+    // the long edge: over 10 µm its 0.005 rad tilt from that plane rises
+    // 5e-8, well inside t, so the four ends fit one plane. The answer is the
+    // same in either order, which the review asked for.
     const a: [Vec3, Vec3] = [v(0, 0, 0), v(20, 0, 0)];
     const b: [Vec3, Vec3] = [v(0, 1, 0.005), v(0, 1.00001, 0.005)];
-    expect(edgePairPlane(a, b)).toEqual({ ok: false, code: 'skew' });
-    expect(edgePairPlane(b, a)).toEqual({ ok: false, code: 'skew' });
+    const forward = plane(a, b);
+    expect(plane(b, a)).toEqual(forward);
+    const lean = Math.hypot(1, 0.005);
+    expectVec(forward.normal, v(0, -0.005 / lean, 1 / lean), 7);
   });
 
   it('gives one normal sign for a component at the direction quantum (review 2)', () => {
@@ -182,15 +192,66 @@ describe('edgePairPlane (pure)', () => {
     const forward = plane(a, b);
     expect(plane(b, a)).toEqual(forward);
     expect(plane([a[1], a[0]], [b[1], b[0]])).toEqual(forward);
-    expect(Math.abs(forward.normal.y)).toBeCloseTo(1, 9);
+    expect(forward.normal.y).toBeCloseTo(1, 9);
   });
 
-  it('takes a short edge across a long one as their plane (review 3)', () => {
+  it('refuses a 1.6 µm edge across a 20 mm one as on its line (review 3)', () => {
+    // Its ends lie 8e-7 from the long edge's line, inside t: every plane
+    // through that line holds all four ends, so none is the plane. The
+    // first review asked for +Z here; the re-check's rule (every end within
+    // t of one line is collinear) decides it, the same in either order.
     const a: [Vec3, Vec3] = [v(0, 0, 0), v(20, 0, 0)];
     const b: [Vec3, Vec3] = [v(10, -8e-7, 0), v(10, 8e-7, 0)];
+    expect(edgePairPlane(a, b)).toEqual({ ok: false, code: 'collinear' });
+    expect(edgePairPlane(b, a)).toEqual({ ok: false, code: 'collinear' });
+  });
+
+  // Re-check of #2261 at 2099cc5.
+  it('takes an exactly coplanar, nearly parallel pair 4e4 mm long (re-check 1)', () => {
+    // Every end lies exactly on z = x + y; the lines are not parallel.
+    const a: [Vec3, Vec3] = [v(0, 0, 0), v(10000, 20000, 30000)];
+    const b: [Vec3, Vec3] = [
+      v(1250, 10000, 11250),
+      v(11250, 30000 + 2 ** -16, 41250 + 2 ** -16)
+    ];
     const forward = plane(a, b);
-    expectVec(forward.normal, v(0, 0, 1));
+    const third = 1 / Math.sqrt(3);
+    expectVec(forward.normal, v(third, third, -third), 12);
     expect(plane(b, a)).toEqual(forward);
+    for (const point of [...a, ...b]) {
+      const height =
+        (point.x - forward.origin.x) * forward.normal.x +
+        (point.y - forward.origin.y) * forward.normal.y +
+        (point.z - forward.origin.z) * forward.normal.z;
+      expect(Math.abs(height)).toBeLessThan(1e-9);
+    }
+  });
+
+  it('answers the same when both edges turn 180° about Z (re-check 2)', () => {
+    const a: [Vec3, Vec3] = [v(0, 0, 0), v(1, 5e-8, 0)];
+    const b: [Vec3, Vec3] = [v(30, 0, 0), v(40, 0, 0)];
+    const turn = ([p, q]: [Vec3, Vec3]): [Vec3, Vec3] => [
+      v(-p.x, -p.y, p.z),
+      v(-q.x, -q.y, q.z)
+    ];
+    // All four ends lie within 5e-8 of the x axis: one line, either way.
+    expect(edgePairPlane(a, b)).toEqual({ ok: false, code: 'collinear' });
+    expect(edgePairPlane(turn(a), turn(b))).toEqual({
+      ok: false,
+      code: 'collinear'
+    });
+  });
+
+  it('keeps a near-axis normal’s sign across the old quantum (re-check 4)', () => {
+    const pair = (y: number) =>
+      plane([v(0, 0, 0), v(0, 0, 1)], [v(0, 0, 2), v(1, y, 2)]);
+    const at = pair(1e-6);
+    const past = pair(1.0000000000005e-6);
+    // Signed by the largest part (+y), so neither flips at x = ±1e-6.
+    expect(at.normal.y).toBeGreaterThan(0.999);
+    expect(past.normal.y).toBeGreaterThan(0.999);
+    expect(Math.sign(at.normal.x)).toBe(Math.sign(past.normal.x));
+    expectVec(at.normal, past.normal, 12);
   });
 
   it('answers the same in either order for random pairs, near-degenerate ones included', () => {
@@ -263,6 +324,104 @@ describe('edgePairPlane (pure)', () => {
     }
     // The generator reaches every outcome.
     expect([...statuses].sort()).toEqual(['collinear', 'ok', 'skew']);
+  });
+
+  it('meets known answers for pairs built coplanar, skew or collinear, in any rigid pose and at any scale', () => {
+    let seed = 0x5eed;
+    const random = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 2 ** 32;
+    };
+    /** A uniform random rotation (unit quaternion) and a shift, at a scale. */
+    const pose = (scale: number) => {
+      const [u1, u2, u3] = [random(), random(), random()];
+      const [qx, qy, qz, qw] = [
+        Math.sqrt(1 - u1) * Math.sin(2 * Math.PI * u2),
+        Math.sqrt(1 - u1) * Math.cos(2 * Math.PI * u2),
+        Math.sqrt(u1) * Math.sin(2 * Math.PI * u3),
+        Math.sqrt(u1) * Math.cos(2 * Math.PI * u3)
+      ];
+      const shift = v(
+        (random() - 0.5) * 20 * scale,
+        (random() - 0.5) * 20 * scale,
+        (random() - 0.5) * 20 * scale
+      );
+      const turn = (p: Vec3): Vec3 => {
+        // q p q⁻¹ for a unit quaternion.
+        const tx = 2 * (qy * p.z - qz * p.y);
+        const ty = 2 * (qz * p.x - qx * p.z);
+        const tz = 2 * (qx * p.y - qy * p.x);
+        return v(
+          p.x + qw * tx + (qy * tz - qz * ty),
+          p.y + qw * ty + (qz * tx - qx * tz),
+          p.z + qw * tz + (qx * ty - qy * tx)
+        );
+      };
+      return {
+        place: (p: Vec3) => {
+          const turned = turn(p);
+          return v(turned.x + shift.x, turned.y + shift.y, turned.z + shift.z);
+        },
+        up: turn(v(0, 0, 1))
+      };
+    };
+    const kinds = ['coplanar', 'nearly-parallel', 'skew', 'collinear'] as const;
+    for (let index = 0; index < 2000; index += 1) {
+      const kind = kinds[index % kinds.length]!;
+      const scale = 10 ** (-3 + random() * 8);
+      const length = scale * (0.5 + random() * 0.5);
+      // Built in the local frame: edge A along x in z = 0.
+      const a: [Vec3, Vec3] = [v(0, 0, 0), v(length, 0, 0)];
+      let b: [Vec3, Vec3];
+      const bLength = scale * (0.3 + random() * 0.7);
+      const from = v(
+        (random() - 0.5) * 2 * scale,
+        scale * (0.2 + random() * 0.8) * (random() < 0.5 ? -1 : 1),
+        0
+      );
+      const toward = (angle: number, z = 0): [Vec3, Vec3] => [
+        v(from.x, from.y, z),
+        v(
+          from.x + bLength * Math.cos(angle),
+          from.y + bLength * Math.sin(angle),
+          z
+        )
+      ];
+      if (kind === 'coplanar') {
+        b = toward(random() * Math.PI);
+      } else if (kind === 'nearly-parallel') {
+        // 1e-6 to 1e-2 rad off A, either way round.
+        const angle = 10 ** (-6 + random() * 4) * (random() < 0.5 ? -1 : 1);
+        b = toward(random() < 0.5 ? angle : Math.PI + angle);
+      } else if (kind === 'skew') {
+        // Well across A, 5% of the scale above it.
+        b = toward(0.2 + random() * (Math.PI - 0.4), 0.05 * scale);
+      } else {
+        const start = (random() * 3 - 1) * length;
+        b = [v(start, 0, 0), v(start + bLength, 0, 0)];
+      }
+      for (let round = 0; round < 2; round += 1) {
+        const { place, up } = pose(scale);
+        const placedA: [Vec3, Vec3] = [place(a[0]), place(a[1])];
+        const placedB: [Vec3, Vec3] = [place(b[0]), place(b[1])];
+        const result = edgePairPlane(placedA, placedB);
+        const context = JSON.stringify({ kind, scale, placedA, placedB });
+        expect(edgePairPlane(placedB, placedA), context).toEqual(result);
+        if (kind === 'skew') {
+          expect(result, context).toEqual({ ok: false, code: 'skew' });
+        } else if (kind === 'collinear') {
+          expect(result, context).toEqual({ ok: false, code: 'collinear' });
+        } else {
+          expect(result.ok, context).toBe(true);
+          if (!result.ok) continue;
+          const along =
+            result.normal.x * up.x +
+            result.normal.y * up.y +
+            result.normal.z * up.z;
+          expect(Math.abs(along), context).toBeGreaterThan(1 - 1e-9);
+        }
+      }
+    }
   });
 
   it('throws on a point that is not finite', () => {
