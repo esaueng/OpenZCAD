@@ -3904,6 +3904,27 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
       .toBeNull();
   });
 
+  it('lets a field take Escape for its edit before the page steps back', async () => {
+    compactSetup({ sheet: starter(fingerprint()) });
+    const page = await openPage('Properties');
+    const title = await page.findByRole('textbox', { name: 'Title' });
+    const saved = (title as HTMLInputElement).value;
+    title.focus();
+    fireEvent.change(title, { target: { value: 'Draft title' } });
+    // The first Escape puts the title back, and the page stays.
+    fireEvent.keyDown(title, { key: 'Escape' });
+    expect(title).toHaveValue(saved);
+    expect(
+      within(sheetPanel()).getByRole('heading', { name: 'Properties' })
+    ).toBeTruthy();
+    expect(sheetPanel().getAttribute('data-detent')).toBe('half');
+    // With nothing left to put back, the next one steps back.
+    fireEvent.keyDown(title, { key: 'Escape' });
+    await waitFor(() =>
+      expect(sheetPanel().getAttribute('data-detent')).toBe('peek')
+    );
+  });
+
   it('offers Undo in the notice after deleting a sheet, a view or the broken annotations', async () => {
     const first = starter(fingerprint());
     const front = first.views.find((view) => view.orientation === 'front')!;

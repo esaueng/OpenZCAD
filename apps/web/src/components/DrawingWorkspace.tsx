@@ -1189,6 +1189,23 @@ function svgPoints(points: number[], height: number): string {
   return out.join(' ');
 }
 
+/**
+ * Escape in a field with an unsaved edit puts its value back, and that is
+ * all it does: the key is marked handled, so the compact sheet holding the
+ * field does not also step back a page. Escape in a field with nothing to
+ * put back is left to what holds it.
+ */
+function resetDraft(
+  event: ReactKeyboardEvent<HTMLInputElement>,
+  draft: string,
+  value: string,
+  setDraft: (value: string) => void
+) {
+  if (draft === value) return;
+  event.preventDefault();
+  setDraft(value);
+}
+
 function TextField(props: {
   label: string;
   value: string;
@@ -1219,7 +1236,8 @@ function TextField(props: {
           onBlur={commit}
           onKeyDown={(event) => {
             if (event.key === 'Enter') commit();
-            if (event.key === 'Escape') setDraft(props.value);
+            if (event.key === 'Escape')
+              resetDraft(event, draft, props.value, setDraft);
           }}
         />
       </label>
@@ -2508,7 +2526,8 @@ function FrameAmountField(props: {
         onBlur={commit}
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit();
-          if (event.key === 'Escape') setDraft(String(props.value));
+          if (event.key === 'Escape')
+            resetDraft(event, draft, String(props.value), setDraft);
         }}
       />
     </label>
@@ -2970,7 +2989,7 @@ function OptionalAmountField(props: {
         onBlur={commit}
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit();
-          if (event.key === 'Escape') setDraft(shown);
+          if (event.key === 'Escape') resetDraft(event, draft, shown, setDraft);
         }}
       />
     </label>
@@ -3153,7 +3172,8 @@ function AmountField(props: {
         onBlur={commit}
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit();
-          if (event.key === 'Escape') setDraft(String(props.value));
+          if (event.key === 'Escape')
+            resetDraft(event, draft, String(props.value), setDraft);
         }}
       />
     </label>
@@ -3600,7 +3620,7 @@ function WeightField(props: {
         onBlur={commit}
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit();
-          if (event.key === 'Escape') setDraft(shown);
+          if (event.key === 'Escape') resetDraft(event, draft, shown, setDraft);
         }}
       />
     </label>
