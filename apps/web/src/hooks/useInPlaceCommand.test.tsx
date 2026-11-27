@@ -7,6 +7,7 @@ import {
   waitFor
 } from '@testing-library/react';
 import { useEffect, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { InPlaceCommandBar } from '../components/InPlaceCommandBar';
 import { cancelCommandChipEntry } from '../lib/inPlace/chipCancel';
 import { describe, expect, it, vi } from 'vitest';
@@ -32,6 +33,11 @@ import type {
   ProfilePick
 } from '../lib/inPlace/tools';
 import { GROUND_FRAME, placementFrame } from '../lib/inPlace/primitives';
+import {
+  mirrorRefusalMember,
+  refusedMirrorMember,
+  type MirrorSetMember
+} from '../lib/inPlace/mirrorBodies';
 
 const FRONT: PlaneBasis = {
   origin: { x: 0, y: 0, z: 0 },
@@ -2961,11 +2967,10 @@ describe('useInPlaceCommand: editing a stored feature', () => {
     >(() => before);
     const held: (() => void)[] = [];
     let hold = false;
-    const derive = vi.fn<UseInPlaceCommandOptions['derive']>(
-      (document) =>
-        hold && (document as { name?: string }).name === 'before'
-          ? new Promise((resolve) => held.push(() => resolve(document.derived)))
-          : Promise.resolve(document.derived)
+    const derive = vi.fn<UseInPlaceCommandOptions['derive']>((document) =>
+      hold && (document as { name?: string }).name === 'before'
+        ? new Promise((resolve) => held.push(() => resolve(document.derived)))
+        : Promise.resolve(document.derived)
     );
     const { hook, built, publishPreview } = setup({ editRestDocument, derive });
     const restShown = () =>
@@ -2983,10 +2988,7 @@ describe('useInPlaceCommand: editing a stored feature', () => {
       hook.result.current.pickBody(base!);
     });
     await waitFor(() => expect(restShown()).toBe(1));
-    expect(editRestDocument).toHaveBeenLastCalledWith(
-      expect.anything(),
-      SEED
-    );
+    expect(editRestDocument).toHaveBeenLastCalledWith(expect.anything(), SEED);
     expect(hook.result.current.canFinish).toBe(false);
     expect(hook.result.current.refusal).toBeNull();
 
@@ -3251,6 +3253,34 @@ describe('useInPlaceCommand: a refused fillet or chamfer value', () => {
       hook.result.current.pickEdge(edge(2));
     });
     await waitFor(() => expect(hook.result.current.refusalInput).toBe('Edges'));
+  });
+
+  // Re-check of #2242, finding 2: a refusal of the very request that built
+  // names nothing and takes the frame down, yet leaves the radius 2 frame
+  // the one a later refusal is measured from, as before #2242.
+  it('measures a later refusal from the built radius after one of its retry', async () => {
+    const { hook, refuse } = refusing();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(1)] })
+    );
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.values.radius).toBe(2);
+    refuse(true);
+    act(() => {
+      hook.result.current.setValue('radius', 3);
+    });
+    await waitFor(() => expect(hook.result.current.refusalInput).toBe('R'));
+    act(() => {
+      hook.result.current.setValue('radius', 2);
+    });
+    await waitFor(() => expect(hook.result.current.refusalInput).toBeNull());
+    expect(hook.result.current.refusal).not.toBeNull();
+    act(() => {
+      hook.result.current.setValue('radius', 30);
+    });
+    await waitFor(() => expect(hook.result.current.refusalInput).toBe('R'));
+    expect(hook.result.current.keptValues?.radius).toBe(2);
+    expect(hook.result.current.canFinish).toBe(false);
   });
 
   // Review of #1771: a frame taken down with an emptied pick is not there to
@@ -3545,6 +3575,12 @@ describe('useInPlaceCommand: a late Split reply', () => {
     min: { x: 0, y: 0, z: 0 },
     max: { x: 90, y: 36, z: 14 }
   };
+  /** The witness block beside the coupon, which no plane here crosses. */
+  const WITNESS = {
+    bodyId: 'body_witness' as BodyId,
+    min: { x: 100, y: 0, z: 0 },
+    max: { x: 120, y: 36, z: 14 }
+  };
   const END_FACE = {
     kind: 'face' as const,
     origin: { x: 90, y: 18, z: 7 },
@@ -3588,8 +3624,10 @@ describe('useInPlaceCommand: a late Split reply', () => {
   /** The plane x each build was asked for, and its reply, held. */
   function harness() {
     const replies: { x: number; release: () => void }[] = [];
-    const outcome = (x: number) =>
-      x > 0 && x < 90
+    // The coupon spans x 0–90; any other body (the witness, x 100–120) is
+    // missed by every plane these tests slide to.
+    const outcome = (x: number, body: string) =>
+      body === COUPON.bodyId && x > 0 && x < 90
         ? ({
             bodyRepresentations: { [BODY]: {} },
             warnings: [],
@@ -3598,19 +3636,24 @@ describe('useInPlaceCommand: a late Split reply', () => {
         : x === 90
           ? ON_FACE
           : MISSES;
-    const planeX = new WeakMap<object, number>();
-    const { hook } = setup({
+    const planeX = new WeakMap<object, { x: number; body: string }>();
+    /** The body each build was asked for, in order. */
+    const asked: string[] = [];
+    const { hook, publishPreview, commit } = setup({
       buildCommand: (request) => {
         // The Split request stores the plane's fields as written.
         const { value } = (
-          request as unknown as { state: { value: { origin: { x: string } } } }
+          request as unknown as {
+            state: { value: { origin: { x: string }; targetBodyId: string } };
+          }
         ).state;
         const x = Number(value.origin.x);
+        asked.push(value.targetBodyId);
         return {
           validate: () => undefined,
           apply: (document) => {
             const built = { ...document } as ProjectDocument;
-            planeX.set(built, x);
+            planeX.set(built, { x, body: value.targetBodyId });
             return built;
           },
           resultBodyId: BODY
@@ -3618,15 +3661,45 @@ describe('useInPlaceCommand: a late Split reply', () => {
       },
       derive: (document) =>
         new Promise((resolve) => {
-          const x = planeX.get(document)!;
-          replies.push({ x, release: () => resolve(outcome(x)) });
+          const { x, body } = planeX.get(document)!;
+          replies.push({ x, release: () => resolve(outcome(x, body)) });
         })
     });
     act(() => hook.result.current.start('split', [], [], [COUPON]));
     act(() => {
       hook.result.current.pickPlane(END_FACE);
     });
-    return { hook, replies };
+    return { hook, replies, publishPreview, commit, asked };
+  }
+
+  /** The coupon's x = 52 halves kept under a refused +8. */
+  async function keptUnderOffset() {
+    const harnessed = harness();
+    const { hook, replies } = harnessed;
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await settle(replies, 3);
+    await waitFor(() =>
+      expect(hook.result.current.refusalInput).toBe('Offset')
+    );
+    return harnessed;
+  }
+
+  /** The next build asked for, released, with the plane x it was for. */
+  async function settle(
+    replies: { x: number; release: () => void }[],
+    n: number
+  ) {
+    await waitFor(() => expect(replies).toHaveLength(n));
+    act(() => replies[n - 1]!.release());
+    return replies[n - 1]!.x;
   }
 
   it('opens on the face touch, with its typed record for the bar', async () => {
@@ -3701,6 +3774,334 @@ describe('useInPlaceCommand: a late Split reply', () => {
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
     expect(hook.result.current.refusal).toBeNull();
     expect(hook.result.current.refusalClassification).toBeNull();
+  });
+
+  // M11 (owner decision D5): Split keeps the last frame that built under a
+  // refused offset, as Hole, Fillet and Chamfer do, and names the offset.
+  it('keeps the x = 52 halves under a refused offset and names it', async () => {
+    const { hook, replies, publishPreview } = harness();
+    // The face pick at offset 0 is the first preview: refused, with nothing
+    // built before it to keep or to show as stale.
+    expect(await settle(replies, 1)).toBe(90);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    expect(await settle(replies, 2)).toBe(52);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    const halves = publishPreview.mock.lastCall?.[0] as ProjectDocument;
+    expect(halves).not.toBeNull();
+
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    expect(await settle(replies, 3)).toBe(98);
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toMatch(/does not split the solid/)
+    );
+    expect(hook.result.current.refusalClassification).toEqual(
+      record('invalid_input', 'plane_misses_body')
+    );
+    expect(hook.result.current.refusalInput).toBe('Offset');
+    // The offset arrow stands on the kept x = 52 plane; the field reads +8.
+    expect(hook.result.current.keptValues?.offset).toBe(-38);
+    expect(hook.result.current.values.offset).toBe(8);
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      expect(hook.result.current.done()).toBe(false);
+    });
+    // Both picks stay, and the x = 52 halves are what the model shows.
+    expect(hook.result.current.slots.bodies).toEqual([COUPON]);
+    expect(hook.result.current.slots.plane).toEqual(END_FACE);
+    expect(publishPreview).toHaveBeenLastCalledWith(halves);
+
+    // Put back, −38 is its own request again and enables Done.
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    expect(await settle(replies, 4)).toBe(52);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.refusal).toBeNull();
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+  });
+
+  it('names a plane picked again, not the offset its pick reset', async () => {
+    const { hook, replies, publishPreview } = harness();
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    const halves = publishPreview.mock.lastCall?.[0] as ProjectDocument;
+    // The far end face, picked: the offset goes back to 0, so the plane at
+    // x = 0 only touches the body (refused here as a miss).
+    act(() => {
+      hook.result.current.pickPlane({
+        kind: 'face',
+        origin: { x: 0, y: 18, z: 7 },
+        normal: { x: -1, y: 0, z: 0 }
+      });
+    });
+    expect(await settle(replies, 3)).toBe(0);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.values.offset).toBe(0);
+    expect(hook.result.current.refusalInput).toBe('Plane');
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(publishPreview).toHaveBeenLastCalledWith(halves);
+  });
+
+  it('keeps no frame of the old body under a refusal on another', async () => {
+    const { hook, replies, publishPreview } = harness();
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    // The witness block beside the coupon, picked with the plane kept.
+    act(() => {
+      hook.result.current.pickBody(WITNESS);
+    });
+    await settle(replies, 3);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    // An offset slid on the witness differs from the coupon's last frame by
+    // its offset too, but that frame is of another body: still not kept.
+    act(() => {
+      hook.result.current.setValue('offset', 50);
+    });
+    await waitFor(() => expect(replies).toHaveLength(4));
+    const published = publishPreview.mock.calls.length;
+    await settle(replies, 4);
+    // Its verdict landed: a refusal publishes what it leaves on screen.
+    await waitFor(() =>
+      expect(publishPreview.mock.calls.length).toBeGreaterThan(published)
+    );
+    expect(hook.result.current.refusal).not.toBeNull();
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  // Review of #2242, finding 1: the coupon's kept halves and its "Offset"
+  // refusal say nothing about the witness, so they come down at the pick,
+  // not when the witness's own verdict lands.
+  it('takes the kept halves and refusal down as soon as another body is picked', async () => {
+    const { hook, replies, publishPreview } = harness();
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await settle(replies, 3);
+    await waitFor(() =>
+      expect(hook.result.current.refusalInput).toBe('Offset')
+    );
+    act(() => {
+      hook.result.current.pickBody(WITNESS);
+    });
+    // The witness's frame is still building.
+    await waitFor(() => expect(replies).toHaveLength(4));
+    expect(hook.result.current.refusal).toBeNull();
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    await settle(replies, 4);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  // Review of #2242, finding 2: once the coupon's frame came down for the
+  // witness, it is not there to keep. Picked back and refused, the coupon
+  // names no input over a viewport that shows no halves.
+  it('names nothing over a body picked back after its frame came down', async () => {
+    const { hook, replies, publishPreview } = harness();
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.pickBody(WITNESS);
+    });
+    await settle(replies, 3);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await settle(replies, 4);
+    await waitFor(() => expect(hook.result.current.values.offset).toBe(8));
+    act(() => {
+      hook.result.current.pickBody(COUPON);
+    });
+    await waitFor(() => expect(replies).toHaveLength(5));
+    const published = publishPreview.mock.calls.length;
+    expect(await settle(replies, 5)).toBe(98);
+    await waitFor(() =>
+      expect(publishPreview.mock.calls.length).toBeGreaterThan(published)
+    );
+    expect(hook.result.current.refusal).toMatch(/does not split the solid/);
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  // Re-check of #2242, finding 1: a coupon reply that lands after the
+  // witness was picked is of the old target. Taking the kept halves down
+  // re-renders with no refusal shown, and the late frame must still not be
+  // drawn while the witness builds.
+  it('never draws a late frame of the old body once another is picked', async () => {
+    const { hook, replies, publishPreview } = harness();
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await settle(replies, 3);
+    await waitFor(() =>
+      expect(hook.result.current.refusalInput).toBe('Offset')
+    );
+    // −30 (x = 60) builds on the coupon, but its reply is still held when
+    // the witness is picked.
+    act(() => {
+      hook.result.current.setValue('offset', -30);
+    });
+    await waitFor(() => expect(replies).toHaveLength(4));
+    expect(replies[3]!.x).toBe(60);
+    act(() => {
+      hook.result.current.pickBody(WITNESS);
+    });
+    expect(hook.result.current.refusal).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    const picked = publishPreview.mock.calls.length;
+    await settle(replies, 4);
+    // The witness builds only once the coupon's reply has been published.
+    await waitFor(() => expect(replies).toHaveLength(5));
+    expect(publishPreview.mock.calls.slice(picked)).toEqual([]);
+    await settle(replies, 5);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(
+      publishPreview.mock.calls.slice(picked).every(([shown]) => shown === null)
+    ).toBe(true);
+  });
+
+  // Preview checks of #2242: in the app the take-down ran in a passive
+  // effect, a paint after the Objects pick, and the viewer installed it a
+  // paint later still, so the new pick showed over the coupon's halves, its
+  // "Offset" refusal and the kept −35 on the chip, then the halves under
+  // "Checking…". A click is a discrete event, which React renders and
+  // commits synchronously; the take-down must be part of that same commit,
+  // done before anything can paint. Its state and the host's preview are set
+  // together, so the hook's own result stands for both here.
+  it('takes the kept halves down in the commit of the pick itself', async () => {
+    const { hook, replies, publishPreview, asked } = await keptUnderOffset();
+    const scope = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const actEnvironment = scope.IS_REACT_ACT_ENVIRONMENT;
+    // Rendered as React renders a click, not drained by act.
+    scope.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      flushSync(() => {
+        hook.result.current.pickBody(WITNESS);
+      });
+      expect(hook.result.current.slots.bodies[0]?.bodyId).toBe(WITNESS.bodyId);
+      expect(hook.result.current.refusal).toBeNull();
+      expect(hook.result.current.refusalInput).toBeNull();
+      expect(hook.result.current.keptValues).toBeNull();
+      expect(hook.result.current.canFinish).toBe(false);
+      expect(publishPreview).toHaveBeenLastCalledWith(null);
+    } finally {
+      scope.IS_REACT_ACT_ENVIRONMENT = actEnvironment;
+    }
+    // The witness's own build follows, and its refusal keeps nothing.
+    await waitFor(() => expect(asked.at(-1)).toBe(WITNESS.bodyId));
+    await settle(replies, 4);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  // The same, with +8 typed on the witness before its first frame lands:
+  // no refusal stood when the body changed, so it is the witness's refusal
+  // taking the coupon's frame down that leaves nothing to keep.
+  it('keeps nothing once a refusal on another body took the frame down', async () => {
+    const { hook, replies, publishPreview } = harness();
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.pickBody(WITNESS);
+    });
+    await waitFor(() => expect(replies).toHaveLength(3));
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await settle(replies, 3);
+    await settle(replies, 4);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    act(() => {
+      hook.result.current.pickBody(COUPON);
+    });
+    await waitFor(() => expect(replies).toHaveLength(5));
+    const published = publishPreview.mock.calls.length;
+    expect(await settle(replies, 5)).toBe(98);
+    await waitFor(() =>
+      expect(publishPreview.mock.calls.length).toBeGreaterThan(published)
+    );
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  it('commits nothing when a refused offset is escaped', async () => {
+    const { hook, replies, publishPreview, commit } = harness();
+    await settle(replies, 1);
+    act(() => {
+      hook.result.current.setValue('offset', -38);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('offset', 8);
+    });
+    await settle(replies, 3);
+    await waitFor(() =>
+      expect(hook.result.current.refusalInput).toBe('Offset')
+    );
+    act(() => {
+      expect(hook.result.current.cancel()).toBe(true);
+    });
+    expect(commit).not.toHaveBeenCalled();
+    // The kept frame comes down with the command.
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    expect(hook.result.current.refusal).toBeNull();
   });
 
   // Review of #2074, finding 3: a stored Split that already fails (an
@@ -3780,6 +4181,266 @@ describe('useInPlaceCommand: a late Split reply', () => {
     );
     expect(screen.getByRole('status')).toHaveTextContent(
       'The cutting plane lies on a face of the body and only touches it. Slide the plane into the body.'
+    );
+  });
+});
+
+describe('useInPlaceCommand: M11 Mirror of several bodies', () => {
+  const box = (id: string, x: number) => ({
+    bodyId: id as BodyId,
+    min: { x, y: 0, z: 0 },
+    max: { x: x + 10, y: 10, z: 10 }
+  });
+  const LEFT = box('body_left', 0);
+  const RIGHT = box('body_right', 20);
+  const PLANE = {
+    kind: 'principal' as const,
+    plane: 'YZ' as const,
+    origin: { x: 0, y: 0, z: 0 },
+    normal: { x: 1, y: 0, z: 0 }
+  };
+  const KERNEL = 'Feature "Mirror 2": The plane is not finite.';
+  const RECORD = { category: 'invalid-input', code: 'plane-not-finite' };
+  const PICK = {
+    name: 'Right block',
+    advice: 'Remove it from the picks, or pick another plane.'
+  };
+
+  /** A host whose mirror of `body_right` refuses, as the kernel would. */
+  function harness() {
+    const built: InPlaceRequest[] = [];
+    const targets = (request: InPlaceRequest): string[] =>
+      request.tool === 'modeling-each'
+        ? request.states.map((state) =>
+            'targetBodyId' in state.value ? state.value.targetBodyId : ''
+          )
+        : request.tool === 'modeling' && 'targetBodyId' in request.state.value
+          ? [request.state.value.targetBodyId]
+          : [];
+    const refuses = new WeakSet<object>();
+    const { hook, commit } = setup({
+      buildCommand: (request) => {
+        built.push(request);
+        const refused = targets(request).includes(RIGHT.bodyId);
+        return {
+          validate: () => undefined,
+          apply: (document) => {
+            const frame = { ...document } as ProjectDocument;
+            if (refused) refuses.add(frame);
+            return frame;
+          },
+          resultBodyId: BODY,
+          ...(request.tool === 'modeling-each'
+            ? {
+                check: () => {
+                  if (refused) throw new Error('No mirrored body was made.');
+                },
+                refusedPick: () => (refused ? PICK : null)
+              }
+            : {})
+        };
+      },
+      derive: async (document) =>
+        refuses.has(document)
+          ? {
+              ...fakeDocument(true).derived,
+              warnings: [KERNEL],
+              featureWarnings: [
+                {
+                  featureId: 'feat_right' as FeatureId,
+                  featureName: 'Mirror 2',
+                  kind: 'build-failed',
+                  message: KERNEL,
+                  kernelRefusal: RECORD
+                } as FeatureWarning
+              ]
+            }
+          : fakeDocument(true).derived
+    });
+    return { hook, commit, built };
+  }
+
+  it('previews every picked body as one request, and one body as Mirror always was', async () => {
+    const { hook, built } = harness();
+    act(() => hook.result.current.start('mirror', [], [], [LEFT]));
+    act(() => {
+      hook.result.current.pickPlane(PLANE);
+    });
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(built.at(-1)).toMatchObject({
+      tool: 'modeling',
+      state: { operation: 'mirror', value: { targetBodyId: LEFT.bodyId } }
+    });
+    // A second body joins the picks; the first stays.
+    act(() => {
+      hook.result.current.pickBody(box('body_middle', 40));
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ tool: 'modeling-each' })
+    );
+    expect(hook.result.current.slots.bodies.map((body) => body.bodyId)).toEqual(
+      [LEFT.bodyId, 'body_middle']
+    );
+    expect(hook.result.current.hint).toBe(
+      '2 bodies · Slide the plane, or pick another'
+    );
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      expect(hook.result.current.done()).toBe(true);
+    });
+  });
+
+  it('names the refused body, holds Done, keeps every pick, and clears once it is removed', async () => {
+    const { hook, commit } = harness();
+    act(() => hook.result.current.start('mirror', [], [], [LEFT, RIGHT]));
+    act(() => {
+      hook.result.current.pickPlane(PLANE);
+    });
+    // The kernel's own sentence stands with its typed record; the refused
+    // body and what to do about it go to the bar as data, not prose.
+    await waitFor(() => expect(hook.result.current.refusal).toBe(KERNEL));
+    expect(hook.result.current.refusalClassification).toEqual(RECORD);
+    expect(hook.result.current.refusalPick).toEqual(PICK);
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      expect(hook.result.current.done()).toBe(false);
+    });
+    expect(commit).not.toHaveBeenCalled();
+    expect(hook.result.current.slots.bodies.map((body) => body.bodyId)).toEqual(
+      [LEFT.bodyId, RIGHT.bodyId]
+    );
+    expect(hook.result.current.slots.plane).toEqual(PLANE);
+    // Clicked out, the rest mirror.
+    act(() => {
+      hook.result.current.pickBody(RIGHT);
+    });
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.refusal).toBeNull();
+    expect(hook.result.current.refusalPick).toBeNull();
+  });
+
+  // Regression (re-check of #2247 at 50af764): the body named ahead of a
+  // refusal is the one whose feature's warning the bar shows. An earlier
+  // feature's new failure, shown first, names no picked body.
+  it('names a body only when its own Mirror is the refusal shown', async () => {
+    const members: MirrorSetMember[] = [LEFT, RIGHT].map((body, index) => ({
+      sourceBodyId: body.bodyId,
+      featureId: `feat_${index}` as FeatureId,
+      featureName: index === 0 ? 'Mirror' : 'Mirror 2',
+      resultBodyId: `body_out_${index}` as BodyId
+    }));
+    const names: Record<string, string> = {
+      [LEFT.bodyId]: 'Left block',
+      [RIGHT.bodyId]: 'Right block'
+    };
+    const EARLIER = {
+      featureId: 'feat_place' as FeatureId,
+      featureName: 'Place block',
+      kind: 'build-failed',
+      message: 'Feature "Place block": The move is not finite.',
+      kernelRefusal: { category: 'invalid-input', code: 'move-not-finite' }
+    } as FeatureWarning;
+    const MIRROR_2 = {
+      featureId: 'feat_1' as FeatureId,
+      featureName: 'Mirror 2',
+      kind: 'build-failed',
+      message: KERNEL,
+      kernelRefusal: RECORD
+    } as FeatureWarning;
+    let warnings: FeatureWarning[] = [EARLIER, MIRROR_2];
+    const { hook } = setup({
+      buildCommand: () => ({
+        validate: () => undefined,
+        apply: (document) => ({ ...document }),
+        resultBodyId: BODY,
+        check: (derived) => {
+          if (refusedMirrorMember(members, derived)) {
+            throw new Error('This did not produce a valid body.');
+          }
+        },
+        refusedPick: (derived, shown) => {
+          const member = mirrorRefusalMember(members, derived, shown);
+          return member
+            ? {
+                name: names[member.sourceBodyId]!,
+                advice: 'Remove it from the picks, or pick another plane.'
+              }
+            : null;
+        }
+      }),
+      derive: async () =>
+        ({
+          ...fakeDocument(true).derived,
+          bodyRepresentations: { [BODY]: {}, body_out_0: {} },
+          warnings: warnings.map((warning) => warning.message),
+          featureWarnings: warnings
+        }) as unknown as ProjectDocument['derived']
+    });
+    act(() => hook.result.current.start('mirror', [], [], [LEFT, RIGHT]));
+    act(() => {
+      hook.result.current.pickPlane(PLANE);
+    });
+    // The earlier feature's words and record lead, and no body is blamed.
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toBe(EARLIER.message)
+    );
+    expect(hook.result.current.refusalClassification).toEqual(
+      EARLIER.kernelRefusal
+    );
+    expect(hook.result.current.refusalPick).toBeNull();
+    expect(hook.result.current.canFinish).toBe(false);
+    // With Mirror 2's refusal the one shown, its body is named.
+    warnings = [MIRROR_2];
+    act(() => {
+      hook.result.current.pickPlane({ ...PLANE, origin: { x: 1, y: 0, z: 0 } });
+    });
+    await waitFor(() => expect(hook.result.current.refusal).toBe(KERNEL));
+    expect(hook.result.current.refusalClassification).toEqual(RECORD);
+    expect(hook.result.current.refusalPick).toEqual(PICK);
+  });
+
+  it('an edit of one Mirror takes one body: a click replaces it', () => {
+    const { hook } = harness();
+    act(() =>
+      hook.result.current.edit('mirror', {
+        featureId: 'feat_1' as FeatureId,
+        nodeId: 'node_1',
+        name: 'Mirror 3',
+        data: {
+          featureKind: 'mirror',
+          targetBodyId: LEFT.bodyId,
+          plane: {
+            origin: { x: 0, y: 0, z: 0 },
+            normal: { x: 1, y: 0, z: 0 }
+          }
+        },
+        resultBodyId: BODY,
+        ownBodyIds: [BODY],
+        slots: {
+          profiles: [],
+          axisId: null,
+          path: [],
+          guide: [],
+          faces: [],
+          bodies: [LEFT],
+          plane: PLANE,
+          edges: []
+        },
+        values: {},
+        raws: {},
+        touched: [],
+        options: {},
+        axes: [],
+        choices: {},
+        lockedOptions: [],
+        notice: null
+      })
+    );
+    act(() => {
+      hook.result.current.pickBody(RIGHT);
+    });
+    expect(hook.result.current.slots.bodies.map((body) => body.bodyId)).toEqual(
+      [RIGHT.bodyId]
     );
   });
 });

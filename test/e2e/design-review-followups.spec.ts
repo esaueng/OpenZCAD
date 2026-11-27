@@ -5,6 +5,7 @@ import {
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import type { Locator, Page, TestInfo } from '@playwright/test';
+import { TOOL_META } from '../../apps/web/src/lib/tools';
 import {
   editExtrudeFromHistory,
   createPrimitiveInPlace,
@@ -69,13 +70,11 @@ async function openPart(
 
 /**
  * Every tool in the catalog (`TOOL_META`): the More tools sheet holds one
- * tile each, and its All filter counts them. 37 since M16 added Sheet metal
- * and Bend; 38 since M02 added Point pattern; 39 since M17 added Standard
- * part; 41 since R01 added Point and Coordinate system; 42 since M06 added
- * Rib; 43 since M12 added Wrap; 44 since M02 added Path pattern; 45 since
- * M02 added Mirror pattern.
+ * tile each, and its All filter counts them. Read from the catalog itself,
+ * as `compactTray.test.ts` does, so a new tool (M10's Align made 46) does
+ * not need a second literal kept in step here.
  */
-const TOOL_TILES = 45;
+const TOOL_TILES = Object.keys(TOOL_META).length;
 
 async function capture(page: Page, testInfo: TestInfo, name: string) {
   const path = testInfo.outputPath(`${name}.png`);

@@ -99,6 +99,7 @@ import {
   type ThreadRequest
 } from './thread';
 import { referenceImage, type ImageSlot } from './image';
+import { faceAlignSpec } from './faceAlign';
 import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
 import { standardPartSpec, type StandardPartRequest } from './standardPart';
 
@@ -140,6 +141,7 @@ export type InPlaceToolId =
   | 'split'
   | 'scale'
   | 'axis-rotate'
+  | 'align'
   | 'union'
   | 'subtract'
   | 'intersect'
@@ -180,6 +182,7 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'split',
   'scale',
   'axis-rotate',
+  'align',
   'union',
   'subtract',
   'intersect',
@@ -655,6 +658,14 @@ export type InPlaceRequest =
       state: ModelingOperationFormState;
     }
   | {
+      /**
+       * M11 (D4): one face operation per picked body (a Mirror of several
+       * bodies), each its own feature, committed together as one step.
+       */
+      tool: 'modeling-each';
+      states: ModelingOperationFormState[];
+    }
+  | {
       tool: 'boolean';
       operation: BooleanOperation;
       targetBodyIds: BodyId[];
@@ -664,6 +675,8 @@ export type InPlaceRequest =
       tool: 'transform';
       targetBodyId: BodyId;
       translation: ParametricVector3;
+      /** Align (M10): the turn, as Move stores it; absent is none. */
+      rotationDeg?: ParametricVector3;
       scale?: ParamValue;
       pivot?: ParametricVector3;
       axisRotation?: { axis: InPlaceAxisRef; angleDeg: ParamValue };
@@ -921,10 +934,29 @@ export interface InPlaceToolSpec {
   featureName?: string;
   /** One profile, an ordered list of them (a loft's sections), or none. */
   profileMode: 'none' | 'one' | 'many';
-  /** Model faces it takes, all on one body; `planar` refuses curved ones. */
-  faceMode?: 'one' | 'many';
+  /**
+   * Model faces it takes, all on one body; `planar` refuses curved ones.
+   * `pair` takes two in order, the second on another body (Align's moving
+   * face, then its target): a click on a picked face takes it back out.
+   */
+  faceMode?: 'one' | 'many' | 'pair';
+  /**
+   * Why a clicked face cannot join the picks as they stand (Align's curved
+   * face, or a target on the moving body), else null: the click is refused
+   * with this sentence on the status line.
+   */
+  refuseFace?(
+    slots: InPlaceSlots,
+    face: FacePick,
+    ctx: InPlaceContext
+  ): string | null;
   /** Whole bodies it takes, named by a click on any of their faces. */
   bodyMode?: 'one' | 'many';
+  /**
+   * The bodies an edit of one of its features takes, when fewer than a new
+   * command's (a Mirror's edit is of one feature, so of one body).
+   */
+  editBodyMode?: 'one';
   /** Model edges it takes, all on one body (Shift is not needed). */
   edgeMode?: 'many';
   /** Takes a plane: a ghost principal plane, a datum plane or a flat face. */
@@ -1137,9 +1169,26 @@ export interface InPlaceToolSpec {
    * U11: the bar inputs, by the names they carry in the bar, that a refused
    * request changed from the last one that built, so a kernel refusal says
    * what to change back or again. A tool with this keeps that last built
-   * frame on screen under the refusal instead of taking it down.
+   * frame on screen under the refusal instead of taking it down. `frames`
+   * holds what each request was made from, for a tool whose request alone
+   * does not tell its inputs apart (a Split's plane already slid by its
+   * offset). Null when the request is of another target (a Split of another
+   * body): the last frame says nothing about it, so it comes down as soon as
+   * that request is made, and is not kept under any later refusal.
    */
-  refusedInputs?(built: InPlaceRequest, refused: InPlaceRequest): string[];
+  refusedInputs?(
+    built: InPlaceRequest,
+    refused: InPlaceRequest,
+    frames?: { built: InPlaceFrameInputs; refused: InPlaceFrameInputs }
+  ): string[] | null;
+}
+
+/** What a preview frame's request was made from. */
+export interface InPlaceFrameInputs {
+  /** Every value as a number. */
+  values: Readonly<Record<string, number>>;
+  options: Readonly<Record<string, string>>;
+  slots: InPlaceSlots;
 }
 
 function section(pick: ProfilePick): SketchSectionReference {
@@ -5559,37 +5608,52 @@ function planeHint(
   return null;
 }
 
+/**
+ * M11 (D4): Mirror takes several bodies about one plane. Each body is its own
+ * Mirror feature, editable and deletable on its own, and Done commits them
+ * all as one step. One body is the Mirror it always was. With a body picked,
+ * a plain click on a flat face is the plane; Shift (the viewport's additive
+ * pick, as the touch multi-select toggle) adds or removes the clicked body,
+ * as a click on its Objects row does. The plane is stored by
+ * its numbers, so a face of one of the picked bodies is a plane like any
+ * other, and that body's copy meets it on that face.
+ */
 const mirror: InPlaceToolSpec = {
   id: 'mirror',
   title: 'Mirror',
   profileMode: 'none',
-  bodyMode: 'one',
+  bodyMode: 'many',
+  editBodyMode: 'one',
   wantsPlane: true,
   wantsAxis: false,
   wantsPath: false,
   values: [PLANE_OFFSET, ...TYPED_PLANE_VALUES],
   options: [PLANE_MODE_OPTION],
-  hint: (slots, options) =>
-    planeHint(slots, 'mirror', options) ?? 'Slide the plane, or pick another',
+  hint: (slots, options) => {
+    const hint =
+      planeHint(slots, 'mirror', options) ?? 'Slide the plane, or pick another';
+    return slots.bodies.length > 1
+      ? `${slots.bodies.length} bodies · ${hint}`
+      : hint;
+  },
   ready: (slots, options) =>
     slots.bodies.length > 0 &&
     (slots.plane !== null || options?.planeMode === 'typed'),
   request(slots, values, options, _ctx, numbers) {
-    const body = slots.bodies[0];
     const plane = commandPlane(slots, values, numbers ?? {}, options);
-    if (!body || !plane) return null;
-    const fields = offsetPlaneFields(plane, values.offset);
-    return {
-      tool: 'modeling',
-      state: {
-        operation: 'mirror',
-        value: {
-          name: 'Mirror',
-          targetBodyId: body.bodyId,
-          ...fields
-        }
+    if (slots.bodies.length === 0 || !plane) return null;
+    // Each body's own copy of the plane, so no two features share one.
+    const states = slots.bodies.map((body): ModelingOperationFormState => ({
+      operation: 'mirror',
+      value: {
+        name: 'Mirror',
+        targetBodyId: body.bodyId,
+        ...offsetPlaneFields(plane, values.offset)
       }
-    };
+    }));
+    return states.length === 1
+      ? { tool: 'modeling', state: states[0]! }
+      : { tool: 'modeling-each', states };
   },
   handles: planeHandles
 };
@@ -5638,8 +5702,61 @@ const split: InPlaceToolSpec = {
       }
     };
   },
-  handles: planeHandles
+  handles: planeHandles,
+  refusedInputs: splitRefusedInputs
 };
+
+/**
+ * M11 (owner decision D5): the Split inputs a refused request changed from
+ * the last one that built, so the kept two-halves frame stays on screen and
+ * the bar names what to put back. The request stores the plane already slid
+ * by its offset, so the plane and the offset are told apart by what each
+ * frame was made from. A plane picked again starts unslid: the offset that
+ * only followed the new pick is not named. A different body is no change of
+ * an input on this one: null, so no frame of the old body stands for it.
+ */
+export function splitRefusedInputs(
+  built: InPlaceRequest,
+  refused: InPlaceRequest,
+  frames?: { built: InPlaceFrameInputs; refused: InPlaceFrameInputs }
+): string[] | null {
+  if (
+    !frames ||
+    built.tool !== 'modeling' ||
+    built.state.operation !== 'split' ||
+    refused.tool !== 'modeling' ||
+    refused.state.operation !== 'split'
+  ) {
+    return [];
+  }
+  const a = built.state.value;
+  const b = refused.state.value;
+  if (a.targetBodyId !== b.targetBodyId) return null;
+  const was = frames.built;
+  const now = frames.refused;
+  const typed = (inputs: InPlaceFrameInputs) =>
+    inputs.options.planeMode === 'typed';
+  const changed = (id: string) => !sameParam(was.values[id], now.values[id]);
+  const inputs: string[] = [];
+  let repicked = false;
+  if (typed(was) !== typed(now)) {
+    inputs.push('Plane');
+  } else if (typed(now)) {
+    const vector = (prefix: string) =>
+      (['X', 'Y', 'Z'] as const).some((axis) => changed(`${prefix}${axis}`));
+    if (vector('planeO')) inputs.push('Origin');
+    if (vector('planeN')) inputs.push('Normal');
+  } else if (!sameParam(was.slots.plane, now.slots.plane)) {
+    inputs.push('Plane');
+    repicked = true;
+  }
+  const unslid = (now.values.offset ?? 0) === PLANE_OFFSET.initial;
+  if (changed('offset') && !(repicked && unslid)) inputs.push('Offset');
+  if (Boolean(a.keepOriginal) !== Boolean(b.keepOriginal)) {
+    inputs.push('Original');
+  }
+  return inputs;
+}
 
 const COPY_OPTION: OptionSpec = {
   id: 'copy',
@@ -6000,7 +6117,7 @@ const DIRECTION_QUANTUM = 1e-9;
 export function inPlaceFaceMode(
   spec: InPlaceToolSpec | null | undefined,
   options: Readonly<Record<string, string>> | undefined
-): 'one' | 'many' | undefined {
+): 'one' | 'many' | 'pair' | undefined {
   if (!spec) return undefined;
   if (takesFeatureFaces(spec, options)) return 'many';
   return spec.faceMode;
@@ -6032,12 +6149,17 @@ export function inPlaceFacePickSurfaces(
   }
 }
 
-/** The bodies a command takes as its options now stand. */
+/**
+ * The bodies a command takes as its options now stand, and whether it is
+ * editing a stored feature.
+ */
 export function inPlaceBodyMode(
   spec: InPlaceToolSpec | null | undefined,
-  options: Readonly<Record<string, string>> | undefined
+  options: Readonly<Record<string, string>> | undefined,
+  editing = false
 ): 'one' | 'many' | undefined {
   if (!spec || takesFeatureFaces(spec, options)) return undefined;
+  if (editing && spec.bodyMode && spec.editBodyMode) return spec.editBodyMode;
   return spec.bodyMode;
 }
 
@@ -8102,6 +8224,7 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   split,
   scale,
   'axis-rotate': axisRotate,
+  align: faceAlignSpec,
   union: booleanSpec('union', 'Union'),
   subtract: booleanSpec('subtract', 'Subtract'),
   intersect: booleanSpec('intersect', 'Intersect'),

@@ -1285,6 +1285,101 @@ describe('body tools', () => {
     expect(spec.handles(slots, {}, CTX, {})).toEqual([]);
   });
 
+  // M11 (owner decision D5): which Split inputs a refusal names over the
+  // kept frame. The request stores the plane already slid, so the frames'
+  // own values, options and picks tell the plane and the offset apart.
+  it('split: a refusal names the inputs that changed since the frame that built', () => {
+    const spec = IN_PLACE_TOOL_SPECS.split;
+    const face = {
+      kind: 'face' as const,
+      origin: { x: 20, y: 5, z: 2 },
+      normal: { x: 1, y: 0, z: 0 }
+    };
+    const frame = (
+      values: Record<string, number>,
+      options: Record<string, string> = {},
+      slots: Partial<InPlaceSlots> = {}
+    ) => {
+      const picks = { ...EMPTY, bodies: [BODY], plane: face, ...slots };
+      const chosen = { planeMode: 'picked', keepOriginal: 'no', ...options };
+      const all = {
+        offset: 0,
+        planeOX: 0,
+        planeOY: 0,
+        planeOZ: 0,
+        planeNX: 0,
+        planeNY: 0,
+        planeNZ: 1,
+        ...values
+      };
+      return {
+        request: spec.request(picks, all, chosen, CTX, all)!,
+        inputs: { values: all, options: chosen, slots: picks }
+      };
+    };
+    const named = (
+      built: ReturnType<typeof frame>,
+      refused: ReturnType<typeof frame>
+    ) =>
+      spec.refusedInputs!(built.request, refused.request, {
+        built: built.inputs,
+        refused: refused.inputs
+      });
+    const built = frame({ offset: -8 });
+    expect(named(built, built)).toEqual([]);
+    expect(named(built, frame({ offset: 4 }))).toEqual(['Offset']);
+    expect(
+      named(built, frame({ offset: -8 }, { keepOriginal: 'yes' }))
+    ).toEqual(['Original']);
+    // Another face picked starts unslid: the pick is named, not the reset.
+    const other = {
+      kind: 'face' as const,
+      origin: { x: 0, y: 5, z: 2 },
+      normal: { x: -1, y: 0, z: 0 }
+    };
+    expect(named(built, frame({}, {}, { plane: other }))).toEqual(['Plane']);
+    // ...and a slide typed on it since is named with it.
+    expect(named(built, frame({ offset: 3 }, {}, { plane: other }))).toEqual([
+      'Plane',
+      'Offset'
+    ]);
+    // A datum plane picked is a plane change too.
+    expect(
+      named(
+        built,
+        frame({}, {}, { plane: { kind: 'datum', featureId: 'p' as FeatureId } })
+      )
+    ).toEqual(['Plane']);
+    // The plane typed instead of picked, then its own origin and normal.
+    const typed = frame({ offset: -8 }, { planeMode: 'typed' });
+    expect(named(built, typed)).toEqual(['Plane']);
+    expect(
+      named(typed, frame({ offset: -8, planeOX: 30 }, { planeMode: 'typed' }))
+    ).toEqual(['Origin']);
+    expect(
+      named(
+        typed,
+        frame({ offset: 0, planeNX: 1, planeNZ: 0 }, { planeMode: 'typed' })
+      )
+    ).toEqual(['Normal', 'Offset']);
+    // Another body is not an input changed on this one: null, so no frame
+    // of the old body stands for it, under a refusal or while it builds.
+    const witness = { ...BODY, bodyId: 'body_w' as BodyId };
+    expect(
+      named(built, frame({ offset: 4 }, {}, { bodies: [witness] }))
+    ).toBeNull();
+    // Without the frames, or for another tool's request, nothing is named.
+    expect(
+      spec.refusedInputs!(built.request, frame({ offset: 4 }).request)
+    ).toEqual([]);
+    expect(
+      spec.refusedInputs!(built.request, { tool: 'boolean' } as never, {
+        built: built.inputs,
+        refused: built.inputs
+      })
+    ).toEqual([]);
+  });
+
   it('scale: about the body centre, the handle reaching its corner', () => {
     const spec = IN_PLACE_TOOL_SPECS.scale;
     const slots = { ...EMPTY, bodies: [BODY] };
@@ -3571,5 +3666,101 @@ describe('Wrap in place', () => {
     expect(wrap.ready(slots)).toBe(false);
     expect(wrap.request(slots, {}, {}, CTX)).toBeNull();
     expect(wrap.hint(slots, {}, {} as never)).toMatch(/one sketch/);
+  });
+});
+
+describe('M11: Mirror of several bodies', () => {
+  const PLANE: InPlaceSlots['plane'] = {
+    kind: 'principal',
+    plane: 'YZ',
+    origin: { x: 0, y: 0, z: 0 },
+    normal: { x: 1, y: 0, z: 0 }
+  };
+
+  it('takes several bodies, but an edit of one Mirror takes one', () => {
+    const spec = IN_PLACE_TOOL_SPECS.mirror;
+    expect(inPlaceBodyMode(spec, {})).toBe('many');
+    expect(inPlaceBodyMode(spec, {}, true)).toBe('one');
+    // A command with no edit rule is the same either way.
+    expect(inPlaceBodyMode(IN_PLACE_TOOL_SPECS.union, {}, true)).toBe('many');
+    expect(inPlaceBodyMode(IN_PLACE_TOOL_SPECS.split, {}, true)).toBe('one');
+  });
+
+  it('one body is the Mirror request it always was', () => {
+    const spec = IN_PLACE_TOOL_SPECS.mirror;
+    const slots = { ...EMPTY, bodies: [BODY], plane: PLANE };
+    expect(spec.request(slots, { offset: 0 }, {}, CTX)).toEqual({
+      tool: 'modeling',
+      state: {
+        operation: 'mirror',
+        value: {
+          name: 'Mirror',
+          targetBodyId: 'body_a',
+          origin: { x: '0', y: '0', z: '0' },
+          normal: { x: '1', y: '0', z: '0' }
+        }
+      }
+    });
+    expect(spec.hint(slots, {})).toBe('Slide the plane, or pick another');
+  });
+
+  it('each body is its own Mirror on the same slid plane, in pick order', () => {
+    const spec = IN_PLACE_TOOL_SPECS.mirror;
+    const slots = { ...EMPTY, bodies: [OTHER, BODY], plane: PLANE };
+    const request = spec.request(slots, { offset: 5 }, {}, CTX);
+    expect(request).toMatchObject({ tool: 'modeling-each' });
+    if (request?.tool !== 'modeling-each') return;
+    expect(request.states.map((state) => state.value)).toEqual(
+      ['body_b', 'body_a'].map((targetBodyId) => ({
+        name: 'Mirror',
+        targetBodyId,
+        origin: { x: '5', y: '0', z: '0' },
+        normal: { x: '1', y: '0', z: '0' }
+      }))
+    );
+    // No two features share one plane object.
+    const [first, second] = request.states.map(
+      (state) => (state.value as { origin: object }).origin
+    );
+    expect(first).not.toBe(second);
+    expect(spec.hint(slots, {})).toBe(
+      '2 bodies · Slide the plane, or pick another'
+    );
+    expect(spec.hint({ ...slots, plane: null }, {})).toBe(
+      '2 bodies · Pick a plane or flat face'
+    );
+  });
+
+  it('a datum plane is stored by id on every body', () => {
+    const spec = IN_PLACE_TOOL_SPECS.mirror;
+    const slots: InPlaceSlots = {
+      ...EMPTY,
+      bodies: [BODY, OTHER],
+      plane: { kind: 'datum', featureId: 'datum_1' as FeatureId }
+    };
+    const request = spec.request(slots, { offset: 0 }, {}, CTX);
+    if (request?.tool !== 'modeling-each') throw new Error('not a set');
+    expect(
+      request.states.map(
+        (state) => (state.value as { datumFeatureId?: string }).datumFeatureId
+      )
+    ).toEqual(['datum_1', 'datum_1']);
+  });
+
+  it('a typed plane goes out as typed on every body', () => {
+    const spec = IN_PLACE_TOOL_SPECS.mirror;
+    const slots = { ...EMPTY, bodies: [BODY, OTHER] };
+    expect(spec.ready(slots, { planeMode: 'typed' })).toBe(true);
+    const request = spec.request(
+      slots,
+      { planeOX: 'wall', planeOY: 0, planeOZ: 0 },
+      { planeMode: 'typed' },
+      CTX,
+      { planeOX: 4, planeOY: 0, planeOZ: 0, planeNX: 0, planeNY: 0, planeNZ: 1 }
+    );
+    if (request?.tool !== 'modeling-each') throw new Error('not a set');
+    for (const state of request.states) {
+      expect(state.value).toMatchObject({ origin: { x: 'wall' } });
+    }
   });
 });

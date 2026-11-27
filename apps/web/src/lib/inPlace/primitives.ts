@@ -127,7 +127,11 @@ export function placementFrame(normal: Vector3): PlacementFrame {
 export function meshNormal(normal: Vector3): Vector3 {
   const n = unit(normal);
   const snap = (value: number) =>
-    Math.abs(value) < 1e-6 ? 0 : Math.abs(Math.abs(value) - 1) < 1e-6 ? Math.sign(value) : value;
+    Math.abs(value) < 1e-6
+      ? 0
+      : Math.abs(Math.abs(value) - 1) < 1e-6
+        ? Math.sign(value)
+        : value;
   return cleaned(unit({ x: snap(n.x), y: snap(n.y), z: snap(n.z) }));
 }
 
@@ -258,7 +262,11 @@ export function footprintPlacement(
     };
   }
   if (!moved) {
-    return { placement: { frame, signU: 1, signV: 1 }, anchor: rounded, values: {} };
+    return {
+      placement: { frame, signU: 1, signV: 1 },
+      anchor: rounded,
+      values: {}
+    };
   }
   if (kind === 'box') {
     return {
@@ -277,23 +285,30 @@ export function footprintPlacement(
 /**
  * The turn taking the kernel's own X, Y and Z onto `x`, `y` and `z`, as the
  * Move's rotation: the transform applies `Rz · Ry · Rx`.
+ *
+ * Well conditioned everywhere, gimbal lock included: Y comes from `atan2`
+ * of the first column (never `asin`, which loses half its digits within a
+ * hair of ±90°), Z from the same column, and X from the rotation with that
+ * Z taken back out, so whatever Z is chosen near the lock, X makes up the
+ * rest and the angles compose back to the rotation to rounding.
  */
 export function eulerDegrees(x: Vector3, y: Vector3, z: Vector3): Vector3 {
   const degrees = (radians: number) => {
     const value = Math.round(((radians * 180) / Math.PI) * 1e9) / 1e9;
     return value === 0 ? 0 : value;
   };
-  const sinY = Math.max(-1, Math.min(1, -x.z));
-  const ry = Math.asin(sinY);
-  if (Math.cos(ry) > 1e-9) {
-    return {
-      x: degrees(Math.atan2(y.z, z.z)),
-      y: degrees(ry),
-      z: degrees(Math.atan2(x.y, x.x))
-    };
+  const across = Math.hypot(x.x, x.y);
+  const ry = Math.atan2(-x.z, across);
+  if (across <= 1e-12) {
+    // Pointing straight along ±Z: only the sum of the X and Z turns matters.
+    return { x: 0, y: degrees(ry), z: degrees(Math.atan2(-y.x, y.y)) };
   }
-  // Pointing straight along ±X: only the sum of the X and Z turns matters.
-  return { x: 0, y: degrees(ry), z: degrees(Math.atan2(-y.x, y.y)) };
+  const rz = Math.atan2(x.y, x.x);
+  const [cz, sz] = [Math.cos(rz), Math.sin(rz)];
+  // Row 1 of Rz(−rz) · R is (0, cos rx, −sin rx).
+  const cosX = -sz * y.x + cz * y.y;
+  const sinX = -(-sz * z.x + cz * z.y);
+  return { x: degrees(Math.atan2(sinX, cosX)), y: degrees(ry), z: degrees(rz) };
 }
 
 function isAxis(vector: Vector3): boolean {
@@ -393,7 +408,10 @@ export function primitiveBuild(
       return { ...turned(u, v, normal), dimensions };
     }
     case 'sphere':
-      return { dimensions: { radius: values.radius ?? 6 }, position: { ...at } };
+      return {
+        dimensions: { radius: values.radius ?? 6 },
+        position: { ...at }
+      };
     case 'torus': {
       const dimensions = {
         majorRadius: values.majorRadius ?? 6,

@@ -124,6 +124,12 @@ export interface InPlaceCommandBarProps {
    * of the refusal so it says what to change, not only that it failed.
    */
   refusalInput?: string | null;
+  /**
+   * M11: the pick the refusal is about ("Back block", a body a Mirror of
+   * several could not mirror), named ahead of the refusal, and what to do
+   * about it, said after it.
+   */
+  refusalPick?: { name: string; advice: string } | null;
   /** The document's length unit, after each size a refusal quotes. */
   unitLabel?: string | null;
   /**
@@ -229,6 +235,7 @@ export function InPlaceCommandBar({
   refusal = null,
   refusalClassification = null,
   refusalInput = null,
+  refusalPick = null,
   unitLabel = null,
   onTrySize,
   recovery,
@@ -352,8 +359,12 @@ export function InPlaceCommandBar({
     (plain ? blendRefusalText(plain.message, unitLabel) : null);
   // Named after translation: a kernel sentence is rewritten whole, which
   // would drop a prefix written ahead of it.
-  const shown =
-    sentence && refusalInput ? `${refusalInput}: ${sentence}` : sentence;
+  const named = refusalInput ?? refusalPick?.name ?? null;
+  const shown = sentence
+    ? [named ? `${named}: ${sentence}` : sentence, refusalPick?.advice]
+        .filter(Boolean)
+        .join(' ')
+    : sentence;
   const technical = refusalSummary || plain?.detail ? refusal : null;
   const smaller = refusal && onTrySize ? smallerSizeIn(refusal) : null;
   // In the compact sheet the bar is its tray (U12 slice 4): one pinned row
