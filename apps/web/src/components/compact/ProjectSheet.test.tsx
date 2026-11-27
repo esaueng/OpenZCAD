@@ -4,6 +4,7 @@ import { COMPACT_ENTRIES } from '../../lib/actions/registry';
 import { AppShell } from '../AppShell';
 import type { PaletteCommand } from '../CommandBar';
 import type { CompactChromeProps, CompactProjectSheet } from './compactSlots';
+import { COMPACT_PANEL_ORDER } from './panelSheet';
 
 function command(id: string, label: string): PaletteCommand {
   return { id, label, group: 'File', run: vi.fn() };
@@ -79,6 +80,16 @@ function chrome(
     project: project(),
     selectionLabel: null,
     reducedMotion: false,
+    panels: {
+      open: null,
+      available: COMPACT_PANEL_ORDER,
+      disabledReason: null,
+      content: null,
+      onOpen: vi.fn(),
+      warningCount: 0
+    },
+    selection: null,
+    editRefusal: null,
     sheetKey: '',
     ...overrides
   };

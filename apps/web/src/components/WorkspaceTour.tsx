@@ -18,6 +18,7 @@ import { useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { StableLabel } from './StableLabel';
 import { TOUCH_ONLY_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
+import { useWorkspaceShell } from '../hooks/useWorkspaceShell';
 import { useStageFootClaim } from '../hooks/useStageFootClaim';
 import { guideShapesClearStage } from '../lib/fitFrame';
 
@@ -81,6 +82,7 @@ export function WorkspaceTour({
 }: WorkspaceTourProps) {
   const keymap = useKeymap();
   const touchOnly = useMediaQuery(TOUCH_ONLY_QUERY);
+  const compact = useWorkspaceShell().shell === 'compact';
   const [localMinimized, setLocalMinimized] = useState(false);
   const savedMinimized = minimizedProp ?? localMinimized;
   // Expand pressed while the guide was folded for a card: it stays open
@@ -365,7 +367,8 @@ export function WorkspaceTour({
               const chord = keymap.label(id);
               return chord ? platformShortcutLabel(chord) : undefined;
             },
-            touchOnly
+            touchOnly,
+            compact
           )}
         </p>
       </div>

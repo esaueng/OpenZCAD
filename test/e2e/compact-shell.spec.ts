@@ -203,6 +203,12 @@ test.describe('the compact workspace frame', () => {
         test.setTimeout(120_000);
         await page.setViewportSize(size);
         await openCompactProject(page, `Compact ${size.width}`);
+        // The undo pair rises above the sheet on a transition once the
+        // sheet first reports its height: measure the frame at rest.
+        await page.waitForFunction(() => {
+          const controls = document.querySelector('.compact-stage-controls');
+          return controls !== null && controls.getAnimations().length === 0;
+        });
         const report = await frameReport(page);
         expect(report.header).not.toBeNull();
         expect(report.tabs).not.toBeNull();

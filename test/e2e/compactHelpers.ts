@@ -186,3 +186,64 @@ export function stageWords(page: Page): Promise<string[]> {
 export function trayWords(page: Page): Promise<string[]> {
   return visibleWords(page, '.compact-sheet .compact-tray-row');
 }
+
+/**
+ * Chromium on Aura (Linux, ChromeOS) as CI runs it: a touch that swiped
+ * across starts a fling, and the tap that stops the fling is suppressed, so
+ * the next touch makes pointer and touch events but no mousedown, mouseup
+ * or click. macOS Chromium leaves tap suppression off, so without this a
+ * spec passes there and fails on Linux. Install before the first load.
+ */
+export async function dropTapAfterFling(page: Page) {
+  await page.addInitScript(() => {
+    let start: { x: number; y: number } | null = null;
+    let swiped = false;
+    let flinging = false;
+    let suppressed = false;
+    const options = { capture: true, passive: true } as const;
+    const firstTouch = (event: Event) => (event as TouchEvent).touches[0];
+    addEventListener(
+      'touchstart',
+      (event) => {
+        const touch = firstTouch(event);
+        if (!touch || (event as TouchEvent).touches.length > 1) return;
+        suppressed = flinging;
+        flinging = false;
+        start = { x: touch.clientX, y: touch.clientY };
+        swiped = false;
+      },
+      options
+    );
+    addEventListener(
+      'touchmove',
+      (event) => {
+        const touch = firstTouch(event);
+        if (start && touch && Math.abs(touch.clientX - start.x) >= 10) {
+          swiped = true;
+        }
+      },
+      options
+    );
+    addEventListener(
+      'touchend',
+      () => {
+        if (swiped) flinging = true;
+        start = null;
+      },
+      options
+    );
+    const drop = (event: Event) => {
+      const fromTouch = (
+        event as UIEvent & {
+          sourceCapabilities?: { firesTouchEvents?: boolean } | null;
+        }
+      ).sourceCapabilities?.firesTouchEvents;
+      if (!suppressed || !fromTouch) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    for (const type of ['mousedown', 'mouseup', 'click']) {
+      addEventListener(type, drop, true);
+    }
+  });
+}

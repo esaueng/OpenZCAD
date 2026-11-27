@@ -9,6 +9,7 @@ import { useKeymap } from '../lib/keymap';
 import { useModalFocus } from '../lib/useModalFocus';
 import { tourStepBody, WORKSPACE_TOUR_STEPS } from '../lib/workspaceTour';
 import { TOUCH_ONLY_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
+import { useWorkspaceShell } from '../hooks/useWorkspaceShell';
 
 interface ShortcutsOverlayProps {
   onClose(): void;
@@ -65,6 +66,7 @@ export function ShortcutsOverlay({
   const keymap = useKeymap();
   const keyboardGroups = liveKeyboardGroups(keymap);
   const touchOnly = useMediaQuery(TOUCH_ONLY_QUERY);
+  const compact = useWorkspaceShell().shell === 'compact';
 
   // Opened by "?" from the workspace, so nothing inside has focus yet.
   // The workspace keymap toggles and closes this sheet, so it must still
@@ -124,7 +126,8 @@ export function ShortcutsOverlay({
                       const chord = keymap.label(id);
                       return chord ? platformShortcutLabel(chord) : undefined;
                     },
-                    touchOnly
+                    touchOnly,
+                    compact
                   )}
                 </li>
               ))}

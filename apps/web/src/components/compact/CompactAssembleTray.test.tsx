@@ -20,6 +20,7 @@ import CompactAssembleTray, {
   type CompactAssembleTrayProps
 } from './CompactAssembleTray';
 import type { CompactChromeProps } from './compactSlots';
+import { COMPACT_PANEL_ORDER } from './panelSheet';
 
 afterEach(() => {
   act(() => {
@@ -47,6 +48,16 @@ function chrome(): CompactChromeProps & { sheetKey: string } {
     fileCommands: [],
     selectionLabel: null,
     reducedMotion: true,
+    panels: {
+      open: null,
+      available: COMPACT_PANEL_ORDER,
+      disabledReason: null,
+      content: null,
+      onOpen: vi.fn(),
+      warningCount: 0
+    },
+    selection: null,
+    editRefusal: null,
     sheetKey: ''
   };
 }
