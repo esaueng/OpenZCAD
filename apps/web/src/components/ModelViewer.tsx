@@ -415,6 +415,7 @@ import {
   ellipseObjectFromPoints,
   ellipticalArcObject,
   splineClickAction,
+  splineFinishRefusal,
   splineObjectFromPoints,
   centerInferenceSegments,
   collectSketchSnapTargets,
@@ -10811,18 +10812,19 @@ export function ModelViewer({
         closed
       );
       if (!spline) {
+        const points = sketchGestureRef.current.curvePoints;
+        const refused = splineFinishRefusal(
+          sketchSplineMethod(mode),
+          points,
+          closed
+        );
         const report = onSketchSplineProgressRef.current;
         if (report) {
-          const points = sketchGestureRef.current.curvePoints.length;
-          report({
-            points,
-            canFinish: false,
-            refusal: 'A spline needs at least three distinct points'
-          });
+          report({ points: points.length, ...refused });
         } else if (latestSketchPointerEvent) {
           positionSketchDimLabel(
             latestSketchPointerEvent,
-            'A spline needs at least three distinct points',
+            refused.refusal,
             false
           );
         }

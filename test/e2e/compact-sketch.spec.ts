@@ -674,7 +674,7 @@ test.describe('the compact sketch', () => {
       await tapPlane(page, [[-2, 10]]);
       await expect(finishSpline).toBeVisible();
       await expect(said).toHaveText(
-        'Spline · 3 points · ✓ finishes, the first point closes it'
+        'Spline · 3 points · Finish, or tap the first point to close'
       );
       expect(await row()).toBe(before);
       await expectReachable(finishSpline);
@@ -683,6 +683,42 @@ test.describe('the compact sketch', () => {
       await expect(finishSpline).toHaveCount(0);
     });
   }
+
+  test('finishes a spline that ends where it began, open, on its last point again', async ({
+    page
+  }) => {
+    test.setTimeout(180_000);
+    await openCompact(page, SIZES[1], 'Compact spline back to its start');
+    await sketchOnTop(page);
+    const curve = await tapTool(page, /^Curve:/);
+    await curve.tap();
+    await sketchTools(page)
+      .getByRole('radiogroup', { name: 'Curve type' })
+      .getByRole('radio', { name: 'Fit spline' })
+      .tap();
+    const finishSpline = sketchTools(page).getByRole('button', {
+      name: 'Finish spline'
+    });
+    const drawn = await entityCount(page);
+    // A, B, then A again, snapped onto the first point: an open spline
+    // that can finish. Its close would add a zero-length chord.
+    await tapPlane(page, [
+      [-20, 6],
+      [0, 16],
+      [-20, 6]
+    ]);
+    await expect(finishSpline).toBeVisible();
+    // A once more is the last point again: it finishes the spline open,
+    // rather than retrying a close that is refused and hiding Finish.
+    await tapPlane(page, [[-20, 6]]);
+    await expectEntities(page, drawn + 1);
+    const spline = (await sketchState(page)).objects.find(
+      (object) => object.data.objectKind === 'spline'
+    ) as { data: { closed?: boolean; points: unknown[] } } | undefined;
+    expect(spline?.data.points).toHaveLength(3);
+    expect(spline?.data.closed ?? false).toBe(false);
+    await expect(finishSpline).toHaveCount(0);
+  });
 
   test('keeps Enter, a text draft and the pick true to what is on the sketch', async ({
     page

@@ -155,7 +155,7 @@ describe('the spline on the compact status line', () => {
     );
     const ready = compactSplineStatus({ points: 3, canFinish: true });
     expect(ready).toBe(
-      'Spline · 3 points · ✓ finishes, the first point closes it'
+      'Spline · 3 points · Finish, or tap the first point to close'
     );
     expect(ready).not.toMatch(/Enter|click/i);
   });
@@ -168,5 +168,11 @@ describe('the spline on the compact status line', () => {
         refusal: 'A spline needs at least three distinct points'
       })
     ).toBe('A spline needs at least three distinct points.');
+  });
+
+  it('keeps to glyphs a bundled face draws', () => {
+    // No bundled font draws ✓, so the line names the tray's Finish instead.
+    const ready = compactSplineStatus({ points: 3, canFinish: true });
+    expect(ready).not.toContain('✓');
   });
 });

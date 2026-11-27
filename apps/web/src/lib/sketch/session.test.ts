@@ -60,6 +60,7 @@ import {
   ellipseParamDegAt,
   ellipticalArcObject,
   splineClickAction,
+  splineFinishRefusal,
   splineObjectFromPoints,
   sketchObjectGrabbedAlongCurve
 } from './session';
@@ -1445,6 +1446,30 @@ describe('the Spline tool’s clicks', () => {
     expect(splineClickAction(placed, at(30, 4), 0.5)).toBe('append');
     // Two points down: a click back on the first is not a close yet.
     expect(splineClickAction(placed.slice(0, 2), at(0, 0), 0.5)).toBe('append');
+  });
+
+  it('finishes a spline that ends where it began on its last point again (review case)', () => {
+    // A, B, A, the third snapped onto A: a fourth tap on A is near both
+    // ends. A close would add a zero-length chord and be refused, and a
+    // finger with no Enter would retry it on every tap; the last point
+    // again finishes it open.
+    const a = at(0, 0);
+    const placed = [a, at(10, 5), at(0, 0)];
+    expect(splineObjectFromPoints('fit', placed, false)).not.toBeNull();
+    expect(splineObjectFromPoints('fit', placed, true)).toBeNull();
+    expect(splineClickAction(placed, a, 0.5)).toBe('finish');
+  });
+
+  it('keeps an open spline finishable when its close is refused', () => {
+    const placed = [at(0, 0), at(10, 5), at(0, 0)];
+    expect(splineFinishRefusal('fit', placed, true)).toEqual({
+      canFinish: true,
+      refusal: 'The spline cannot close there'
+    });
+    expect(splineFinishRefusal('fit', placed.slice(0, 2), false)).toEqual({
+      canFinish: false,
+      refusal: 'A spline needs at least three distinct points'
+    });
   });
 
   it('finishes on the last point a spline may hold (review case)', () => {

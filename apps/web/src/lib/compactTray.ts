@@ -182,8 +182,8 @@ function capitalise(text: string): string {
 /**
  * The spline being placed, as the compact status line says it (U12): how
  * many points are down and what a finger does next, or why a finish was
- * refused. A finger has no Enter: ✓ in the tray finishes the spline once it
- * can, and a tap on the first point closes it.
+ * refused. A finger has no Enter: Finish in the tray (or the last point again)
+ * finishes the spline once it can, and a tap on the first point closes it.
  */
 export function compactSplineStatus(progress: {
   points: number;
@@ -193,6 +193,6 @@ export function compactSplineStatus(progress: {
   if (progress.refusal) return `${progress.refusal}.`;
   const count = `${progress.points} ${progress.points === 1 ? 'point' : 'points'}`;
   return progress.canFinish
-    ? `Spline · ${count} · ✓ finishes, the first point closes it`
+    ? `Spline · ${count} · Finish, or tap the first point to close`
     : `Spline · ${count} · tap the next point`;
 }

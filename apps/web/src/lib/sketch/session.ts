@@ -410,10 +410,13 @@ export function splineObjectFromPoints(
 
 /**
  * What one click of the Spline tool does with the points placed so far: a
- * click on the first point (with three already down) closes the spline, a
- * click on the last point again finishes it open, and any other click adds
- * a point — finishing at once when that point is the last a spline may
- * hold, since a further one would leave a list no commit accepts.
+ * click on the last point again finishes it open, a click on the first point
+ * (with three already down) closes the spline, and any other click adds a
+ * point — finishing at once when that point is the last a spline may hold,
+ * since a further one would leave a list no commit accepts. The last point
+ * wins over the first: when the spline already ends where it began (A, B,
+ * A), a close would add a zero-length chord no spline accepts, and a finger
+ * tapping that point again would retry it forever with no Enter to escape.
  */
 export function splineClickAction(
   points: readonly SketchPoint[],
@@ -424,15 +427,35 @@ export function splineClickAction(
     Math.hypot(point.x - other.x, point.y - other.y) <= reach;
   const first = points[0];
   const last = points[points.length - 1];
-  if (first && points.length >= 3 && near(first)) {
-    return 'close';
-  }
   if (last && near(last)) {
     return 'finish';
+  }
+  if (first && points.length >= 3 && near(first)) {
+    return 'close';
   }
   return points.length + 1 >= MAX_SKETCH_SPLINE_POINTS
     ? 'append-and-finish'
     : 'append';
+}
+
+/**
+ * A refused spline finish, as the tool reports it: whether the points still
+ * make an open spline (so a refused close never hides the way to finish it
+ * open) and why this finish was refused.
+ */
+export function splineFinishRefusal(
+  method: 'fit' | 'control',
+  points: readonly SketchPoint[],
+  closed: boolean
+): { canFinish: boolean; refusal: string } {
+  const canFinish = splineObjectFromPoints(method, points, false) !== null;
+  return {
+    canFinish,
+    refusal:
+      closed && canFinish
+        ? 'The spline cannot close there'
+        : 'A spline needs at least three distinct points'
+  };
 }
 
 /** Display polyline of an ellipse or spline object, for in-progress previews. */
