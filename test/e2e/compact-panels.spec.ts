@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
+import { dropTapAfterFling } from './compactHelpers';
 import { expect, stubApi, test } from './openzcad-fixtures';
 
 /**
@@ -244,6 +245,8 @@ const PANELS = [
 
 test.describe('the compact workspace panels', () => {
   test.use({ hasTouch: true, isMobile: true });
+  // The row swipes here end in taps CI's Linux Chromium drops.
+  test.beforeEach(({ page }) => dropTapAfterFling(page));
 
   for (const size of [
     { width: 390, height: 844 },

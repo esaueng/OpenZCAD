@@ -41,6 +41,7 @@ import {
   swipeRest,
   type SwipeSide
 } from './rowGestures';
+import { SwipeActionTaps } from './swipeActionTap';
 
 export type CompactHistoryListProps = Pick<
   ModelPanelSource,
@@ -138,6 +139,10 @@ export function CompactHistoryList({
   );
   const [renamingId, setRenamingId] = useState<FeatureId | null>(null);
   const [drag, setDrag] = useState<{ id: string; dy: number } | null>(null);
+  // A revealed action runs on its finger's lift, and the clicks a swipe or
+  // such a run end with are not taps (see swipeActionTap).
+  const [taps] = useState(() => new SwipeActionTaps<string>());
+  useEffect(() => () => taps.dispose(), [taps]);
 
   // A row deleted or undone away takes its open actions and its rename.
   useEffect(() => {
@@ -224,7 +229,19 @@ export function CompactHistoryList({
           </button>
         </div>
       ) : null}
-      <ol ref={listRef} className="compact-rows" aria-label="History steps">
+      <ol
+        ref={listRef}
+        className="compact-rows"
+        aria-label="History steps"
+        onPointerDownCapture={() => taps.press()}
+        onClickCapture={(event) => {
+          const target = event.target instanceof Element ? event.target : null;
+          const onActions = Boolean(target?.closest('.compact-row-actions'));
+          if (!taps.takeClick(onActions)) return;
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+      >
         {features.map((feature, index) => {
           const actions = rowActions(feature, index);
           const status: RowStatus = isFeatureManuallySuppressed(feature)
@@ -263,6 +280,7 @@ export function CompactHistoryList({
               dragDy={drag?.id === feature.id ? drag.dy : null}
               midpoints={midpoints}
               canDelete={Boolean(onDeleteFeatures)}
+              taps={taps}
               onOpen={(side) => setOpen(side ? { id: feature.id, side } : null)}
               anyOpen={open !== null}
               closeOpen={() => setOpen(null)}
@@ -332,6 +350,8 @@ interface CompactHistoryRowProps {
   dragDy: number | null;
   midpoints(): number[];
   canDelete: boolean;
+  /** The list's taps on revealed actions, and the clicks it swallows. */
+  taps: SwipeActionTaps<string>;
   onOpen(side: SwipeSide | null): void;
   closeOpen(): void;
   onDrag(dy: number | null): void;
@@ -361,6 +381,7 @@ function CompactHistoryRow({
   dragDy,
   midpoints,
   canDelete,
+  taps,
   onOpen,
   closeOpen,
   onDrag,
@@ -375,8 +396,6 @@ function CompactHistoryRow({
 }: CompactHistoryRowProps) {
   const gesture = useRef<Gesture | null>(null);
   const grip = useRef<GripDrag | null>(null);
-  // A press that swiped or closed an open row is not also a tap.
-  const swallowClick = useRef(false);
   const [offset, setOffset] = useState<number | null>(null);
   const suppressed = status === 'suppressed';
   // Rolling back after the last step does nothing: that side has no action.
@@ -398,7 +417,6 @@ function CompactHistoryRow({
       base: restOffset(open, counts),
       swiping: false
     };
-    swallowClick.current = false;
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const press = gesture.current;
@@ -408,7 +426,8 @@ function CompactHistoryRow({
     if (!press.swiping) {
       if (!isSwipe(dx, dy)) return;
       press.swiping = true;
-      swallowClick.current = true;
+      // The click this press may end with is not a tap on the step.
+      taps.swallowRowClick();
       capture(event);
     }
     setOffset(swipeOffset(press.base, dx, counts));
@@ -466,6 +485,29 @@ function CompactHistoryRow({
 
   const revealed = (side: SwipeSide) => open === side || (offset ?? 0) !== 0;
 
+  /**
+   * A revealed action's handlers. A finger or pen runs it when it lifts,
+   * not on the click the browser may make of the tap: Chromium on Linux
+   * and ChromeOS drops the tap that stops a fling, and the swipe that
+   * revealed it flings. A mouse, the keyboard and a screen reader click.
+   */
+  const tapAction = (side: SwipeSide, key: string, run: () => void) => {
+    const id = `${feature.id}:${key}`;
+    return {
+      onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (open === side) taps.pressAction(event, id);
+      },
+      onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (taps.release(event) !== id || open !== side) return;
+        taps.ran();
+        run();
+      },
+      onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) =>
+        taps.cancel(event),
+      onClick: run
+    };
+  };
+
   return (
     <li
       className={`compact-row${selected ? ' is-selected' : ''}${
@@ -492,7 +534,7 @@ function CompactHistoryRow({
             className="compact-row-action is-rollback"
             aria-label={rollbackLabel}
             tabIndex={open === 'start' ? 0 : -1}
-            onClick={onRollBack}
+            {...tapAction('start', 'rollback', onRollBack)}
           >
             <History size={20} aria-hidden="true" />
             <span className="compact-row-action-label">
@@ -510,7 +552,7 @@ function CompactHistoryRow({
           className="compact-row-action is-suppress"
           aria-label={`${suppressed ? 'Resume' : 'Suppress'} ${feature.name}`}
           tabIndex={open === 'end' ? 0 : -1}
-          onClick={onSuppress}
+          {...tapAction('end', 'suppress', onSuppress)}
         >
           {suppressed ? (
             <CirclePlay size={20} aria-hidden="true" />
@@ -527,7 +569,7 @@ function CompactHistoryRow({
             className="compact-row-action is-delete"
             aria-label={`Delete ${feature.name}`}
             tabIndex={open === 'end' ? 0 : -1}
-            onClick={onDelete}
+            {...tapAction('end', 'delete', onDelete)}
           >
             <Trash2 size={20} aria-hidden="true" />
             <span className="compact-row-action-label">Delete</span>
@@ -574,10 +616,6 @@ function CompactHistoryRow({
             className="compact-row-main"
             aria-current={selected || undefined}
             onClick={() => {
-              if (swallowClick.current) {
-                swallowClick.current = false;
-                return;
-              }
               // A tap elsewhere puts an open row's actions away first.
               if (anyOpen) {
                 closeOpen();

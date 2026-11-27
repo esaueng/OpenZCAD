@@ -6,7 +6,7 @@ import {
   transformBody
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { expectReachable } from './compactHelpers';
+import { dropTapAfterFling, expectReachable } from './compactHelpers';
 import { expect, stubAnonymousApi, stubApi, test } from './openzcad-fixtures';
 
 const LAYOUT_KEY = 'openzcad.layout:v1';
@@ -171,6 +171,8 @@ async function closeSheet(page: Page) {
  */
 test.describe('the compact workspace keeps the regular gates', () => {
   test.use({ hasTouch: true, isMobile: true });
+  // The row swipes here end in taps CI's Linux Chromium drops.
+  test.beforeEach(({ page }) => dropTapAfterFling(page));
 
   test(
     'a row menu checks Delete against the document when Delete is chosen',

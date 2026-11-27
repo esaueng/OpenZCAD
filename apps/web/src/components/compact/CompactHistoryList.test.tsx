@@ -132,6 +132,142 @@ describe('CompactHistoryList', () => {
     ).toBeNull();
   });
 
+  it('runs a revealed action when the finger lifts, with or without the click', () => {
+    const { container, props } = list();
+    const target = row(container, 1);
+    swipe(target.querySelector('.compact-row-face')!, -2 * SWIPE_ACTION_PX);
+    const remove = within(target).getByRole('button', {
+      name: 'Delete Step number 2 with a long name'
+    });
+    const finger = {
+      pointerType: 'touch',
+      isPrimary: true,
+      pointerId: 11,
+      clientX: 360,
+      clientY: 20
+    };
+    fireEvent.pointerDown(remove, finger);
+    fireEvent.pointerUp(remove, { ...finger, clientX: 363 });
+    // Chromium on Linux sends no click for a tap that stops a fling: the
+    // lift alone deletes, through the same handler that asks first.
+    expect(props.onDeleteFeatures).toHaveBeenCalledTimes(1);
+    expect(props.onDeleteFeatures).toHaveBeenCalledWith(['feature-2']);
+    expect(target.querySelector('.compact-row-face')).not.toHaveAttribute(
+      'style'
+    );
+    // Where the click does come, it lands on the step slid back under the
+    // finger: it opens nothing and deletes nothing twice.
+    fireEvent.click(target.querySelector('.compact-row-main')!);
+    expect(props.onEditStep).not.toHaveBeenCalled();
+    expect(props.onDeleteFeatures).toHaveBeenCalledTimes(1);
+
+    // A click that never came eats nothing: the next tap opens its step.
+    swipe(target.querySelector('.compact-row-face')!, -2 * SWIPE_ACTION_PX);
+    const suppress = within(target).getByRole('button', {
+      name: 'Suppress Step number 2 with a long name'
+    });
+    fireEvent.pointerDown(suppress, finger);
+    fireEvent.pointerUp(suppress, finger);
+    expect(props.onToggleFeatureSuppression).toHaveBeenCalledWith(
+      props.features[1]
+    );
+    const next = row(container, 2).querySelector('.compact-row-main')!;
+    fireEvent.pointerDown(next, { ...finger, pointerId: 12 });
+    fireEvent.pointerUp(next, { ...finger, pointerId: 12 });
+    fireEvent.click(next);
+    expect(props.onEditStep).toHaveBeenCalledWith(props.features[2]);
+  });
+
+  it('swallows the click after a run on release outside the list too, until the next press', () => {
+    const outside = vi.fn();
+    const { container, props } = list();
+    const prompt = document.createElement('button');
+    prompt.addEventListener('click', outside);
+    document.body.append(prompt);
+    try {
+      swipe(row(container, 0).querySelector('.compact-row-face')!, 120);
+      const rollBack = screen.getByRole('button', {
+        name: 'Roll back to Step number 1 with a long name'
+      });
+      const finger = {
+        pointerType: 'touch',
+        pointerId: 14,
+        clientX: 30,
+        clientY: 20
+      };
+      fireEvent.pointerDown(rollBack, finger);
+      fireEvent.pointerUp(rollBack, finger);
+      expect(props.onRollbackAfterFeature).toHaveBeenCalledTimes(1);
+      // A prompt the action opened under the finger is not answered by the
+      // same tap's click.
+      fireEvent.click(prompt);
+      expect(outside).not.toHaveBeenCalled();
+      // The next press is a tap of its own.
+      fireEvent.pointerDown(prompt, { ...finger, pointerId: 15 });
+      fireEvent.click(prompt);
+      expect(outside).toHaveBeenCalledTimes(1);
+    } finally {
+      prompt.remove();
+    }
+  });
+
+  it('runs a revealed action a screen reader clicks, with no press before it', () => {
+    const { container, props } = list();
+    const target = row(container, 1);
+    swipe(target.querySelector('.compact-row-face')!, -2 * SWIPE_ACTION_PX);
+    fireEvent.click(
+      within(target).getByRole('button', {
+        name: 'Suppress Step number 2 with a long name'
+      })
+    );
+    expect(props.onToggleFeatureSuppression).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs a revealed action a mouse clicks once, on its click', () => {
+    const { container, props } = list();
+    const target = row(container, 1);
+    swipe(target.querySelector('.compact-row-face')!, -2 * SWIPE_ACTION_PX);
+    const remove = within(target).getByRole('button', {
+      name: 'Delete Step number 2 with a long name'
+    });
+    const mouse = {
+      pointerType: 'mouse',
+      isPrimary: true,
+      pointerId: 1,
+      button: 0,
+      clientX: 360,
+      clientY: 20
+    };
+    fireEvent.pointerDown(remove, mouse);
+    fireEvent.pointerUp(remove, mouse);
+    expect(props.onDeleteFeatures).not.toHaveBeenCalled();
+    fireEvent.click(remove);
+    expect(props.onDeleteFeatures).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs nothing when the finger slides off a revealed action, or on a covered one', () => {
+    const { container, props } = list();
+    const target = row(container, 1);
+    const remove = within(target).getByRole('button', {
+      name: 'Delete Step number 2 with a long name',
+      hidden: true
+    });
+    const finger = {
+      pointerType: 'touch',
+      pointerId: 16,
+      clientX: 360,
+      clientY: 20
+    };
+    // Still under the row's face: the press is not on the action.
+    fireEvent.pointerDown(remove, finger);
+    fireEvent.pointerUp(remove, finger);
+    expect(props.onDeleteFeatures).not.toHaveBeenCalled();
+    swipe(target.querySelector('.compact-row-face')!, -2 * SWIPE_ACTION_PX);
+    fireEvent.pointerDown(remove, finger);
+    fireEvent.pointerUp(remove, { ...finger, clientY: 60 });
+    expect(props.onDeleteFeatures).not.toHaveBeenCalled();
+  });
+
   it('snaps a short swipe closed', () => {
     const { container } = list();
     const face = row(container, 0).querySelector('.compact-row-face')!;
