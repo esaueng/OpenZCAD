@@ -2991,6 +2991,330 @@ describe('DrawingWorkspace section views (D03)', () => {
     });
     expect(view.centerMm.y).toBe(front.centerMm.y);
   });
+
+  describe('by touch (U12 slice 9)', () => {
+    /** The section or detail tool armed on the cube's sheet, for a finger. */
+    async function armed(toolName: 'Section view' | 'Detail view') {
+      resetRetainedProjections();
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      const sheet = starter(fingerprint);
+      const { onCommand } = renderSheet(sheet, () =>
+        Promise.resolve({ [bodyId]: halfCube() })
+      );
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      await waitFor(() =>
+        expect(
+          canvas.querySelectorAll('.drawing-view.is-placeholder')
+        ).toHaveLength(0)
+      );
+      fireEvent.click(screen.getByRole('button', { name: toolName }));
+      const surface = canvas.querySelector('.drawing-section-surface')!;
+      Object.defineProperty(canvas, 'getScreenCTM', {
+        configurable: true,
+        value: () => ({
+          a: 1,
+          b: 0,
+          c: 0,
+          d: 1,
+          e: 0,
+          f: 0,
+          inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 })
+        })
+      });
+      const front = sheet.views.find((view) => view.orientation === 'front')!;
+      let nextPointer = 1;
+      const finger = (x: number, y: number, pointerId = nextPointer++) => ({
+        clientX: x,
+        clientY: 297 - y,
+        button: 0,
+        pointerId,
+        pointerType: 'touch'
+      });
+      const added = () =>
+        onCommand.mock.calls
+          .map(([command]) => command)
+          .filter((command) => command.kind === 'drawing.view.add');
+      /** Two fingers land, spread and lift: a pinch. */
+      const pinch = (
+        a: { x: number; y: number },
+        b: { x: number; y: number }
+      ) => {
+        const first = finger(a.x, a.y);
+        const second = finger(b.x, b.y);
+        fireEvent.pointerDown(surface, first);
+        fireEvent.pointerDown(surface, second);
+        fireEvent.pointerMove(surface, {
+          ...first,
+          clientX: first.clientX - 20
+        });
+        fireEvent.pointerMove(surface, {
+          ...second,
+          clientX: second.clientX + 20
+        });
+        fireEvent.pointerUp(surface, { ...first, clientX: first.clientX - 20 });
+        fireEvent.pointerUp(surface, {
+          ...second,
+          clientX: second.clientX + 20
+        });
+      };
+      /** One finger dragged across the paper. */
+      const drag = (
+        a: { x: number; y: number },
+        b: { x: number; y: number }
+      ) => {
+        const down = finger(a.x, a.y);
+        const up = { ...finger(b.x, b.y, down.pointerId) };
+        fireEvent.pointerDown(surface, down);
+        fireEvent.pointerMove(surface, up);
+        fireEvent.pointerUp(surface, up);
+      };
+      const tap = (at: { x: number; y: number }) => {
+        const point = finger(at.x, at.y);
+        fireEvent.pointerDown(surface, point);
+        fireEvent.pointerUp(surface, point);
+      };
+      /** Whether the tool shows a view to place, the pointer at `at`. */
+      const ghostAt = (at: { x: number; y: number }) => {
+        fireEvent.pointerMove(surface, {
+          clientX: at.x,
+          clientY: 297 - at.y,
+          pointerId: 99,
+          pointerType: 'mouse'
+        });
+        return canvas.querySelector('.drawing-section-ghost') !== null;
+      };
+      return {
+        surface,
+        front: front.centerMm,
+        added,
+        pinch,
+        drag,
+        tap,
+        ghostAt
+      };
+    }
+
+    it('lets a pinch over a section line being drawn draw none, and places the section on a tap', async () => {
+      const { front, added, pinch, drag, tap, ghostAt } =
+        await armed('Section view');
+      const place = { x: front.x - 50, y: front.y };
+      // The first finger lands in the view and its release lands across it:
+      // the line it would draw on its own is dropped by the second finger.
+      pinch({ x: front.x, y: front.y + 8 }, { x: front.x, y: front.y - 8 });
+      expect(ghostAt(place)).toBe(false);
+      drag(
+        { x: front.x + 0.8, y: front.y + 8 },
+        { x: front.x + 0.8, y: front.y - 8 }
+      );
+      expect(ghostAt(place)).toBe(true);
+      // Armed to place: a pinch places nothing.
+      pinch(place, { x: place.x, y: place.y - 30 });
+      expect(added()).toHaveLength(0);
+      expect(ghostAt(place)).toBe(true);
+      // A finger that drags places nothing either.
+      drag(place, { x: place.x + 30, y: place.y });
+      expect(added()).toHaveLength(0);
+      tap(place);
+      expect(added()).toHaveLength(1);
+      expect(
+        (added()[0]!.payload as { view: DrawingSheet['views'][number] }).view
+          .section
+      ).toBeTruthy();
+    });
+
+    it('lets a pinch over a detail circle being drawn draw none, and places the detail on a tap', async () => {
+      const { front, added, pinch, drag, tap, ghostAt } =
+        await armed('Detail view');
+      const place = { x: front.x + 70, y: front.y };
+      pinch(front, { x: front.x + 6, y: front.y });
+      expect(ghostAt(place)).toBe(false);
+      drag(front, { x: front.x + 4, y: front.y });
+      expect(ghostAt(place)).toBe(true);
+      pinch(place, { x: place.x, y: place.y - 30 });
+      expect(added()).toHaveLength(0);
+      expect(ghostAt(place)).toBe(true);
+      tap(place);
+      expect(added()).toHaveLength(1);
+      expect(
+        (added()[0]!.payload as { view: DrawingSheet['views'][number] }).view
+          .detail
+      ).toBeTruthy();
+    });
+  });
+});
+
+describe('DrawingWorkspace auxiliary view by touch (U12 slice 9)', () => {
+  /** The straight-edged cube turned 30° about Y: its front view slopes. */
+  function tiltedCube(): BodyRepresentation {
+    const body = straightCube();
+    const c = Math.cos(Math.PI / 6);
+    const s = Math.sin(Math.PI / 6);
+    const turn = (values: ArrayLike<number>) =>
+      Array.from(values, (value, index) => {
+        const base = index - (index % 3);
+        const x = values[base]!;
+        const z = values[base + 2]!;
+        return index % 3 === 0
+          ? x * c + z * s
+          : index % 3 === 2
+            ? -x * s + z * c
+            : value;
+      });
+    const vertices = turn(body.mesh.vertices);
+    const xs = vertices.filter((_, index) => index % 3 === 0);
+    const zs = vertices.filter((_, index) => index % 3 === 2);
+    return {
+      ...body,
+      mesh: { ...body.mesh, vertices: Float32Array.from(vertices) },
+      bbox: {
+        min: { x: Math.min(...xs), y: 0, z: Math.min(...zs) },
+        max: { x: Math.max(...xs), y: 10, z: Math.max(...zs) }
+      },
+      topology: {
+        ...body.topology!,
+        edges: body.topology!.edges.map((edge) => ({
+          ...edge,
+          points: turn(edge.points)
+        }))
+      }
+    };
+  }
+
+  it('picks the edge and places the view on a release, never under a pinch', async () => {
+    resetRetainedProjections();
+    const tilted = tiltedCube();
+    const bodies = { [bodyId]: tilted };
+    const sheet = createStarterSheet({
+      name: 'Sheet 1',
+      bodyIds: [bodyId],
+      bodies,
+      units: 'mm',
+      paper: { size: 'A3', orientation: 'landscape' },
+      projectionAngle: 'first',
+      fingerprint: drawingSourceFingerprint(bodies, [bodyId])!
+    });
+    const base = createProjectDocument('Bracket', toUserId('test'));
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    const onStatus = vi.fn();
+    render(
+      <DrawingWorkspace
+        document={{
+          ...base,
+          bodyOrder: [bodyId],
+          drawings: { sheets: [sheet] }
+        }}
+        bodies={bodies}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={displayTessellation(bodies)}
+        editDisabledReason={null}
+        onCommand={onCommand}
+        onStatus={onStatus}
+      />
+    );
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Auxiliary view' }));
+    const surface = canvas.querySelector('.drawing-section-surface')!;
+    Object.defineProperty(canvas, 'getScreenCTM', {
+      configurable: true,
+      value: () => ({
+        a: 1,
+        b: 0,
+        c: 0,
+        d: 1,
+        e: 0,
+        f: 0,
+        inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 })
+      })
+    });
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    const k = drawingPaperPerModelUnit(sheet.scale, 'mm');
+    const cu = (tilted.bbox.min.x + tilted.bbox.max.x) / 2;
+    const cv = (tilted.bbox.min.z + tilted.bbox.max.z) / 2;
+    /** A point of the front view, in its model (x, z), on the paper. */
+    const onPaper = (u: number, v: number) => ({
+      x: front.centerMm.x + (u - cu) * k,
+      y: front.centerMm.y + (v - cv) * k
+    });
+    let nextPointer = 1;
+    const finger = (
+      at: { x: number; y: number },
+      pointerId = nextPointer++
+    ) => ({
+      clientX: at.x,
+      clientY: 297 - at.y,
+      button: 0,
+      pointerId,
+      pointerType: 'touch'
+    });
+    const pinch = (at: { x: number; y: number }) => {
+      const first = finger(at);
+      const second = finger({ x: at.x, y: at.y - 30 });
+      fireEvent.pointerDown(surface, first);
+      fireEvent.pointerDown(surface, second);
+      fireEvent.pointerMove(surface, { ...first, clientY: first.clientY - 20 });
+      fireEvent.pointerMove(surface, {
+        ...second,
+        clientY: second.clientY + 20
+      });
+      fireEvent.pointerUp(surface, { ...first, clientY: first.clientY - 20 });
+      fireEvent.pointerUp(surface, { ...second, clientY: second.clientY + 20 });
+    };
+    const tap = (at: { x: number; y: number }) => {
+      const point = finger(at);
+      fireEvent.pointerDown(surface, point);
+      fireEvent.pointerUp(surface, point);
+    };
+    const ghostAt = (at: { x: number; y: number }) => {
+      fireEvent.pointerMove(surface, {
+        clientX: at.x,
+        clientY: 297 - at.y,
+        pointerId: 99,
+        pointerType: 'mouse'
+      });
+      return canvas.querySelector('.drawing-section-ghost') !== null;
+    };
+    const added = () =>
+      onCommand.mock.calls
+        .map(([command]) => command)
+        .filter((command) => command.kind === 'drawing.view.add');
+    // The bottom front edge, (0, 0) to (10, 0) turned: it slopes down.
+    const edge = onPaper(
+      (10 * Math.cos(Math.PI / 6)) / 2,
+      (-10 * Math.sin(Math.PI / 6)) / 2
+    );
+    // Beside it, square to it, above and to the right on the page.
+    const place = {
+      x: edge.x + 0.5 * 40,
+      y: edge.y + Math.cos(Math.PI / 6) * 40
+    };
+    // A pinch landing on the edge picks nothing.
+    pinch(edge);
+    expect(ghostAt(place)).toBe(false);
+    // A finger landing on it picks it on release.
+    tap(edge);
+    expect(ghostAt(place)).toBe(true);
+    // A pinch where the view goes places nothing.
+    pinch(place);
+    expect(added()).toHaveLength(0);
+    expect(ghostAt(place)).toBe(true);
+    // A tap does.
+    tap(place);
+    expect(added()).toHaveLength(1);
+    expect(
+      (added()[0]!.payload as { view: DrawingSheet['views'][number] }).view
+        .auxiliary
+    ).toBeTruthy();
+  });
 });
 
 describe('DrawingWorkspace geometry annotations (D02 v73)', () => {

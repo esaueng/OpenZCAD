@@ -3830,6 +3830,20 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     clientY: number;
     tool: AnnotationTool;
   } | null>(null);
+  /**
+   * A finger down on an armed view tool's surface (the auxiliary view's
+   * edge or place, a section's or a detail's place), waiting for its
+   * release to act, as an annotation tool's pick does: a second finger or a
+   * drag cancels it, and so does a tool or step changed before the release.
+   */
+  const viewTapRef = useRef<{
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+    tool: 'auxiliary' | 'section' | 'detail';
+    /** The step's own state: the picked edge, the circled region, the line. */
+    step: unknown;
+  } | null>(null);
   const wheelClassifier = useRef<WheelGestureClassifier | null>(null);
   const wheelRef = useRef<(event: WheelEvent) => void>(() => undefined);
   wheelRef.current = (event: WheelEvent) => {
@@ -5795,8 +5809,54 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     auxiliaryTool?.edge && auxiliaryTool.pointer && shownSheet
       ? auxiliaryDraft(shownSheet, auxiliaryTool.edge, auxiliaryTool.pointer)
       : null;
+  /** A finger waits for its release to act on an armed view tool's step. */
+  const holdViewTap = (
+    event: ReactPointerEvent<SVGRectElement>,
+    tool: 'auxiliary' | 'section' | 'detail',
+    step: unknown
+  ) => {
+    viewTapRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      tool,
+      step
+    };
+  };
+  /**
+   * The finger's release, where it is the one waiting and its tool still
+   * stands at the step it landed on; null otherwise.
+   */
+  const takeViewTap = (
+    event: ReactPointerEvent<SVGRectElement>,
+    tool: 'auxiliary' | 'section' | 'detail',
+    step: unknown
+  ): { clientX: number; clientY: number } | null => {
+    const tap = viewTapRef.current;
+    if (tap?.pointerId !== event.pointerId) return null;
+    viewTapRef.current = null;
+    return tap.tool === tool && tap.step === step ? event : null;
+  };
   const onAuxiliaryPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
     if (event.button !== 0 || !auxiliaryTool || !shownSheet) return;
+    // A finger picks and places on its release: the first finger of a
+    // pinch must not place a view before the second one lands.
+    if (event.pointerType === 'touch') {
+      holdViewTap(event, 'auxiliary', auxiliaryTool.edge);
+      return;
+    }
+    auxiliaryAt(event);
+  };
+  const onAuxiliaryPointerUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    const tap = takeViewTap(
+      event,
+      'auxiliary',
+      auxiliaryTool ? auxiliaryTool.edge : undefined
+    );
+    if (tap) auxiliaryAt(tap);
+  };
+  const auxiliaryAt = (event: { clientX: number; clientY: number }) => {
+    if (!auxiliaryTool || !shownSheet) return;
     const at = paperPoint(event);
     if (!at) return;
     if (auxiliaryTool.edge) {
@@ -5877,26 +5937,36 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             : null;
         })()
       : null;
-  const onDetailPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
-    if (event.button !== 0 || !detailTool || !shownSheet) return;
+  /** Places the circled detail where the pointer is. */
+  const placeDetail = (event: { clientX: number; clientY: number }) => {
+    if (!detailTool?.region || !shownSheet) return;
     const at = paperPoint(event);
     if (!at) return;
-    if (detailTool.region) {
-      const source = detailSourceView(detailTool.region.sourceViewId);
-      if (!source) return;
-      const view: DrawingView = {
-        ...detailDraft(shownSheet, source, detailTool.region, at.point),
-        viewId: createDrawingViewId()
-      };
-      setDetailTool(null);
-      if (
-        run(
-          commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
-        )
+    const source = detailSourceView(detailTool.region.sourceViewId);
+    if (!source) return;
+    const view: DrawingView = {
+      ...detailDraft(shownSheet, source, detailTool.region, at.point),
+      viewId: createDrawingViewId()
+    };
+    setDetailTool(null);
+    if (
+      run(
+        commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
       )
-        setSelectedViewId(view.viewId);
+    )
+      setSelectedViewId(view.viewId);
+  };
+  const onDetailPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (event.button !== 0 || !detailTool || !shownSheet) return;
+    if (detailTool.region) {
+      // A finger places on its release, as a tap.
+      if (event.pointerType === 'touch')
+        holdViewTap(event, 'detail', detailTool.region);
+      else placeDetail(event);
       return;
     }
+    const at = paperPoint(event);
+    if (!at) return;
     if (!detailSourceAt(shownSheet, drawnViews, at.point, document.units)) {
       props.onStatus('Start the detail circle inside a view, at its centre.');
       return;
@@ -5921,6 +5991,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       setDetailTool({ ...detailTool, pointer: at.point });
   };
   const onDetailPointerUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    const tap = takeViewTap(event, 'detail', detailTool?.region);
+    if (tap) {
+      placeDetail(tap);
+      return;
+    }
     if (!detailTool?.drag || !shownSheet) return;
     const at = paperPoint(event);
     const end = at?.point ?? detailTool.drag.current;
@@ -6016,33 +6091,43 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             : null;
         })()
       : null;
-  const onSectionPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
-    if (event.button !== 0 || !sectionTool || !shownSheet) return;
+  /** Places the section whose line is drawn where the pointer is. */
+  const placeSection = (event: { clientX: number; clientY: number }) => {
+    if (!sectionTool?.line || !shownSheet) return;
     const at = paperPoint(event);
     if (!at) return;
-    if (sectionTool.line) {
-      const source = sectionSource(sectionTool.line);
-      const draft =
-        source &&
-        sectionPlacement(
-          shownSheet,
-          source.view,
-          sectionTool.line,
-          at.point,
-          source.view.bodyIds,
-          sectionReach(source.view, sectionTool.line)
-        );
-      if (!draft) return;
-      const view: DrawingView = { ...draft, viewId: createDrawingViewId() };
-      setSectionTool(null);
-      if (
-        run(
-          commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
-        )
+    const source = sectionSource(sectionTool.line);
+    const draft =
+      source &&
+      sectionPlacement(
+        shownSheet,
+        source.view,
+        sectionTool.line,
+        at.point,
+        source.view.bodyIds,
+        sectionReach(source.view, sectionTool.line)
+      );
+    if (!draft) return;
+    const view: DrawingView = { ...draft, viewId: createDrawingViewId() };
+    setSectionTool(null);
+    if (
+      run(
+        commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
       )
-        setSelectedViewId(view.viewId);
+    )
+      setSelectedViewId(view.viewId);
+  };
+  const onSectionPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (event.button !== 0 || !sectionTool || !shownSheet) return;
+    if (sectionTool.line) {
+      // A finger places on its release, as a tap.
+      if (event.pointerType === 'touch')
+        holdViewTap(event, 'section', sectionTool.line);
+      else placeSection(event);
       return;
     }
+    const at = paperPoint(event);
+    if (!at) return;
     if (!sectionSourceAt(shownSheet, drawnViews, at.point, document.units)) {
       props.onStatus(
         'Start the section line inside a front, top or side view.'
@@ -6069,6 +6154,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       setSectionTool({ ...sectionTool, pointer: at.point });
   };
   const onSectionPointerUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    const tap = takeViewTap(event, 'section', sectionTool?.line);
+    if (tap) {
+      placeSection(tap);
+      return;
+    }
     if (!sectionTool?.drag || !shownSheet) return;
     const at = paperPoint(event);
     const end = at?.point ?? sectionTool.drag.current;
@@ -6364,8 +6454,17 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       if (touches.size >= 2) {
         panRef.current = null;
         pickTapRef.current = null;
+        viewTapRef.current = null;
         setDrag(null);
         setAnnotationDrag(null);
+        // A section line or detail circle being dragged out is dropped, so
+        // the pinch's first finger does not draw one.
+        setSectionTool((current) =>
+          current?.drag ? { drag: null, line: null, pointer: null } : current
+        );
+        setDetailTool((current) =>
+          current?.drag ? { drag: null, region: null, pointer: null } : current
+        );
         event.stopPropagation();
         return;
       }
@@ -6387,6 +6486,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         PICK_TAP_SLOP_PX
     )
       pickTapRef.current = null;
+    const viewTap = viewTapRef.current;
+    if (
+      viewTap?.pointerId === event.pointerId &&
+      Math.hypot(
+        event.clientX - viewTap.clientX,
+        event.clientY - viewTap.clientY
+      ) > PICK_TAP_SLOP_PX
+    )
+      viewTapRef.current = null;
     if (event.pointerType === 'touch' && touches.has(event.pointerId)) {
       if (touches.size === 2) {
         const measure = () => {
@@ -8197,6 +8305,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 width={paper.width}
                 height={paper.height}
                 onPointerDown={onAuxiliaryPointerDown}
+                onPointerUp={onAuxiliaryPointerUp}
+                onPointerCancel={() => {
+                  viewTapRef.current = null;
+                }}
                 onPointerMove={onAuxiliaryPointerMove}
               />
             )}
@@ -8209,6 +8321,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 onPointerDown={onDetailPointerDown}
                 onPointerMove={onDetailPointerMove}
                 onPointerUp={onDetailPointerUp}
+                onPointerCancel={() => {
+                  viewTapRef.current = null;
+                }}
               />
             )}
             {sectionTool && (
@@ -8220,6 +8335,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 onPointerDown={onSectionPointerDown}
                 onPointerMove={onSectionPointerMove}
                 onPointerUp={onSectionPointerUp}
+                onPointerCancel={() => {
+                  viewTapRef.current = null;
+                }}
               />
             )}
           </svg>
