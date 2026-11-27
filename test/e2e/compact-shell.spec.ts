@@ -6,6 +6,7 @@ import {
   test,
   waitForSurfacesToSettle
 } from './openzcad-fixtures';
+import { smallTouchTargets } from './touch-hit-area';
 
 /**
  * The compact workspace's frame (U12 slice 2): a header, the mode tabs, the
@@ -234,6 +235,81 @@ test.describe('the compact workspace frame', () => {
         ).toBeInViewport();
       }
     );
+  }
+
+  for (const withWarnings of [false, true]) {
+    test(`keeps the header’s “Edit not applied” whole at 360px${
+      withWarnings ? ' beside the warning count' : ''
+    }, and the name a finger’s width`, async ({ page }) => {
+      test.setTimeout(120_000);
+      await page.setViewportSize({ width: 360, height: 640 });
+      await openCompactProject(page, 'A long project name for a phone header');
+      // The chip CompactWorkspace draws for a refused edit, and the warning
+      // count it draws while Diagnostics has warnings, where it draws them
+      // (after the name, before the search): a held kernel refusal and a
+      // warning raise them for real, and only their fit is measured here.
+      await page.locator('.compact-header').evaluate((header, warnings) => {
+        const search = header.querySelector(
+          '[aria-label="Open the command bar"]'
+        );
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'compact-refusal-chip';
+        chip.setAttribute('aria-label', 'Edit not applied: reopen it');
+        chip.innerHTML =
+          '<svg width="16" height="16" aria-hidden="true"></svg><span class="compact-refusal-text">Edit not applied</span>';
+        header.insertBefore(chip, search);
+        if (warnings) {
+          const badge = document.createElement('button');
+          badge.type = 'button';
+          badge.className = 'compact-warning-badge';
+          badge.setAttribute('aria-label', '12 warnings: show Diagnostics');
+          badge.innerHTML =
+            '<svg width="18" height="18" aria-hidden="true"></svg><span class="compact-warning-count mono">12</span>';
+          header.insertBefore(badge, search);
+        }
+      }, withWarnings);
+      const fit = await page.locator('.compact-header').evaluate((header) => {
+        const words = header.querySelector<HTMLElement>(
+          '.compact-refusal-text'
+        )!;
+        const name = header.querySelector('.compact-project-button')!;
+        // The name's tappable width as drawn: its box cut by every box
+        // around it that clips, up to the header.
+        let { left, right } = name.getBoundingClientRect();
+        for (
+          let clip = name.parentElement;
+          clip;
+          clip = clip === header ? null : clip.parentElement
+        ) {
+          if (getComputedStyle(clip).overflowX === 'visible') continue;
+          const box = clip.getBoundingClientRect();
+          left = Math.max(left, box.left);
+          right = Math.min(right, box.right);
+        }
+        return {
+          // Whole, or (with no room for them) not drawn at all: never cut.
+          wordsWhole:
+            words.getClientRects().length === 0 ||
+            words.scrollWidth <= words.clientWidth,
+          nameShown: Math.round(right - left),
+          headerFits: header.scrollWidth <= header.clientWidth
+        };
+      });
+      expect(fit.wordsWhole).toBe(true);
+      expect(fit.nameShown).toBeGreaterThanOrEqual(44);
+      expect(fit.headerFits).toBe(true);
+      // Every header control a finger's size, measured as a finger meets
+      // it: the name's clipped box included. Polled, as the header fades in.
+      await expect
+        .poll(async () =>
+          (await smallTouchTargets(page, { within: '.compact-header' })).map(
+            (target) =>
+              `${target.kind} "${target.name}" ${target.hit.width}×${target.hit.height}${target.hidden ? ' hidden' : ''}`
+          )
+        )
+        .toEqual([]);
+    });
   }
 
   test('moves the undo pair with the sheet, never on a clock of its own', async ({

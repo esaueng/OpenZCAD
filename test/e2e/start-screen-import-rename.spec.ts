@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  expect,
+  expectBodyCount,
+  promptField,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 const STL = readFileSync(
   fileURLToPath(new URL('../../samples/simple-block.stl', import.meta.url)),
@@ -152,6 +158,49 @@ test('a copy of a sample drops "Demo ·" and wears its picture', async ({
   await expect(copy).toHaveCount(1);
   await expect(copy).not.toContainText('Demo ·');
   await expect(copy.locator('.start-tile-thumb img')).toHaveCount(1);
+});
+
+// U12 polish: Duplicate project right after a rename in the workspace named
+// the copy from the library's row, which still held the old name.
+test('Duplicate project right after a rename names the copy from the new name', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Copy source');
+  await page.getByRole('button', { name: 'New project' }).click();
+  const title = page.getByRole('button', {
+    name: 'Rename project Copy source'
+  });
+  await expect(title).toBeVisible({ timeout: 60_000 });
+  await title.click();
+  const field = page.getByRole('textbox', {
+    name: 'Project name',
+    exact: true
+  });
+  await field.fill('Copy renamed');
+  await field.press('Enter');
+  await expect(
+    page.getByRole('button', { name: 'Rename project Copy renamed' })
+  ).toBeVisible();
+
+  await page.locator('.viewer-host canvas').click();
+  await page.keyboard.press('Control+k');
+  await promptField(page).fill('/Duplicate project');
+  await expect(
+    page.getByRole('listbox', { name: 'Commands' }).getByRole('option').first()
+  ).toContainText('Duplicate project');
+  await page.keyboard.press('Enter');
+
+  await page.getByTitle('Back to projects').click();
+  const copies = page.locator('.start-tile-project', { hasText: '(copy)' });
+  await expect(copies).toHaveCount(1, { timeout: 60_000 });
+  await expect(copies).toContainText('Copy renamed (copy)');
+  await expect(
+    page.locator('.start-tile-project', { hasText: 'Copy source' })
+  ).toHaveCount(0);
 });
 
 // 14 Nov 2026 recording: a copy made before copies carried their source's

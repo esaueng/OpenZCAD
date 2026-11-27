@@ -1,5 +1,9 @@
 import type { Locator, Page } from '@playwright/test';
-import { dropTapAfterFling } from './compactHelpers';
+import {
+  dropTapAfterFling,
+  expectReachable,
+  smallTargets
+} from './compactHelpers';
 import { expect, stubApi, test } from './openzcad-fixtures';
 
 /**
@@ -147,6 +151,19 @@ async function holdRow(page: Page, row: Locator) {
   return holdAt(page, box.x + box.width / 2, box.y + box.height / 2);
 }
 
+/** The action sheet's fade at rest, so its box is where it stays. */
+function settledSheet(page: Page) {
+  return page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every(
+        (animation) =>
+          animation.playState !== 'running' ||
+          animation.effect?.getComputedTiming().iterations === Infinity
+      )
+  );
+}
+
 /** A point on the stage clear of the model and the floating controls. */
 async function emptyStagePoint(page: Page) {
   const stage = (await page.locator('.viewer-host canvas').boundingBox())!;
@@ -229,6 +246,30 @@ async function openPanelsFromMore(page: Page) {
   ).toBeVisible();
 }
 
+/**
+ * What a finger lands on just around the panel tabs once the rows have
+ * scrolled under them: at the tabs' rounded corner and just under them.
+ * Null where it lands on the tabs' own bar; a row's class where a row shows
+ * through.
+ */
+function aroundTabs(page: Page) {
+  return page.evaluate(() => {
+    const tabs = document.querySelector('.compact-sheet [role="tablist"]')!;
+    const body = tabs.closest<HTMLElement>('.compact-sheet-body')!;
+    body.scrollTop = body.scrollHeight;
+    const box = tabs.getBoundingClientRect();
+    const hits = [
+      [box.left + 3, box.top + 3],
+      [box.right - 3, box.bottom - 3],
+      [box.left + box.width / 2, box.bottom + 2]
+    ].map(([x, y]) => {
+      const hit = document.elementFromPoint(x!, y!);
+      return hit?.closest('.compact-panel-body') ? hit.className : null;
+    });
+    return { scrolled: body.scrollTop, hits };
+  });
+}
+
 async function closeSheet(page: Page) {
   await sheet(page).getByRole('button', { name: 'Close sheet' }).tap();
   await expect(sheet(page).locator('[data-page="panels"]')).toHaveCount(0);
@@ -278,11 +319,30 @@ test.describe('the compact workspace panels', () => {
           await expect(
             sheet(page).getByRole('tabpanel', { name: title })
           ).toBeVisible();
-          // One word on the active segment; a finger's size on each.
+          // One word on the active segment, whole; a finger's size on every
+          // segment, the inactive ones too (at 360px they shrank to 31px).
           await expect(tab).toHaveText(title);
-          const box = (await tab.boundingBox())!;
-          expect(box.height).toBeGreaterThanOrEqual(44);
-          expect(box.width).toBeGreaterThanOrEqual(44);
+          expect(
+            await tab
+              .locator('.compact-segment-label')
+              .evaluate((label) => label.scrollWidth <= label.clientWidth),
+            `${title}'s word is whole`
+          ).toBe(true);
+          expect(
+            await tabs.getByRole('tab').evaluateAll((all) =>
+              all
+                .map((each) => {
+                  const box = each.getBoundingClientRect();
+                  return { name: each.getAttribute('aria-label'), box };
+                })
+                .filter(({ box }) => box.width < 44 || box.height < 44)
+                .map(
+                  ({ name, box }) =>
+                    `${name} ${Math.round(box.width)}×${Math.round(box.height)}`
+                )
+            ),
+            `tabs under 44 px with ${title} open`
+          ).toEqual([]);
         }
         // The sheet shuts as it opened: Hide or show the model panels.
         await closeSheet(page);
@@ -330,6 +390,15 @@ test.describe('the compact workspace panels', () => {
       await openPanelsFromMore(page);
       const rows = sheet(page).locator('.compact-row');
       await expect(rows).toHaveCount(3);
+      // Scrolled, the rows pass under the tabs: none shows around them.
+      const around = await aroundTabs(page);
+      expect(around.scrolled).toBeGreaterThan(20);
+      expect(around.hits).toEqual([null, null, null]);
+      await page.evaluate(() => {
+        document
+          .querySelector('.compact-sheet [role="tablist"]')!
+          .closest('.compact-sheet-body')!.scrollTop = 0;
+      });
       const first = rows.nth(0);
       const second = rows.nth(1);
       const firstName = (await first
@@ -425,6 +494,107 @@ test.describe('the compact workspace panels', () => {
       reached('feature-edit');
     }
   );
+
+  test('takes a finger in Parameters and Revisions at 360px, with whole names and values', async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 360, height: 640 });
+    await openCompactProject(page, 'Panels parameters');
+    await placeBox(page);
+    await openPanelsFromMore(page);
+    const tabs = sheet(page).getByRole('tablist', { name: 'Panels' });
+    await tabs.getByRole('tab', { name: 'Parameters', exact: true }).tap();
+    const panel = sheet(page).getByRole('tabpanel', { name: 'Parameters' });
+    for (const [name, expression] of [
+      ['wall_thickness', '12.5 mm + 3 mm'],
+      ['h', '120 mm']
+    ] as const) {
+      await panel
+        .getByRole('textbox', { name: 'New parameter name' })
+        .fill(name);
+      await panel
+        .getByRole('textbox', { name: 'New parameter expression' })
+        .fill(expression);
+      await panel.getByRole('button', { name: 'Add parameter' }).tap();
+      await expect(
+        panel.getByRole('button', { name: `Rename parameter ${name}` })
+      ).toBeVisible();
+    }
+    // Away from the rows, so nothing there is hovered.
+    await tabs.getByRole('tab', { name: 'Parameters', exact: true }).tap();
+    expect(
+      await smallTargets(page, '.compact-panel-list.is-parameters')
+    ).toEqual([]);
+    // Each name, expression and value whole: at 360px the regular row gave
+    // the name a letter's width ("h" drew 2px wide).
+    const cut = await panel.evaluate((root) =>
+      [
+        ...root.querySelectorAll<HTMLElement>(
+          '.param-row :is(.param-name-button, .param-readable-name > *, .param-expression, .param-value)'
+        )
+      ]
+        .filter(
+          (element) =>
+            element.clientWidth < 6 ||
+            element.scrollWidth > element.clientWidth + 1
+        )
+        .map(
+          (element) =>
+            `${element.className} "${(element as HTMLInputElement).value ?? element.textContent}" ${element.scrollWidth}/${element.clientWidth}`
+        )
+    );
+    expect(cut).toEqual([]);
+    // Delete shows without a hover, and a tap deletes.
+    const remove = panel.getByRole('button', { name: 'Delete parameter h' });
+    await expect(remove).toHaveCSS('opacity', '1');
+    await expectReachable(remove);
+    await remove.tap();
+    await expect(
+      panel.getByRole('button', { name: 'Rename parameter h' })
+    ).toHaveCount(0);
+
+    await tabs.getByRole('tab', { name: 'Revisions', exact: true }).tap();
+    const revisions = sheet(page).getByRole('tabpanel', { name: 'Revisions' });
+    await expect(revisions.locator('.revision-row').first()).toBeVisible();
+    expect(
+      await smallTargets(page, '.compact-panel-list.is-revisions')
+    ).toEqual([]);
+  });
+
+  test('keeps a long press’s action sheet on a short screen, its items scrolling', async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 844, height: 390 });
+    await openCompactProject(page, 'Panels landscape');
+    await placeBox(page);
+    await openPanelsFromMore(page);
+    const actions = await holdRow(
+      page,
+      sheet(page).locator('.compact-row').first()
+    );
+    await settledSheet(page);
+    const box = (await actions.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(390);
+    // The heading and Cancel stay put; the items scroll between them.
+    const cancel = actions.getByRole('menuitem', { name: 'Cancel' });
+    await expectReachable(cancel);
+    const items = actions.locator('.compact-action-sheet-items');
+    expect(
+      await items.evaluate((list) => list.scrollHeight > list.clientHeight)
+    ).toBe(true);
+    const remove = actions.getByRole('menuitem', { name: 'Delete' });
+    // Its last item, Delete, scrolled up into reach.
+    await items.evaluate((list) => {
+      list.scrollTop = list.scrollHeight;
+    });
+    await expectReachable(cancel);
+    await remove.tap();
+    await expect(actions).toHaveCount(0);
+    await expect(sheet(page).locator('.compact-row')).toHaveCount(0);
+  });
 
   test('opens the selection sheet from the chip and the model’s long press as action sheets', async ({
     page
