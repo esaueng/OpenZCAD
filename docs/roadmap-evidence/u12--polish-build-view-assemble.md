@@ -1,0 +1,5 @@
+---
+row: U12
+---
+
+Polish of Build, View, Tweak and Assemble from the preview checks of slices 4, 7 and 8: a kept measurement's actions sit on their own line whatever the pointer; Measure's settings toggle, an analysis's Details and a card's recoveries take 44 px; the stage's status stands over the undo pair, clear of the sheet and beside the landscape side sheet, letting taps through to the model, while a cut's standing line stays on View's tray; Tweak's parameter controls are named by their label; the Build keypad's raise lasts while it is open, a half sheet grows to hold it upright, and a key's tap keeps the sheet's scroll; All tools says why a tool is off under the group it was tapped in; value chips keep clear of the side sheet; an Exploded chip on the stage away from its page turns the view off; animation rows are centred; the joint card says Tap on touch. Evidence: `AllToolsSheet.test.tsx`, `CompactModeTray.test.tsx`, `CompactAppShell.test.tsx`, `CompactAssembleTray.test.tsx`, `JointToolCard.test.tsx`, `NumericKeypad.test.tsx`, and `test/e2e/compact-build.spec.ts`, `compact-view-tweak.spec.ts`, `compact-assemble.spec.ts`.
