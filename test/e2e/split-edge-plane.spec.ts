@@ -115,6 +115,18 @@ async function storedSplitPlane(
   );
 }
 
+/**
+ * The edges the viewport lights as picked, by topology id: the hook the
+ * Fillet and Chamfer edge-pick specs read. An entry with no id is one the
+ * highlight cannot match, so it is kept here as '' to fail the check.
+ */
+async function litEdges(page: Page): Promise<string[]> {
+  const value = await page
+    .locator('.viewer-host canvas')
+    .getAttribute('data-e2e-selected-edges');
+  return value === null ? [] : value.split(',');
+}
+
 const hint = (bar: Locator) => bar.getByRole('status');
 const done = (bar: Locator) => bar.getByRole('button', { name: /Done/ });
 const historyRows = (page: Page) =>
@@ -157,6 +169,10 @@ test(
     await clickWorldPoint(page, [20, 10, 0]);
     await expect(hint(bar)).toContainText('Pick a second edge for the plane');
     await expect(done(bar)).toBeDisabled();
+    // The held edge is lit as a picked edge (preview check of 2099cc5).
+    await expect.poll(() => litEdges(page)).toHaveLength(1);
+    const [firstLit] = await litEdges(page);
+    expect(firstLit).toBeTruthy();
 
     // 2. The top front edge along x is skew to it: refused by name, the
     // first edge kept, Done disabled, the block untouched.
@@ -167,6 +183,12 @@ test(
     );
     await expect(done(bar)).toBeDisabled();
     await expect.poll(() => drawnVolumes(page)).toEqual([8000]);
+    // Both held edges are lit, the first still first.
+    await expect.poll(() => litEdges(page)).toHaveLength(2);
+    const [stillFirst, skewLit] = await litEdges(page);
+    expect(stillFirst).toBe(firstLit);
+    expect(skewLit).toBeTruthy();
+    expect(skewLit).not.toBe(firstLit);
 
     // 3. The top edge at x = 0 replaces the skew one: x + z = 20 halves the
     // block in the preview.
@@ -181,6 +203,8 @@ test(
     // through the four ends' centroid with the canonical normal.
     await done(bar).click();
     await expect(bar).toHaveCount(0);
+    // The command's edges are no selection left behind.
+    await expect.poll(() => litEdges(page)).toEqual([]);
     await expect(historyRows(page)).toHaveCount(rowsBefore + 1, {
       timeout: 20_000
     });

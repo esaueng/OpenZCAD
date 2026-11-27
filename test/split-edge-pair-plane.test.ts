@@ -640,6 +640,21 @@ describe('Split on the plane through two block edges (exact)', () => {
     expect(negative).toBeCloseTo(4000, 6);
   });
 
+  // Preview check of #2261 at 2099cc5: picked edges were not lit, since the
+  // viewport's picked-edge highlight matches an edge by its topology id and
+  // the pick did not carry one.
+  it('carries each picked edge’s topology id for the picked-edge highlight', async () => {
+    const start = block(blank());
+    const derived = await adapter.syncDocument(start.document);
+    const topology = derived.bodyRepresentations[start.bodyId]!.topology!;
+    const pick = edgeBetween(derived, start.bodyId, bottom[0], bottom[1]);
+    const edge = topology.edges.find(
+      (candidate) => candidate.hash === pick.hash
+    )!;
+    expect(edge.topologyId).toBeTruthy();
+    expect(pick.topologyId).toBe(edge.topologyId);
+  });
+
   it('refuses a skew pair and a curved edge on real topology', async () => {
     const start = block(blank());
     const withPost = addPrimitiveFeature(start.document, {

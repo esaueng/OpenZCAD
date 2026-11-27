@@ -12,6 +12,11 @@ import type { BodyId, BodyTopology, Vector3 } from '@openzcad/shared';
 export interface PlaneEdgePick {
   bodyId: BodyId;
   hash: number;
+  /**
+   * The edge's display identity, which the viewport's picked-edge highlight
+   * matches on (as a Fillet's picked edges carry it); not stored anywhere.
+   */
+  topologyId?: string;
   ends: [Vector3, Vector3];
 }
 
@@ -56,7 +61,12 @@ export function planeEdgeFromTopology(
   const start = vertex(startId) ?? drawn(0);
   const end = vertex(endId) ?? drawn(count - 1);
   if (!start || !end) return null;
-  return { bodyId, hash, ends: [{ ...start }, { ...end }] };
+  return {
+    bodyId,
+    hash,
+    ...(edge.topologyId ? { topologyId: edge.topologyId } : {}),
+    ends: [{ ...start }, { ...end }]
+  };
 }
 
 /** The plane through two held edges, or why there is none. */
