@@ -1078,9 +1078,33 @@
 /* A cut left on is said on View's tray (its Section mark) and turned off
    on its page, so its standing line and Turn off are not drawn on the
    stage: under the sheet at peek, a strip of them showed over its edge,
-   and a tap there turned the cut off. */
-.app-shell[data-shell='compact'] .workspace-toast[data-section-line] {
-  visibility: hidden;
+   and a tap there turned the cut off. Only those two: the rest of the
+   footer (the workspace summary, the overlap note) is never drawn, and
+   stays read out, and the line's live region stays in place to announce
+   the next status. */
+.app-shell[data-shell='compact']
+  .workspace-toast[data-section-line]
+  .workspace-toast-body {
+  position: absolute;
+  width: 1px;
+  min-width: 0;
+  height: 1px;
+  /* A phone's status wraps to a 28px minimum (quiet-stage.css). */
+  min-height: 0;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  box-shadow: none;
+}
+
+.app-shell[data-shell='compact']
+  .workspace-toast[data-section-line]
+  .workspace-toast-undo {
+  display: none;
 }
 
 /* A full sheet leaves no stage to show it on: it waits, still read out. */

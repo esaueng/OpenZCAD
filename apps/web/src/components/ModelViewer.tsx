@@ -2486,6 +2486,34 @@ function sameEdgeRigPlacement(a: EdgeRigPlacement, b: EdgeRigPlacement) {
 const PIN_CHIP_GAP_PX = 44;
 
 /**
+ * The compact workspace's sheet where it stands beside the stage (a phone
+ * held landscape, U12), as measured: one that starts inside the canvas,
+ * wherever that is. A sheet along the stage's foot starts at its left edge.
+ * (The side sheet is `min(400px, 50vw)` wide, so on a 736 px screen it
+ * starts exactly at the canvas's middle: a test against the middle missed
+ * it.) Null otherwise, and for a full sheet, which leaves no stage.
+ */
+function compactSideSheetRect(canvas: HTMLElement): DOMRect | null {
+  const sheet = canvas
+    .closest('.app-shell[data-shell="compact"]')
+    ?.querySelector<HTMLElement>(
+      '.compact-sheet:not([hidden], [data-detent="full"])'
+    );
+  if (!sheet) return null;
+  const rect = sheet.getBoundingClientRect();
+  const canvasRect = canvas.getBoundingClientRect();
+  return rect.width > 0 &&
+    rect.height > 0 &&
+    rect.left > canvasRect.left + 0.5 &&
+    rect.left < canvasRect.right
+    ? rect
+    : null;
+}
+
+/** Air kept between a push/pull's arrow or value and the side sheet. */
+const SIDE_SHEET_HANDLE_MARGIN_PX = 16;
+
+/**
  * What a handle's value chip and its tag come out from under, besides the
  * right lane: the model panels, the tool column's rail at the stage's left
  * edge (a pick's face tools), and the modeling guide. The column itself
@@ -9059,20 +9087,8 @@ export function ModelViewer({
       // The compact workspace's sheet held landscape (U12) stands at the
       // stage's right, over the canvas, outside the viewer: a value chip
       // placed under it (a push/pull's) could be neither read nor tapped.
-      // Only a sheet beside the stage counts; one along its foot spans it.
-      const sideSheet = renderer.domElement
-        .closest('.app-shell[data-shell="compact"]')
-        ?.querySelector<HTMLElement>(
-          '.compact-sheet:not([hidden], [data-detent="full"])'
-        )
-        ?.getBoundingClientRect();
-      if (
-        sideSheet &&
-        sideSheet.width > 0 &&
-        sideSheet.left > canvasRect.left + canvasRect.width / 2
-      ) {
-        laneEdges.push(sideSheet.left);
-      }
+      const sideSheet = compactSideSheetRect(renderer.domElement);
+      if (sideSheet) laneEdges.push(sideSheet.left);
       return laneEdges.length > 0
         ? Math.min(...laneEdges) - canvasRect.left
         : null;
@@ -16982,6 +16998,95 @@ export function ModelViewer({
     },
     []
   );
+
+  // Held landscape, the compact workspace's sheet stands at the stage's
+  // right (U12), and a face picked there had its push/pull arrow under it:
+  // the value could be moved clear, but not the arrow, which is what a drag
+  // takes. Once per picked face, glide the view sideways (no orbit, no
+  // zoom), as the region arrows do clear of the desktop's right lane, just
+  // far enough to put the arrow and the value beside it clear of the sheet.
+  // A face already clear, the face a commit re-arms on (where the drag
+  // left it) and every other layout leave the view alone.
+  const offsetClearanceKey =
+    offsetHandle && !offsetHandle.movedFrom
+      ? `${offsetHandle.bodyId}|${offsetHandle.topologyId}`
+      : null;
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !offsetClearanceKey) return;
+    let frame = requestAnimationFrame(() => {
+      // Two frames: the rig is scaled to the screen and the sheet laid out.
+      frame = requestAnimationFrame(() => {
+        const rig = offsetRigRef.current;
+        if (offsetDragActiveRef.current || rig?.kind !== 'offset-face') {
+          return;
+        }
+        const canvas = context.renderer.domElement;
+        const sheet = compactSideSheetRect(canvas);
+        const bounds = canvas.getBoundingClientRect();
+        if (!sheet || !(bounds.width > 0)) return;
+        const camera = context.activeCamera;
+        const arrow = new THREE.Box3().expandByObject(rig.group);
+        if (arrow.isEmpty()) return;
+        const reach = { left: Infinity, top: 0, right: -Infinity, bottom: 0 };
+        const corner = new THREE.Vector3();
+        for (let index = 0; index < 8; index += 1) {
+          corner
+            .set(
+              index & 1 ? arrow.max.x : arrow.min.x,
+              index & 2 ? arrow.max.y : arrow.min.y,
+              index & 4 ? arrow.max.z : arrow.min.z
+            )
+            .project(camera);
+          const x = bounds.left + ((corner.x + 1) / 2) * bounds.width;
+          reach.left = Math.min(reach.left, x);
+          reach.right = Math.max(reach.right, x);
+        }
+        // The value hangs right of the pin, and swaps to its left only
+        // when the sheet would cover it: keep its own side clear too.
+        const pin = rig.group.position.clone().project(camera);
+        const chipEnd =
+          bounds.left +
+          ((pin.x + 1) / 2) * bounds.width +
+          PIN_CHIP_GAP_PX +
+          CHIP_LANE_CLEARANCE_PX;
+        reach.right = Math.max(reach.right, chipEnd);
+        const clearRight = sheet.left - SIDE_SHEET_HANDLE_MARGIN_PX;
+        const shift = shiftIntoFrame(reach, bounds, {
+          minX: -1,
+          maxX: ((clearRight - bounds.left) / bounds.width) * 2 - 1,
+          minY: -1,
+          maxY: 1
+        });
+        // Only away from the sheet: a face clear of it stays put.
+        if (shift > -1) return;
+        const anchor = rig.group.position.clone();
+        const moved = anchor.clone().project(camera);
+        moved.x += (shift / bounds.width) * 2;
+        moved.unproject(camera);
+        const travel = anchor.sub(moved);
+        const perspective = context.camera;
+        const heldUp = perspective.up.clone();
+        context.startCameraTween(
+          {
+            position: perspective.position.clone().add(travel),
+            target: context.controls.target.clone().add(travel),
+            near: perspective.near,
+            far: perspective.far,
+            // A held roll (a face view) stays as it is.
+            ...(heldUp.z === 1 ? {} : { up: heldUp })
+          },
+          () => {
+            if (context.projection === 'orthographic') {
+              context.syncOrthographic(false);
+            }
+          },
+          { ease: viewJumpEase }
+        );
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [offsetClearanceKey]);
 
   useEffect(() => {
     offsetRigRef.current?.setWarning?.(offsetPreviewInvalid);

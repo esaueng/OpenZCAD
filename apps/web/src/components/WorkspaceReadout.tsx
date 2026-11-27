@@ -9,7 +9,8 @@ import { Info, Magnet } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import {
   CompactCommandTrayContext,
-  useCompactCommandRowHost
+  useCompactCommandRowHost,
+  useInCompactShell
 } from './compact/compactSlots';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
@@ -225,6 +226,11 @@ export function WorkspaceReadout({
     givenCommandRow !== null || sheetNotice !== null
   );
   const commandRow = compactRowHost ? null : givenCommandRow;
+  // In the compact workspace the status is not a control: the activity log
+  // it opens on the regular stage is in Settings there, and the line stands
+  // over the model, where a tap picks what is under it. Its actions (Undo,
+  // Turn off and the like) stay buttons.
+  const compactShell = useInCompactShell();
   const notice = compactRowHost && sheetNotice !== null ? null : givenNotice;
   const hasCommandRow = commandRow !== null;
   const hasSelectionGuidance =
@@ -476,6 +482,21 @@ export function WorkspaceReadout({
     return () => observer?.disconnect();
   }, [probedPrompt]);
   const hintRaised = raised && probedPrompt !== null;
+  const toastBody = (
+    <>
+      <i aria-hidden="true" />
+      <span role="status" aria-live="polite" aria-atomic="true">
+        {shownStatus}
+      </span>
+      {/* Says what it counts: a bare "+11" after every status read as
+          jargon. The title above carries the same for the tooltip. */}
+      {shown && missed ? (
+        <span className="workspace-toast-more" aria-hidden="true">
+          {missed} in log
+        </span>
+      ) : null}
+    </>
+  );
   // Always in the tree, as the page's contentinfo landmark: what the status
   // bar used to be for assistive tech and for the specs that read it. Only
   // its visibility changes.
@@ -585,42 +606,38 @@ export function WorkspaceReadout({
         // workspace (U12) shows it on View's tray instead.
         data-section-line={sectionShown || undefined}
       >
-        <button
-          type="button"
-          className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
-          // Keep the toast out of the tab order while it is faded out.
-          tabIndex={shown ? undefined : -1}
-          title={
-            quiet
-              ? 'View activity log'
-              : sectionShown && section?.note
-                ? `${paced.status} — ${section.note}`
-                : missed
-                  ? `${paced.status} — ${missed} in the activity log`
-                  : `${paced.status} — View activity log`
-          }
-          // No trailing period on the action's name (I9): the status, when
-          // there is one, follows it as what the toast currently says.
-          aria-label={
-            quiet || line === ''
-              ? 'Open activity log'
-              : `Open activity log — current status: ${line}`
-          }
-          aria-haspopup="dialog"
-          onClick={onOpenLog}
-        >
-          <i aria-hidden="true" />
-          <span role="status" aria-live="polite" aria-atomic="true">
-            {shownStatus}
-          </span>
-          {/* Says what it counts: a bare "+11" after every status read as
-              jargon. The title above carries the same for the tooltip. */}
-          {shown && missed ? (
-            <span className="workspace-toast-more" aria-hidden="true">
-              {missed} in log
-            </span>
-          ) : null}
-        </button>
+        {compactShell ? (
+          <div className={`workspace-toast-body${quiet ? ' quiet' : ''}`}>
+            {toastBody}
+          </div>
+        ) : (
+          <button
+            type="button"
+            className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
+            // Keep the toast out of the tab order while it is faded out.
+            tabIndex={shown ? undefined : -1}
+            title={
+              quiet
+                ? 'View activity log'
+                : sectionShown && section?.note
+                  ? `${paced.status} — ${section.note}`
+                  : missed
+                    ? `${paced.status} — ${missed} in the activity log`
+                    : `${paced.status} — View activity log`
+            }
+            // No trailing period on the action's name (I9): the status, when
+            // there is one, follows it as what the toast currently says.
+            aria-label={
+              quiet || line === ''
+                ? 'Open activity log'
+                : `Open activity log — current status: ${line}`
+            }
+            aria-haspopup="dialog"
+            onClick={onOpenLog}
+          >
+            {toastBody}
+          </button>
+        )}
         {section && turnOffShown ? (
           <>
             {sectionShown && section.note ? (

@@ -9,6 +9,7 @@ import {
   STATUS_LIFETIME_MS
 } from '../lib/statusLifetime';
 import { ViewportDockExtras, WorkspaceReadout } from './WorkspaceReadout';
+import { CompactCommandRowContext } from './compact/compactSlots';
 
 const SUMMARY = {
   prompt: 'Click a body, face, or edge · Shift+Click adds to selection',
@@ -486,6 +487,47 @@ describe('WorkspaceReadout', () => {
       />
     );
     expect(screen.queryByRole('button', { name: /^Undo/ })).toBeNull();
+  });
+
+  it('draws the status as text in the compact workspace, keeping its Undo', async () => {
+    // U12: there the line stands over the model and the log is in Settings.
+    // Pointer input alone was turned off by CSS, so Tab and Enter on the
+    // line still opened the activity log.
+    const user = userEvent.setup();
+    const onOpenLog = vi.fn();
+    const onUndo = vi.fn();
+    render(
+      <CompactCommandRowContext.Provider value={{ host: null, report() {} }}>
+        <button type="button">Before</button>
+        <WorkspaceReadout
+          status="Added box."
+          statusAt={Date.now()}
+          tone="ready"
+          onOpenLog={onOpenLog}
+          onUndo={onUndo}
+          {...SUMMARY}
+          prompt={null}
+          searchBar={null}
+        />
+      </CompactCommandRowContext.Provider>
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Added box.');
+    expect(
+      screen.queryByRole('button', { name: /Open activity log/ })
+    ).toBeNull();
+    screen.getByRole('button', { name: 'Before' }).focus();
+    // The next tab stop is the Undo: the line itself is none.
+    await user.tab();
+    const undo = screen.getByRole('button', { name: 'Undo: Added box.' });
+    expect(undo).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(onUndo).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole('status'));
+    expect(onOpenLog).not.toHaveBeenCalled();
+    // Still the landmark, with the summary for assistive tech.
+    expect(
+      screen.getByRole('group', { name: 'Workspace status' })
+    ).toHaveTextContent('sync');
   });
 
   it('carries the orbit mode in the summary for assistive tech', () => {

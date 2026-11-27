@@ -358,7 +358,9 @@ test.describe('View and Tweak in the compact sheet', () => {
             .closest('.compact-sheet-body')!
             .getBoundingClientRect();
           const box = element.getBoundingClientRect();
-          return Math.min(box.bottom, body.bottom) - Math.max(box.top, body.top);
+          return (
+            Math.min(box.bottom, body.bottom) - Math.max(box.top, body.top)
+          );
         });
         expect(room).toBeGreaterThanOrEqual(180);
         await expect(
@@ -412,8 +414,25 @@ test.describe('View and Tweak in the compact sheet', () => {
         // of it is drawn along the collapsed sheet's edge, where a strip
         // of it and its Turn off showed and a tap turned the cut back off.
         await waitForSurfacesToSettle(page, ['.compact-sheet']);
+        const sectionLine = page.locator('.workspace-toast[data-section-line]');
+        await expect(sectionLine).toHaveCount(1);
+        // The rest of the footer is still read out: the warning count and
+        // the sync status…
+        const summary = page.getByRole('group', { name: 'Workspace status' });
+        await expect(summary).toHaveCount(1);
+        await expect(summary).toContainText('warnings');
+        await expect(summary).toContainText('sync');
+        // …while neither the line nor its Turn off is drawn.
+        expect(
+          await sectionLine
+            .locator('.workspace-toast-body')
+            .evaluate((line) => {
+              const box = line.getBoundingClientRect();
+              return box.width <= 1 && box.height <= 1;
+            })
+        ).toBe(true);
         await expect(
-          page.locator('.workspace-toast[data-section-line]')
+          sectionLine.getByRole('button', { name: 'Turn off section view' })
         ).toBeHidden();
         expect(await overSheetEdge(page)).toEqual([]);
         await expect(view('Section view')).toHaveClass(/is-on/);
@@ -888,7 +907,9 @@ test.describe('View in the compact sheet with a mouse', () => {
     expect(widths.scroll).toBeLessThanOrEqual(widths.client);
     const row = workbench.getByRole('listitem');
     for (const action of ['Hide', 'Copy', 'Edit', 'Delete']) {
-      const button = row.getByRole('button', { name: new RegExp(`^${action}`) });
+      const button = row.getByRole('button', {
+        name: new RegExp(`^${action}`)
+      });
       await button.scrollIntoViewIfNeeded();
       await expect(button, action).toBeInViewport({ ratio: 1 });
       const box = (await button.boundingBox())!;

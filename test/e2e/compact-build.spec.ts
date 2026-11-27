@@ -23,7 +23,8 @@ import {
   locateEdge,
   MODEL_ONLY,
   stubApi,
-  test
+  test,
+  waitForStillViewport
 } from './openzcad-fixtures';
 
 /**
@@ -262,6 +263,115 @@ async function expectChipsBesideSideSheet(page: Page) {
 }
 
 /**
+ * Where the push/pull arrow's grab point stands on the page (on its shaft,
+ * as the viewer reports it), its way on screen, the side sheet's left edge,
+ * and whether anything but the canvas is on top there.
+ */
+function pushPullHandle(page: Page) {
+  return page.locator('.viewer-host canvas').evaluate((element) => {
+    const canvas = element as HTMLCanvasElement;
+    const bounds = canvas.getBoundingClientRect();
+    const x = bounds.left + Number(canvas.dataset.e2eHandleX);
+    const y = bounds.top + Number(canvas.dataset.e2eHandleY);
+    const sheetLeft = document
+      .querySelector('.compact-sheet:not([hidden])')!
+      .getBoundingClientRect().left;
+    const top = document.elementFromPoint(x, y);
+    return {
+      x,
+      y,
+      dx: Number(canvas.dataset.e2eHandleDx),
+      dy: Number(canvas.dataset.e2eHandleDy),
+      sheetLeft,
+      covered: top !== canvas,
+      on: top?.className ?? null
+    };
+  });
+}
+
+/** Two fingers moved together `dx` across the stage: a pan of the view. */
+async function twoFingerPan(
+  page: Page,
+  from: { x: number; y: number },
+  dx: number
+) {
+  const cdp = await page.context().newCDPSession(page);
+  const fingers = (offset: number) => [
+    { x: from.x + offset, y: from.y - 30, id: 0 },
+    { x: from.x + offset, y: from.y + 30, id: 1 }
+  ];
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: fingers(0)
+  });
+  for (let index = 1; index <= 12; index++) {
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: fingers((dx * index) / 12)
+    });
+  }
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchEnd',
+    touchPoints: []
+  });
+  await cdp.detach();
+}
+
+/** The highest point of the model's drawn faces. */
+function modelTop(page: Page) {
+  return page.locator('.viewer-host canvas').evaluate(
+    (element) =>
+      new Promise<number>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-render-policy', {
+            detail: {
+              resolve: (state: {
+                bodyFaces: { worldBounds?: { max: number[] } }[];
+              }) =>
+                resolve(
+                  Math.max(
+                    ...state.bodyFaces.map(
+                      (face) => face.worldBounds?.max[2] ?? -Infinity
+                    )
+                  )
+                )
+            }
+          })
+        );
+      })
+  );
+}
+
+/** One finger dragged across the screen, as a touch. */
+async function touchDrag(
+  page: Page,
+  from: { x: number; y: number },
+  to: { x: number; y: number }
+) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [from]
+  });
+  for (let index = 1; index <= 10; index++) {
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [
+        {
+          x: from.x + ((to.x - from.x) * index) / 10,
+          y: from.y + ((to.y - from.y) * index) / 10
+        }
+      ]
+    });
+  }
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchEnd',
+    touchPoints: []
+  });
+  await cdp.detach();
+}
+
+/**
  * Every key of the keypad in the sheet is drawn inside the sheet's body:
  * none below its foot, where it can be neither seen nor tapped.
  */
@@ -457,6 +567,37 @@ test.describe('Build in the compact workspace', () => {
           page.locator('.workspace-toast:not(.hidden) .workspace-toast-body')
         ).toContainText('Added box');
         await expectStatusClearOfSheet(page);
+        // The line is not a control here: no button, no tab stop, and so
+        // no activity log from the keyboard. Its Undo is, and works.
+        const status = page.locator(
+          '.workspace-toast:not(.hidden) .workspace-toast-body'
+        );
+        expect(
+          await status.evaluate((element) => {
+            (element as HTMLElement).focus();
+            return {
+              tag: element.tagName,
+              focused: document.activeElement === element
+            };
+          })
+        ).toEqual({ tag: 'DIV', focused: false });
+        await expect(
+          page.getByRole('button', { name: /Open activity log/ })
+        ).toHaveCount(0);
+        const toastUndo = page.getByRole('button', {
+          name: 'Undo: Added box.'
+        });
+        await toastUndo.focus();
+        await expect(toastUndo).toBeFocused();
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+          'data-e2e-rendered-bodies',
+          '0',
+          { timeout: 30_000 }
+        );
+        await expect(
+          page.getByRole('dialog', { name: /activity/i })
+        ).toHaveCount(0);
       }
     );
   }
@@ -628,58 +769,116 @@ test.describe('Build in the compact workspace', () => {
     await expect(keypad.getByRole('textbox').first()).toHaveValue(/10$/);
   });
 
-  test('keeps a push/pull value beside the side sheet, held landscape', async ({
-    page
-  }) => {
-    test.setTimeout(150_000);
-    // Two blocks, the second on the right, where the side sheet stands.
-    let document = createProjectDocument(
-      'Compact push pull',
-      toUserId('user_e2e')
-    );
-    document = addPrimitiveFeature(document, {
-      name: 'Left block',
-      primitiveKind: 'box',
-      dimensions: { width: 20, height: 20, depth: 20 }
+  // 844 px wide the side sheet is its 400 px; 736 px wide it is 50vw, and
+  // starts exactly at the stage's middle.
+  for (const size of [SIZES[2], { width: 736, height: 414 }] as const) {
+    test(`keeps a push/pull handle and its value beside the side sheet, at ${size.width}×${size.height}`, async ({
+      page
+    }) => {
+      test.setTimeout(150_000);
+      // Two blocks, the second on the right, where the side sheet stands.
+      let document = createProjectDocument(
+        'Compact push pull',
+        toUserId('user_e2e')
+      );
+      document = addPrimitiveFeature(document, {
+        name: 'Left block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      });
+      document = addPrimitiveFeature(document, {
+        name: 'Right block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      });
+      const right = document.bodyOrder[1]!;
+      document = transformBody(document, {
+        name: 'Right block placement',
+        targetBodyId: right,
+        translation: { x: 80, y: 0, z: 0 }
+      }).document;
+      await openCompact(page, size, document);
+      const canvas = page.locator('.viewer-host canvas');
+      const topFace = (select: boolean) =>
+        canvas.evaluate(
+          (element, { bodyId, select }) =>
+            new Promise<{
+              lineageName?: string;
+              center: { x: number; y: number; z: number };
+            } | null>((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-planar-face', {
+                  detail: {
+                    bodyId,
+                    normal: { x: 0, y: 0, z: 1 },
+                    select,
+                    resolve
+                  }
+                })
+              );
+            }),
+          { bodyId: right, select }
+        );
+      await expect
+        .poll(() => topFace(false), { timeout: 60_000 })
+        .toMatchObject({ lineageName: 'primitive.box.face.z-max' });
+      await waitForSheetToSettle(page);
+      await waitForStillViewport(page);
+      // The view moved (two fingers) until the face stands under the sheet,
+      // where a person's own pan can leave it.
+      const sheetLeft = () =>
+        sheet(page).evaluate((element) => element.getBoundingClientRect().left);
+      const faceX = async () => {
+        const { center } = (await topFace(false))!;
+        return (await projected(page, [[center.x, center.y, center.z]]))[0]!.x;
+      };
+      const from = { x: 40, y: size.height / 2 };
+      await twoFingerPan(
+        page,
+        from,
+        (await sheetLeft()) + 60 - (await faceX())
+      );
+      await waitForStillViewport(page);
+      expect(await faceX()).toBeGreaterThan(await sheetLeft());
+      await expect
+        .poll(() => topFace(true), { timeout: 30_000 })
+        .toMatchObject({ lineageName: 'primitive.box.face.z-max' });
+      await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
+      await waitForSheetToSettle(page);
+      await waitForStillViewport(page);
+      // The arrow itself, what a drag takes, stands beside the sheet: not
+      // only its value. Raised to half, the sheet stands the stage's whole
+      // height, and still nothing of it is over the arrow.
+      for (const detent of ['peek', 'half']) {
+        if (detent === 'half') {
+          const grabber = sheet(page).getByRole('slider', {
+            name: 'Sheet height'
+          });
+          await grabber.focus();
+          await page.keyboard.press('Enter');
+          await expect(sheet(page)).toHaveAttribute('data-detent', 'half');
+          await waitForSheetToSettle(page);
+          await waitForStillViewport(page);
+        }
+        const at = await pushPullHandle(page);
+        expect(at.x, `${detent}: ${JSON.stringify(at)}`).toBeLessThan(
+          at.sheetLeft
+        );
+        expect(at.covered, `${detent}: ${JSON.stringify(at)}`).toBe(false);
+        await expectChipsBesideSideSheet(page);
+      }
+      const handle = await pushPullHandle(page);
+      // And it is dragged there: the face moves up.
+      const top = () => modelTop(page);
+      const before = await top();
+      await touchDrag(
+        page,
+        { x: handle.x, y: handle.y },
+        { x: handle.x + handle.dx * 60, y: handle.y + handle.dy * 60 }
+      );
+      await expect.poll(top, { timeout: 30_000 }).toBeGreaterThan(before + 1);
     });
-    document = addPrimitiveFeature(document, {
-      name: 'Right block',
-      primitiveKind: 'box',
-      dimensions: { width: 20, height: 20, depth: 20 }
-    });
-    const right = document.bodyOrder[1]!;
-    document = transformBody(document, {
-      name: 'Right block placement',
-      targetBodyId: right,
-      translation: { x: 80, y: 0, z: 0 }
-    }).document;
-    await openCompact(page, SIZES[2], document);
-    await expect
-      .poll(
-        () =>
-          page.locator('.viewer-host canvas').evaluate(
-            (element, bodyId) =>
-              new Promise<{ lineageName?: string } | null>((resolve) => {
-                element.dispatchEvent(
-                  new CustomEvent('openzcad:e2e-select-planar-face', {
-                    detail: {
-                      bodyId,
-                      normal: { x: 0, y: 0, z: 1 },
-                      select: true,
-                      resolve
-                    }
-                  })
-                );
-              }),
-            right
-          ),
-        { timeout: 60_000 }
-      )
-      .toMatchObject({ lineageName: 'primitive.box.face.z-max' });
-    await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
-    await waitForSheetToSettle(page);
-    await expectChipsBesideSideSheet(page);
-  });
+  }
 
   test('runs Extrude from a tapped sketch region, then Move', async ({
     page
