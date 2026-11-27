@@ -26,7 +26,10 @@ test('a signed-in visitor can retry an unavailable account encryption check', as
   test.setTimeout(240_000);
   const owner = await ownerWithShareLink(browser);
   // The owner opening their own link is offered the project, not a copy.
+  // In a fresh load, as a pasted link opens: the account listing read on
+  // the way in marks the project as hers while its link is live.
   await installAnonymousShareRoutes(owner.context, owner.server);
+  await owner.alice.goto('about:blank');
   await owner.alice.goto(owner.link);
   await expect(
     owner.alice.getByRole('button', { name: 'Open your project', exact: true })
