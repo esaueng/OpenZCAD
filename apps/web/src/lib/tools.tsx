@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import {
+  AlignStartVertical,
   Axis3d,
   Bolt,
   Box,
@@ -74,6 +75,7 @@ export type ToolId =
   | 'transform'
   | 'scale'
   | 'axis-rotate'
+  | 'align'
   | 'mirror'
   | 'split'
   | 'shell'
@@ -356,6 +358,12 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'bodies',
     hint: 'Turn a body about an axis'
   },
+  align: {
+    label: 'Align',
+    icon: icon(<AlignStartVertical size={16} aria-hidden="true" />),
+    group: 'bodies',
+    hint: 'Place a body face to face on another'
+  },
   mirror: {
     label: 'Mirror',
     icon: icon(<FlipHorizontal2 size={16} aria-hidden="true" />),
@@ -487,6 +495,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'transform',
         'scale',
         'axis-rotate',
+        'align',
         'mirror',
         'split',
         'union',
@@ -670,6 +679,13 @@ export function toolDisabledReason(
     !avail.booleanCommandRunning
   ) {
     return 'Needs at least two bodies';
+  }
+  // Align moves one body onto another's face.
+  if (tool === 'align' && avail.liveBodyCount < 2) {
+    return 'Needs at least two bodies';
+  }
+  if (tool === 'align' && !avail.exactGeometryReady) {
+    return 'Waiting for exact geometry';
   }
   if (
     tool === 'transform' &&

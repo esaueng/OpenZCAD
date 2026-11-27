@@ -491,6 +491,10 @@ import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
 import { loneBodyFor } from './lib/inPlace/loneBody';
 import {
+  committedFaceForPreviewPick,
+  previewedMove
+} from './lib/inPlace/faceAlign';
+import {
   presentedDiagnostics,
   shownFeatureWarnings
 } from './lib/diagnosticsRows';
@@ -2116,6 +2120,14 @@ import {
   type ProfilePick,
   type RefPick
 } from './lib/inPlace/tools';
+import {
+  MIRROR_REFUSED_ADVICE,
+  bodyCommandClick,
+  composeMirrorSet,
+  mirrorRefusalMember,
+  refusedMirrorMember,
+  type MirrorSetMember
+} from './lib/inPlace/mirrorBodies';
 import { imagePlacementPlane, placeImage } from './lib/inPlace/image';
 import {
   FIXED_POINT_OPTION,
@@ -14536,19 +14548,43 @@ export function App() {
       // While a preview shows, a click lands on the preview's body, which the
       // document does not have. The face meant is the edited body's face in
       // the same plane: clicking the face again is how a hole moves.
-      const shown =
-        previewDoc?.derived.bodyRepresentations[
-          resolvedBodyId
-        ]?.topology?.faces.find(matches)?.geometry;
+      const shownFaces =
+        previewDoc?.derived.bodyRepresentations[resolvedBodyId]?.topology
+          ?.faces;
+      const shownFace = shownFaces?.find(matches);
+      const shown = shownFace?.geometry;
       const target = editTarget ?? inPlaceRef.current.slots.faces[0]?.bodyId;
-      if (target) {
+      const committed = managerRef.current?.document;
+      if (
+        target &&
+        inPlaceRef.current.tool === 'align' &&
+        target === resolvedBodyId
+      ) {
+        // Align's moving body, drawn where the Move on screen puts it: the
+        // move renamed every face, so the face meant is the committed one
+        // in the same place in the body, moved back by that frame's own
+        // Move (never a newer request still building).
+        const move =
+          previewDoc && committed
+            ? previewedMove(previewDoc, committed, target)
+            : null;
+        face =
+          (move && shownFaces && shownFace
+            ? committedFaceForPreviewPick(
+                move,
+                shownFaces,
+                representations[target]?.topology?.faces ?? [],
+                shownFace
+              )
+            : null) ?? undefined;
+      } else if (target) {
         face = coplanarFace(
           target,
           shown?.normal,
           shown?.centroid ?? shown?.center
         );
-        if (face) resolvedBodyId = target;
       }
+      if (target && face) resolvedBodyId = target;
     }
     if (!face) return null;
     const geometry = face.geometry;
@@ -23755,13 +23791,30 @@ export function App() {
         command.spec &&
         inPlaceBodyMode(command.spec, command.options)
       ) {
+        // A preview's result is not a body to pick: a click on it names the
+        // first pick, as Options lists it. A Boolean's edit previews under
+        // its committed result's id, which counts as that preview too (U11).
+        const previewResult =
+          !representations[selection.bodyId] ||
+          (command.editing?.data.featureKind === 'boolean' &&
+            command.editing.ownBodyIds.includes(selection.bodyId));
         // With the body picked, a flat face is the plane to mirror or split
-        // across; otherwise any face names its body.
-        if (
-          command.spec.wantsPlane &&
-          command.slots.bodies.length > 0 &&
-          selection.kind === 'face'
-        ) {
+        // across; otherwise any face names its body. M11 (D4): Shift on
+        // Mirror, which takes several bodies, toggles the clicked body.
+        const click = bodyCommandClick({
+          wantsPlane: Boolean(command.spec.wantsPlane),
+          bodyMode: inPlaceBodyMode(
+            command.spec,
+            command.options,
+            !!command.editing
+          ),
+          additive,
+          bodiesPicked: command.slots.bodies.length,
+          onFace: selection.kind === 'face',
+          previewResult
+        });
+        if (click === 'none') return true;
+        if (click === 'plane' && selection.kind === 'face') {
           // The plane is the face as clicked, where it stands on screen: a
           // plane is stored by its numbers, so unlike a face operation's
           // face it is not mapped back onto an edited feature's input.
@@ -23788,13 +23841,6 @@ export function App() {
           }
           return false;
         }
-        // A preview's result is not a body to pick: a click on it names the
-        // first pick, as Options lists it. A Boolean's edit previews under
-        // its committed result's id, which counts as that preview too (U11).
-        const previewResult =
-          !representations[selection.bodyId] ||
-          (command.editing?.data.featureKind === 'boolean' &&
-            command.editing.ownBodyIds.includes(selection.bodyId));
         const shown = previewResult
           ? (command.slots.bodies[0]?.bodyId ?? null)
           : selection.bodyId;
@@ -29137,23 +29183,10 @@ export function App() {
           bodyName,
           ...request.part
         });
-      case 'modeling': {
-        // Through the card's own submission builder, so a face operation
-        // run in place is validated and stored exactly as the card's was.
-        const targetBodyId =
-          'targetBodyId' in request.state.value
-            ? request.state.value.targetBodyId
-            : '';
-        const body = targetBodyId ? representations[targetBodyId] : undefined;
-        const submission = buildModelingOperationSubmission(
-          {
-            ...request.state,
-            value: { ...request.state.value, name }
-          } as ModelingOperationFormState,
-          modelingFaceOptions(body?.topology, body)
-        );
-        return commandForModelingSubmission(submission);
-      }
+      case 'modeling':
+        return inPlaceModelingCommand(request.state, name);
+      case 'modeling-each':
+        return inPlaceMirrorSet(request, name).command;
       case 'boolean':
         // A union or intersect result is named for itself; a subtract keeps
         // its base body's name, exactly as the card's Create does.
@@ -29171,6 +29204,7 @@ export function App() {
           name,
           targetBodyId: request.targetBodyId,
           translation: request.translation,
+          ...(request.rotationDeg ? { rotationDeg: request.rotationDeg } : {}),
           ...(request.scale !== undefined ? { scale: request.scale } : {}),
           ...(request.pivot !== undefined ? { pivot: request.pivot } : {}),
           ...(request.axisRotation
@@ -29253,6 +29287,46 @@ export function App() {
       case 'reference-image':
         return commandFactories.addReferenceImage({ image: request.image });
     }
+  }
+  /**
+   * A face operation through the card's own submission builder, so one run
+   * in place is validated and stored exactly as the card's was.
+   */
+  function inPlaceModelingCommand(
+    state: ModelingOperationFormState,
+    name: string
+  ): AnyCommand {
+    const targetBodyId =
+      'targetBodyId' in state.value ? state.value.targetBodyId : '';
+    const body = targetBodyId ? representations[targetBodyId] : undefined;
+    const submission = buildModelingOperationSubmission(
+      {
+        ...state,
+        value: { ...state.value, name }
+      } as ModelingOperationFormState,
+      modelingFaceOptions(body?.topology, body)
+    );
+    return commandForModelingSubmission(submission);
+  }
+  /**
+   * M11 (D4): a Mirror of several bodies, one Mirror feature per body in one
+   * transaction, each named on from the one before.
+   */
+  function inPlaceMirrorSet(
+    request: Extract<InPlaceRequest, { tool: 'modeling-each' }>,
+    name: string
+  ): { command: AnyCommand; members: MirrorSetMember[] } {
+    return composeMirrorSet(
+      managerRef.current?.document,
+      name,
+      request.states.map((state) =>
+        'targetBodyId' in state.value
+          ? (state.value.targetBodyId as BodyId)
+          : ('' as BodyId)
+      ),
+      (index, memberName) =>
+        inPlaceModelingCommand(request.states[index]!, memberName)
+    );
   }
   /** The datum a datum request adds, and which kind, or null for others. */
   function inPlaceDatum(
@@ -29576,6 +29650,33 @@ export function App() {
             : {})
         };
       }
+      if (request.tool === 'modeling-each') {
+        // M11 (D4): every body's mirror must build. One that does not is
+        // named, and Done waits with every pick kept.
+        const set = inPlaceMirrorSet(request, title);
+        return {
+          command: set.command,
+          validate: (document) => set.command.validate(document),
+          apply: (document) => set.command.apply(document),
+          resultBodyId: set.members.at(-1)?.resultBodyId,
+          // The kernel's own warning, with its typed record, is the reason
+          // the bar shows; the refused body is named ahead of it as data.
+          check: (derived: ProjectDocument['derived']) => {
+            if (refusedMirrorMember(set.members, derived)) {
+              throw new Error('This did not produce a valid body.');
+            }
+          },
+          refusedPick: (derived, shown) => {
+            const member = mirrorRefusalMember(set.members, derived, shown);
+            return member
+              ? {
+                  name: representations[member.sourceBodyId]?.name ?? 'A body',
+                  advice: MIRROR_REFUSED_ADVICE
+                }
+              : null;
+          }
+        };
+      }
       // A pattern's frame is named as its commit names it, so Done can land
       // this very command and keep the rebuild the frame already made.
       const command = inPlaceCommandFor(
@@ -29614,6 +29715,28 @@ export function App() {
         return;
       }
       const name = newFeatureName(title);
+      if (request.tool === 'modeling-each') {
+        // M11 (D4): one transaction, so one Undo; each body's Mirror is a
+        // target of its own, so none of them lands unless all of them built.
+        const set = inPlaceMirrorSet(request, name);
+        const last = set.members.at(-1);
+        if (!last || set.members.length !== request.states.length) {
+          setStatus('Mirror could not name a body to mirror.');
+          return Promise.resolve(false);
+        }
+        return executeValidatedFeature(set.command, {
+          featureName: last.featureName,
+          resultBodyId: last.resultBodyId,
+          targets: set.members.map((member) => ({
+            featureName: member.featureName,
+            featureId: member.featureId,
+            resultBodyId: member.resultBodyId
+          })),
+          successMessage: commandOutcomeMessage(set.command.label),
+          onSuccess: finishFeatureCreation,
+          cancelled: withdrawn
+        }).then((outcome) => outcome === 'committed');
+      }
       // The frame Done was pressed on built this pattern already; see below.
       const previewedPattern =
         request.tool === 'pattern' ? (previewed?.built.command ?? null) : null;
@@ -30452,7 +30575,8 @@ export function App() {
   /** A face-list command's faces, lit as a sweep's are. */
   const inPlaceFocusFaces = useMemo<TopologySelection[] | null>(
     () =>
-      inPlaceFaceMode(inPlaceSpec, inPlace.options) === 'many' &&
+      (inPlaceFaceMode(inPlaceSpec, inPlace.options) === 'many' ||
+        inPlaceFaceMode(inPlaceSpec, inPlace.options) === 'pair') &&
       inPlace.slots.faces.length > 0
         ? inPlace.slots.faces.map((face) => ({
             bodyId: face.bodyId,
@@ -31126,6 +31250,14 @@ export function App() {
   // longer has is dropped and said, since nothing on screen could click it
   // back out of the list.
   const inPlaceEditPicks = inPlace.slots;
+  // M11: a Mirror lists several bodies, but its edit holds one.
+  const inPlaceListsBodies =
+    inPlace.tool !== null &&
+    inPlaceBodyMode(
+      IN_PLACE_TOOL_SPECS[inPlace.tool],
+      inPlace.options,
+      inPlaceEditing !== null
+    ) === 'many';
   const inPlaceFacePickRef = useRef(inPlaceFacePick);
   inPlaceFacePickRef.current = inPlaceFacePick;
   const inPlaceBodyPickRef = useRef(inPlaceBodyPick);
@@ -31215,9 +31347,7 @@ export function App() {
     const guide = curves(inPlaceEditPicks.guide);
     // A boolean's inputs are a list a missing body could not be clicked out
     // of; a one-body slot is replaced by the next click, so it stays.
-    const listsBodies =
-      inPlace.tool !== null &&
-      IN_PLACE_TOOL_SPECS[inPlace.tool].bodyMode === 'many';
+    const listsBodies = inPlaceListsBodies;
     // Gone means gone from the document, or still without a shape once the
     // exact rebuild has finished: a body between rebuilds keeps its place.
     const kept = listsBodies
@@ -31330,6 +31460,7 @@ export function App() {
   }, [
     inPlaceEditing,
     inPlaceEditPicks,
+    inPlaceListsBodies,
     inPlace.tool,
     doc,
     representations,
@@ -35710,7 +35841,8 @@ export function App() {
         const plan = folderCommandPicks(
           command.slots.bodies.map((body) => body.bodyId),
           bodyIds.filter((bodyId) => inPlaceEditTakesBody(bodyId)),
-          command.spec.bodyMode
+          inPlaceBodyMode(command.spec, command.options, !!command.editing) ??
+            command.spec.bodyMode
         );
         if (plan.kind === 'too-many') {
           setStatus(
@@ -43069,6 +43201,7 @@ export function App() {
                   // U11: a kernel refusal says the input it is about; the
                   // last request that built stays on screen meanwhile.
                   refusalInput={inPlace.refusalInput}
+                  refusalPick={inPlace.refusalPick}
                   unitLabel={displayLengthName(doc.units)}
                   onTrySize={(dimension, size) => {
                     // The proved size is stored-unit; the panel reads a
