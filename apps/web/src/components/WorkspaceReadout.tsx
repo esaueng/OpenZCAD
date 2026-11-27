@@ -581,6 +581,9 @@ export function WorkspaceReadout({
       <footer
         className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}`}
         role="contentinfo"
+        // The cut's own line, a state rather than news: the compact
+        // workspace (U12) shows it on View's tray instead.
+        data-section-line={sectionShown || undefined}
       >
         <button
           type="button"

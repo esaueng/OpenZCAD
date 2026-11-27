@@ -1065,6 +1065,24 @@
   );
 }
 
+/* Standing over the model, the line itself takes no tap: a tap there picks
+   what is under it, as it would with no status up. Its Undo does; the
+   activity log it opens on the regular stage is in Settings. */
+.app-shell[data-shell='compact']
+  .workspace.column-layout
+  .workspace-toast
+  .workspace-toast-body {
+  pointer-events: none;
+}
+
+/* A cut left on is said on View's tray (its Section mark) and turned off
+   on its page, so its standing line and Turn off are not drawn on the
+   stage: under the sheet at peek, a strip of them showed over its edge,
+   and a tap there turned the cut off. */
+.app-shell[data-shell='compact'] .workspace-toast[data-section-line] {
+  visibility: hidden;
+}
+
 /* A full sheet leaves no stage to show it on: it waits, still read out. */
 .app-shell[data-shell='compact']:has(.compact-sheet[data-detent='full'])
   .workspace.column-layout
@@ -1216,7 +1234,11 @@
   min-height: var(--compact-target);
 }
 
-.app-shell[data-shell='compact'] .compact-sheet .panel-close {
+/* A card's recoveries and its pick's verbs ("Or: Loft") a finger's width
+   too, however short their word. */
+.app-shell[data-shell='compact']
+  .compact-sheet
+  :is(.panel-close, .tool-card-recovery) {
   min-width: var(--compact-target);
 }
 
