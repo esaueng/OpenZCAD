@@ -13,7 +13,9 @@ text rules, and History's failing-step card and the Resume dialog word a
 refusal by its typed record as the command bar does
 (`test/mirror-several-bodies.test.ts`, `refusalLanguage.test.ts`,
 `InPlaceCommandBar.test.tsx`, `FeatureHistoryPanel.test.tsx`,
-`ResumeHistoryDialog.test.tsx`, `historyResume.test.ts`). Every "smaller sizes failed too" clause in
+`ResumeHistoryDialog.test.tsx`, `historyResume.test.ts`; in the app, the
+History card reads the session's attributed records, which a committed
+projection does not keep: `test/e2e/mirror-refusal-history.spec.ts`). Every "smaller sizes failed too" clause in
 the fillet and chamfer diagnosis (`neighbor-faces`, `unknown`, `closed-rim`,
 `ends-on-blend`, `trim-face`) now needs a smaller rung that actually ran and
 was refused with the requested size's own typed code (#2201's rule); an

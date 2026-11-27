@@ -345,3 +345,45 @@ it("words a failing step's typed refusal from its code", () => {
   );
   expect(details).not.toHaveTextContent('Mirror target is unavailable.');
 });
+
+// As the app commits it: the document's projection keeps only the warning
+// strings, and the typed records the rebuild attributed travel beside it
+// (`featureAttribution`). The card reads them there (preview re-check of
+// 3d82fb8 still read the adapter's sentence).
+it('words a committed failing step from the attributed typed records', () => {
+  const { document, fillet } = plateAndFillet();
+  const message = 'Feature "Round corners": Mirror target is unavailable.';
+  const committed: ProjectDocument = {
+    ...document,
+    derived: { ...document.derived, warnings: [message] }
+  };
+  expect(committed.derived.featureWarnings).toBeUndefined();
+  render(
+    <FeatureHistoryPanel
+      document={committed}
+      featureWarnings={[
+        {
+          featureId: fillet.featureId,
+          featureName: 'Round corners',
+          kind: 'build-failed',
+          message,
+          kernelRefusal: {
+            family: 'reference',
+            category: 'invalid_input',
+            code: 'mirror_source_unavailable'
+          }
+        }
+      ]}
+      selectedId={fillet.id}
+      failure={null}
+      onSelect={vi.fn()}
+      onDismissFailure={vi.fn()}
+    />
+  );
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    MIRROR_SOURCE_UNAVAILABLE
+  );
+  expect(
+    screen.getByRole('region', { name: 'History details' })
+  ).not.toHaveTextContent('Mirror target is unavailable.');
+});

@@ -4,6 +4,7 @@ import {
   isFeatureRollbackSuppressed,
   isFeatureSuppressed,
   type FeatureId,
+  type FeatureWarning,
   type ProjectDocument,
   type FeatureNode
 } from '@openzcad/shared';
@@ -23,6 +24,13 @@ interface Props {
   selectedId: string | null;
   /** Features the current rebuild reported as failed or refused. */
   failedFeatureIds?: ReadonlySet<FeatureId>;
+  /**
+   * The typed warnings the rebuild attributed to `document.derived`. A
+   * committed projection keeps only the warning strings (the records are
+   * advice to this session, not saved state), so without these a typed
+   * refusal could only be shown in the adapter's words.
+   */
+  featureWarnings?: readonly FeatureWarning[];
   failure: FeatureBuildError | null;
   onSelect(id: string): void;
   onDismissFailure(): void;
@@ -33,6 +41,7 @@ export function FeatureHistoryPanel({
   scope = {},
   selectedId,
   failedFeatureIds,
+  featureWarnings,
   failure,
   onSelect,
   onDismissFailure
@@ -67,7 +76,7 @@ export function FeatureHistoryPanel({
       ? refusingWarningDetail(
           selected.name,
           document.derived.warnings,
-          document.derived.featureWarnings,
+          featureWarnings ?? document.derived.featureWarnings,
           selected.featureId
         )
       : null;
