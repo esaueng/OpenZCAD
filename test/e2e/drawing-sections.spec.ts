@@ -189,3 +189,83 @@ test(
     ).not.toHaveCount(0);
   }
 );
+
+test('pans a zoomed sheet from a drag off every view while Section is armed, and draws the line from one on a view', async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Zoomed section');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '40', depth: '30', height: '30' },
+    name: 'Plate'
+  });
+  await mode(page, 'Draw').click();
+  const drawings = page.getByRole('region', { name: 'Drawings' });
+  await drawings.getByRole('button', { name: 'New drawing sheet' }).click();
+  const canvas = drawings.getByRole('application', { name: 'Sheet Sheet 1' });
+  await expect(
+    canvas.locator('[data-view="front"]:not(.is-placeholder)')
+  ).toHaveCount(1, { timeout: 20_000 });
+  const zoomIn = drawings.getByRole('button', { name: 'Zoom in' });
+  await zoomIn.click();
+  await zoomIn.click();
+  await expect(canvas).toHaveClass(/is-zoomed/);
+  await drawings
+    .getByRole('toolbar', { name: 'Annotation tools' })
+    .getByRole('button', { name: 'Section view' })
+    .click();
+
+  // A press on bare paper, clear of every view: the tool refuses it, and
+  // the drag pans the zoomed sheet as it does with no tool armed (review
+  // case: the tool's surface took the press, and nothing panned).
+  const blank = await page.evaluate(() => {
+    const surface = document.querySelector('.drawing-section-surface');
+    const views = [...document.querySelectorAll('.drawing-view-hit')].map(
+      (view) => view.getBoundingClientRect()
+    );
+    const clear = 40;
+    for (let y = 8; y < innerHeight; y += 12)
+      for (let x = 8; x < innerWidth - 80; x += 12) {
+        if (
+          views.some(
+            (box) =>
+              x + 80 > box.left - clear &&
+              x < box.right + clear &&
+              y > box.top - clear &&
+              y < box.bottom + clear
+          ) ||
+          document.elementFromPoint(x, y) !== surface ||
+          document.elementFromPoint(x + 80, y) !== surface
+        )
+          continue;
+        return { x, y };
+      }
+    return null;
+  });
+  expect(blank, 'bare paper on screen').not.toBeNull();
+  const before = await canvas.getAttribute('viewBox');
+  await page.mouse.move(blank!.x, blank!.y);
+  await page.mouse.down();
+  await page.mouse.move(blank!.x + 80, blank!.y, { steps: 6 });
+  await page.mouse.up();
+  await expect(canvas).not.toHaveAttribute('viewBox', before!);
+  await expect(canvas.locator('.drawing-section-ghost')).toHaveCount(0);
+
+  // A drag across the front view still draws the line, panning nothing.
+  const panned = await canvas.getAttribute('viewBox');
+  const front = await viewBox(canvas, 'front');
+  const y = front.centreY + 0.6 * front.pxPerMm;
+  await page.mouse.move(front.left + 2 * front.pxPerMm, y);
+  await page.mouse.down();
+  await page.mouse.move(front.centreX, y, { steps: 4 });
+  await page.mouse.move(front.right - 2 * front.pxPerMm, y, { steps: 4 });
+  await page.mouse.up();
+  await page.mouse.move(front.centreX + 30, front.top - 20 * front.pxPerMm, {
+    steps: 6
+  });
+  await expect(canvas.locator('.drawing-section-ghost')).toBeVisible();
+  expect(await canvas.getAttribute('viewBox')).toBe(panned);
+});

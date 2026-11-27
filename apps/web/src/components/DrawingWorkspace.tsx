@@ -3747,6 +3747,16 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   } | null>(null);
   const [selectedAnnotationId, setSelectedAnnotationId] =
     useState<DrawingAnnotationId | null>(null);
+  /**
+   * A view just added becomes the pick, and the annotation's pick goes, as
+   * when a view is picked from the list or the sheet. A picked annotation
+   * takes precedence over a picked view, so the new view's settings never
+   * showed while one stayed picked.
+   */
+  const selectAddedView = (viewId: DrawingViewId) => {
+    setSelectedViewId(viewId);
+    setSelectedAnnotationId(null);
+  };
   /** D06: Auto-dimension's proposal, previewed on the sheet it was made from. */
   const [autoPlan, setAutoPlan] = useState<{
     sheet: DrawingSheet;
@@ -4879,7 +4889,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     if (run(commandFactories.addDrawingView({ sheetId: sheet.sheetId, view })))
-      setSelectedViewId(view.viewId);
+      selectAddedView(view.viewId);
   };
 
   const exportSheet = async (format: 'pdf' | 'svg' | 'dxf') => {
@@ -5847,8 +5857,27 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     viewTapRef.current = null;
     return tap.tool === tool && tap.step === step ? event : null;
   };
+  /**
+   * A press an armed section, detail or auxiliary tool does not take, off
+   * every view it could start on: on a zoomed sheet it pans the paper, as a
+   * drag on blank paper does with no tool armed. The tool's surface covers
+   * the paper, so the canvas never sees the press to pan from it.
+   */
+  const panInstead = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (event.button === 0 && zoom.zoom > 1) startPan(event);
+  };
   const onAuxiliaryPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
     if (event.button !== 0 || !auxiliaryTool || !shownSheet) return;
+    // Picking the edge, a press off every view pans a zoomed sheet; a
+    // still one there is still refused, on its release or at once.
+    if (!auxiliaryTool.edge) {
+      const at = paperPoint(event);
+      if (
+        at &&
+        !sectionSourceAt(shownSheet, drawnViews, at.point, document.units)
+      )
+        panInstead(event);
+    }
     // A finger picks and places on its release: the first finger of a
     // pinch must not place a view before the second one lands.
     if (event.pointerType === 'touch') {
@@ -5879,7 +5908,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
         )
       )
-        setSelectedViewId(view.viewId);
+        selectAddedView(view.viewId);
       return;
     }
     const hit = edgeAt(at.point, at.pxPerMm);
@@ -5964,7 +5993,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
       )
     )
-      setSelectedViewId(view.viewId);
+      selectAddedView(view.viewId);
   };
   const onDetailPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
     if (event.button !== 0 || !detailTool || !shownSheet) return;
@@ -5979,6 +6008,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     if (!at) return;
     if (!detailSourceAt(shownSheet, drawnViews, at.point, document.units)) {
       props.onStatus('Start the detail circle inside a view, at its centre.');
+      panInstead(event);
       return;
     }
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -6125,7 +6155,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
       )
     )
-      setSelectedViewId(view.viewId);
+      selectAddedView(view.viewId);
   };
   const onSectionPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
     if (event.button !== 0 || !sectionTool || !shownSheet) return;
@@ -6142,6 +6172,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       props.onStatus(
         'Start the section line inside a front, top or side view.'
       );
+      panInstead(event);
       return;
     }
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -6444,7 +6475,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const zoom = sheetZoom ?? fitSheetZoom(paper);
   const zoomBy = (factor: number) =>
     setSheetZoom(zoomSheetAt(zoom, paper, zoom.zoom * factor));
-  const startPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+  /**
+   * Pans with this pointer, captured where it pressed: the canvas, or an
+   * armed tool's surface over it (`panInstead`), whose release then still
+   * reaches the tool.
+   */
+  const startPan = (event: ReactPointerEvent<Element>) => {
     panRef.current = {
       pointerId: event.pointerId,
       x: event.clientX,
@@ -7875,8 +7911,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               if (event.target === event.currentTarget) deselect();
               // A zoomed sheet pans by dragging empty paper. An armed
               // section, detail or auxiliary tool's surface covers the
-              // paper: its drag draws the line or circle at any zoom (a
-              // pinch still zooms, and the zoom buttons still work).
+              // paper: a drag on a view draws its line or circle at any
+              // zoom, and one off every view pans (`panInstead`). A pinch
+              // still zooms, and the zoom buttons still work.
               const target = event.target as Element;
               if (
                 event.button === 0 &&

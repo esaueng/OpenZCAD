@@ -200,6 +200,43 @@ describe('CompactDrawTray (U12 slice 9)', () => {
     fireEvent.click(within(row).getByRole('button', { name: 'Done' }));
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onDone).toHaveBeenCalledTimes(1);
+
+    // A finger's tap after a drag on the sheet (a section line, a pan): on
+    // Linux and ChromeOS the browser makes no click of it, as the drag
+    // flung. Cancel and Done run on the lift, and a click that does come
+    // after it runs nothing twice (review case: the tool kept running).
+    for (const [name, handler] of [
+      ['Cancel', onCancel],
+      ['Done', onDone]
+    ] as const) {
+      const button = within(row).getByRole('button', { name });
+      const finger = {
+        pointerId: 7,
+        pointerType: 'touch',
+        clientX: 10,
+        clientY: 10
+      };
+      fireEvent.pointerDown(button, finger);
+      fireEvent.pointerUp(button, finger);
+      expect(handler).toHaveBeenCalledTimes(2);
+      fireEvent.click(button);
+      expect(handler).toHaveBeenCalledTimes(2);
+    }
+    // A finger that slid off its press runs nothing.
+    const cancel = within(row).getByRole('button', { name: 'Cancel' });
+    fireEvent.pointerDown(cancel, {
+      pointerId: 8,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10
+    });
+    fireEvent.pointerUp(cancel, {
+      pointerId: 8,
+      pointerType: 'touch',
+      clientX: 60,
+      clientY: 10
+    });
+    expect(onCancel).toHaveBeenCalledTimes(2);
   });
 
   it('brings the settings of a newly added view into sight on Views', async () => {

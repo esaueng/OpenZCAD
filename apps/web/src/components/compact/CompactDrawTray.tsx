@@ -17,7 +17,14 @@ import {
   X,
   ZoomIn
 } from 'lucide-react';
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode
+} from 'react';
 import {
   MAX_DRAWING_TEXT_LENGTH,
   type DrawingSheet,
@@ -33,6 +40,7 @@ import {
 } from '../../lib/drawing/compactDraw';
 import { ANNOTATION_TOOL_ICONS } from '../drawingToolIcons';
 import { useCompactTray } from './compactSlots';
+import { SwipeActionTaps } from './swipeActionTap';
 import { TrayPage, TrayRow, type TrayItem } from './CompactTray';
 
 /** A view tool (section, detail, auxiliary), as the drawing toolbar has it. */
@@ -625,8 +633,33 @@ function EmptyRow({ control }: { control: CompactDrawSheets }) {
   );
 }
 
-/** The running tool's row: its icon, its step, Cancel and Done. */
+/**
+ * The running tool's row: its icon, its step, Cancel and Done.
+ *
+ * A finger or pen runs Cancel and Done as it lifts, not on the click the
+ * browser may make of the tap: the press before it is often a drag on the
+ * sheet (a section line, a detail circle, a pan), which flings, and
+ * Chromium on Linux and ChromeOS drops the tap that stops a fling, as it
+ * does after a row's swipe (`SwipeActionTaps`). A mouse, the keyboard and
+ * a screen reader click.
+ */
 function RunRow({ run }: { run: CompactDrawRun }) {
+  const [taps] = useState(() => new SwipeActionTaps<'cancel' | 'done'>());
+  useEffect(() => () => taps.dispose(), [taps]);
+  const tapAction = (key: 'cancel' | 'done', action: () => void) => ({
+    onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+      taps.press();
+      taps.pressAction(event, key);
+    },
+    onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (taps.release(event) !== key) return;
+      taps.ran();
+      action();
+    },
+    onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) =>
+      taps.cancel(event),
+    onClick: action
+  });
   return (
     <div
       className="compact-tray-row compact-draw-run"
@@ -646,7 +679,7 @@ function RunRow({ run }: { run: CompactDrawRun }) {
         type="button"
         className="compact-draw-run-button"
         aria-label="Cancel"
-        onClick={run.onCancel}
+        {...tapAction('cancel', run.onCancel)}
       >
         <X size={22} aria-hidden="true" />
       </button>
@@ -654,7 +687,7 @@ function RunRow({ run }: { run: CompactDrawRun }) {
         type="button"
         className="compact-draw-run-button is-done"
         aria-label="Done"
-        onClick={run.onDone}
+        {...tapAction('done', run.onDone)}
       >
         <Check size={22} aria-hidden="true" />
       </button>

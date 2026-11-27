@@ -26,8 +26,10 @@ import {
 import {
   STAGE_WORD_BUDGET,
   TRAY_WORD_BUDGET,
+  dropTapAfterFling,
   expectReachable,
   preferCompact,
+  tabTo,
   trayWords,
   visibleWords
 } from './compactHelpers';
@@ -177,6 +179,45 @@ function viewSegments(page: Page, view: string): Promise<Segment[]> {
 
 async function paperBox(page: Page) {
   return (await page.locator('.drawing-paper').boundingBox())!;
+}
+
+/**
+ * A point of bare paper on screen, well clear of every view, where the
+ * armed tool's surface is what a finger lands on; null when none shows.
+ */
+async function blankPaperPoint(page: Page) {
+  return page.evaluate(() => {
+    const surface = document.querySelector('.drawing-section-surface');
+    const paper = document.querySelector('.drawing-paper');
+    if (!surface || !paper) return null;
+    const views = [...document.querySelectorAll('.drawing-view-hit')].map(
+      (view) => view.getBoundingClientRect()
+    );
+    const bounds = paper.getBoundingClientRect();
+    const clear = 40;
+    for (let y = 8; y < innerHeight; y += 12) {
+      for (let x = 8; x < innerWidth - 60; x += 12) {
+        if (
+          x < bounds.left ||
+          x + 60 > bounds.right ||
+          y < bounds.top ||
+          y > bounds.bottom ||
+          views.some(
+            (box) =>
+              x + 60 > box.left - clear &&
+              x < box.right + clear &&
+              y > box.top - clear &&
+              y < box.bottom + clear
+          ) ||
+          document.elementFromPoint(x, y) !== surface ||
+          document.elementFromPoint(x + 60, y) !== surface
+        )
+          continue;
+        return { x, y };
+      }
+    }
+    return null;
+  });
 }
 
 /**
@@ -693,6 +734,9 @@ test.describe('Draw in the compact sheet', () => {
     test.setTimeout(240_000);
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
+    // As on Linux CI and ChromeOS: the tap after a drag across the sheet
+    // makes no click. Cancel must still end the tool (review case).
+    await dropTapAfterFling(page);
     await openScissorsInDraw(page, SIZES[1]!);
     await trayButton(page, 'New sheet').tap();
     await expect(
@@ -728,6 +772,14 @@ test.describe('Draw in the compact sheet', () => {
     await zoom.getByRole('button', { name: 'Zoom in' }).tap();
     await expect(canvas(page)).toHaveClass(/is-zoomed/);
     await startTool(page, 'Views', 'Section view');
+    // Off every view, the same drag pans the zoomed paper instead (review
+    // case: the tool's surface took the press, and nothing panned).
+    const before = await canvas(page).getAttribute('viewBox');
+    const blank = await blankPaperPoint(page);
+    expect(blank, 'bare paper on screen').not.toBeNull();
+    await touchDrag(page, blank!, { x: blank!.x + 60, y: blank!.y });
+    await expect(canvas(page)).not.toHaveAttribute('viewBox', before!);
+    await expect(step(page)).not.toHaveText('Place');
     const zoomed = await canvas(page).getAttribute('viewBox');
     const top = (await canvas(page)
       .locator('[data-view="top"] .drawing-view-hit')
@@ -872,9 +924,14 @@ test.describe('Draw in the compact sheet', () => {
         await expect(
           undo.locator('xpath=ancestor-or-self::*[@inert]')
         ).toHaveCount(0);
-        await undo.focus();
-        await expect(undo).toBeFocused();
-        await tapNoticeUndo(page);
+        // By keyboard from inside the sheet, both ways round: the sheet's
+        // focus trap takes the notice in, and Enter runs its Undo (review
+        // case: the trap wrapped inside the sheet, past the Undo).
+        await grabber.focus();
+        await tabTo(page, undo, 'Tab');
+        await grabber.focus();
+        await tabTo(page, undo, 'Shift+Tab');
+        await page.keyboard.press('Enter');
         await expect(sheets).toHaveCount(2);
         await expect(sheet(page)).toHaveAttribute('data-detent', 'full');
         expect(errors).toEqual([]);
