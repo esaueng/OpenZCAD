@@ -4,7 +4,11 @@ import {
   createProjectDocument,
   sharedProjectSnapshotDocument
 } from '@openzcad/document-core';
-import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
+import {
+  DEFAULT_APP_SETTINGS,
+  toUserId,
+  type ProjectDocument
+} from '@openzcad/shared';
 import { dropTapAfterFling } from './compactHelpers';
 import { expect, stubAnonymousApi, stubApi, test } from './openzcad-fixtures';
 import {
@@ -726,3 +730,354 @@ test(`settings at ${PHONE.width}×${PHONE.height}: a device-approval link opens 
   await dialog.getByRole('button', { name: 'Back to all settings' }).tap();
   await expect(dialog.getByLabel('Find a setting')).toHaveValue('');
 });
+
+/**
+ * Holds every account listing from now until released, then answers it with
+ * one marker row (and any `rows`): an account snapshot taken before any copy
+ * was stored, and a way to tell when that listing has reached the shelf.
+ */
+async function holdAccountListing(page: Page, rows: object[] = []) {
+  let sent!: () => void;
+  const out = new Promise<void>((resolve) => (sent = resolve));
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route('**/api/projects', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    sent();
+    await held;
+    return route.fulfill({
+      json: {
+        projects: [
+          {
+            projectId: 'proj_listing_marker',
+            name: 'Listing marker',
+            revisionCount: 1,
+            updatedAt: new Date().toISOString()
+          },
+          ...rows
+        ]
+      }
+    });
+  });
+  return { out, release };
+}
+
+/** Holds each copy the account is asked to store until `until` settles. */
+async function holdCopies(page: Page, until: Promise<unknown>) {
+  await page.route('**/api/projects/*/duplicate', async (route) => {
+    await until;
+    await route.fallback();
+  });
+}
+
+const copyTiles = (page: Page, name: string) =>
+  page.locator('.start-tile-project', {
+    has: page.getByRole('button', {
+      name: new RegExp(`^${name.replace(/[()]/g, '\\$&')},`)
+    })
+  });
+
+test(
+  'a copy made just before Back to projects is listed once',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize(SIZES[0]!);
+    await openCompactLibrary(page);
+    await newProject(page, 'Race part');
+
+    // The account stores the copy only once the shelf's listing has gone
+    // out, and that listing is held until the copy's row is up: the shelf
+    // then reads this device before the copy has landed, and applies what it
+    // read after, which is when its listing used to drop the copy.
+    const listing = await holdAccountListing(page);
+    await holdCopies(page, listing.out);
+
+    const sheet = await openProjectSheet(page, 'Race part');
+    await sheet
+      .getByRole('button', { name: 'Duplicate project', exact: true })
+      .tap();
+    await backToLibrary(page);
+    const copies = copyTiles(page, 'Race part (copy)');
+    await expect(copies).toHaveCount(1, { timeout: 60_000 });
+    listing.release();
+    await expect(tile(page, 'Listing marker')).toBeVisible({
+      timeout: 60_000
+    });
+    await expect(copies).toHaveCount(1);
+  }
+);
+
+test(
+  'a second copy made while the shelf is still listing stays listed too',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize(SIZES[0]!);
+    await openCompactLibrary(page);
+    await newProject(page, 'Pair part');
+
+    // The first copy lands once Back to projects has started its listing,
+    // whose account read is held; the second is made from the shelf after
+    // that listing has read this device. Both land before it is applied.
+    const listing = await holdAccountListing(page);
+    await holdCopies(page, listing.out);
+    const sheet = await openProjectSheet(page, 'Pair part');
+    await sheet
+      .getByRole('button', { name: 'Duplicate project', exact: true })
+      .tap();
+    await backToLibrary(page);
+    const first = copyTiles(page, 'Pair part (copy)');
+    await expect(first).toHaveCount(1, { timeout: 60_000 });
+
+    await page
+      .getByRole('button', { name: 'Actions for Pair part', exact: true })
+      .tap();
+    await page
+      .getByRole('menu', { name: 'Actions for Pair part', exact: true })
+      .getByRole('menuitem', { name: 'Duplicate', exact: true })
+      .tap();
+    const copies = page
+      .locator('.start-tile-project')
+      .filter({ hasText: /Pair part \(copy/ });
+    await expect(copies).toHaveCount(2, { timeout: 60_000 });
+
+    listing.release();
+    await expect(tile(page, 'Listing marker')).toBeVisible({
+      timeout: 60_000
+    });
+    await expect(copies).toHaveCount(2);
+    await expect(first).toHaveCount(1);
+  }
+);
+
+test(
+  'a copy the account stored after its listing was taken stays an account project',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize(SIZES[0]!);
+    await openCompactLibrary(page);
+    await newProject(page, 'Cloud part');
+
+    // The account's snapshot is taken before it stores the copy, so the
+    // listing names every account project but this one.
+    const listing = await holdAccountListing(page);
+    await holdCopies(page, listing.out);
+    const copied = page
+      .waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname.endsWith('/duplicate')
+      )
+      .then(
+        async (response) =>
+          ((await response.json()) as { document: ProjectDocument }).document
+      );
+    const sheet = await openProjectSheet(page, 'Cloud part');
+    await sheet
+      .getByRole('button', { name: 'Duplicate project', exact: true })
+      .tap();
+    await backToLibrary(page);
+    const copy = await copied;
+    const copyTile = copyTiles(page, 'Cloud part (copy)');
+    await expect(copyTile).toHaveCount(1, { timeout: 60_000 });
+    listing.release();
+    await expect(tile(page, 'Listing marker')).toBeVisible({
+      timeout: 60_000
+    });
+
+    // Listed as the account's, not as this device's alone, so renaming it
+    // on the shelf writes the account's copy.
+    await expect(copyTile).toHaveCount(1);
+    await expect(copyTile.getByLabel('On this device only')).toHaveCount(0);
+    await page.route(
+      `**/api/projects/${encodeURIComponent(copy.projectId)}`,
+      (route) =>
+        route.request().method() === 'GET'
+          ? route.fulfill({ json: copy })
+          : route.fallback()
+    );
+    const accountRename = page.waitForRequest(
+      (request) =>
+        request.method() === 'PUT' &&
+        new URL(request.url()).pathname ===
+          `/api/projects/${encodeURIComponent(copy.projectId)}/document`
+    );
+    await page
+      .getByRole('button', {
+        name: 'Actions for Cloud part (copy)',
+        exact: true
+      })
+      .tap();
+    await page
+      .getByRole('menu', { name: 'Actions for Cloud part (copy)', exact: true })
+      .getByRole('menuitem', { name: 'Rename' })
+      .tap();
+    const field = page.getByRole('textbox', {
+      name: 'Rename Cloud part (copy)'
+    });
+    await field.fill('Cloud copy renamed');
+    await field.press('Enter');
+    const renamed = (await accountRename).postDataJSON() as {
+      document: ProjectDocument;
+    };
+    expect(renamed.document.name).toBe('Cloud copy renamed');
+    await expect(tile(page, 'Cloud copy renamed')).toHaveCount(1);
+  }
+);
+
+test(
+  'a copy the account never answers holds up neither the shelf nor sign-out',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize(SIZES[0]!);
+    await openCompactLibrary(page);
+    await newProject(page, 'Stalled part');
+
+    // The account never answers the copy; its listing answers at once.
+    let signedIn = true;
+    await page.route('**/api/session', (route) =>
+      signedIn
+        ? route.fallback()
+        : route.fulfill({
+            status: 401,
+            json: { error: 'Authentication required.', code: 'AUTH_REQUIRED' }
+          })
+    );
+    await page.route('**/api/auth/logout', (route) => {
+      signedIn = false;
+      return route.fulfill({ json: { ok: true } });
+    });
+    const listing = await holdAccountListing(page);
+    listing.release();
+    let copyAsked!: () => void;
+    const asked = new Promise<void>((resolve) => (copyAsked = resolve));
+    await page.route('**/api/projects/*/duplicate', () => {
+      copyAsked();
+      // Never fulfilled.
+    });
+
+    const sheet = await openProjectSheet(page, 'Stalled part');
+    await sheet
+      .getByRole('button', { name: 'Duplicate project', exact: true })
+      .tap();
+    await asked;
+    await backToLibrary(page);
+    await expect(tile(page, 'Listing marker')).toBeVisible({
+      timeout: 30_000
+    });
+    await expect(tile(page, 'Stalled part')).toHaveCount(1);
+
+    await page
+      .locator('.compact-library-head')
+      .getByRole('button', { name: 'Open settings', exact: true })
+      .tap();
+    const settings = page.getByRole('dialog', {
+      name: 'Settings',
+      exact: true
+    });
+    await settings.getByRole('button', { name: 'Account', exact: true }).tap();
+    await settings.getByRole('button', { name: 'Sign out', exact: true }).tap();
+    await expect(page.locator('.settings-save-message')).toContainText(
+      'Signed out',
+      { timeout: 30_000 }
+    );
+    await expect(tile(page, 'Listing marker')).toHaveCount(0);
+  }
+);
+
+test(
+  'a copy deleted forever while the shelf is listing is not listed again',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize(SIZES[0]!);
+    await openCompactLibrary(page);
+    await newProject(page, 'Gone part');
+
+    const copied = page
+      .waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname.endsWith('/duplicate')
+      )
+      .then(
+        async (response) =>
+          ((await response.json()) as { document: ProjectDocument }).document
+      );
+    const sheet = await openProjectSheet(page, 'Gone part');
+    await sheet
+      .getByRole('button', { name: 'Duplicate project', exact: true })
+      .tap();
+    const copy = await copied;
+    await page.route(
+      `**/api/projects/${encodeURIComponent(copy.projectId)}`,
+      (route) =>
+        route.request().method() === 'DELETE'
+          ? route.fulfill({ status: 204 })
+          : route.fallback()
+    );
+
+    // Back to projects' account snapshot already holds the copy, and is held
+    // until the copy has been trashed and deleted forever.
+    const listing = await holdAccountListing(page, [
+      {
+        projectId: copy.projectId,
+        name: copy.name,
+        revisionCount: 1,
+        updatedAt: new Date().toISOString()
+      }
+    ]);
+    await backToLibrary(page);
+    await listing.out;
+    const copyTile = copyTiles(page, 'Gone part (copy)');
+    await expect(copyTile).toHaveCount(1, { timeout: 60_000 });
+    await page
+      .getByRole('button', {
+        name: 'Actions for Gone part (copy)',
+        exact: true
+      })
+      .tap();
+    await page
+      .getByRole('menu', { name: 'Actions for Gone part (copy)', exact: true })
+      .getByRole('menuitem', { name: 'Move to trash' })
+      .tap();
+    await expect(copyTile).toHaveCount(0);
+
+    const shelves = page.getByRole('group', { name: 'Shelves' });
+    await shelves.getByRole('button', { name: 'Trash' }).tap();
+    const trashed = page.locator('.start-tile-project', {
+      has: page.getByRole('group', { name: /^Gone part \(copy\),/ })
+    });
+    await expect(trashed).toBeVisible();
+    await page
+      .getByRole('button', {
+        name: 'Actions for Gone part (copy)',
+        exact: true
+      })
+      .tap();
+    await page
+      .getByRole('menu', { name: 'Actions for Gone part (copy)', exact: true })
+      .getByRole('menuitem', { name: 'Delete forever' })
+      .tap();
+    await page
+      .getByRole('alertdialog', { name: 'Delete “Gone part (copy)” forever?' })
+      .getByRole('button', { name: 'Delete forever' })
+      .tap();
+    await expect(trashed).toHaveCount(0);
+
+    // The listing that read the copy before it was deleted reaches the
+    // shelf (its marker shows) without it, on either shelf.
+    listing.release();
+    await shelves.getByRole('button', { name: 'Projects' }).tap();
+    await expect(tile(page, 'Listing marker')).toBeVisible({
+      timeout: 60_000
+    });
+    await expect(copyTile).toHaveCount(0);
+    await expect(tile(page, 'Gone part')).toHaveCount(1);
+    await shelves.getByRole('button', { name: 'Trash' }).tap();
+    await expect(trashed).toHaveCount(0);
+  }
+);
