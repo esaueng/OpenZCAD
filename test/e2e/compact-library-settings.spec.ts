@@ -733,10 +733,10 @@ test(`settings at ${PHONE.width}×${PHONE.height}: a device-approval link opens 
 
 /**
  * Holds every account listing from now until released, then answers it with
- * one marker row: an account snapshot taken before any copy was stored, and a
- * way to tell when that listing has reached the shelf.
+ * one marker row (and any `rows`): an account snapshot taken before any copy
+ * was stored, and a way to tell when that listing has reached the shelf.
  */
-async function holdAccountListing(page: Page) {
+async function holdAccountListing(page: Page, rows: object[] = []) {
   let sent!: () => void;
   const out = new Promise<void>((resolve) => (sent = resolve));
   let release!: () => void;
@@ -753,7 +753,8 @@ async function holdAccountListing(page: Page) {
             name: 'Listing marker',
             revisionCount: 1,
             updatedAt: new Date().toISOString()
-          }
+          },
+          ...rows
         ]
       }
     });
@@ -984,5 +985,99 @@ test(
       { timeout: 30_000 }
     );
     await expect(tile(page, 'Listing marker')).toHaveCount(0);
+  }
+);
+
+test(
+  'a copy deleted forever while the shelf is listing is not listed again',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize(SIZES[0]!);
+    await openCompactLibrary(page);
+    await newProject(page, 'Gone part');
+
+    const copied = page
+      .waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname.endsWith('/duplicate')
+      )
+      .then(
+        async (response) =>
+          ((await response.json()) as { document: ProjectDocument }).document
+      );
+    const sheet = await openProjectSheet(page, 'Gone part');
+    await sheet
+      .getByRole('button', { name: 'Duplicate project', exact: true })
+      .tap();
+    const copy = await copied;
+    await page.route(
+      `**/api/projects/${encodeURIComponent(copy.projectId)}`,
+      (route) =>
+        route.request().method() === 'DELETE'
+          ? route.fulfill({ status: 204 })
+          : route.fallback()
+    );
+
+    // Back to projects' account snapshot already holds the copy, and is held
+    // until the copy has been trashed and deleted forever.
+    const listing = await holdAccountListing(page, [
+      {
+        projectId: copy.projectId,
+        name: copy.name,
+        revisionCount: 1,
+        updatedAt: new Date().toISOString()
+      }
+    ]);
+    await backToLibrary(page);
+    await listing.out;
+    const copyTile = copyTiles(page, 'Gone part (copy)');
+    await expect(copyTile).toHaveCount(1, { timeout: 60_000 });
+    await page
+      .getByRole('button', {
+        name: 'Actions for Gone part (copy)',
+        exact: true
+      })
+      .tap();
+    await page
+      .getByRole('menu', { name: 'Actions for Gone part (copy)', exact: true })
+      .getByRole('menuitem', { name: 'Move to trash' })
+      .tap();
+    await expect(copyTile).toHaveCount(0);
+
+    const shelves = page.getByRole('group', { name: 'Shelves' });
+    await shelves.getByRole('button', { name: 'Trash' }).tap();
+    const trashed = page.locator('.start-tile-project', {
+      has: page.getByRole('group', { name: /^Gone part \(copy\),/ })
+    });
+    await expect(trashed).toBeVisible();
+    await page
+      .getByRole('button', {
+        name: 'Actions for Gone part (copy)',
+        exact: true
+      })
+      .tap();
+    await page
+      .getByRole('menu', { name: 'Actions for Gone part (copy)', exact: true })
+      .getByRole('menuitem', { name: 'Delete forever' })
+      .tap();
+    await page
+      .getByRole('alertdialog', { name: 'Delete “Gone part (copy)” forever?' })
+      .getByRole('button', { name: 'Delete forever' })
+      .tap();
+    await expect(trashed).toHaveCount(0);
+
+    // The listing that read the copy before it was deleted reaches the
+    // shelf (its marker shows) without it, on either shelf.
+    listing.release();
+    await shelves.getByRole('button', { name: 'Projects' }).tap();
+    await expect(tile(page, 'Listing marker')).toBeVisible({
+      timeout: 60_000
+    });
+    await expect(copyTile).toHaveCount(0);
+    await expect(tile(page, 'Gone part')).toHaveCount(1);
+    await shelves.getByRole('button', { name: 'Trash' }).tap();
+    await expect(trashed).toHaveCount(0);
   }
 );
