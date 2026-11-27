@@ -41,13 +41,19 @@ describe('edge modifier fallback advice', () => {
   );
 
   it('does not advise a smaller size once every smaller size was refused', () => {
+    // Every rung refused with the requested size's own code: the one proof
+    // "smaller sizes were refused too" rests on.
     const fillet = edgeModifierFailureMessage(
-      refusingKernel,
+      ladderKernel('fillet-failed').kernel,
       1,
       [2, 3],
       'fillet',
       3,
-      false
+      false,
+      'fillet-failed: an invented kernel sentence',
+      undefined,
+      undefined,
+      'fillet-failed'
     );
     expect(fillet).toBe(
       'Fillet could not be created on 2 selected edges with radius 3. ' +
@@ -55,12 +61,16 @@ describe('edge modifier fallback advice', () => {
         'Try rounding fewer edges at once, or different edges.'
     );
     const chamfer = edgeModifierFailureMessage(
-      refusingKernel,
+      ladderKernel('fillet-failed').kernel,
       1,
       [2],
       'chamfer',
       1.5,
-      false
+      false,
+      'fillet-failed: an invented kernel sentence',
+      undefined,
+      undefined,
+      'fillet-failed'
     );
     expect(chamfer).toBe(
       'Chamfer could not be created on 1 selected edge with distance 1.5. ' +
@@ -72,12 +82,16 @@ describe('edge modifier fallback advice', () => {
 
   it('returns the same verdict as data, so a control never reads the sentence', () => {
     const refusal = edgeModifierRefusal(
-      refusingKernel,
+      ladderKernel('fillet-failed').kernel,
       1,
       [2, 3],
       'fillet',
       3,
-      false
+      false,
+      'fillet-failed: an invented kernel sentence',
+      undefined,
+      undefined,
+      'fillet-failed'
     );
     expect(refusal.advice).toEqual({
       operation: 'fillet',
@@ -106,7 +120,7 @@ describe('edge modifier fallback advice', () => {
  * (face 10, a torus) shares edge 5 with the wall, away from the rim.
  * Anything this table does not answer throws, as a refusing kernel does.
  */
-function rimKernel(): RemusKernel {
+function rimKernel(refusalCode?: string): RemusKernel {
   const arcVertices: Record<number, [number, number]> = {
     1: [11, 12],
     2: [12, 13],
@@ -140,7 +154,16 @@ function rimKernel(): RemusKernel {
     evaluateEdgeCurve: () => Float64Array.from([4.24, 4.24, 28]),
     getSolidFaces: () => Uint32Array.from([8, 9, 10]),
     getFaceEdges: (face) => Uint32Array.from(faceEdges[face] ?? []),
-    getSurfaceType: (face) => surfaces[face] ?? 'plane'
+    getSurfaceType: (face) => surfaces[face] ?? 'plane',
+    // With a code, every rung of the ladder reaches the kernel's typed
+    // blend and is refused with it; without one, the rungs throw.
+    ...(refusalCode
+      ? {
+          boundingBox: () => Float64Array.from([-6, -6, 0, 6, 6, 28]),
+          filletDetailed: () => typedRefusal(refusalCode),
+          chamferDetailed: () => typedRefusal(refusalCode)
+        }
+      : {})
   };
   return new Proxy(
     {},
@@ -152,6 +175,15 @@ function rimKernel(): RemusKernel {
         })
     }
   ) as RemusKernel;
+}
+
+function typedRefusal(code: string) {
+  return {
+    status: 'error',
+    code,
+    category: 'internal',
+    details: { kernelCode: code, message: 'an invented kernel sentence' }
+  };
 }
 
 describe('a closed rim split into arcs', () => {
@@ -179,13 +211,16 @@ describe('a closed rim split into arcs', () => {
 
   it('explains a trimming refusal on the wall that meets an earlier round', () => {
     const message = edgeModifierFailureMessage(
-      rimKernel(),
+      rimKernel('trimming-failure'),
       7,
       [1, 2, 3, 4],
       'fillet',
       1,
       false,
-      'trimming-failure: blend: trimming failure on face Id(9)'
+      'trimming-failure: blend: trimming failure on face Id(9)',
+      undefined,
+      undefined,
+      'trimming-failure'
     );
     expect(message).toBe(
       'Fillet could not be created on the selected closed edge with radius 1. ' +
@@ -198,13 +233,16 @@ describe('a closed rim split into arcs', () => {
 
   it('does not blame an earlier round the trimmed face never meets', () => {
     const message = edgeModifierFailureMessage(
-      rimKernel(),
+      rimKernel('trimming-failure'),
       7,
       [1, 2, 3, 4],
       'chamfer',
       1,
       false,
-      'trimming-failure: blend: trimming failure on face Id(8)'
+      'trimming-failure: blend: trimming failure on face Id(8)',
+      undefined,
+      undefined,
+      'trimming-failure'
     );
     expect(message).toContain('could not trim the flat face beside it.');
     expect(message).not.toContain('earlier fillet');
@@ -335,6 +373,69 @@ describe('the fallback claims smaller sizes failed only when one was tried', () 
         'Smaller radii were refused too, so a different size is unlikely to help. ' +
         'Try rounding fewer edges at once, or different edges.'
     });
+  });
+
+  it('makes no claim when a rung was discarded without a code', () => {
+    // The requested radius 4 came back unaccepted with no typed refusal, and
+    // so did every rung: the exact-only probe discards an approximate result
+    // without a code, though the normal build would accept that size. Two
+    // missing codes are not the same refusal (review of 72942e1).
+    const calls: number[] = [];
+    const table: Record<string, unknown> = {
+      boundingBox: () => Float64Array.from([0, 0, 0, 10, 10, 10]),
+      filletDetailed: (_target: number, _edges: Uint32Array, size: number) => {
+        calls.push(size);
+        return { status: 'ok', value: 99, details: { quality: 'approximate' } };
+      }
+    };
+    const kernel = new Proxy(
+      {},
+      {
+        get: (_target, name: string) =>
+          table[name] ??
+          (() => {
+            throw new Error('refused');
+          })
+      }
+    ) as RemusKernel;
+    for (const edges of [[2], [2, 3]]) {
+      calls.length = 0;
+      const refusal = edgeModifierRefusal(
+        kernel,
+        1,
+        edges,
+        'fillet',
+        4,
+        false,
+        'Fillet did not produce a changed solid.',
+        undefined,
+        undefined,
+        null
+      );
+      // The ladder ran every rung, and none is a refusal.
+      expect(calls).toEqual([2, 0.5, 0.0625]);
+      expect(refusal.advice?.kind).toBe('structural');
+      expect(refusal.message, edges.join(',')).not.toMatch(/[Ss]maller/);
+    }
+  });
+
+  it('makes no claim for a named cause whose rungs threw', () => {
+    // Throwing rungs carry no code, so the trim-face sentence makes no claim
+    // even though the requested size was typed.
+    const message = edgeModifierFailureMessage(
+      rimKernel(),
+      7,
+      [1, 2, 3, 4],
+      'fillet',
+      1,
+      false,
+      'trimming-failure: blend: trimming failure on face Id(9)',
+      undefined,
+      undefined,
+      'trimming-failure'
+    );
+    expect(message).toContain('could not trim the cylindrical face beside it');
+    expect(message).not.toMatch(/[Ss]maller/);
   });
 
   it('drops the claim from a named cause too when no rung ran', () => {

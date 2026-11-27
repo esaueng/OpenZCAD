@@ -781,6 +781,22 @@ export function plainRefusal(
     ...(category ? { category } : {}),
     ...(typed?.code ? { code: typed.code } : {})
   };
+  // A typed code is read first: it is the branchable field, and the text
+  // rules below match the whole sentence, which can include a name the user
+  // gave a feature (a Mirror called "Body no longer exists" lost its
+  // typed sentence to the lost-selection rule).
+  const byCode = typed ? typedSentence(typed) : null;
+  if (byCode) {
+    const detail = [sentence, tail].filter(Boolean).join('\n');
+    return {
+      message: byCode,
+      detail,
+      ...classified,
+      ...(typed?.code === 'cylinder-diameter-unbuildable'
+        ? { headline: byCode }
+        : {})
+    };
+  }
   // A lost selection is read by the card to know that no value can help; a
   // parse error names the entity of the file that is broken. Both stay. So
   // do the STEP importer's own sentences, which name each solid it dropped
@@ -799,18 +815,6 @@ export function plainRefusal(
     return tail
       ? { message: sentence, detail: tail, ...classified }
       : { message: sentence, ...classified };
-  }
-  const byCode = typed ? typedSentence(typed) : null;
-  if (byCode) {
-    const detail = [sentence, tail].filter(Boolean).join('\n');
-    return {
-      message: byCode,
-      detail,
-      ...classified,
-      ...(typed?.code === 'cylinder-diameter-unbuildable'
-        ? { headline: byCode }
-        : {})
-    };
   }
   const translation = TRANSLATIONS.find(({ pattern }) =>
     pattern.test(sentence)

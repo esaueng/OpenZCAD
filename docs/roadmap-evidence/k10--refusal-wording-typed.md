@@ -8,12 +8,14 @@ suppressed, or its feature failed) now throws the adapter's typed
 `mirror_source_unavailable` (`reference` / `invalid_input`) instead of the
 bare "Mirror target is unavailable.", and the web words it from the code,
 including after a refused body's name in the multi-body Mirror bar
-(`test/mirror-several-bodies.test.ts`, `refusalLanguage.test.ts`,
+whatever the feature is named, since a typed code is now read before the
+text rules (`test/mirror-several-bodies.test.ts`, `refusalLanguage.test.ts`,
 `InPlaceCommandBar.test.tsx`). Every "smaller sizes failed too" clause in
 the fillet and chamfer diagnosis (`neighbor-faces`, `unknown`, `closed-rim`,
 `ends-on-blend`, `trim-face`) now needs a smaller rung that actually ran and
-was refused the way the requested size was (#2201's rule); an empty ladder
-or rungs refused for another reason get the same cause without the claim
+was refused with the requested size's own typed code (#2201's rule); an
+empty ladder, rungs refused with another code, and rungs discarded or thrown
+without a code get the same cause without the claim
 (`edge-modifier-fallback.test.ts`, Cell 4b's 1.5e-9 mm case in
 `test/boolean-role-correction.test.ts`). An in-place value refusal no longer
 repeats the tool's last word ("Solid offset offset", "Draft draft", "Gear

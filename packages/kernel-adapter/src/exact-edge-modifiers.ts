@@ -1251,7 +1251,8 @@ export function edgeModifierRefusal(
    * The kernel code of the requested size's typed refusal, or `null` when
    * it was not a typed kernel refusal (an acceptance rule declined the
    * result, or the call threw). A sentence says smaller sizes failed too
-   * only when a smaller rung ran and was refused the same way.
+   * only when this is a code and a smaller rung ran and was refused with it;
+   * two missing codes are never the same refusal.
    */
   reportedCode: string | null = null
 ): { message: string; advice: BlendRefusalAdvice | null } {
@@ -1295,10 +1296,13 @@ export function edgeModifierRefusal(
   // Whether a smaller rung actually ran and the kernel refused it with the
   // same catch-all code as the requested size.
   let smallerRungCatchAll = false;
-  // Whether a smaller rung actually ran and was refused the way the
-  // requested size was: the same typed code, or neither typed. Every "smaller
-  // sizes failed too" below rests on this, never on the ladder returning
-  // null, which it also does when no rung was small enough to run (#2201).
+  // Whether a smaller rung actually ran and the kernel refused it with the
+  // same typed code as the requested size. Every "smaller sizes failed too"
+  // below rests on this, never on the ladder returning null, which it also
+  // does when no rung was small enough to run (#2201). A rung with no code is
+  // not a refusal: the exact-only probe discards an approximate or otherwise
+  // unaccepted result without one, and that result may well be a size the
+  // normal build accepts.
   let smallerRungRefusedAlike = false;
   try {
     const laddered = acceptedEdgeModifierProbe(
@@ -1313,7 +1317,11 @@ export function edgeModifierRefusal(
         if (refusal?.kernelCode === CATCH_ALL_BLEND_CODE) {
           smallerRungCatchAll = true;
         }
-        if ((refusal?.kernelCode ?? null) === reportedCode) {
+        if (
+          reportedCode !== null &&
+          refusal !== null &&
+          refusal.kernelCode === reportedCode
+        ) {
           smallerRungRefusedAlike = true;
         }
       }

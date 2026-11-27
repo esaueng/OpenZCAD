@@ -415,6 +415,15 @@ describe('plainRefusal with the kernel category', () => {
         code: 'unsupported_move_face'
       });
     }
+    // A sentence the verbatim rules keep does not shadow the code either.
+    expect(
+      plainRefusal(
+        'Feature "Old face no longer exists": an opaque kernel sentence',
+        typed('partial_reversed_wall')
+      ).message
+    ).toBe(
+      "This hole's wall doesn't end in full circles, which resizing can't follow yet. Change the size on the original shape in History instead."
+    );
     // A cause with no sentence of its own falls back to the category.
     expect(plainRefusal(raw, typed('unclassified')).message).toBe(
       'The exact kernel does not support this combination of shapes yet.'
@@ -440,6 +449,18 @@ describe('a Mirror whose source body is not built', () => {
     expect(MIRROR_SOURCE_UNAVAILABLE).toBe(
       "The body to mirror isn't built at this point in the history. It may be suppressed, or its feature may have failed."
     );
+  });
+
+  it('is worded from its code whatever the feature is named', () => {
+    // A user's feature name matched the verbatim rule for a lost selection
+    // ("no longer exists") ahead of the code (review of 72942e1).
+    const named =
+      'Feature "Body no longer exists": Mirror target is unavailable.';
+    expect(plainRefusal(named, record)).toEqual({
+      message: MIRROR_SOURCE_UNAVAILABLE,
+      detail: named,
+      ...record
+    });
   });
 
   it('does not read the code from the sentence', () => {
