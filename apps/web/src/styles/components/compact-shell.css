@@ -1049,6 +1049,66 @@
   bottom: var(--sp-2);
 }
 
+/* The stage's status ("Added box.", "Section on" and its Undo) stands
+   over the undo pair, where the action notice stands, clear of the sheet
+   at any height. Placed by the regular stage's notice lane it stood at the
+   stage's foot, under the sheet: a strip of it showed over the sheet at
+   peek and a tap there reached its Undo, which turned Section back off. A
+   sketch's notices stand higher still, over its relations row (below). */
+.app-shell[data-shell='compact']
+  .workspace.column-layout
+  :is(.workspace-toast, .activity-lane) {
+  left: max(var(--sp-2), env(safe-area-inset-left));
+  right: max(var(--sp-2), env(safe-area-inset-right));
+  bottom: calc(
+    var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2
+  );
+}
+
+/* A full sheet leaves no stage to show it on: it waits, still read out. */
+.app-shell[data-shell='compact']:has(.compact-sheet[data-detent='full'])
+  .workspace.column-layout
+  :is(.workspace-toast, .activity-lane) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app-shell[data-shell='compact']:has(.compact-sheet[data-detent='full'])
+  .workspace.column-layout
+  .workspace-toast
+  :is(.workspace-toast-body, .workspace-toast-undo) {
+  pointer-events: none;
+}
+
+/* Held landscape, beside the side sheet rather than centred on the whole
+   width, where the sheet covered its right half. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .app-shell[data-shell='compact']:has(.compact-sheet:not([hidden]))
+    .workspace.column-layout
+    :is(.workspace-toast, .activity-lane) {
+    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
+    bottom: calc(var(--compact-target) + var(--sp-2) * 2);
+  }
+}
+
+/* A tray's row on the stage (Assemble's Exploded chip) stands over the
+   undo pair: the status stands over that row in turn. */
+.app-shell[data-shell='compact']:has(.compact-stage-tray:not(:empty))
+  .workspace.column-layout
+  :is(.workspace-toast, .activity-lane) {
+  bottom: calc(
+    var(--compact-sheet-h, 0px) + var(--compact-target) * 2 + var(--sp-2) * 3
+  );
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .app-shell[data-shell='compact']:has(.compact-stage-tray:not(:empty))
+    .workspace.column-layout
+    :is(.workspace-toast, .activity-lane) {
+    bottom: calc(var(--compact-target) * 2 + var(--sp-2) * 3);
+  }
+}
+
 /* As on the regular stage (quiet-stage.css), a settled status only repeats
    what the notice has just said, so it steps aside while the notice is up. */
 .app-shell[data-shell='compact']:has(.compact-notice-host .toast:not(.closing))
@@ -1110,6 +1170,29 @@
   border-radius: var(--radius-lg);
   background: var(--color-surface-2);
   box-shadow: none;
+}
+
+/* Half the stage is too short for the whole pad under the tray row on a
+   phone held upright: its lower rows stood below the sheet's foot. The
+   sheet grows to hold all of it, never past the stage's height, with the
+   model in view above where the stage has the room. Held landscape, the
+   side sheet already stands the stage's full height; the pad scrolls in
+   it, and a key's tap leaves the scroll where it is (NumericKeypad). */
+.app-shell[data-shell='compact']
+  .compact-sheet[data-detent='half']:has(
+    > .compact-sheet-body:not([hidden]) .numeric-keypad
+  ) {
+  height: auto;
+  min-height: 50%;
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .app-shell[data-shell='compact']
+    .compact-sheet[data-detent='half']:has(
+      > .compact-sheet-body:not([hidden]) .numeric-keypad
+    ) {
+    height: 100%;
+  }
 }
 
 /* ── Feature forms and operation cards in the sheet ── */
@@ -1562,9 +1645,42 @@
     .rail-section-icon,
     .rail-section-flip,
     .analysis-panel-off,
-    .measurement-row-actions button
+    .measurement-row-actions button,
+    .measurement-settings-toggle
   ) {
   min-width: var(--compact-target);
+}
+
+/* A kept measurement's Hide, Copy, Edit and Delete on a line of their own
+   under its value, shown on every row, whatever the pointer: the desktop
+   row holds them in a 108 px track beside the value, revealed on hover,
+   and touch-targets.css lays them out this way only under a coarse
+   pointer. A compact window driven by a mouse squeezed all four into that
+   track, Delete past the sheet's edge and the page scrolling sideways. */
+.compact-tray-page .measurement-row-main {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.compact-tray-page .measurement-row-actions {
+  position: static;
+  justify-self: end;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  width: auto;
+  max-width: 100%;
+  margin: -4px 0 4px;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* An analysis's Details, a finger's size like the rest of the page. */
+.compact-tray-page .analysis-about > summary {
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
 }
 
 /* A part's Show only and Hide stand in its row: there is no hover to
@@ -2783,6 +2899,12 @@
   min-width: var(--compact-target);
   min-height: var(--compact-target);
   justify-content: center;
+}
+
+/* An animation's name and length stand in the middle of its 44 px row,
+   not on the baseline at its top. */
+.compact-assemble-page .assembly-study-select {
+  align-items: center;
 }
 
 /* Shown, not hover-revealed: there is no hover on a touch screen. */

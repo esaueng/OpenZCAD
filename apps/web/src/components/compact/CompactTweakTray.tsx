@@ -105,7 +105,8 @@ export type ParameterDraftOwner = { current: object | null };
 
 /**
  * An exposed parameter as a large row: its name, its value (tap for the
- * keypad), and − / + steppers. An on/off parameter is one switch. A value
+ * keypad), and − / + steppers, each named by the parameter's label as the
+ * row shows it ("Decrease Plate t"), not by its expression id. An on/off parameter is one switch. A value
  * set by an expression keeps its expression: the steppers leave it alone,
  * and the keypad opens on it.
  */
@@ -198,7 +199,7 @@ export function CompactParameterRow({
           type="button"
           role="switch"
           className="compact-switch"
-          aria-label={`Toggle ${parameter.name}`}
+          aria-label={`Toggle ${name}`}
           aria-checked={value === 1}
           onClick={() => void set(value === 1 ? '0' : '1')}
         >
@@ -223,7 +224,7 @@ export function CompactParameterRow({
         <button
           type="button"
           className="compact-round-button"
-          aria-label={`Decrease ${parameter.name}`}
+          aria-label={`Decrease ${name}`}
           disabled={
             !steppable ||
             pending ||
@@ -236,7 +237,7 @@ export function CompactParameterRow({
         <button
           type="button"
           className="compact-param-value"
-          aria-label={`Edit ${parameter.name}`}
+          aria-label={`Edit ${name}`}
           aria-describedby={
             error ? `compact-param-error-${parameter.parameterId}` : undefined
           }
@@ -249,7 +250,7 @@ export function CompactParameterRow({
         <button
           type="button"
           className="compact-round-button"
-          aria-label={`Increase ${parameter.name}`}
+          aria-label={`Increase ${name}`}
           disabled={!steppable || pending}
           onClick={() => step(1)}
         >

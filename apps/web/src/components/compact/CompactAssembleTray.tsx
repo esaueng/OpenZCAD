@@ -1,5 +1,6 @@
-import { Boxes, Expand, Link2, MoveVertical, Play } from 'lucide-react';
+import { Boxes, Expand, Link2, MoveVertical, Play, X } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   assemblyRuntime,
   getAssemblyRuntime,
@@ -153,6 +154,28 @@ export function CompactAssembleTray(props: CompactAssembleTrayProps) {
     () => playerStudies(assembly).length === 0,
     [assembly]
   );
+  // Exploded stays on away from its page, where a drag pulls a part out
+  // rather than turning its joint: a chip on the stage says so wherever
+  // else the sheet stands, and puts the parts back together.
+  const explodedChip =
+    exploded && page !== 'explode' && tray?.stageHost
+      ? createPortal(
+          <button
+            type="button"
+            className="compact-analysis-chip"
+            aria-label="Turn off exploded view"
+            title="Exploded view: a drag pulls a part out. Tap to assemble."
+            onClick={() => assemblyRuntime.setExploded(false)}
+          >
+            <span className="compact-selection-dot" aria-hidden="true" />
+            <span className="compact-selection-text" aria-hidden="true">
+              Exploded
+            </span>
+            <X size={18} aria-hidden="true" />
+          </button>,
+          tray.stageHost
+        )
+      : null;
   const pagePanel = (key: Exclude<AssemblePage, 'play'>) => (
     <TrayPage page={key} onStageCovered={onStageCovered}>
       <div className="compact-assemble-page">
@@ -175,6 +198,7 @@ export function CompactAssembleTray(props: CompactAssembleTrayProps) {
   );
   return (
     <>
+      {explodedChip}
       <TrayRow label="Assemble tools" items={items} page={page} />
       <TrayPage page="measure" onStageCovered={onStageCovered}>
         {measure.dock}

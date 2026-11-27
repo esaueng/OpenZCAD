@@ -447,7 +447,7 @@ test.describe('View and Tweak in the compact sheet', () => {
 
         // A parameter, typed on the keypad.
         await tweak('Parameters').tap();
-        const edit = sheet(page).getByRole('button', { name: 'Edit width' });
+        const edit = sheet(page).getByRole('button', { name: 'Edit Width' });
         await expect(edit).toContainText('20');
         await edit.tap();
         const keypad = page.getByRole('dialog', { name: /value$/ });
@@ -460,7 +460,7 @@ test.describe('View and Tweak in the compact sheet', () => {
         await expect(keypad).toHaveCount(0);
         await expect(edit).toContainText('30', { timeout: 30_000 });
         // And a step.
-        await sheet(page).getByRole('button', { name: 'Increase width' }).tap();
+        await sheet(page).getByRole('button', { name: 'Increase Width' }).tap();
         await expect(edit).toContainText('31', { timeout: 30_000 });
         await expectTidy(page);
         await back(page);
@@ -624,10 +624,10 @@ test.describe('View and Tweak in the compact sheet', () => {
       await openSharedBracket(page);
       await trayButton(page, 'Tweak tools', 'Parameters').tap();
       const editWidth = sheet(page).getByRole('button', {
-        name: 'Edit width'
+        name: 'Edit Width'
       });
       const editDepth = sheet(page).getByRole('button', {
-        name: 'Edit depth'
+        name: 'Edit Depth'
       });
       await expect(editDepth).toContainText('4');
       // A Width draft, left open.

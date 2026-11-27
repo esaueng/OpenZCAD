@@ -120,4 +120,43 @@ describe('JointToolCard', () => {
       child: null
     });
   });
+
+  it('asks for picks with a tap on touch, and keeps Click for a mouse', () => {
+    const { live } = scissorsManager({ components: true });
+    act(() => assemblyRuntime.openJointTool());
+    const { unmount } = render(<JointToolCard document={live()} />);
+    expect(
+      screen.getByText('Click a hole, face or edge on the part that moves.')
+    ).toBeInTheDocument();
+    unmount();
+
+    // Drawn for touch (the compact sheet).
+    const touched = render(<JointToolCard document={live()} touch />);
+    expect(
+      screen.getByText('Tap a hole, face or edge on the part that moves.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Click/)).toBeNull();
+    touched.unmount();
+
+    // A touch-only device, wherever the card is drawn.
+    const matchMedia = vi
+      .spyOn(window, 'matchMedia')
+      .mockImplementation(
+        (query: string) =>
+          ({
+            matches: query === '(hover: none) and (pointer: coarse)',
+            media: query,
+            addEventListener: () => {},
+            removeEventListener: () => {}
+          }) as unknown as MediaQueryList
+      );
+    try {
+      render(<JointToolCard document={live()} />);
+      expect(
+        screen.getByText('Tap a hole, face or edge on the part that moves.')
+      ).toBeInTheDocument();
+    } finally {
+      matchMedia.mockRestore();
+    }
+  });
 });

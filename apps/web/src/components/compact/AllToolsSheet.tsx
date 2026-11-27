@@ -1,5 +1,5 @@
 import { Search } from 'lucide-react';
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   allToolsLead,
   allToolsSections,
@@ -18,8 +18,10 @@ import { useTrayReason } from './ContextTray';
  * Every tool in Build (U12 slice 4), as a sheet page: a search on top, the
  * recent (or pinned) row first, then the five groups. A tile is an icon with
  * one word under it and the tool's full name for assistive technology; a
- * tool that cannot run now stays tappable and says why. A tap launches the
- * tool through the workspace's own launch path.
+ * tool that cannot run now stays tappable and says why, under the group it
+ * was tapped in and scrolled into view: at the list's top it was off-screen
+ * once the list had scrolled. A tap launches the tool through the
+ * workspace's own launch path.
  */
 export function AllToolsSheet({
   build,
@@ -29,7 +31,14 @@ export function AllToolsSheet({
   onLaunch(tool: ToolId): void;
 }) {
   const [query, setQuery] = useState('');
-  const [reason, showReason] = useTrayReason();
+  const [reason, showReason, reasonTurn] = useTrayReason();
+  // The group the refused tile was tapped in. A recent tool stands in its
+  // own group as well; the reason goes under the tile that was tapped.
+  const [reasonSection, setReasonSection] = useState<string | null>(null);
+  const reasonRef = useRef<HTMLParagraphElement | null>(null);
+  useEffect(() => {
+    if (reasonTurn > 0) reasonRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [reasonTurn]);
   const headingId = useId();
   const sections = allToolsSections(
     query,
@@ -50,11 +59,6 @@ export function AllToolsSheet({
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
-      {reason ? (
-        <p className="compact-tray-reason" role="status">
-          {reason}
-        </p>
-      ) : null}
       {sections.map((section) => (
         <section
           key={section.id}
@@ -82,8 +86,12 @@ export function AllToolsSheet({
                     aria-pressed={build.activeTool === tool}
                     title={toolTitle(tool, build.availability, null)}
                     onClick={() => {
-                      if (disabled === null) onLaunch(tool);
-                      else showReason(`${TOOL_META[tool].label}: ${disabled}`);
+                      if (disabled === null) {
+                        onLaunch(tool);
+                        return;
+                      }
+                      setReasonSection(section.id);
+                      showReason(`${TOOL_META[tool].label}: ${disabled}`);
                     }}
                   >
                     <span className="compact-tool-icon" aria-hidden="true">
@@ -97,6 +105,11 @@ export function AllToolsSheet({
               );
             })}
           </ul>
+          {reason && reasonSection === section.id ? (
+            <p ref={reasonRef} className="compact-tray-reason" role="status">
+              {reason}
+            </p>
+          ) : null}
         </section>
       ))}
       {sections.length === 0 ? (

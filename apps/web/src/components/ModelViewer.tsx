@@ -9043,6 +9043,7 @@ export function ModelViewer({
      * folded the panels away.
      */
     function rightLaneLeft(withRail = false): number | null {
+      const canvasRect = renderer.domElement.getBoundingClientRect();
       const laneEdges = [
         ...(renderer.domElement
           .closest('.viewer-area')
@@ -9055,9 +9056,25 @@ export function ModelViewer({
         .map((element) => element.getBoundingClientRect())
         .filter((rect) => rect.width > 0)
         .map((rect) => rect.left);
+      // The compact workspace's sheet held landscape (U12) stands at the
+      // stage's right, over the canvas, outside the viewer: a value chip
+      // placed under it (a push/pull's) could be neither read nor tapped.
+      // Only a sheet beside the stage counts; one along its foot spans it.
+      const sideSheet = renderer.domElement
+        .closest('.app-shell[data-shell="compact"]')
+        ?.querySelector<HTMLElement>(
+          '.compact-sheet:not([hidden], [data-detent="full"])'
+        )
+        ?.getBoundingClientRect();
+      if (
+        sideSheet &&
+        sideSheet.width > 0 &&
+        sideSheet.left > canvasRect.left + canvasRect.width / 2
+      ) {
+        laneEdges.push(sideSheet.left);
+      }
       return laneEdges.length > 0
-        ? Math.min(...laneEdges) -
-            renderer.domElement.getBoundingClientRect().left
+        ? Math.min(...laneEdges) - canvasRect.left
         : null;
     }
 

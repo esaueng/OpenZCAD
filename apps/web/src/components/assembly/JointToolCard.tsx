@@ -23,10 +23,16 @@ import {
   suggestJointKind,
   unitSymbol
 } from '../../lib/assembly/assemblyUi';
+import { TOUCH_ONLY_QUERY, useMediaQuery } from '../../hooks/useMediaQuery';
 import { JointKindIcon } from './JointKindIcon';
 
 export interface JointToolCardProps {
   document: ProjectDocument;
+  /**
+   * Drawn for touch (the compact sheet, U12): the picks are asked for with
+   * a tap. A touch-only device says "Tap" without it; elsewhere "Click".
+   */
+  touch?: boolean;
 }
 
 /**
@@ -34,18 +40,28 @@ export interface JointToolCardProps {
  * the type, and Create. The viewport fills the picks; this card shows them,
  * suggests a type from what was picked, and refuses a pair already joined.
  */
-export function JointToolCard({ document }: JointToolCardProps) {
+export function JointToolCard({ document, touch = false }: JointToolCardProps) {
   const tool = useAssemblyRuntime((s) => s.jointTool);
+  const touchOnly = useMediaQuery(TOUCH_ONLY_QUERY);
   if (!tool) return null;
-  return <JointToolForm document={document} tool={tool} />;
+  return (
+    <JointToolForm
+      document={document}
+      tool={tool}
+      pickVerb={touch || touchOnly ? 'Tap' : 'Click'}
+    />
+  );
 }
 
 function JointToolForm({
   document,
-  tool
+  tool,
+  pickVerb
 }: {
   document: ProjectDocument;
   tool: AssemblyJointToolState;
+  /** How a pick is made on this device: a tap or a click. */
+  pickVerb: 'Tap' | 'Click';
 }) {
   const set = document.assembly;
   // Until a type is chosen by hand, the picks choose it.
@@ -137,13 +153,13 @@ function JointToolForm({
           'child',
           1,
           'Moving part',
-          'Click a hole, face or edge on the part that moves.'
+          `${pickVerb} a hole, face or edge on the part that moves.`
         )}
         {step(
           'parent',
           2,
           'Target',
-          'Click where it attaches on another part.'
+          `${pickVerb} where it attaches on another part.`
         )}
       </ol>
 

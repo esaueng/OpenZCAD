@@ -129,7 +129,8 @@ export interface AssemblyPanelProps {
   sections?: readonly AssemblyPanelSection[];
   /**
    * Touch: each part and joint offers Rename in its details, which a mouse
-   * reaches by double-click or the row's right-click menu.
+   * reaches by double-click or the row's right-click menu, and the joint
+   * card asks for its picks with a tap.
    */
   touch?: boolean;
 }
@@ -168,7 +169,7 @@ export function AssemblyPanel(props: AssemblyPanelProps) {
   return (
     <aside className="assembly-panel" aria-label="Assembly">
       {tool ? (
-        <JointToolCard document={document} />
+        <JointToolCard document={document} touch={props.touch ?? false} />
       ) : setup ? (
         <MotionSetupCard
           document={document}

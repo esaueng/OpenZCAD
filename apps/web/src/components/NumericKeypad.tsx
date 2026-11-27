@@ -942,7 +942,10 @@ function NumericKeypadControl({
       }
     }
     // Keep the value field focused so Enter/Escape always land on the pad.
-    inputRef.current?.focus();
+    // In the compact sheet (U12) the pad scrolls under the tray row: a key
+    // tapped below the fold must not scroll the field back into view, the
+    // keys out from under the finger.
+    inputRef.current?.focus({ preventScroll: asSheetRef.current });
   };
 
   // The missing name defined (here or anywhere else), the entry evaluates
@@ -1255,7 +1258,7 @@ function NumericKeypadControl({
           aria-controls={gridId}
           onClick={() => {
             setGridOpen((open) => !open);
-            inputRef.current?.focus();
+            inputRef.current?.focus({ preventScroll: asSheetRef.current });
           }}
         >
           <Ellipsis size={15} aria-hidden="true" />
