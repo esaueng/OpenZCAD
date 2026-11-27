@@ -165,6 +165,12 @@ export interface TopBarProps {
     /** L08: the owner shared the finished model without its history. */
     withoutHistory?: boolean;
     onMakeCopy(): void;
+    /**
+     * The signed-in viewer owns the shared project: the bar offers opening
+     * it in place of Make a copy, which made a second project of their own
+     * model.
+     */
+    onOpenOwnProject?: () => void;
   } | null;
   workspaceMode: WorkspaceMode;
   canRenameProject: boolean;
@@ -928,13 +934,15 @@ export function TopBar({
           <Tooltip
             label="Shared model"
             description={
-              shareSession.withoutHistory
-                ? shareSession.mode === 'tweak'
-                  ? 'The owner shared this model without its history: you can try parameter changes here, and they stay in this tab. A copy keeps the solids as you left them.'
-                  : 'The owner shared this model without its history: you have the finished solid, with no features, sketches or parameters. Make a copy to keep or change it.'
-                : shareSession.mode === 'view'
-                  ? 'Someone shared this model with you to look at. Make a copy to keep or change it.'
-                  : 'Someone shared this model with you. You can try parameter changes here; they stay in this tab. Make a copy to keep them.'
+              shareSession.onOpenOwnProject
+                ? 'This is your project’s share link, as visitors see it. Open your project to edit it; nothing changed here is kept.'
+                : shareSession.withoutHistory
+                  ? shareSession.mode === 'tweak'
+                    ? 'The owner shared this model without its history: you can try parameter changes here, and they stay in this tab. A copy keeps the solids as you left them.'
+                    : 'The owner shared this model without its history: you have the finished solid, with no features, sketches or parameters. Make a copy to keep or change it.'
+                  : shareSession.mode === 'view'
+                    ? 'Someone shared this model with you to look at. Make a copy to keep or change it.'
+                    : 'Someone shared this model with you. You can try parameter changes here; they stay in this tab. Make a copy to keep them.'
             }
             multiline
           >
@@ -1094,7 +1102,17 @@ export function TopBar({
           {/* Signed in is the happy default and the save status already shows
             cloud state, so the account chip appears only when something
             needs attention. */}
-          {shareSession ? (
+          {shareSession?.onOpenOwnProject ? (
+            <button
+              type="button"
+              className="primary topbar-share-copy"
+              title="This is your project’s share link, as visitors see it"
+              onClick={shareSession.onOpenOwnProject}
+            >
+              <FolderOpen size={14} aria-hidden="true" />
+              Open your project
+            </button>
+          ) : shareSession ? (
             <button
               type="button"
               className="primary topbar-share-copy"

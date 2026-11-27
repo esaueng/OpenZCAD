@@ -2,10 +2,16 @@ import {
   test,
   expect,
   shareLoadResponse,
-  stubAnonymousApi
+  stubAnonymousApi,
+  stubApi,
+  promptField,
+  createPrimitiveInPlace
 } from './openzcad-fixtures';
-import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import {
+  createProjectDocument,
+  sharedProjectSnapshotDocument
+} from '@openzcad/document-core';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 
 async function holdRestoreResult(page: Page) {
@@ -279,4 +285,136 @@ test('a newer share wins over a held restore that saves locally without opening'
     release();
     await releaseRestore(page);
   }
+});
+
+test('the owner opening their own share link is offered the project, not a copy', async ({
+  page
+}) => {
+  await stubApi(page);
+  let own: ProjectDocument | null = null;
+  page.on('response', async (response) => {
+    if (
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/api/projects' &&
+      response.ok()
+    ) {
+      own = ((await response.json()) as { document: ProjectDocument })
+        .document;
+    }
+  });
+  // The account lists the owner's project with its live link, as the
+  // Worker marks it (`withProjectSharing`).
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'GET' && own
+      ? route.fulfill({
+          json: {
+            projects: [
+              {
+                projectId: own.projectId,
+                name: own.name,
+                revisionCount: 1,
+                updatedAt: new Date().toISOString(),
+                sharing: { role: 'owner', linkCount: 1 }
+              }
+            ]
+          }
+        })
+      : route.fallback()
+  );
+  await page.route('**/api/share', (route) =>
+    own
+      ? route.fulfill({
+          json: {
+            // What the Worker serves: the owner's id taken out.
+            document: sharedProjectSnapshotDocument(own),
+            project: { projectId: own.projectId, name: own.name },
+            mode: 'tweak'
+          }
+        })
+      : route.fulfill({ status: 404, json: { error: 'Unavailable' } })
+  );
+  // Nothing the public session holds is saved over the project.
+  const snapshotWrites: string[] = [];
+  page.on('request', (request) => {
+    if (
+      request.method() !== 'GET' &&
+      new URL(request.url()).pathname.startsWith('/api/projects') &&
+      (request.postData() ?? '').includes('user_shared')
+    )
+      snapshotWrites.push(request.url());
+  });
+  // The project's view as this device remembers it.
+  const rememberedProjection = () =>
+    page.evaluate((projectId) => {
+      const stored = JSON.parse(
+        localStorage.getItem('openzcad-workspace-session:v1') ?? '{}'
+      ) as { views?: Record<string, { projection?: string }> };
+      return stored.views?.[projectId]?.projection ?? null;
+    }, own!.projectId);
+  const orthographic = page.getByRole('button', {
+    name: /^Orthographic projection/
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Own shared bracket');
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
+  await expect(page.locator('.breadcrumb')).toContainText('Own shared bracket');
+  await expect.poll(() => own !== null).toBe(true);
+  // A body gives the project a camera, which this device remembers.
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '30', depth: '20', height: '10' }
+  });
+  await expect.poll(rememberedProjection).toBe('perspective');
+
+  // Pasted into a fresh load, as a link is opened: the account listing
+  // read on the way in is the one that marks the project as the owner's.
+  const token = 'o'.repeat(43);
+  await page.goto('about:blank');
+  const opened = shareLoadResponse(page, token);
+  await page.goto(`/#share=${token}`);
+  await opened;
+  await expect(
+    page.getByRole('status', { name: 'Shared model · Tweak only' })
+  ).toBeVisible();
+  const openOwn = page.getByRole('button', {
+    name: 'Open your project',
+    exact: true
+  });
+  await expect(openOwn).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toHaveCount(0);
+  // Build's commands point the owner to the project, not to a copy.
+  const field = promptField(page);
+  await field.fill('/Extrude');
+  const extrude = page
+    .getByRole('listbox', { name: 'Commands' })
+    .getByRole('option')
+    .filter({
+      has: page.locator('.palette-label', { hasText: /^Extrude$/ })
+    });
+  await expect(extrude).toHaveAttribute('aria-disabled', 'true');
+  await expect(extrude.locator('.palette-reason')).toHaveText(
+    'This is your project’s share link — Open your project to open Build mode'
+  );
+  await page.keyboard.press('Escape');
+  // The link's view is not remembered as the project's: the project reopens
+  // as the owner left it, as the Shared-model tooltip promises.
+  await orthographic.click();
+  await expect(orthographic).toHaveAttribute('aria-pressed', 'true');
+  // Past the effect that would have saved it.
+  await page.waitForTimeout(500);
+  expect(await rememberedProjection()).toBe('perspective');
+
+  await openOwn.click();
+  await expect(
+    page.getByRole('status', { name: 'Shared model · Tweak only' })
+  ).toHaveCount(0);
+  await expect(page.locator('.breadcrumb')).toContainText('Own shared bracket');
+  await expect(
+    page.getByRole('button', { name: 'Build', exact: true })
+  ).toBeEnabled();
+  expect(new URL(page.url()).hash).toBe('');
+  expect(snapshotWrites).toEqual([]);
+  await expect(orthographic).toHaveAttribute('aria-pressed', 'false');
+  expect(await rememberedProjection()).toBe('perspective');
 });

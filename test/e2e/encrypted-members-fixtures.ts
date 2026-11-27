@@ -1,5 +1,6 @@
 import type { BrowserContext, Page, Browser } from '@playwright/test';
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
+import { withProjectSharing } from '../../apps/web/worker/projectSharingListing';
 import { d1Database } from '../d1-sqlite';
 import { createPrimitiveInPlace, expect, stubApi } from './openzcad-fixtures';
 import {
@@ -50,7 +51,10 @@ async function listing(server: E2eeServer, userId: string) {
     revision_count: number;
     updated_at: string;
   }[];
-  return withEncryptedProjectInfo(d1Database(server.db), userId, {
+  const db = d1Database(server.db);
+  // Marked as the Worker marks it (`GET /api/projects`): sharing, then the
+  // encrypted names.
+  const listed = await withProjectSharing(db, userId, {
     projects: rows.map((row) => ({
       projectId: row.id as never,
       name: 'Encrypted project',
@@ -61,6 +65,7 @@ async function listing(server: E2eeServer, userId: string) {
       storageFormat: 2
     }))
   });
+  return withEncryptedProjectInfo(db, userId, listed);
 }
 
 /** The metadata route the sharing dialog reads members from. */

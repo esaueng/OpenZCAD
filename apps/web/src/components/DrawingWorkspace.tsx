@@ -266,11 +266,20 @@ import {
 } from '../lib/drawing/annotationPicking';
 import {
   ANNOTATION_TOOL_KEYS,
-  ANNOTATION_TOOLS,
   AUXILIARY_TOOL_KEY,
   DETAIL_TOOL_KEY,
   SECTION_TOOL_KEY
 } from '../lib/drawing/toolKeys';
+import {
+  ANNOTATION_TOOL_NAMES,
+  DRAWING_NO_SHEET_REASON,
+  DRAWING_TOOL_ACTIONS,
+  drawingToolAction,
+  drawingToolActionForKey,
+  type DrawingToolActionId,
+  type DrawingToolBridge,
+  type DrawingToolStatus
+} from '../lib/drawing/toolActions';
 import { CHARACTERISTIC_LABELS } from '../lib/drawing/toleranceFrames';
 
 // Draw's compact tray (U12 slice 9) loads only where the compact workspace
@@ -427,6 +436,12 @@ export interface DrawingWorkspaceProps {
     sheetId: DrawingSheetId;
     annotations: DrawingAnnotation[];
   } | null;
+  /**
+   * U12: Draw's tools for the workspace's command bar, whenever what one
+   * of them can do changes, and null when the workspace closes. A row runs
+   * the handler the tool's key and toolbar button run.
+   */
+  onToolBridge?: (bridge: DrawingToolBridge | null) => void;
 }
 
 type SheetStatus =
@@ -3269,17 +3284,7 @@ function DrawingToolRail(props: {
             const Icon = ANNOTATION_TOOL_ICONS[kind];
             const active = tool?.kind === kind && !tool.repairId;
             const usable = props.canUseTool(kind);
-            const name =
-              kind === 'note' ||
-              kind === 'balloon' ||
-              kind === 'parts-list' ||
-              kind === 'hole-table' ||
-              kind === 'image' ||
-              kind === 'general-tolerance' ||
-              isToleranceTool(kind) ||
-              isGeometryTool(kind)
-                ? ANNOTATION_TOOL_LABELS[kind]
-                : `${ANNOTATION_TOOL_LABELS[kind]} dimension`;
+            const name = ANNOTATION_TOOL_NAMES[kind];
             return (
               <button
                 key={kind}
@@ -4512,31 +4517,31 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     if (event.shiftKey) return;
-    if (event.key.toLowerCase() === SECTION_TOOL_KEY.toLowerCase()) {
-      event.preventDefault();
-      event.stopPropagation();
-      toggleSectionTool();
-      return;
-    }
-    if (event.key.toLowerCase() === DETAIL_TOOL_KEY.toLowerCase()) {
-      event.preventDefault();
-      event.stopPropagation();
-      toggleDetailTool();
-      return;
-    }
-    if (event.key.toLowerCase() === AUXILIARY_TOOL_KEY.toLowerCase()) {
-      event.preventDefault();
-      event.stopPropagation();
-      toggleAuxiliaryTool();
-      return;
-    }
-    const kind = ANNOTATION_TOOLS.find(
-      (entry) =>
-        ANNOTATION_TOOL_KEYS[entry].toLowerCase() === event.key.toLowerCase()
-    );
-    if (!kind) return;
+    const action = drawingToolActionForKey(event.key);
+    if (!action) return;
     event.preventDefault();
     event.stopPropagation();
+    runToolAction(action.id);
+  };
+  /**
+   * Starts a Draw tool, or ends it while it runs: what its key, its toolbar
+   * button, its compact tile and its command-bar row all do (U12). A tool
+   * that cannot start says why.
+   */
+  function runToolAction(id: DrawingToolActionId) {
+    const action = drawingToolAction(id);
+    if (!action) return;
+    if (!sheet) {
+      props.onStatus(DRAWING_NO_SHEET_REASON);
+      return;
+    }
+    if (action.tool.kind === 'view') {
+      if (action.tool.view === 'section') toggleSectionTool();
+      else if (action.tool.view === 'detail') toggleDetailTool();
+      else toggleAuxiliaryTool();
+      return;
+    }
+    const kind = action.tool.annotation;
     if (!canUseTool(kind)) {
       props.onStatus(toolDisabledReason(kind));
       return;
@@ -4544,7 +4549,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     chooseTool(
       tool?.kind === kind && !tool.repairId ? null : startAnnotationTool(kind)
     );
-  };
+  }
   useEffect(() => {
     const listener = (event: KeyboardEvent) => shortcutRef.current(event);
     window.addEventListener('keydown', listener, { capture: true });
@@ -6401,6 +6406,50 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     );
   };
 
+  // U12: each tool's status for the workspace's command bar, beside the
+  // handler its rows run. Reported when a status changes, not every render.
+  const toolStatus = (id: DrawingToolActionId): DrawingToolStatus => {
+    const action = drawingToolAction(id);
+    if (!action || !sheet)
+      return { disabledReason: DRAWING_NO_SHEET_REASON, active: false };
+    if (action.tool.kind === 'annotation') {
+      const kind = action.tool.annotation;
+      return {
+        disabledReason: canUseTool(kind) ? null : toolDisabledReason(kind),
+        active: tool?.kind === kind && !tool.repairId
+      };
+    }
+    const view = action.tool.view;
+    return view === 'section'
+      ? {
+          disabledReason: canSection ? null : sectionDisabledReason,
+          active: sectionTool !== null
+        }
+      : view === 'detail'
+        ? {
+            disabledReason: canDetail ? null : detailDisabledReason,
+            active: detailTool !== null
+          }
+        : {
+            disabledReason: canAuxiliary ? null : auxiliaryDisabledReason,
+            active: auxiliaryTool !== null
+          };
+  };
+  const toolStatuses = Object.fromEntries(
+    DRAWING_TOOL_ACTIONS.map((action) => [action.id, toolStatus(action.id)])
+  ) as Record<DrawingToolActionId, DrawingToolStatus>;
+  const toolStatusKey = JSON.stringify(toolStatuses);
+  const runToolActionRef = useRef(runToolAction);
+  runToolActionRef.current = runToolAction;
+  const onToolBridgeRef = useRef(props.onToolBridge);
+  onToolBridgeRef.current = props.onToolBridge;
+  useEffect(() => {
+    onToolBridgeRef.current?.({
+      status: JSON.parse(toolStatusKey) as DrawingToolBridge['status'],
+      run: (id) => runToolActionRef.current(id)
+    });
+  }, [toolStatusKey]);
+  useEffect(() => () => onToolBridgeRef.current?.(null), []);
   if (!sheet || !shownSheet || !page || !status) {
     return (
       <section
@@ -7526,7 +7575,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           active: tool && !tool.repairId ? tool.kind : null,
           canUse: canUseTool,
           disabledReason: toolDisabledReason,
-          onTool: (kind) => chooseTool(startAnnotationTool(kind)),
+          onTool: (kind) => runToolAction(`drawing-${kind}`),
           check: dimensionCheck,
           list: annotationList
         },
@@ -7535,19 +7584,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             active: sectionTool !== null,
             usable: canSection,
             disabledReason: sectionDisabledReason,
-            onToggle: toggleSectionTool
+            onToggle: () => runToolAction('drawing-section-view')
           },
           detail: {
             active: detailTool !== null,
             usable: canDetail,
             disabledReason: detailDisabledReason,
-            onToggle: toggleDetailTool
+            onToggle: () => runToolAction('drawing-detail-view')
           },
           auxiliary: {
             active: auxiliaryTool !== null,
             usable: canAuxiliary,
             disabledReason: auxiliaryDisabledReason,
-            onToggle: toggleAuxiliaryTool
+            onToggle: () => runToolAction('drawing-auxiliary-view')
           }
         },
         views: viewsSection,
@@ -8407,25 +8456,25 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             canUseTool={canUseTool}
             disabledReason={toolDisabledReason}
             onTool={(kind) =>
-              chooseTool(kind ? startAnnotationTool(kind) : null)
+              kind ? runToolAction(`drawing-${kind}`) : chooseTool(null)
             }
             section={{
               active: sectionTool !== null,
               usable: canSection,
               disabledReason: sectionDisabledReason,
-              onToggle: toggleSectionTool
+              onToggle: () => runToolAction('drawing-section-view')
             }}
             detail={{
               active: detailTool !== null,
               usable: canDetail,
               disabledReason: detailDisabledReason,
-              onToggle: toggleDetailTool
+              onToggle: () => runToolAction('drawing-detail-view')
             }}
             auxiliary={{
               active: auxiliaryTool !== null,
               usable: canAuxiliary,
               disabledReason: auxiliaryDisabledReason,
-              onToggle: toggleAuxiliaryTool
+              onToggle: () => runToolAction('drawing-auxiliary-view')
             }}
           />
           {auxiliaryTool && (

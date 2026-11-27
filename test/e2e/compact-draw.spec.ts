@@ -37,6 +37,7 @@ import {
   ACTIONS,
   COMPACT_ENTRIES
 } from '../../apps/web/src/lib/actions/registry';
+import { DRAWING_TOOL_ACTIONS } from '../../apps/web/src/lib/drawing/toolActions';
 
 /**
  * Draw in the compact workspace (U12 slice 9): the sheet fills the stage,
@@ -1001,6 +1002,81 @@ test.describe('Draw in the compact sheet', () => {
           await expect(trayButton(page, 'Annotate')).toBeVisible();
         }
         reached.push(entry.id);
+      }
+      expect(reached).toHaveLength(25);
+    }
+  );
+
+  test(
+    'reaches every drawing tool from the full-screen command search, as its tile does',
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(240_000);
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await openScissorsInDraw(page, SIZES[0]!);
+      const field = page.getByRole('combobox', { name: 'Search commands' });
+      const search = async (name: string) => {
+        await page
+          .getByRole('button', { name: 'Open the command bar', exact: true })
+          .tap();
+        await expect(field).toBeVisible();
+        await field.fill(name);
+        // By the row's own name: Draw's Section view sits beside View's
+        // "Section view: on".
+        return page.getByRole('option').filter({
+          has: page.locator('.palette-label', {
+            hasText: new RegExp(`^${name}$`)
+          })
+        });
+      };
+      const close = async () => {
+        await page
+          .getByRole('button', { name: 'Close the command bar', exact: true })
+          .tap();
+        await expect(field).toHaveCount(0);
+      };
+      // Before the first sheet every tool's row says why it cannot start.
+      const early = await search('Note');
+      await expect(early).toHaveAttribute('aria-disabled', 'true');
+      await expect(early.locator('.palette-reason')).toHaveText(
+        'Add a sheet first.'
+      );
+      await close();
+      await drawings(page)
+        .getByRole('button', { name: 'New drawing sheet' })
+        .tap();
+      await expect(
+        canvas(page).locator('[data-view="top"]:not(.is-placeholder)')
+      ).toHaveCount(1, { timeout: 60_000 });
+
+      expect(DRAWING_TOOL_ACTIONS).toHaveLength(25);
+      const reached: string[] = [];
+      for (const action of DRAWING_TOOL_ACTIONS) {
+        const label = ACTIONS.find((entry) => entry.id === action.id)!.label;
+        const row = await search(action.searchName);
+        await expect(row).toHaveCount(1);
+        if ((await row.getAttribute('aria-disabled')) === 'true') {
+          // The row's reason is the tile's.
+          const reason = (await row.locator('.palette-reason').textContent())!;
+          expect(reason.length).toBeGreaterThan(0);
+          await close();
+          const viewTool = action.tool.kind === 'view';
+          await openPage(page, viewTool ? 'Views' : 'Annotate');
+          await expect(
+            sheet(page).getByRole('button', { name: label, exact: true })
+          ).toHaveAttribute('title', reason);
+          await back(page);
+        } else {
+          await row.tap();
+          await expect(field).toHaveCount(0);
+          const running = sheet(page).getByRole('group', {
+            name: `${label} placement`
+          });
+          await expect(running).toBeVisible();
+          await running.getByRole('button', { name: 'Cancel' }).tap();
+          await expect(trayButton(page, 'Annotate')).toBeVisible();
+        }
+        reached.push(action.id);
       }
       expect(reached).toHaveLength(25);
     }

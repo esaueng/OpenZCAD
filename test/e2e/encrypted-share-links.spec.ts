@@ -1,9 +1,17 @@
 import { expect, expectBodyCount, test } from './openzcad-fixtures';
 import {
+  BOB_EMAIL,
+  BOB_ID,
   COMMIT_BUDGET_MS,
   PROJECT_NAME,
-  SYNC_BUDGET_MS
+  SYNC_BUDGET_MS,
+  signIn
 } from './encrypted-members-fixtures';
+import {
+  addE2eeUser,
+  openEncryptionSettings,
+  seedE2eeDevice
+} from './e2ee-fixtures';
 import {
   installAnonymousShareRoutes,
   openAsVisitor,
@@ -17,8 +25,38 @@ test('a signed-in visitor can retry an unavailable account encryption check', as
 }) => {
   test.setTimeout(240_000);
   const owner = await ownerWithShareLink(browser);
-  const page = owner.alice;
+  // The owner opening their own link is offered the project, not a copy.
+  // In a fresh load, as a pasted link opens: the account listing read on
+  // the way in marks the project as hers while its link is live.
   await installAnonymousShareRoutes(owner.context, owner.server);
+  await owner.alice.goto('about:blank');
+  await owner.alice.goto(owner.link);
+  await expect(
+    owner.alice.getByRole('button', { name: 'Open your project', exact: true })
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await expect(
+    owner.alice.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toHaveCount(0);
+
+  // Another signed-in account, which encrypts new projects, visits it.
+  addE2eeUser(owner.server, BOB_ID, BOB_EMAIL);
+  const visitor = await browser.newContext();
+  const page = await signIn(visitor, owner.server, BOB_ID, BOB_EMAIL);
+  page.on('pageerror', (error) => owner.errors.push(error.message));
+  await installAnonymousShareRoutes(visitor, owner.server);
+  await page.goto('/');
+  await seedE2eeDevice(page, owner.server, {
+    label: 'Bob browser',
+    userId: BOB_ID
+  });
+  const settings = await openEncryptionSettings(page);
+  const encrypt = settings.getByRole('checkbox', {
+    name: 'Encrypt new projects'
+  });
+  await encrypt.click();
+  await expect(encrypt).toBeChecked();
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
   await page.goto(owner.link);
   await expect(
     page.getByRole('button', { name: 'Make a copy', exact: true })
@@ -56,6 +94,7 @@ test('a signed-in visitor can retry an unavailable account encryption check', as
   await expect(dialog).toHaveCount(0);
   await expectBodyCount(page, 1);
   expect(owner.errors).toEqual([]);
+  await visitor.close();
   await owner.context.close();
 });
 

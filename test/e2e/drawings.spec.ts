@@ -1,6 +1,7 @@
 import type { Download, Locator, Page } from '@playwright/test';
 import {
   createPrimitiveInPlace,
+  promptField,
   test,
   expect,
   stubApi,
@@ -189,6 +190,88 @@ test('lays out, places, exports and fences a drawing sheet', { tag: '@ci-smoke' 
   await expect(reopened.getByRole('status')).toHaveCount(0, {
     timeout: 30_000
   });
+});
+
+test("runs Draw's tools from the command bar as their keys do, in Draw only (U12)", async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Draw commands');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '30', depth: '20', height: '10' }
+  });
+  const field = promptField(page);
+  const options = page.getByRole('listbox', { name: 'Commands' });
+  // By the row's own name: Draw's Section view sits beside View's
+  // "Section view: on".
+  const row = (name: string) =>
+    options.getByRole('option').filter({
+      has: page.locator('.palette-label', {
+        hasText: new RegExp(`^${name}$`)
+      })
+    });
+  const search = async (name: string) => {
+    await field.fill(`/${name}`);
+    await expect(options).toBeVisible();
+    return row(name);
+  };
+
+  // Outside Draw there are no Draw rows.
+  await field.fill('/Horizontal dimension');
+  await expect(
+    page.locator('.palette-label', { hasText: /^Horizontal dimension/ })
+  ).toHaveCount(0);
+  await expect(field).toHaveValue('/Horizontal dimension');
+  await page.keyboard.press('Escape');
+
+  await mode(page, 'Draw').click();
+  const drawings = page.getByRole('region', { name: 'Drawings' });
+  // Before a sheet, every tool's row says why it cannot start.
+  const early = await search('Note');
+  await expect(early).toHaveAttribute('aria-disabled', 'true');
+  await expect(early.locator('.palette-reason')).toHaveText(
+    'Add a sheet first.'
+  );
+  await page.keyboard.press('Escape');
+  await drawings.getByRole('button', { name: 'New drawing sheet' }).click();
+  const canvas = drawings.getByRole('application', { name: 'Sheet Sheet 1' });
+  await expect(
+    canvas.locator('[data-view="front"]:not(.is-placeholder)')
+  ).toHaveCount(1, { timeout: 20_000 });
+  const railButton = (name: string) =>
+    drawings.getByRole('button', { name, exact: true });
+
+  // A row starts the tool, and the running tool's row ends it, as H does.
+  const horizontal = railButton('Horizontal');
+  await expect(horizontal).toHaveAttribute('aria-pressed', 'false');
+  const start = await search('Horizontal dimension');
+  await expect(start.locator('kbd')).toHaveText('H');
+  await start.click();
+  await expect(horizontal).toHaveAttribute('aria-pressed', 'true');
+  await (await search('Horizontal dimension: off')).click();
+  await expect(horizontal).toHaveAttribute('aria-pressed', 'false');
+
+  // The view tools too: the row and S start the same section tool.
+  const section = railButton('Section view');
+  await (await search('Section view')).click();
+  await expect(section).toHaveAttribute('aria-pressed', 'true');
+  await canvas.focus();
+  await page.keyboard.press('s');
+  await expect(section).toHaveAttribute('aria-pressed', 'false');
+
+  // A tool the sheet cannot take shows the toolbar's reason, unrun.
+  const image = await search('Sheet image');
+  await expect(image).toHaveAttribute('aria-disabled', 'true');
+  await expect(image.locator('.palette-reason')).toHaveText(
+    (await railButton('Image').getAttribute('title'))!
+  );
+  // Clicked anyway (it is aria-disabled, which Playwright waits out), it
+  // starts nothing.
+  await image.click({ force: true });
+  await expect(railButton('Image')).toHaveAttribute('aria-pressed', 'false');
 });
 
 async function exportSheet(

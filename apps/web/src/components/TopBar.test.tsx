@@ -34,7 +34,11 @@ function renderTopBar(
     exportUnavailableReason?: string | null;
     projectName?: string;
     encryption?: EncryptionIndicatorProps | null;
-    shareSession?: { mode: 'view' | 'tweak'; onMakeCopy(): void } | null;
+    shareSession?: {
+      mode: 'view' | 'tweak';
+      onMakeCopy(): void;
+      onOpenOwnProject?: () => void;
+    } | null;
     buildModeDisabledReason?: string;
     tweakModeDisabledReason?: string;
     drawingModeDisabledReason?: string;
@@ -1104,6 +1108,19 @@ describe('TopBar share-link session', () => {
       expect(onMakeCopy).toHaveBeenCalledOnce();
     }
   );
+
+  it('offers the owner of the shared project their project, not a copy of it', () => {
+    const onMakeCopy = vi.fn();
+    const onOpenOwnProject = vi.fn();
+    renderTopBar({
+      saveState: 'local',
+      shareSession: { mode: 'tweak', onMakeCopy, onOpenOwnProject }
+    });
+    expect(screen.queryByRole('button', { name: 'Make a copy' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open your project' }));
+    expect(onOpenOwnProject).toHaveBeenCalledOnce();
+    expect(onMakeCopy).not.toHaveBeenCalled();
+  });
 });
 
 // A shared link's visitor sees only the modes the link opens, not greyed
