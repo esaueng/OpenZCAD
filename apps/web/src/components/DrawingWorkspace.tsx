@@ -190,6 +190,7 @@ import {
   zoomSheetAt,
   type SheetZoom
 } from '../lib/drawing/sheetZoom';
+import { tapWording } from '../lib/touchWording';
 import {
   drawingExportFileName,
   SheetPictureUnavailableError,
@@ -1499,6 +1500,8 @@ function AnnotationList(props: {
   selected: DrawingAnnotation | null;
   resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>;
   onSelect: (annotationId: DrawingAnnotationId | null) => void;
+  /** The compact workspace, where the tools are on the page above. */
+  compact?: boolean;
 }) {
   const { ready, selected } = props;
   const annotations = props.sheet.annotations ?? [];
@@ -1541,8 +1544,11 @@ function AnnotationList(props: {
         />
       ) : (
         <p className="drawing-hint">
-          Pick a dimension tool on the sheet&apos;s left. Dimensions read their
-          values from the model and follow the sheet&apos;s Update.
+          {props.compact
+            ? 'Pick a dimension tool above.'
+            : "Pick a dimension tool on the sheet's left."}{' '}
+          Dimensions read their values from the model and follow the
+          sheet&apos;s Update.
         </p>
       )}
     </div>
@@ -3918,6 +3924,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // pages, drawn into the tray slot's anchor. Null in the regular workspace.
   const compactHost = useCompactTrayHost();
   const compact = compactHost !== null;
+  /** A prompt's pointer words: a tap in the compact workspace (U12). */
+  const pointerWords = (text: string) => (compact ? tapWording(text) : text);
   useEffect(() => {
     if (!canvasElement) return;
     const listener = (event: WheelEvent) => wheelRef.current(event);
@@ -5734,7 +5742,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         setTool(pinnedTool(next));
         setHover({ edge: null, face: null, point: at.point });
         props.onStatus(
-          `${ANNOTATION_TOOL_LABELS[tool.kind]}: click where it goes.`
+          pointerWords(
+            `${ANNOTATION_TOOL_LABELS[tool.kind]}: click where it goes.`
+          )
         );
         return;
       }
@@ -7251,6 +7261,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const annotationList = (
     <AnnotationList
       sheet={sheet}
+      compact={compact}
       ready={sheetReady}
       selected={selectedAnnotation}
       resolutions={resolutions}
@@ -7392,17 +7403,23 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
 
   // What the running view tool asks for next, on the stage or (compact) as
   // the tray's status.
-  const auxiliaryHint = auxiliaryTool?.edge
-    ? 'Move to the side to see the edge from, then click to place the view.'
-    : 'Pick an inclined straight edge of a front, top or side view.';
-  const detailHint = detailTool?.region
-    ? 'Move the detail into place, then click.'
-    : 'Drag a circle on a view, out from its centre.';
-  const sectionHint = sectionTool?.line
-    ? sectionTool.line.axis === 'free'
-      ? 'Click on a side of the line to place the section seen from there.'
-      : 'Move the section view into place along its arrows, then click.'
-    : 'Drag across a view to draw the section line; at an angle for a free section.';
+  const auxiliaryHint = pointerWords(
+    auxiliaryTool?.edge
+      ? 'Move to the side to see the edge from, then click to place the view.'
+      : 'Pick an inclined straight edge of a front, top or side view.'
+  );
+  const detailHint = pointerWords(
+    detailTool?.region
+      ? 'Move the detail into place, then click.'
+      : 'Drag a circle on a view, out from its centre.'
+  );
+  const sectionHint = pointerWords(
+    sectionTool?.line
+      ? sectionTool.line.axis === 'free'
+        ? 'Click on a side of the line to place the section seen from there.'
+        : 'Move the section view into place along its arrows, then click.'
+      : 'Drag across a view to draw the section line; at an angle for a free section.'
+  );
   // U12 slice 9: the compact tray's content. A running tool's row (its
   // step, Cancel and Done) stands in for the tray while it runs; Done keeps
   // what it placed and ends the tool, which otherwise waits for the next
@@ -7435,7 +7452,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           label: ANNOTATION_TOOL_LABELS[tool.kind],
           icon: annotationToolIcon(tool.kind, 22),
           step: annotationToolStep(tool),
-          hint: annotationToolHint(tool),
+          hint: pointerWords(annotationToolHint(tool)),
           onCancel: () => chooseTool(null),
           onDone: finishPlacement
         }
@@ -7499,6 +7516,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         },
         views: viewsSection,
         selectedView: viewProperties,
+        selectedViewId:
+          selection === 'view' && selectedView ? selectedView.viewId : null,
         properties: annotationProperties ?? (
           <>
             {sheetProperties}
@@ -7854,13 +7873,16 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             onPointerCancelCapture={onCanvasPointerEnd}
             onPointerDown={(event) => {
               if (event.target === event.currentTarget) deselect();
-              // A zoomed sheet pans by dragging empty paper.
+              // A zoomed sheet pans by dragging empty paper. An armed
+              // section, detail or auxiliary tool's surface covers the
+              // paper: its drag draws the line or circle at any zoom (a
+              // pinch still zooms, and the zoom buttons still work).
               const target = event.target as Element;
               if (
                 event.button === 0 &&
                 zoom.zoom > 1 &&
                 !target.closest?.(
-                  '.drawing-view-hit, .drawing-annotation-hit, .drawing-pick-surface'
+                  '.drawing-view-hit, .drawing-annotation-hit, .drawing-pick-surface, .drawing-section-surface'
                 )
               )
                 startPan(event);

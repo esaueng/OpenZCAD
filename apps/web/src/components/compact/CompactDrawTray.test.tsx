@@ -140,8 +140,8 @@ function shell(props: Parameters<typeof Stage>[0]) {
 const panel = () => document.querySelector<HTMLElement>('.compact-sheet')!;
 const detent = () => panel().getAttribute('data-detent');
 const tray = () =>
-    // The tray is lazy: a cold first load takes longer than findBy's 1 s.
-    screen.findByRole('toolbar', { name: 'Draw tools' }, { timeout: 5000 });
+  // The tray is lazy: a cold first load takes longer than findBy's 1 s.
+  screen.findByRole('toolbar', { name: 'Draw tools' }, { timeout: 5000 });
 
 describe('CompactDrawTray (U12 slice 9)', () => {
   it('rests at peek and opens each page over the tray', async () => {
@@ -156,9 +156,7 @@ describe('CompactDrawTray (U12 slice 9)', () => {
       fireEvent.click(within(await tray()).getByRole('button', { name }));
       expect(await within(panel()).findByText(text)).toBeTruthy();
       expect(detent()).toBe('half');
-      fireEvent.click(
-        within(panel()).getByRole('button', { name: 'Back' })
-      );
+      fireEvent.click(within(panel()).getByRole('button', { name: 'Back' }));
       await waitFor(() => expect(detent()).toBe('peek'));
     }
   });
@@ -202,6 +200,57 @@ describe('CompactDrawTray (U12 slice 9)', () => {
     fireEvent.click(within(row).getByRole('button', { name: 'Done' }));
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('brings the settings of a newly added view into sight on Views', async () => {
+    const seen: string[] = [];
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(function (this: Element) {
+        seen.push(this.textContent ?? '');
+      });
+    try {
+      const { rerender } = render(
+        shell({ sheets: sheets(), sheet: content(), run: null })
+      );
+      fireEvent.click(
+        within(await tray()).getByRole('button', { name: 'Views' })
+      );
+      expect(await within(panel()).findByText('Views list')).toBeTruthy();
+      expect(seen).toEqual([]);
+      // Add view selects the new view: its settings stand above the list,
+      // out of sight of the Add view under it, until brought into view.
+      rerender(
+        shell({
+          sheets: sheets(),
+          sheet: content({
+            selectedView: <p>Right view settings</p>,
+            selectedViewId: 'dview_right'
+          }),
+          run: null
+        })
+      );
+      expect(
+        await within(panel()).findByText('Right view settings')
+      ).toBeTruthy();
+      expect(seen).toEqual(['Right view settings']);
+      // Another view, another scroll; the same one again, none.
+      rerender(
+        shell({
+          sheets: sheets(),
+          sheet: content({
+            selectedView: <p>Top view settings</p>,
+            selectedViewId: 'dview_top'
+          }),
+          run: null
+        })
+      );
+      await waitFor(() =>
+        expect(seen).toEqual(['Right view settings', 'Top view settings'])
+      );
+    } finally {
+      scrollIntoView.mockRestore();
+    }
   });
 
   it('opens Properties when the workspace asks for them', async () => {
@@ -273,7 +322,10 @@ describe('CompactDrawTray (U12 slice 9)', () => {
     const page = within(panel());
     expect(await page.findByText(warning)).toBeTruthy();
     const pdf = page.getByRole('button', { name: 'Export PDF' });
-    expect(pdf).toHaveAttribute('title', 'pdf as drawn before the model change');
+    expect(pdf).toHaveAttribute(
+      'title',
+      'pdf as drawn before the model change'
+    );
     fireEvent.click(page.getByRole('button', { name: 'Update' }));
     expect(onUpdate).toHaveBeenCalledTimes(1);
     fireEvent.click(pdf);

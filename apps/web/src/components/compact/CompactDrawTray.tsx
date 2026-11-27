@@ -91,6 +91,11 @@ export interface CompactDrawSheet {
   views: ReactNode;
   /** The selected view's configuration and Delete view, or null. */
   selectedView: ReactNode | null;
+  /**
+   * Which view `selectedView` configures: a newly picked or added one
+   * brings its settings into the page's view.
+   */
+  selectedViewId?: string | null;
   /** The selected annotation's properties, or the sheet's. */
   properties: ReactNode;
   /** A view or an annotation is selected. */
@@ -269,6 +274,18 @@ function ViewsPage({
   onStart(start: () => void): void;
 }) {
   const [reasonLine, showReason] = useReason();
+  // The settings stand above the list, and Add view is under it: a view
+  // just added (or picked in the list) brings its settings into sight
+  // rather than leaving them scrolled off the page's top.
+  const selectedRef = useRef<HTMLDivElement | null>(null);
+  const shownViewId = sheet.selectedView
+    ? (sheet.selectedViewId ?? null)
+    : null;
+  useEffect(() => {
+    if (shownViewId === null) return;
+    // Its head first: the settings run taller than a half sheet.
+    selectedRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [shownViewId]);
   return (
     <div className="compact-draw-page">
       {reasonLine}
@@ -290,7 +307,12 @@ function ViewsPage({
         })}
       </ul>
       {sheet.selectedView ? (
-        <div className="compact-draw-section">{sheet.selectedView}</div>
+        <div
+          ref={selectedRef}
+          className="compact-draw-section compact-draw-selected"
+        >
+          {sheet.selectedView}
+        </div>
       ) : null}
       <div className="compact-draw-section">{sheet.views}</div>
     </div>
@@ -570,6 +592,39 @@ function ExportPage({ sheet }: { sheet: CompactDrawSheet }) {
   );
 }
 
+/**
+ * The tray before the first sheet: its one action, New sheet, at peek. The
+ * tools that need a sheet are not shown greyed: there is nothing to pick
+ * on yet. A refused New sheet says why on a tap: a phone has no hover.
+ */
+function EmptyRow({ control }: { control: CompactDrawSheets }) {
+  const [reasonLine, showReason] = useReason();
+  const reason = control.createDisabledReason;
+  return (
+    <div className="compact-draw-empty">
+      <div
+        className="compact-tray is-mode"
+        role="toolbar"
+        aria-label="Draw tools"
+      >
+        <button
+          type="button"
+          className="compact-draw-new-sheet"
+          aria-disabled={reason !== null}
+          title={reason ?? undefined}
+          onClick={() =>
+            reason === null ? control.onCreate() : showReason(reason)
+          }
+        >
+          <Plus size={20} aria-hidden="true" />
+          New sheet
+        </button>
+      </div>
+      {reasonLine}
+    </div>
+  );
+}
+
 /** The running tool's row: its icon, its step, Cancel and Done. */
 function RunRow({ run }: { run: CompactDrawRun }) {
   return (
@@ -639,11 +694,17 @@ export default function CompactDrawTray({
     shown?.();
     if (page !== 'properties') tray?.openPage('properties', 'Properties');
   }, [page, requested, shown, tray]);
+  // The last sheet deleted: its page goes, and New sheet is the tray.
+  const empty = !sheet && sheets.sheets.length === 0;
+  useEffect(() => {
+    if (empty && page) tray?.closePage();
+  }, [empty, page, tray]);
   const start = (begin: () => void) => {
     tray?.closePage();
     begin();
   };
   if (run) return <RunRow run={run} />;
+  if (empty) return <EmptyRow control={sheets} />;
   const missing = sheet ? null : NO_SHEET;
   const items: TrayItem[] = [
     {

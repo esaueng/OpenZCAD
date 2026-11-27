@@ -3,6 +3,7 @@ import { commandContextFor } from './commandContext';
 import {
   allToolsLead,
   allToolsSections,
+  compactSplineStatus,
   compactToolLabel,
   TRAY_TOOL_LIMIT,
   trayState,
@@ -141,5 +142,31 @@ describe("the tray's suggested tools", () => {
     const tools = trayTools(IDLE, ONE_BODY, recent);
     expect(tools[0]).toBe('hole');
     expect(trayTools(IDLE, EMPTY)).not.toContain('fillet');
+  });
+});
+
+describe('the spline on the compact status line', () => {
+  it('counts the points, worded for a finger, with no Enter', () => {
+    expect(compactSplineStatus({ points: 1, canFinish: false })).toBe(
+      'Spline · 1 point · tap the next point'
+    );
+    expect(compactSplineStatus({ points: 2, canFinish: false })).toBe(
+      'Spline · 2 points · tap the next point'
+    );
+    const ready = compactSplineStatus({ points: 3, canFinish: true });
+    expect(ready).toBe(
+      'Spline · 3 points · ✓ finishes, the first point closes it'
+    );
+    expect(ready).not.toMatch(/Enter|click/i);
+  });
+
+  it('says why a finish was refused', () => {
+    expect(
+      compactSplineStatus({
+        points: 2,
+        canFinish: false,
+        refusal: 'A spline needs at least three distinct points'
+      })
+    ).toBe('A spline needs at least three distinct points.');
   });
 });

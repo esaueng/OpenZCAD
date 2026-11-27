@@ -6,6 +6,7 @@ import {
   fileAccept,
   persistStorageForInstalledApp
 } from './lib/appleTouch';
+import { compactSplineStatus } from './lib/compactTray';
 import { documentRevision } from './lib/documentRevision';
 import { registerOfflineShell } from './lib/offlineShell';
 import { spaceMouse } from './lib/spaceMouse';
@@ -1216,6 +1217,7 @@ import type {
   OffsetCommitOutcome,
   NormalToFaceRequest,
   SketchSlotEntry,
+  SketchSplineProgress,
   ViewportContextMenuOptions
 } from './components/ModelViewer';
 import type { OrientationLink } from './components/viewer/orientationCube';
@@ -4999,6 +5001,22 @@ export function App() {
   const [fitSignal, setFitSignal] = useState(0);
   // The compact sketch tray's ✓: finishes the spline being placed (U12).
   const [finishSketchCurveSignal, setFinishSketchCurveSignal] = useState(0);
+  // The spline being placed, as the compact workspace follows it: ✓ only
+  // once it can finish, and its count and refusals on the status line, not
+  // on the pointer's label, which ran off a phone's stage (U12).
+  const [sketchSplineProgress, setSketchSplineProgress] =
+    useState<SketchSplineProgress | null>(null);
+  const handleSketchSplineProgress = useCallback(
+    (progress: SketchSplineProgress | null) => {
+      setSketchSplineProgress(progress);
+      if (!progress) return;
+      setStatus(
+        compactSplineStatus(progress),
+        progress.refusal ? undefined : { unlogged: true, immediate: true }
+      );
+    },
+    [setStatus]
+  );
   // A 3D mouse this browser already allows reopens with no prompt. Its keys
   // run the same commands as the keyboard (spaceMouseActions.ts); the roll
   // key turns the camera, so the viewer answers that one.
@@ -40735,6 +40753,11 @@ export function App() {
           splineInProgress={
             interaction.session.drawing && interaction.session.tool === 'spline'
           }
+          splineCanFinish={
+            interaction.session.drawing &&
+            interaction.session.tool === 'spline' &&
+            Boolean(sketchSplineProgress?.canFinish)
+          }
           workflow={sketchWorkflow}
           palette={{
             settings: appSettings.sketching,
@@ -42413,6 +42436,9 @@ export function App() {
             }}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
+            }
+            onSketchSplineProgress={
+              compactShell ? handleSketchSplineProgress : undefined
             }
             sketchMoveEnabled={
               interaction.mode === 'sketch' &&

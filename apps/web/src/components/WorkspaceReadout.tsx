@@ -9,7 +9,8 @@ import { Info, Magnet } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import {
   CompactCommandTrayContext,
-  useCompactCommandRowHost
+  useCompactCommandRowHost,
+  useCompactStatusHost
 } from './compact/compactSlots';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
@@ -225,6 +226,7 @@ export function WorkspaceReadout({
     givenCommandRow !== null || sheetNotice !== null
   );
   const commandRow = compactRowHost ? null : givenCommandRow;
+  const statusHost = useCompactStatusHost();
   const notice = compactRowHost && sheetNotice !== null ? null : givenNotice;
   const hasCommandRow = commandRow !== null;
   const hasSelectionGuidance =
@@ -476,6 +478,12 @@ export function WorkspaceReadout({
     return () => observer?.disconnect();
   }, [probedPrompt]);
   const hintRaised = raised && probedPrompt !== null;
+  // While the compact sheet stands at full height the stage is inert, and
+  // the status line's Undo could be neither tapped nor focused there: the
+  // compact workspace then draws the line on its sheet's layer, as it does
+  // the action notice (Toast.tsx). At peek and half it stays on the stage.
+  const footer = (element: ReactNode) =>
+    statusHost ? createPortal(element, statusHost) : element;
   // Always in the tree, as the page's contentinfo landmark: what the status
   // bar used to be for assistive tech and for the specs that read it. Only
   // its visibility changes.
@@ -578,110 +586,112 @@ export function WorkspaceReadout({
           </details>
         )}
       </div>
-      <footer
-        className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}`}
-        role="contentinfo"
-      >
-        <button
-          type="button"
-          className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
-          // Keep the toast out of the tab order while it is faded out.
-          tabIndex={shown ? undefined : -1}
-          title={
-            quiet
-              ? 'View activity log'
-              : sectionShown && section?.note
-                ? `${paced.status} — ${section.note}`
-                : missed
-                  ? `${paced.status} — ${missed} in the activity log`
-                  : `${paced.status} — View activity log`
-          }
-          // No trailing period on the action's name (I9): the status, when
-          // there is one, follows it as what the toast currently says.
-          aria-label={
-            quiet || line === ''
-              ? 'Open activity log'
-              : `Open activity log — current status: ${line}`
-          }
-          aria-haspopup="dialog"
-          onClick={onOpenLog}
+      {footer(
+        <footer
+          className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}`}
+          role="contentinfo"
         >
-          <i aria-hidden="true" />
-          <span role="status" aria-live="polite" aria-atomic="true">
-            {shownStatus}
-          </span>
-          {/* Says what it counts: a bare "+11" after every status read as
-              jargon. The title above carries the same for the tooltip. */}
-          {shown && missed ? (
-            <span className="workspace-toast-more" aria-hidden="true">
-              {missed} in log
+          <button
+            type="button"
+            className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
+            // Keep the toast out of the tab order while it is faded out.
+            tabIndex={shown ? undefined : -1}
+            title={
+              quiet
+                ? 'View activity log'
+                : sectionShown && section?.note
+                  ? `${paced.status} — ${section.note}`
+                  : missed
+                    ? `${paced.status} — ${missed} in the activity log`
+                    : `${paced.status} — View activity log`
+            }
+            // No trailing period on the action's name (I9): the status, when
+            // there is one, follows it as what the toast currently says.
+            aria-label={
+              quiet || line === ''
+                ? 'Open activity log'
+                : `Open activity log — current status: ${line}`
+            }
+            aria-haspopup="dialog"
+            onClick={onOpenLog}
+          >
+            <i aria-hidden="true" />
+            <span role="status" aria-live="polite" aria-atomic="true">
+              {shownStatus}
             </span>
-          ) : null}
-        </button>
-        {section && turnOffShown ? (
-          <>
-            {sectionShown && section.note ? (
-              // M09: the toolbox's words for the overlap, which the line
-              // can only point at; read out, and on the line's tooltip.
-              <span className="visually-hidden" role="note">
-                {section.note}
+            {/* Says what it counts: a bare "+11" after every status read as
+              jargon. The title above carries the same for the tooltip. */}
+            {shown && missed ? (
+              <span className="workspace-toast-more" aria-hidden="true">
+                {missed} in log
               </span>
             ) : null}
+          </button>
+          {section && turnOffShown ? (
+            <>
+              {sectionShown && section.note ? (
+                // M09: the toolbox's words for the overlap, which the line
+                // can only point at; read out, and on the line's tooltip.
+                <span className="visually-hidden" role="note">
+                  {section.note}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="workspace-toast-undo"
+                aria-label="Turn off section view"
+                onClick={section.onTurnOff}
+              >
+                {sectionShown ? 'Turn off' : 'Turn off section'}
+              </button>
+            </>
+          ) : null}
+          {undoShown ? (
             <button
               type="button"
               className="workspace-toast-undo"
-              aria-label="Turn off section view"
-              onClick={section.onTurnOff}
+              aria-label={`Undo: ${line}`}
+              onClick={onUndo}
             >
-              {sectionShown ? 'Turn off' : 'Turn off section'}
+              Undo
             </button>
-          </>
-        ) : null}
-        {undoShown ? (
-          <button
-            type="button"
-            className="workspace-toast-undo"
-            aria-label={`Undo: ${line}`}
-            onClick={onUndo}
+          ) : null}
+          {statusActionShown && statusAction ? (
+            <button
+              type="button"
+              className="workspace-toast-undo"
+              data-status-action={statusAction.id}
+              onClick={statusAction.run}
+            >
+              {statusAction.label}
+            </button>
+          ) : null}
+          <div
+            className="workspace-status-summary"
+            role="group"
+            aria-label="Workspace status"
           >
-            Undo
-          </button>
-        ) : null}
-        {statusActionShown && statusAction ? (
-          <button
-            type="button"
-            className="workspace-toast-undo"
-            data-status-action={statusAction.id}
-            onClick={statusAction.run}
-          >
-            {statusAction.label}
-          </button>
-        ) : null}
-        <div
-          className="workspace-status-summary"
-          role="group"
-          aria-label="Workspace status"
-        >
-          {prompt && <span>{prompt}</span>}
-          <span>
-            <b>warnings</b>
-            {warningCount}
-          </span>
-          <span
-            title={`${workspaceSummary} · rev ${documentVersion ?? '—'}`}
-            aria-label={`${workspaceSummary}. Sync ${syncLabel}.${previewActive ? ' Preview active, not applied.' : ''}`}
-          >
-            <b>sync</b>
-            {syncLabel}
-          </span>
-          {orbitMode && (
+            {prompt && <span>{prompt}</span>}
             <span>
-              <b>orbit</b>
-              {orbitMode === 'turntable' ? 'Turntable' : 'Free'}
+              <b>warnings</b>
+              {warningCount}
             </span>
-          )}
-        </div>
-      </footer>
+            <span
+              title={`${workspaceSummary} · rev ${documentVersion ?? '—'}`}
+              aria-label={`${workspaceSummary}. Sync ${syncLabel}.${previewActive ? ' Preview active, not applied.' : ''}`}
+            >
+              <b>sync</b>
+              {syncLabel}
+            </span>
+            {orbitMode && (
+              <span>
+                <b>orbit</b>
+                {orbitMode === 'turntable' ? 'Turntable' : 'Free'}
+              </span>
+            )}
+          </div>
+        </footer>
+      )}
     </>
   );
 }

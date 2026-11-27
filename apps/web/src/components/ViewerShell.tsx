@@ -357,6 +357,8 @@ interface ViewerShellProps {
   onSelectSketchConstraint?: ModelViewerProps['onSelectSketchConstraint'];
   onSketchConstraintSelectionShown?: ModelViewerProps['onSketchConstraintSelectionShown'];
   onSketchDrawingChange(drawing: boolean): void;
+  /** See `ModelViewerProps.onSketchSplineProgress`. */
+  onSketchSplineProgress?: ModelViewerProps['onSketchSplineProgress'];
   onSketchSlotEntry?: ModelViewerProps['onSketchSlotEntry'];
   onSketchSlotStage?: ModelViewerProps['onSketchSlotStage'];
   sketchMoveEnabled?: ModelViewerProps['sketchMoveEnabled'];
@@ -629,6 +631,7 @@ export function ViewerShell({
   onSelectSketchConstraint,
   onSketchConstraintSelectionShown,
   onSketchDrawingChange,
+  onSketchSplineProgress,
   onSketchSlotEntry,
   onSketchSlotStage,
   sketchMoveEnabled,
@@ -1159,6 +1162,7 @@ export function ViewerShell({
         onSelectSketchConstraint={onSelectSketchConstraint}
         onSketchConstraintSelectionShown={onSketchConstraintSelectionShown}
         onSketchDrawingChange={onSketchDrawingChange}
+        {...(onSketchSplineProgress ? { onSketchSplineProgress } : {})}
         onSketchSlotEntry={onSketchSlotEntry}
         onSketchSlotStage={onSketchSlotStage}
         sketchMoveEnabled={sketchMoveEnabled}

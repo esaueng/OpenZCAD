@@ -466,11 +466,18 @@ test.describe('Draw in the compact sheet', () => {
         page.on('pageerror', (error) => errors.push(error.message));
         await openScissorsInDraw(page, size);
 
-        // Before the first sheet, the tray offers Sheets alone.
-        await expect(trayButton(page, 'Annotate')).toBeDisabled();
-        await drawings(page)
+        // Before the first sheet, the tray at peek offers New sheet alone,
+        // and the stage's invitation takes a finger too.
+        await expect(sheet(page)).toHaveAttribute('data-detent', 'peek');
+        await expect(trayButton(page, 'Annotate')).toHaveCount(0);
+        const newSheet = trayButton(page, 'New sheet');
+        await expectReachable(newSheet);
+        const invitation = (await drawings(page)
           .getByRole('button', { name: 'New drawing sheet' })
-          .tap();
+          .boundingBox())!;
+        expect(invitation.height).toBeGreaterThanOrEqual(44);
+        expect((await layoutReport(page)).smallTargets).toEqual([]);
+        await newSheet.tap();
         await expect(
           canvas(page).locator('[data-view="top"]:not(.is-placeholder)')
         ).toHaveCount(1, { timeout: 60_000 });
@@ -679,6 +686,83 @@ test.describe('Draw in the compact sheet', () => {
       }
     );
   }
+
+  test('draws a section and a detail on a zoomed sheet, worded for a finger, with a new view in sight', async ({
+    page
+  }) => {
+    test.setTimeout(240_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await openScissorsInDraw(page, SIZES[1]!);
+    await trayButton(page, 'New sheet').tap();
+    await expect(
+      canvas(page).locator('[data-view="top"]:not(.is-placeholder)')
+    ).toHaveCount(1, { timeout: 60_000 });
+    await settled(page);
+
+    // The annotation list's empty line points at the tools above it, not
+    // at the regular sheet's left.
+    await openPage(page, 'Annotate');
+    await expect(
+      sheet(page).getByText(/^Pick a dimension tool above\./)
+    ).toBeVisible();
+    await expect(sheet(page).getByText(/sheet's left/)).toHaveCount(0);
+    await back(page);
+
+    // Add view selects the new view: its settings, above the list, come
+    // into sight rather than staying scrolled off the page's top.
+    await openPage(page, 'Views');
+    const add = sheet(page).getByRole('button', { name: 'Add view' });
+    await add.scrollIntoViewIfNeeded();
+    await add.tap();
+    const settings = sheet(page).locator('.compact-draw-selected');
+    await expect(settings.locator('.drawing-selection-title')).toBeInViewport({
+      ratio: 1
+    });
+    await back(page);
+
+    // Zoomed in, a finger's drag across a view draws the section line:
+    // the paper does not pan under it.
+    const zoom = page.getByRole('toolbar', { name: 'Sheet zoom' });
+    await zoom.getByRole('button', { name: 'Zoom in' }).tap();
+    await zoom.getByRole('button', { name: 'Zoom in' }).tap();
+    await expect(canvas(page)).toHaveClass(/is-zoomed/);
+    await startTool(page, 'Views', 'Section view');
+    const zoomed = await canvas(page).getAttribute('viewBox');
+    const top = (await canvas(page)
+      .locator('[data-view="top"] .drawing-view-hit')
+      .boundingBox())!;
+    const paper = await paperBox(page);
+    const left = Math.max(top.x, paper.x, 0) + 12;
+    const right = Math.min(top.x + top.width, paper.x + paper.width, 360) - 12;
+    const middle = top.y + top.height / 2;
+    await touchDrag(page, { x: left, y: middle }, { x: right, y: middle });
+    await expect(step(page)).toHaveText('Place');
+    expect(await canvas(page).getAttribute('viewBox')).toBe(zoomed);
+    // Its step, for a finger: tap, not click.
+    await expect(runRow(page).getByRole('status')).toHaveText(
+      /tap\.$|then tap\b/
+    );
+    await expect(runRow(page).getByRole('status')).not.toHaveText(/click/i);
+    await runRow(page).getByRole('button', { name: 'Cancel' }).tap();
+    await expect(runRow(page)).toHaveCount(0);
+
+    // A detail circle the same way.
+    await startTool(page, 'Views', 'Detail view');
+    const detailZoom = await canvas(page).getAttribute('viewBox');
+    const front = (await canvas(page)
+      .locator('[data-view="top"] .drawing-view-hit')
+      .boundingBox())!;
+    const centre = {
+      x: Math.min(Math.max(front.x + front.width / 2, 40), 320),
+      y: front.y + front.height / 2
+    };
+    await touchDrag(page, centre, { x: centre.x + 24, y: centre.y });
+    await expect(step(page)).toHaveText('Place');
+    expect(await canvas(page).getAttribute('viewBox')).toBe(detailZoom);
+    await runRow(page).getByRole('button', { name: 'Cancel' }).tap();
+    expect(errors).toEqual([]);
+  });
 
   for (const size of [SIZES[0]!, SIZES[2]!]) {
     test(

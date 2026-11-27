@@ -484,6 +484,18 @@ import {
   type SlotDimension
 } from '../lib/sketch/composites';
 
+/**
+ * The spline being placed, for a host that shows its progress itself (the
+ * compact workspace's status line, U12): its points so far, whether it can
+ * finish now, and why a finish was refused.
+ */
+export interface SketchSplineProgress {
+  points: number;
+  canFinish: boolean;
+  /** Set when a finish (Enter, ✓, the last point again) was refused. */
+  refusal?: string;
+}
+
 export interface SketchSlotEntry {
   field: SlotDimension;
   label: string;
@@ -1792,6 +1804,14 @@ export interface ModelViewerProps {
   onSketchConstraintSelectionShown?(constraintId: string, shown: boolean): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
+  /**
+   * The spline being placed, after each point and on a refused finish;
+   * null once it is finished or dropped. While this is given, the label at
+   * the pointer leaves out the spline's count and refusal: the host says
+   * them where it shows status (the compact workspace, whose stage edge
+   * clipped the label at 360 px and in landscape).
+   */
+  onSketchSplineProgress?(progress: SketchSplineProgress | null): void;
   onSketchSlotEntry?(entry: SketchSlotEntry | null): void;
   onSketchSlotStage?(stage: 'radius' | 'exact' | null): void;
   /**
@@ -2854,6 +2874,7 @@ export function ModelViewer({
   onSelectSketchConstraint,
   onSketchConstraintSelectionShown,
   onSketchDrawingChange,
+  onSketchSplineProgress,
   onSketchSlotEntry,
   onSketchSlotStage,
   sketchMoveEnabled = false,
@@ -3447,6 +3468,8 @@ export function ModelViewer({
   onSketchCommitCompositeRef.current = onSketchCommitComposite;
   const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
   onSketchDrawingChangeRef.current = onSketchDrawingChange;
+  const onSketchSplineProgressRef = useRef(onSketchSplineProgress);
+  onSketchSplineProgressRef.current = onSketchSplineProgress;
   const onSketchSlotEntryRef = useRef(onSketchSlotEntry);
   onSketchSlotEntryRef.current = onSketchSlotEntry;
   const onSketchSlotStageRef = useRef(onSketchSlotStage);
@@ -10741,7 +10764,36 @@ export function ModelViewer({
       sketchRigRef.current?.setInProgress(null, false);
       sketchRigRef.current?.setInference(null);
       hideSketchDimLabel();
+      onSketchSplineProgressRef.current?.(null);
       onSketchDrawingChangeRef.current(false);
+    }
+
+    /** The spline's fit or control method, as its curve type sets it. */
+    function sketchSplineMethod(mode: SketchModeState): 'fit' | 'control' {
+      return sketchCurveModeFor('spline', mode.curveMode) === 'control-spline'
+        ? 'control'
+        : 'fit';
+    }
+
+    /** Tells a host that shows the spline's progress its points so far. */
+    function reportSketchSplineProgress() {
+      const report = onSketchSplineProgressRef.current;
+      const mode = sketchModeRef.current;
+      if (!report || mode?.tool !== 'spline') return;
+      const points = sketchGestureRef.current.curvePoints;
+      report(
+        points.length === 0
+          ? null
+          : {
+              points: points.length,
+              canFinish:
+                splineObjectFromPoints(
+                  sketchSplineMethod(mode),
+                  points,
+                  false
+                ) !== null
+            }
+      );
     }
 
     /**
@@ -10753,17 +10805,21 @@ export function ModelViewer({
       if (!mode) {
         return false;
       }
-      const method =
-        sketchCurveModeFor('spline', mode.curveMode) === 'control-spline'
-          ? 'control'
-          : 'fit';
       const spline = splineObjectFromPoints(
-        method,
+        sketchSplineMethod(mode),
         sketchGestureRef.current.curvePoints,
         closed
       );
       if (!spline) {
-        if (latestSketchPointerEvent) {
+        const report = onSketchSplineProgressRef.current;
+        if (report) {
+          const points = sketchGestureRef.current.curvePoints.length;
+          report({
+            points,
+            canFinish: false,
+            refusal: 'A spline needs at least three distinct points'
+          });
+        } else if (latestSketchPointerEvent) {
           positionSketchDimLabel(
             latestSketchPointerEvent,
             'A spline needs at least three distinct points',
@@ -10798,6 +10854,7 @@ export function ModelViewer({
         finishSketchNumericEntry();
         points.push(point);
         onSketchDrawingChangeRef.current(true);
+        reportSketchSplineProgress();
         return;
       }
       if (mode.tool === 'spline') {
@@ -10816,6 +10873,8 @@ export function ModelViewer({
           points.push(point);
           if (action === 'append-and-finish') {
             finishSketchSpline(false);
+          } else {
+            reportSketchSplineProgress();
           }
         }
         return;
@@ -10891,7 +10950,13 @@ export function ModelViewer({
             : null
         );
         // A finger or a pen has no Enter to press: it taps the last point
-        // again, or the tray's ✓ in the compact workspace.
+        // again, or the tray's ✓ in the compact workspace, whose status
+        // line counts the points instead (the label at the pointer ran off
+        // its stage's edge).
+        if (onSketchSplineProgressRef.current) {
+          hideSketchDimLabel();
+          return;
+        }
         positionSketchDimLabel(
           event,
           event.pointerType === 'mouse'
@@ -18935,6 +19000,9 @@ export function ModelViewer({
       gesture.arcStart = null;
       gesture.circleFirst = null;
       gesture.circleSecond = null;
+      if (gesture.curvePoints.length > 0) {
+        onSketchSplineProgressRef.current?.(null);
+      }
       gesture.curvePoints = [];
       gesture.awaitingSecondPoint = false;
       sketchRigRef.current?.setInProgress(null, false);
