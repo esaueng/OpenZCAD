@@ -1,11 +1,6 @@
 import { ANNOTATION_TOOL_LABELS } from '../drawing/annotationPicking';
-import {
-  ANNOTATION_TOOL_KEYS,
-  ANNOTATION_TOOLS,
-  AUXILIARY_TOOL_KEY,
-  DETAIL_TOOL_KEY,
-  SECTION_TOOL_KEY
-} from '../drawing/toolKeys';
+import { DRAWING_TOOL_ACTIONS } from '../drawing/toolActions';
+import { ANNOTATION_TOOLS } from '../drawing/toolKeys';
 import type { SelectionActionId } from '../interaction/capabilities';
 import { KEYMAP_COMMANDS, toolCommandId } from '../keymap';
 import { TOOL_GROUPS, type ToolId } from '../tools';
@@ -473,17 +468,6 @@ export function selectionVerbAction(verbId: string): string {
     : `selection-${verbId.replace(/^action:/, '')}`;
 }
 
-/** Draw's view tools, beside its annotation tools. */
-const DRAWING_VIEW_TOOLS: readonly (readonly [
-  id: string,
-  label: string,
-  key: string
-])[] = [
-  ['drawing-section-view', 'Section view', SECTION_TOOL_KEY],
-  ['drawing-detail-view', 'Detail view', DETAIL_TOOL_KEY],
-  ['drawing-auxiliary-view', 'Auxiliary view', AUXILIARY_TOOL_KEY]
-];
-
 /** Keys a surface handles itself, and gestures with no other route. */
 const FIXED_INPUTS: readonly (readonly [
   id: string,
@@ -572,15 +556,15 @@ function buildActions(): ActionEntry[] {
   for (const [id, label] of SELECTION_ACTIONS) verb(`action:${id}`, label);
   for (const [id, label] of OTHER_SELECTION_VERBS) verb(id, label);
   for (const tool of TOOL_VERBS) verb(`tool:${tool}`, undefined);
-  for (const kind of ANNOTATION_TOOLS) {
-    add(
-      `drawing-${kind}`,
-      ANNOTATION_TOOL_LABELS[kind],
-      'drawing'
-    ).fixedKeys.push(ANNOTATION_TOOL_KEYS[kind]);
-  }
-  for (const [id, label, key] of DRAWING_VIEW_TOOLS) {
-    add(id, label, 'drawing').fixedKeys.push(key);
+  // Draw's tools: its letter keys, and (U12) a command-bar row each while
+  // Draw is open, which runs the handler the key runs.
+  for (const action of DRAWING_TOOL_ACTIONS) {
+    const label =
+      action.tool.kind === 'annotation'
+        ? ANNOTATION_TOOL_LABELS[action.tool.annotation]
+        : action.name;
+    add(action.id, label, 'drawing').fixedKeys.push(action.key);
+    add(action.id, undefined, 'command-bar');
   }
   for (const [id, label, source, input] of FIXED_INPUTS) {
     add(id, label, source).fixedKeys.push(...[input].flat());

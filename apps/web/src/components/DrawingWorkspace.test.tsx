@@ -1,5 +1,6 @@
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -37,6 +38,10 @@ import { DrawingWorkspace, resetRetainedProjections } from './DrawingWorkspace';
 import { AppShell } from './AppShell';
 import CompactModeTray from './compact/CompactModeTray';
 import { ANNOTATION_TOOLS } from '../lib/drawing/toolKeys';
+import {
+  DRAWING_NO_SHEET_REASON,
+  type DrawingToolBridge
+} from '../lib/drawing/toolActions';
 import { ANNOTATION_TOOL_LABELS } from '../lib/drawing/annotationPicking';
 import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
 import { WHEEL_DEVICE_STORAGE_KEY } from '../lib/wheelDeviceMemory';
@@ -199,6 +204,7 @@ function setup(
     previewAnnotations?: Parameters<
       typeof DrawingWorkspace
     >[0]['previewAnnotations'];
+    onToolBridge?: Parameters<typeof DrawingWorkspace>[0]['onToolBridge'];
   } = {}
 ) {
   const base = createProjectDocument('Bracket', toUserId('test'));
@@ -226,6 +232,7 @@ function setup(
       onCommand={onCommand}
       onStatus={onStatus}
       onAnnounceUndoable={onAnnounceUndoable}
+      onToolBridge={options.onToolBridge}
     />
   );
   return { onCommand, onStatus, onAnnounceUndoable };
@@ -790,6 +797,74 @@ describe('DrawingWorkspace', () => {
     } finally {
       window.removeEventListener('keydown', reached);
     }
+  });
+
+  it('hands the command bar each tool’s status and the handler its key runs (U12)', async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const bridges: (DrawingToolBridge | null)[] = [];
+    const latest = () => bridges.at(-1)!;
+    const { onStatus } = setup({
+      sheet: starter(fingerprint),
+      onToolBridge: (bridge) => bridges.push(bridge)
+    });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    await waitFor(() =>
+      expect(latest().status['drawing-horizontal']).toEqual({
+        disabledReason: null,
+        active: false
+      })
+    );
+    expect(Object.keys(latest().status)).toHaveLength(25);
+    const horizontal = screen.getByRole('button', { name: 'Horizontal' });
+    act(() => latest().run('drawing-horizontal'));
+    expect(horizontal).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() =>
+      expect(latest().status['drawing-horizontal']?.active).toBe(true)
+    );
+    // Run again, it ends the tool, as a second press of H does.
+    act(() => latest().run('drawing-horizontal'));
+    expect(horizontal).toHaveAttribute('aria-pressed', 'false');
+    // The key and the row agree on the view tools too.
+    await userEvent.keyboard('s');
+    const section = screen.getByRole('button', { name: 'Section view' });
+    expect(section).toHaveAttribute('aria-pressed', 'true');
+    act(() => latest().run('drawing-section-view'));
+    expect(section).toHaveAttribute('aria-pressed', 'false');
+    // A tool that cannot start says why, in its status and when run.
+    const image = latest().status['drawing-image'];
+    expect(image?.disabledReason).toMatch(/Add a picture/);
+    act(() => latest().run('drawing-image'));
+    expect(onStatus).toHaveBeenLastCalledWith(image?.disabledReason);
+    expect(screen.getByRole('button', { name: 'Image' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    cleanup();
+    expect(bridges.at(-1)).toBeNull();
+  });
+
+  it('refuses every tool, with the reason, while there is no sheet (U12)', async () => {
+    const bridges: (DrawingToolBridge | null)[] = [];
+    const { onStatus } = setup({
+      onToolBridge: (bridge) => bridges.push(bridge)
+    });
+    await waitFor(() => expect(bridges.at(-1)).toBeTruthy());
+    const bridge = bridges.at(-1)!;
+    for (const status of Object.values(bridge.status)) {
+      expect(status).toEqual({
+        disabledReason: DRAWING_NO_SHEET_REASON,
+        active: false
+      });
+    }
+    act(() => bridge.run('drawing-note'));
+    expect(onStatus).toHaveBeenLastCalledWith(DRAWING_NO_SHEET_REASON);
   });
 
   it('sets the sheet’s drawing properties as one format, leaving defaults out (v70)', async () => {

@@ -210,10 +210,12 @@ import {
   ListOrdered,
   MessageSquare,
   Spline,
+  SquareArrowOutUpRight,
   Trash2,
   TriangleRight,
   Undo2,
-  Upload
+  Upload,
+  ZoomIn
 } from 'lucide-react';
 import {
   CommandManager,
@@ -236,6 +238,13 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
+import {
+  DRAWING_TOOL_ACTIONS,
+  type DrawingToolAction,
+  type DrawingToolActionId,
+  type DrawingToolBridge
+} from './lib/drawing/toolActions';
+import { ANNOTATION_TOOL_ICONS } from './components/drawingToolIcons';
 import type { AutoDimensionPreview } from './lib/drawing/assistantPreflight';
 import type { PatchSource } from './components/modelPanels/modelPanelProps';
 import {
@@ -8214,6 +8223,13 @@ export function App() {
   /** The sheet the Draw workspace has on screen; null while it is closed. */
   const [drawingActiveSheetId, setDrawingActiveSheetId] =
     useState<DrawingSheetId | null>(null);
+  /**
+   * Draw's tools while it is open (U12): what each can do now, and the
+   * handler its key and toolbar run, which its command-bar row runs too.
+   */
+  const [drawingTools, setDrawingTools] = useState<DrawingToolBridge | null>(
+    null
+  );
   const drawingModeRef = useRef(drawingMode);
   drawingModeRef.current = drawingMode;
   // Ctrl+Shift+M steps View → Tweak → Build → Assemble → Draw past whatever the project
@@ -37822,6 +37838,12 @@ export function App() {
       workspaceTourStep: 0
     }));
   };
+  const drawingToolHandlers = Object.fromEntries(
+    DRAWING_TOOL_ACTIONS.map((action) => [
+      action.id,
+      () => drawingTools?.run(action.id)
+    ])
+  ) as Record<DrawingToolActionId, () => void>;
   const actionHandlers = {
     'view-front': () => requestView('front'),
     'view-top': () => requestView('top'),
@@ -37856,7 +37878,9 @@ export function App() {
       else draftPrompt('');
     },
     'edit-undo': handleUndo,
-    'edit-redo': handleRedo
+    'edit-redo': handleRedo,
+    // Draw's 25 tools run Draw's own handler, the one their keys run.
+    ...drawingToolHandlers
   } satisfies ActionHandlers;
 
   // Workspace keyboard map (ignored while typing in a field). The ref must be
@@ -39477,6 +39501,36 @@ export function App() {
       run: () => showModelPanel(id)
     } satisfies Omit<PaletteCommand, 'id'>;
   };
+  /** A command-bar row for one of Draw's tools (U12). */
+  const drawingToolRow = (drawingTool: DrawingToolAction): PaletteCommand => {
+    const status = drawingTools?.status[drawingTool.id];
+    const Icon =
+      drawingTool.tool.kind === 'annotation'
+        ? ANNOTATION_TOOL_ICONS[drawingTool.tool.annotation]
+        : drawingTool.tool.view === 'section'
+          ? Scissors
+          : drawingTool.tool.view === 'detail'
+            ? ZoomIn
+            : SquareArrowOutUpRight;
+    return {
+      id: drawingTool.id,
+      // A running tool's row ends it, as its key does.
+      label: status?.active
+        ? `${drawingTool.searchName}: off`
+        : drawingTool.searchName,
+      group: 'Draw',
+      keywords: [
+        'draw',
+        'drawing',
+        'sheet',
+        drawingTool.tool.kind === 'annotation' ? 'annotate' : 'view'
+      ],
+      shortcut: drawingTool.key,
+      icon: <Icon size={16} aria-hidden="true" />,
+      disabledReason: status ? status.disabledReason : 'Draw is still opening.',
+      run: actionHandlers[drawingTool.id]
+    };
+  };
   // No two rows share a name: a repeated one is numbered.
   const paletteCommands = withDistinctLabels<PaletteCommand>([
     // Typed search reaches tools across modes, with the destination stated
@@ -40054,6 +40108,13 @@ export function App() {
             ...panelRow('diagnostics', ['warnings', 'errors', 'problems'])
           }
         ]
+      : []),
+    // Draw's tools by name (U12): its 22 annotation tools and its three
+    // view tools, in Draw only, each running what its key runs.
+    ...(drawingMode
+      ? DRAWING_TOOL_ACTIONS.map((drawingTool): PaletteCommand =>
+          drawingToolRow(drawingTool)
+        )
       : []),
     ...(doc && (!shareSession || shareSession.comments)
       ? [
@@ -43793,6 +43854,7 @@ export function App() {
                 onAssistantSource={handleDrawingAssistantSource}
                 onActiveSheetChange={setDrawingActiveSheetId}
                 previewAnnotations={drawingPreview}
+                onToolBridge={setDrawingTools}
               />
             </Suspense>
           </ErrorBoundary>

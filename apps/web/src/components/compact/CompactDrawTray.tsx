@@ -31,6 +31,7 @@ import {
   COMPACT_ANNOTATION_GROUPS,
   COMPACT_ANNOTATION_WORDS
 } from '../../lib/drawing/compactDraw';
+import { DRAWING_NO_SHEET_REASON } from '../../lib/drawing/toolActions';
 import { ANNOTATION_TOOL_ICONS } from '../drawingToolIcons';
 import { useCompactTray } from './compactSlots';
 import { TrayPage, TrayRow, type TrayItem } from './CompactTray';
@@ -131,7 +132,7 @@ const PAGE_TITLES: Record<DrawPage, string> = {
   export: 'Export'
 };
 
-const NO_SHEET = 'Add a sheet first.';
+const NO_SHEET = DRAWING_NO_SHEET_REASON;
 
 /** A tile in a page's grid: an icon with one word, its name for AT. */
 function ToolTile({
