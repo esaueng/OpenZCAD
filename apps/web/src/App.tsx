@@ -491,6 +491,11 @@ import {
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
+import {
+  chipEntryLostItsPicks,
+  chipEntryOpenedOver,
+  type SlotPickCounts
+} from './lib/inPlace/chipEntrySlots';
 import { commandChipName } from './lib/inPlace/chipNames';
 import { loneBodyFor } from './lib/inPlace/loneBody';
 import {
@@ -2100,6 +2105,12 @@ import {
   summarizeLocalDocument,
   withSavedVersion
 } from './lib/projectShelf';
+import {
+  createProjectCopyLandings,
+  withLandedCloudCopies,
+  withLandedCopies,
+  type ProjectCopyListingStart
+} from './lib/projectCopyLandings';
 import { SEALED_SHELF_APPLIED_EVENT } from './lib/sealedShelfCore';
 import type * as SealedShelf from './lib/sealedShelfState';
 import {
@@ -2820,12 +2831,66 @@ const organizationMirrorHost: OrganizationMirrorHost = {
 };
 const organizationBackground = new OrganizationMirrorBackground();
 
+/** Copies landed while a listing was under way; see `keepingLandedCopies`. */
+const projectCopyLandings = createProjectCopyLandings();
+
+/**
+ * Every project this device can reach (see {@link readProjectSummaries}),
+ * noting where this listing began among the shelf's copies so the shelf it
+ * sets keeps any copy that lands meanwhile.
+ */
+async function loadProjectSummaries(
+  ...args: Parameters<typeof readProjectSummaries>
+): Promise<
+  Awaited<ReturnType<typeof readProjectSummaries>> & {
+    copies: ProjectCopyListingStart;
+  }
+> {
+  const copies = projectCopyLandings.beginListing(args[0]);
+  try {
+    return { ...(await readProjectSummaries(...args)), copies };
+  } finally {
+    projectCopyLandings.listingReturned(copies);
+  }
+}
+
+type ProjectListing = Awaited<ReturnType<typeof loadProjectSummaries>>;
+
+/**
+ * What applying `listed` sets: its rows and account ids with every shelf
+ * change made after the listing began standing: each copy (Duplicate,
+ * Branch) that landed, once; each project destroyed, gone; each shelf edit
+ * (trash, restore, archive, pin, order), kept. Without them a listing that
+ * read before a copy was written drops the copy's row, or lists an account
+ * copy as this device's alone, and one that read before a deletion or an
+ * edit undoes it. Taken where the result is applied, so a change made after
+ * the listing returned stands too; one made after this call updates the
+ * shelf behind it.
+ *
+ * Null, and nothing may be applied, when `accountId` (the signed-in account
+ * as the result is applied) is not the account the listing was for: it
+ * started before a sign-out, sign-in or account switch, and its rows and
+ * account ids belong to the shelf that left.
+ */
+function keepingLandedCopies(listed: ProjectListing, accountId: string | null) {
+  const landed = projectCopyLandings.takeLandedSince(listed.copies, accountId);
+  if (landed === null) return null;
+  return {
+    projects:
+      (rows: ProjectSummary[] = listed.projects) =>
+      (current: ProjectSummary[]) =>
+        withLandedCopies(rows, current, landed),
+    cloudProjectIds: (ids: Set<string> = listed.cloudProjectIds) =>
+      withLandedCloudCopies(ids, landed)
+  };
+}
+
 /**
  * Every project this device can reach. Device shelf state is reconciled before
  * expired local copies are purged so a temporarily failed cloud mirror cannot
  * resurrect a project after its local retention window closes.
  */
-async function loadProjectSummaries(
+async function readProjectSummaries(
   accountId: string | null,
   allowPurge = true,
   options?: {
@@ -5782,8 +5847,10 @@ export function App() {
     const listed = await loadProjectSummaries(accountId, false);
     if (sessionRef.current?.userId !== accountId || !listed.remoteReached)
       return null;
-    setProjects(listed.projects);
-    setCloudProjectIds(listed.cloudProjectIds);
+    const kept = keepingLandedCopies(listed, accountId);
+    if (!kept) return null;
+    setProjects(kept.projects());
+    setCloudProjectIds(kept.cloudProjectIds());
     setAccountProjectListReached(true);
     return listed.projects;
   }, []);
@@ -9753,18 +9820,21 @@ export function App() {
       // device holds them all), and must not leave "Account unavailable"
       // standing. Unchanged values keep their identity, so an unchanged
       // poll still renders nothing.
+      const kept = keepingLandedCopies(listed, accountId);
+      if (!kept) return null;
+      const cloudIds = kept.cloudProjectIds();
       setCloudProjectIds((current) =>
-        current.size === listed.cloudProjectIds.size &&
-        [...current].every((id) => listed.cloudProjectIds.has(id))
+        current.size === cloudIds.size &&
+        [...current].every((id) => cloudIds.has(id))
           ? current
-          : listed.cloudProjectIds
+          : cloudIds
       );
       setAccountProjectListReached(true);
       setCloudAvailable(true);
       // An unchanged listing leaves the shelf alone so it (and its thumbnail
       // loads) does not re-render every poll.
       if (JSON.stringify(listed.projects) !== JSON.stringify(before))
-        setProjects(listed.projects);
+        setProjects(kept.projects());
       return true;
     };
     relistLibraryRef.current = refresh;
@@ -10077,8 +10147,11 @@ export function App() {
         }
         listingPublished = true;
         setStartupLibraryAccountId(activeSession?.userId ?? null);
-        setProjects(merged);
-        setCloudProjectIds(listed.cloudProjectIds);
+        // The session this startup installs just below is the shelf's.
+        const kept = keepingLandedCopies(listed, activeSession?.userId ?? null);
+        if (!kept) return;
+        setProjects(kept.projects(merged));
+        setCloudProjectIds(kept.cloudProjectIds());
         setAccountProjectListReached(listed.remoteReached);
         setCloudAvailable(canUseCloud);
         if (getKeySessionRevision() === keySessionRevision) {
@@ -16724,8 +16797,12 @@ export function App() {
     setStatus('Offline mode · work is saved on this device.');
     void loadProjectSummaries(null)
       .then((listed) => {
-        if (!cloudFunctionsEnabledRef.current) {
-          setProjects(listed.projects);
+        const kept = keepingLandedCopies(
+          listed,
+          sessionRef.current?.userId ?? null
+        );
+        if (!cloudFunctionsEnabledRef.current && kept) {
+          setProjects(kept.projects());
         }
       })
       .catch(() => undefined);
@@ -16864,8 +16941,13 @@ export function App() {
       if (activeSession.userId !== listedAccount) {
         const listed = await loadProjectSummaries(activeSession.userId);
         if (!isCurrent()) return;
-        setProjects(listed.projects);
-        setCloudProjectIds(listed.cloudProjectIds);
+        const kept = keepingLandedCopies(
+          listed,
+          sessionRef.current?.userId ?? null
+        );
+        if (!kept) return;
+        setProjects(kept.projects());
+        setCloudProjectIds(kept.cloudProjectIds());
         setAccountProjectListReached(listed.remoteReached);
       }
       setSettingsMessage('Cloud profile connected.');
@@ -17088,8 +17170,13 @@ export function App() {
     } else {
       cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current, 0);
     }
-    setProjects(listed.projects);
-    setCloudProjectIds(listed.cloudProjectIds);
+    const kept = keepingLandedCopies(
+      listed,
+      sessionRef.current?.userId ?? null
+    );
+    if (!kept) return;
+    setProjects(kept.projects());
+    setCloudProjectIds(kept.cloudProjectIds());
     setAccountProjectListReached(listed.remoteReached);
     const activeProjectIsCloud = Boolean(
       doc && remoteVersionsRef.current.has(doc.projectId)
@@ -17294,7 +17381,9 @@ export function App() {
       setAccountSettings(null);
       setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
       setCloudAvailable(false);
-      setProjects(listed.projects);
+      // Signed out just above: the session is the listing's (none).
+      const kept = keepingLandedCopies(listed, null);
+      if (kept) setProjects(kept.projects());
       // Nothing is in "the account" once there is no account in session, so the
       // shelf must stop claiming otherwise.
       setCloudProjectIds(new Set());
@@ -17383,6 +17472,9 @@ export function App() {
           departingSession.userId,
           deleted.deletedProjectIds
         );
+      // Gone from the account, kept on this device: a listing already under
+      // way must not list them as the account's again.
+      projectCopyLandings.remove(deleted.deletedProjectIds, false);
       if (deleted.signedOut) {
         if (sessionRef.current !== null) return;
         organizationBackground.confirmSignedOut();
@@ -17391,7 +17483,9 @@ export function App() {
         if (sessionRef.current !== null) return;
         remoteVersionsRef.current.clear();
         setCloudAvailable(false);
-        setProjects(listed.projects);
+        // Still signed out (checked above), as the listing was.
+        const kept = keepingLandedCopies(listed, null);
+        if (kept) setProjects(kept.projects());
         setCloudProjectIds(new Set());
         setAccountProjectListReached(false);
         setSaveState('local');
@@ -17412,20 +17506,28 @@ export function App() {
       const listed = await loadProjectSummaries(
         sessionRef.current?.userId ?? null
       );
-      setProjects(listed.projects);
-      setCloudProjectIds(listed.cloudProjectIds);
-      setAccountProjectListReached(listed.remoteReached);
-      const currentProjectId = doc?.projectId;
-      const currentIsCloud = Boolean(
-        currentProjectId && listed.cloudProjectIds.has(currentProjectId)
+      // A sign-out or another account since leaves the shelf to its own
+      // listing.
+      const kept = keepingLandedCopies(
+        listed,
+        sessionRef.current?.userId ?? null
       );
-      setCloudAvailable(currentIsCloud);
-      setSaveState(currentIsCloud ? 'synced' : 'local');
-      const currentVersion = currentProjectId
-        ? remoteVersionsRef.current.get(currentProjectId)
-        : undefined;
-      if (currentProjectId && currentVersion !== undefined) {
-        projectController?.openProject(currentProjectId, currentVersion);
+      if (kept) {
+        setProjects(kept.projects());
+        setCloudProjectIds(kept.cloudProjectIds());
+        setAccountProjectListReached(listed.remoteReached);
+        const currentProjectId = doc?.projectId;
+        const currentIsCloud = Boolean(
+          currentProjectId && listed.cloudProjectIds.has(currentProjectId)
+        );
+        setCloudAvailable(currentIsCloud);
+        setSaveState(currentIsCloud ? 'synced' : 'local');
+        const currentVersion = currentProjectId
+          ? remoteVersionsRef.current.get(currentProjectId)
+          : undefined;
+        if (currentProjectId && currentVersion !== undefined) {
+          projectController?.openProject(currentProjectId, currentVersion);
+        }
       }
       setSettingsMessage(
         `${countLabel(deleted.deletedProjectIds.length, 'cloud project', 'cloud projects')} deleted permanently · local copies remain.`
@@ -18170,8 +18272,13 @@ export function App() {
         sessionRef.current?.userId ?? null
       );
       if (!isCurrent()) return;
-      setProjects(listed.projects);
-      setCloudProjectIds(listed.cloudProjectIds);
+      const kept = keepingLandedCopies(
+        listed,
+        sessionRef.current?.userId ?? null
+      );
+      if (!kept) return;
+      setProjects(kept.projects());
+      setCloudProjectIds(kept.cloudProjectIds());
       setAccountProjectListReached(listed.remoteReached);
       setStatus(`Invitation accepted with ${accepted.role} access.`);
       // Leave the anonymous workspace completely before opening member access.
@@ -18643,8 +18750,15 @@ export function App() {
           sessionRef.current?.userId ?? null
         );
         if (!isCurrent()) return;
-        setProjects(listed.projects);
-        setCloudProjectIds(listed.cloudProjectIds);
+        // Listed before a sign-out, sign-in or account switch: the shelf
+        // that change set stands. The navigation token does not see one.
+        const kept = keepingLandedCopies(
+          listed,
+          sessionRef.current?.userId ?? null
+        );
+        if (!kept) return;
+        setProjects(kept.projects());
+        setCloudProjectIds(kept.cloudProjectIds());
         setAccountProjectListReached(listed.remoteReached);
         setCloudAvailable(listed.remoteReached);
         // The shelf heading counts the parts and the cloud card says whether
@@ -18757,6 +18871,9 @@ export function App() {
         throw error;
       }
     });
+    // Durable on this device now: a listing that read before this must not
+    // undo it (a trash, restore or archive above all) as it is applied.
+    projectCopyLandings.edit(rows.keys());
     setProjects((current) =>
       current
         .map((project) => {
@@ -19164,6 +19281,37 @@ export function App() {
     }
   }
 
+  /**
+   * Puts a copy that just landed on the shelf, once (a listing that read this
+   * device after the copy was written may already show it), and notes it for
+   * any listing still under way, which keeps it (`keepingLandedCopies`). An
+   * account copy made in an account no longer signed in is left to that
+   * account's next listing.
+   */
+  function landProjectCopy(
+    row: ProjectSummary,
+    madeBy: string | null,
+    inAccount: boolean
+  ) {
+    setProjects((current) =>
+      [
+        ...current.filter((project) => project.projectId !== row.projectId),
+        row
+      ].sort(compareProjectSummaries)
+    );
+    // A device-only copy is on this device whoever is signed in, and every
+    // listing lists this device's projects; an account copy belongs to its
+    // account's listings alone.
+    if (inAccount && sessionRef.current?.userId !== madeBy) return;
+    projectCopyLandings.land(madeBy, row.projectId, inAccount);
+    if (inAccount)
+      setCloudProjectIds((current) =>
+        current.has(row.projectId)
+          ? current
+          : new Set(current).add(row.projectId)
+      );
+  }
+
   /** Copies `project` (or branches its save state); resolves the copy's id. */
   async function handleDuplicateProject(
     project: ProjectSummary,
@@ -19182,6 +19330,7 @@ export function App() {
       recovered?: boolean;
     } = {}
   ): Promise<string | null> {
+    const madeBy = session?.userId ?? null;
     setBusy(true);
     try {
       await flushPendingLocalSave();
@@ -19329,9 +19478,7 @@ export function App() {
               : response.project,
             copied
           );
-          setProjects((current) =>
-            [...current, copyRow].sort(compareProjectSummaries)
-          );
+          landProjectCopy(copyRow, madeBy, true);
           setStatus(
             [
               saveState
@@ -19406,10 +19553,10 @@ export function App() {
         mirrorPending: true
       }).catch(() => undefined);
       await seedCopyThumbnail(source, copy);
-      setProjects((current) =>
-        [...current, summarizeLocalDocument(copy, organization)].sort(
-          compareProjectSummaries
-        )
+      landProjectCopy(
+        summarizeLocalDocument(copy, organization),
+        madeBy,
+        false
       );
       setStatus(
         saveState
@@ -19792,6 +19939,9 @@ export function App() {
     setProjects((current) =>
       current.filter((project) => !destroyed.has(project.projectId))
     );
+    // A listing already under way must not bring back a project destroyed
+    // here, nor its account standing.
+    projectCopyLandings.remove(destroyed, true);
     // A destroyed project is in no account any more. A sample keeps its fixed
     // id, so a reset one rebuilt later must not inherit the old copy's cloud
     // standing (listed as saved, or written at the deleted version).
@@ -30090,6 +30240,8 @@ export function App() {
   }, [inPlace.tool]);
   /** Whether the value a command keypad opened on had been set by the user. */
   const commandKeypadTouchedRef = useRef(false);
+  /** The picks a command chip's open entry was opened over, per slot. */
+  const commandKeypadSlotsRef = useRef<SlotPickCounts>({});
   /** The keypad moves a command handle through this, without a render. */
   const commandSetterRef = useRef<
     ((valueId: string, value: number) => void) | null
@@ -30370,6 +30522,11 @@ export function App() {
     if (!valueSpec) return false;
     const raw = inPlace.raws[valueId];
     commandKeypadTouchedRef.current = inPlace.touched.includes(valueId);
+    commandKeypadSlotsRef.current = chipEntryOpenedOver(
+      inPlace.slots,
+      inPlace.handles,
+      valueId
+    );
     setKeypad({
       kind: 'command',
       commandValueId: valueId,
@@ -30388,6 +30545,30 @@ export function App() {
     });
     return true;
   }
+  // A chip's entry (its editor and keypad) closes, as if canceled, once
+  // every pick it was opened over is taken back and its chip goes with
+  // them: Align's Offset after a click on the moving face in the preview
+  // cleared the pair. A pick replaced or partly taken back keeps the draft. It used to stay open over nothing, so the first Escape only
+  // closed it. The rule is every command's; see chipEntryLostItsPicks for
+  // why nothing else closes an entry.
+  useEffect(() => {
+    const open = keypadRef.current;
+    if (
+      !inPlace.active ||
+      open?.kind !== 'command' ||
+      !open.commandValueId ||
+      !chipEntryLostItsPicks(
+        commandKeypadSlotsRef.current,
+        inPlace.slots,
+        inPlace.handles,
+        open.commandValueId
+      )
+    )
+      return;
+    commandKeypadSlotsRef.current = {};
+    cancelOpenKeypad();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- cancelOpenKeypad reads refs
+  }, [keypad, inPlace.active, inPlace.slots, inPlace.handles]);
   /**
    * The values a running command takes from the keyboard, in the order its
    * Options list them: those with a chip in the viewport (a box's Width,

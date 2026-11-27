@@ -278,7 +278,13 @@ test(
     await joints.getByRole('button', { name: /^Pinion turn\b/ }).click();
     await expect(angle).toHaveValue('-20');
 
-    // The saved project reopens with the coupling still holding.
+    // The saved project reopens with the coupling still holding. Reload once
+    // the last turn is saved on this device, as a person closing the tab
+    // would; sooner, the page asks to leave with it unsaved and the reload
+    // reopens the turn before it.
+    await expect(page.locator('.save-state')).toHaveClass(
+      /\bis-(?:local|local-source|synced)(?:\s|$)/
+    );
     await page.reload();
     await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
       'data-e2e-rendered-bodies',
