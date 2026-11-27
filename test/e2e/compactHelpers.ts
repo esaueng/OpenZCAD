@@ -54,6 +54,25 @@ export async function expectReachable(control: Locator) {
 }
 
 /**
+ * Presses `key` (Tab or Shift+Tab) from wherever focus is until `control`
+ * holds it, as a keyboard user would, never moving focus by script; fails
+ * after `limit` presses, as a focus trap that leaves `control` out would.
+ */
+export async function tabTo(
+  page: Page,
+  control: Locator,
+  key: 'Tab' | 'Shift+Tab',
+  limit = 80
+) {
+  for (let press = 0; press < limit; press += 1) {
+    if (await control.evaluate((element) => element === document.activeElement))
+      return;
+    await page.keyboard.press(key);
+  }
+  await expect(control).toBeFocused();
+}
+
+/**
  * The visible controls under `selector` smaller than 44 px either way, by
  * name and size; empty when every target is large enough.
  */

@@ -387,6 +387,18 @@ export default function CompactWorkspace({
     ],
     []
   );
+  // The notice host stands beside the sheet, outside the stage it makes
+  // inert at full height: its Undo (a toast's, the status line's) is part
+  // of the sheet's focus trap there.
+  const noticeHostRef = useRef<HTMLDivElement | null>(null);
+  const noticeHostCallback = useCallback(
+    (element: HTMLDivElement | null) => {
+      noticeHostRef.current = element;
+      onNoticeHost?.(element);
+    },
+    [onNoticeHost]
+  );
+  const companions = useCallback(() => [noticeHostRef.current], []);
   const onHeight = useCallback((px: number) => {
     (shell() as HTMLElement | null)?.style.setProperty(
       '--compact-sheet-h',
@@ -870,6 +882,7 @@ export default function CompactWorkspace({
           renderPage={renderPage}
           reducedMotion={reducedMotion}
           background={background}
+          companions={companions}
           onHeight={onHeight}
         >
           {/* The mode's tray first: the row the sheet shows at peek. A
@@ -917,7 +930,7 @@ export default function CompactWorkspace({
         {/* The action notice (a delete's Undo): over the sheet and outside
             the stage, which is inert while the sheet stands at full. */}
         <div
-          ref={onNoticeHost}
+          ref={noticeHostCallback}
           className="compact-notice-host"
           {...{ [SHEET_OVERLAY_ATTRIBUTE]: '' }}
         />

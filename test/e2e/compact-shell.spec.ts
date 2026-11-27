@@ -6,6 +6,7 @@ import {
   test,
   waitForSurfacesToSettle
 } from './openzcad-fixtures';
+import { tabTo } from './compactHelpers';
 
 /**
  * The compact workspace's frame (U12 slice 2): a header, the mode tabs, the
@@ -484,9 +485,15 @@ test.describe('the compact workspace frame', () => {
       await undo.evaluate((element) => element.closest('[inert]') === null)
     ).toBe(true);
     await expectReachable(undo);
-    await undo.focus();
-    await expect(undo).toBeFocused();
-    await undo.click();
+    // By keyboard from inside the sheet: its focus trap takes the notice
+    // layer in, both ways round, and Enter runs the Undo (review case: the
+    // trap wrapped inside the sheet, leaving the Undo out of reach).
+    await grabber.focus();
+    await tabTo(page, undo, 'Tab');
+    await grabber.focus();
+    await tabTo(page, undo, 'Shift+Tab');
+    await expect(sheet).toHaveAttribute('data-detent', 'full');
+    await page.keyboard.press('Enter');
     await expect(
       page.getByRole('button', { name: 'Redo', exact: true })
     ).toBeEnabled();
