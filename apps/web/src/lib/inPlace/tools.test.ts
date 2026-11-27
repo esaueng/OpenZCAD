@@ -2541,6 +2541,45 @@ describe('review: values the cards accepted stay expressible', () => {
     expect(
       spec.refusedInputs!(built, { ...built, tool: 'boolean' } as never)
     ).toEqual([]);
+    // U01: another face of the same body is the Face input; a face of
+    // another body is another target, null, as a Split of another body.
+    const onFace = (face: FacePick) =>
+      spec.request(
+        { ...EMPTY, faces: [face] },
+        { diameter: 4, depth: 8 },
+        { style: 'counterbore', depthMode: 'blind' },
+        CTX
+      )!;
+    expect(
+      spec.refusedInputs!(
+        built,
+        onFace({ ...TOP, hash: 12, topologyId: 'f12' })
+      )
+    ).toEqual(['Face']);
+    expect(
+      spec.refusedInputs!(built, onFace({ ...TOP, bodyId: 'body_b' as BodyId }))
+    ).toBeNull();
+  });
+
+  it("a refused fillet or chamfer names its edges on one body, and nothing of another's (U01)", () => {
+    for (const tool of ['fillet', 'chamfer'] as const) {
+      const spec = IN_PLACE_TOOL_SPECS[tool];
+      const on = (bodyId: string, hash: number) =>
+        spec.request(
+          {
+            ...EMPTY,
+            edges: [{ bodyId: bodyId as BodyId, hash, topologyId: `e${hash}` }]
+          },
+          tool === 'fillet' ? { radius: 2 } : { distance: 1 },
+          {},
+          CTX
+        )!;
+      const built = on('body_a', 1);
+      expect(spec.refusedInputs!(built, built)).toEqual([]);
+      expect(spec.refusedInputs!(built, on('body_a', 2))).toEqual(['Edges']);
+      expect(spec.refusedInputs!(built, on('body_b', 1))).toBeNull();
+      expect(spec.refusedInputs!(built, on('body_b', 7))).toBeNull();
+    }
   });
 
   it('a typed hole names the world axis each position chip runs along', () => {
