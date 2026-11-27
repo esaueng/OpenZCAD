@@ -1183,9 +1183,10 @@ export interface InPlaceToolSpec {
    * frame on screen under the refusal instead of taking it down. `frames`
    * holds what each request was made from, for a tool whose request alone
    * does not tell its inputs apart (a Split's plane already slid by its
-   * offset). Null when the request is of another target (a Split of another
-   * body): the last frame says nothing about it, so it comes down as soon as
-   * that request is made, and is not kept under any later refusal.
+   * offset). Null when the request is of another target (a Split, Fillet,
+   * Chamfer or Hole of another body): the last frame says nothing about it,
+   * so it comes down as soon as that request is made, and is not kept under
+   * any later refusal.
    */
   refusedInputs?(
     built: InPlaceRequest,
@@ -4411,12 +4412,14 @@ function holeClickedPosition(
 /**
  * U11: the Hole inputs a refused request changed from the last one that
  * built, so the kept preview stays on screen and the bar names what to put
- * back. A step size that only followed a new bore is not named.
+ * back. A step size that only followed a new bore is not named. A face of
+ * another body is no change of an input on this one: null, as for a Split
+ * of another body, so no frame of the old body stands for it.
  */
 export function holeRefusedInputs(
   built: InPlaceRequest,
   refused: InPlaceRequest
-): string[] {
+): string[] | null {
   if (
     built.tool !== 'modeling' ||
     built.state.operation !== 'hole' ||
@@ -4427,9 +4430,10 @@ export function holeRefusedInputs(
   }
   const a = built.state.value;
   const b = refused.state.value;
-  const inputs: string[] = [];
   const changed = (key: keyof typeof b) => !sameParam(a[key], b[key]);
-  if (changed('targetBodyId') || changed('faceHash')) inputs.push('Face');
+  if (changed('targetBodyId')) return null;
+  const inputs: string[] = [];
+  if (changed('faceHash')) inputs.push('Face');
   if (changed('points')) inputs.push('Sketch points');
   if (changed('style')) inputs.push('Style');
   if (changed('standard')) inputs.push('Standard');
@@ -7506,22 +7510,20 @@ function sameParam(a: unknown, b: unknown): boolean {
  * The inputs an edge tool's refused request changed from the last one that
  * built, in the bar's order: the picked edges, the option that changes which
  * values apply, then each value by its bar label. A value an option brought
- * in or took away is the option's change, not the value's.
+ * in or took away is the option's change, not the value's. Edges of another
+ * body are no change of an input on this one: null, as for a Split of
+ * another body, so no frame of the old body stands for them.
  */
 export function edgeRefusedInputs(
   built: InPlaceRequest,
   refused: InPlaceRequest
-): string[] {
+): string[] | null {
   if (built.tool !== 'edge-modifier' || refused.tool !== 'edge-modifier') {
     return [];
   }
+  if (built.targetBodyId !== refused.targetBodyId) return null;
   const inputs: string[] = [];
-  if (
-    built.targetBodyId !== refused.targetBodyId ||
-    !sameParam(built.edgeHashes, refused.edgeHashes)
-  ) {
-    inputs.push('Edges');
-  }
+  if (!sameParam(built.edgeHashes, refused.edgeHashes)) inputs.push('Edges');
   const field = (key: keyof typeof refused, label: string) => {
     if (!sameParam(built[key], refused[key])) inputs.push(label);
   };

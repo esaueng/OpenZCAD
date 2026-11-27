@@ -3255,11 +3255,15 @@ describe('useInPlaceCommand: a refused fillet or chamfer value', () => {
     await waitFor(() => expect(hook.result.current.refusalInput).toBe('Edges'));
   });
 
-  // Re-check of #2242, finding 2: a refusal of the very request that built
-  // names nothing and takes the frame down, yet leaves the radius 2 frame
-  // the one a later refusal is measured from, as before #2242.
-  it('measures a later refusal from the built radius after one of its retry', async () => {
-    const { hook, refuse } = refusing();
+  // U01 (supersedes the #2242 re-check pin of finding 2): a refusal of the
+  // very request that built names nothing and takes the frame down. An
+  // input is named only over the frame it is measured from, as for Split,
+  // so a later refusal names nothing either: the radius 2 frame is gone, and
+  // the kernel has just refused radius 2 itself, so neither drawing it
+  // again nor "R" (put it back to 2) would be true. Once 2 builds again the
+  // frame is kept and named over as before.
+  it('names nothing over a fillet a refused retry of it took down', async () => {
+    const { hook, publishPreview, frames, refuse } = refusing();
     act(() =>
       hook.result.current.start('fillet', [], [], [], { edges: [edge(1)] })
     );
@@ -3275,12 +3279,67 @@ describe('useInPlaceCommand: a refused fillet or chamfer value', () => {
     });
     await waitFor(() => expect(hook.result.current.refusalInput).toBeNull());
     expect(hook.result.current.refusal).not.toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    const refusals = publishPreview.mock.calls.length;
+    act(() => {
+      hook.result.current.setValue('radius', 30);
+    });
+    await waitFor(() =>
+      expect(publishPreview.mock.calls.length).toBeGreaterThan(refusals)
+    );
+    expect(hook.result.current.refusal).not.toBeNull();
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(hook.result.current.canFinish).toBe(false);
+    // No fillet is drawn under it: nothing is named over a bare body.
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+
+    refuse(false);
+    act(() => {
+      hook.result.current.setValue('radius', 2);
+    });
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    const good = frames.at(-1);
+    refuse(true);
     act(() => {
       hook.result.current.setValue('radius', 30);
     });
     await waitFor(() => expect(hook.result.current.refusalInput).toBe('R'));
     expect(hook.result.current.keptValues?.radius).toBe(2);
+    expect(publishPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ derived: good?.derived })
+    );
+  });
+
+  // U01: edges of another body are no change of an input on the first, as
+  // a Split's other body is not (#2242). Before, the bar named "Edges" and
+  // kept body A's fillet on screen under body B's refusal.
+  it("keeps no fillet of the old body under a refusal of another body's edges", async () => {
+    const { hook, publishPreview, refuse } = refusing();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(1)] })
+    );
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    refuse(true);
+    act(() => {
+      hook.result.current.pickEdge({ ...edge(7), bodyId: 'body_b' as BodyId });
+    });
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
     expect(hook.result.current.canFinish).toBe(false);
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    // A radius changed on body B is not measured from body A's frame either.
+    const published = publishPreview.mock.calls.length;
+    act(() => {
+      hook.result.current.setValue('radius', 30);
+    });
+    await waitFor(() =>
+      expect(publishPreview.mock.calls.length).toBeGreaterThan(published)
+    );
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
   });
 
   // Review of #1771: a frame taken down with an emptied pick is not there to
@@ -3313,6 +3372,232 @@ describe('useInPlaceCommand: a refused fillet or chamfer value', () => {
     await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
     expect(hook.result.current.refusalInput).toBeNull();
     expect(hook.result.current.keptValues).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+});
+
+// U01: Fillet, Chamfer and Hole take the target-change rule Split has had
+// since #2242. A pick on another body comes with nothing of the old body's
+// frame: a frame kept under a refusal comes down in the pick's own commit,
+// and a late frame of the old body is never drawn for the new one.
+describe('useInPlaceCommand: a Fillet or Hole picked on another body', () => {
+  const A = 'body_a' as BodyId;
+  const B = 'body_b' as BodyId;
+  const edge = (bodyId: BodyId, hash: number) => ({
+    bodyId,
+    hash,
+    topologyId: `e${hash}`,
+    middle: { x: 0, y: 0, z: 10 },
+    outward: { x: 1, y: 0, z: 0 }
+  });
+  const face = (bodyId: BodyId, hash: number): FacePick => ({
+    bodyId,
+    hash,
+    topologyId: `f${hash}`,
+    surfaceType: 'plane',
+    normal: { x: 0, y: 0, z: 1 },
+    centroid: { x: 10, y: 5, z: 4 },
+    point: { x: 12, y: 6, z: 4 }
+  });
+  /** What each build was for: its body and its fillet radius or bore. */
+  const target = (request: InPlaceRequest) =>
+    request.tool === 'edge-modifier'
+      ? { body: request.targetBodyId, size: Number(request.size) }
+      : request.tool === 'modeling' && request.state.operation === 'hole'
+        ? {
+            body: request.state.value.targetBodyId,
+            size: Number(request.state.value.diameter)
+          }
+        : { body: '', size: NaN };
+
+  /**
+   * Every build's reply held until released. Body A builds a fillet up to
+   * R 20 and any bore; body B refuses everything.
+   */
+  function harness() {
+    const replies: {
+      body: string;
+      size: number;
+      document: ProjectDocument;
+      release: () => void;
+    }[] = [];
+    const asked = new WeakMap<object, { body: string; size: number }>();
+    const { hook, publishPreview } = setup({
+      buildCommand: (request) => ({
+        validate: () => undefined,
+        apply: (document) => {
+          const built = { ...document } as ProjectDocument;
+          asked.set(built, target(request));
+          return built;
+        },
+        resultBodyId: BODY
+      }),
+      derive: (document) =>
+        new Promise((resolve) => {
+          const { body, size } = asked.get(document)!;
+          replies.push({
+            body,
+            size,
+            document,
+            release: () =>
+              resolve(fakeDocument(body === A && size <= 20).derived)
+          });
+        })
+    });
+    return { hook, replies, publishPreview };
+  }
+
+  /** The next build asked for, released. */
+  async function settle(
+    replies: ReturnType<typeof harness>['replies'],
+    n: number
+  ) {
+    await waitFor(() => expect(replies).toHaveLength(n));
+    act(() => replies[n - 1]!.release());
+    return replies[n - 1]!;
+  }
+
+  /** Body A's radius 2 fillet kept under a refused radius 30. */
+  async function keptUnderRadius() {
+    const harnessed = harness();
+    const { hook, replies } = harnessed;
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(A, 1)] })
+    );
+    await settle(replies, 1);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.setValue('radius', 30);
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.refusalInput).toBe('R'));
+    return harnessed;
+  }
+
+  it("takes body A's kept fillet and its refusal down in the commit of the pick on body B", async () => {
+    const { hook, replies, publishPreview } = await keptUnderRadius();
+    const before = publishPreview.mock.calls.length;
+    // A click, not an act(): the take-down must be committed when the
+    // pick's own commit returns, before any paint.
+    flushSync(() => {
+      hook.result.current.pickEdge(edge(B, 7));
+    });
+    expect(hook.result.current.refusal).toBeNull();
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(publishPreview.mock.calls.length).toBeGreaterThan(before);
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    // Body B's own refusal then names nothing over the bare model.
+    const reply = await settle(replies, 3);
+    expect(reply.body).toBe(B);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  // Found by the U01 browser case: left up while body B was checked, the
+  // built fillet was still drawn for a paint under body B's refusal.
+  it("takes body A's built fillet down in the commit of the pick on body B", async () => {
+    const { hook, replies, publishPreview } = harness();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(A, 1)] })
+    );
+    await settle(replies, 1);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(publishPreview).not.toHaveBeenLastCalledWith(null);
+    flushSync(() => {
+      hook.result.current.pickEdge(edge(B, 7));
+    });
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(hook.result.current.refusal).toBeNull();
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  it('keeps a built fillet up while another edge of body A is checked', async () => {
+    const { hook, replies, publishPreview } = harness();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(A, 1)] })
+    );
+    await settle(replies, 1);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    const shown = publishPreview.mock.calls.length;
+    act(() => {
+      hook.result.current.pickEdge(edge(A, 2));
+    });
+    await waitFor(() => expect(replies).toHaveLength(2));
+    // Same body: nothing comes down while its frame builds.
+    expect(publishPreview.mock.calls.length).toBe(shown);
+  });
+
+  it('never draws a late fillet of body A once edges of body B are picked', async () => {
+    const { hook, replies, publishPreview } = harness();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(A, 1)] })
+    );
+    await settle(replies, 1);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    // R 3 on body A would build, but its reply is late: body B is picked
+    // while it is still out.
+    act(() => {
+      hook.result.current.setValue('radius', 3);
+    });
+    await waitFor(() => expect(replies).toHaveLength(2));
+    act(() => {
+      hook.result.current.pickEdge(edge(B, 7));
+    });
+    // One build is out at a time: body B's is asked once body A's is in.
+    const late = replies[1]!;
+    expect(late).toMatchObject({ body: A, size: 3 });
+    act(() => late.release());
+    // Body B refuses: nothing of body A stays, named or drawn.
+    expect((await settle(replies, 3)).body).toBe(B);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    const drawn = publishPreview.mock.calls
+      .map(([shown]) => shown as ProjectDocument | null)
+      .filter((shown) => shown !== null);
+    // Only the radius 2 frame was ever drawn: never the late R 3 one.
+    expect(drawn).toHaveLength(1);
+  });
+
+  it("keeps the same body's behaviour: another edge on body A is named", async () => {
+    const { hook, replies, publishPreview } = await keptUnderRadius();
+    const kept = (publishPreview.mock.calls as [ProjectDocument | null][])
+      .map(([shown]) => shown)
+      .filter((shown) => shown !== null)
+      .at(-1);
+    expect(kept).toBeDefined();
+    act(() => {
+      hook.result.current.pickEdge(edge(A, 2));
+    });
+    await settle(replies, 3);
+    await waitFor(() =>
+      expect(hook.result.current.refusalInput).toBe('Edges and R')
+    );
+    expect(hook.result.current.keptValues?.radius).toBe(2);
+    expect(publishPreview).toHaveBeenLastCalledWith(kept);
+  });
+
+  it("keeps no hole of body A under a refusal of body B's face", async () => {
+    const { hook, replies, publishPreview } = harness();
+    act(() => hook.result.current.start('hole', [], [face(A, 11)]));
+    await settle(replies, 1);
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.pickFace(face(B, 12));
+    });
+    await settle(replies, 2);
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(hook.result.current.canFinish).toBe(false);
     expect(publishPreview).toHaveBeenLastCalledWith(null);
   });
 });

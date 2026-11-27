@@ -1043,23 +1043,29 @@ export function useInPlaceCommand(
             refused: made
           })
         : [];
-    // A refusal of another target (a Split's other body) is not measured
-    // from that frame, and neither is any after it: it is no longer kept.
-    if (named === null) lastBuilt.current = null;
     const inputs = named ?? [];
     setRefusalInputs(inputs);
     // The handles stand on the values the kept frame built from, so a
     // refused size (a 1000 mm radius) leaves its arrow and chip at the edge
     // being edited rather than that far along the arrow, off the model.
     setKeptValues(inputs.length > 0 && kept ? kept.values : null);
-    if (inputs.length === 0) optionsRef.current.publishPreview(null);
-    else if (kept && supersededDrawn.current)
+    if (inputs.length === 0) {
+      optionsRef.current.publishPreview(null);
+      // An input is named only over the frame it is measured from. Once
+      // that frame is down, no later refusal is measured from it: not one of
+      // another target (a Split's other body, a Fillet's edges on another
+      // body), and not one after a refused retry of the very request that
+      // built it. Drawn again there, it would show a shape the kernel has
+      // just refused for those same inputs, and the name over it would say
+      // to put back a value that no longer builds.
+      lastBuilt.current = null;
+    } else if (kept && supersededDrawn.current)
       optionsRef.current.publishPreview(kept.preview);
     supersededDrawn.current = false;
   };
   /**
    * Whether a frame was built for another target than the request now
-   * made (a Split of the body picked before): nothing it shows is about
+   * made (a Split or Fillet of the body picked before): nothing it shows is about
    * the current request, so it is never drawn for it, refusal or not.
    */
   const ofAnotherTarget = (
@@ -1368,20 +1374,23 @@ export function useInPlaceCommand(
     setEntryRefusals([]);
   }, [editIdentity]);
   const instant = spec?.instant === true;
-  // A frame kept under a refusal that says nothing about the new request (a
-  // Split's other body) comes down with the request, refusal and all, in the
-  // same paint: a layout effect, so no frame shows the new pick over the old
-  // body's halves, its "Offset" refusal or the kept value on its chip, and
-  // the viewer installs the take-down in that commit too. As a passive
-  // effect it ran a paint late, and the viewer's own install one more:
-  // the preview check of #2242 caught the halves under "Checking…" in that
-  // gap. It runs before the build below is asked for, so no reply for the
-  // new request can land ahead of it. A late frame of the old target is not
-  // drawn in its place either (`ofAnotherTarget`, which reads the frame,
-  // not the refusal shown).
+  // A frame that says nothing about the new request (a Split's other body,
+  // a Fillet's edges or a Hole's face on another) comes down with the
+  // request, in the same paint: a layout effect, so no frame shows the new
+  // pick over the old body's halves or fillet, and the viewer installs the
+  // take-down in that commit too. As a passive effect it ran a paint late,
+  // and the viewer's own install one more: the preview check of #2242
+  // caught the halves under "Checking…" in that gap. A frame kept under a
+  // refusal ("Offset", "R") comes down with its refusal and kept values; one
+  // that built, with its advisory (U01): left up while the other body is
+  // checked, the viewer still drew it for a paint under that body's own
+  // refusal. It runs before the build below is asked for, so no reply for
+  // the new request can land ahead of it. A late frame of the old target is
+  // not drawn in its place either (`ofAnotherTarget`, which reads the
+  // frame, not the refusal shown).
   useLayoutEffect(() => {
     const kept = lastBuilt.current;
-    if (!requestKey || !refusalShown.current || !kept) return;
+    if (!requestKey || !kept) return;
     if (!ofAnotherTarget(kept)) return;
     lastBuilt.current = null;
     supersededDrawn.current = false;
@@ -1390,6 +1399,7 @@ export function useInPlaceCommand(
     setTypedRefusal(null);
     setRefusalInputs([]);
     setKeptValues(null);
+    setPreviewAdvisory(null);
     optionsRef.current.publishPreview(null);
     // Only a new request can retarget; the refs say the rest.
   }, [requestKey]);
