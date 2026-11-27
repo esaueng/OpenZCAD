@@ -491,6 +491,10 @@ import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
 import { loneBodyFor } from './lib/inPlace/loneBody';
 import {
+  committedFaceForPreviewPick,
+  previewedMove
+} from './lib/inPlace/faceAlign';
+import {
   presentedDiagnostics,
   shownFeatureWarnings
 } from './lib/diagnosticsRows';
@@ -14548,19 +14552,43 @@ export function App() {
       // While a preview shows, a click lands on the preview's body, which the
       // document does not have. The face meant is the edited body's face in
       // the same plane: clicking the face again is how a hole moves.
-      const shown =
-        previewDoc?.derived.bodyRepresentations[
-          resolvedBodyId
-        ]?.topology?.faces.find(matches)?.geometry;
+      const shownFaces =
+        previewDoc?.derived.bodyRepresentations[resolvedBodyId]?.topology
+          ?.faces;
+      const shownFace = shownFaces?.find(matches);
+      const shown = shownFace?.geometry;
       const target = editTarget ?? inPlaceRef.current.slots.faces[0]?.bodyId;
-      if (target) {
+      const committed = managerRef.current?.document;
+      if (
+        target &&
+        inPlaceRef.current.tool === 'align' &&
+        target === resolvedBodyId
+      ) {
+        // Align's moving body, drawn where the Move on screen puts it: the
+        // move renamed every face, so the face meant is the committed one
+        // in the same place in the body, moved back by that frame's own
+        // Move (never a newer request still building).
+        const move =
+          previewDoc && committed
+            ? previewedMove(previewDoc, committed, target)
+            : null;
+        face =
+          (move && shownFaces && shownFace
+            ? committedFaceForPreviewPick(
+                move,
+                shownFaces,
+                representations[target]?.topology?.faces ?? [],
+                shownFace
+              )
+            : null) ?? undefined;
+      } else if (target) {
         face = coplanarFace(
           target,
           shown?.normal,
           shown?.centroid ?? shown?.center
         );
-        if (face) resolvedBodyId = target;
       }
+      if (target && face) resolvedBodyId = target;
     }
     if (!face) return null;
     const geometry = face.geometry;
@@ -29183,6 +29211,7 @@ export function App() {
           name,
           targetBodyId: request.targetBodyId,
           translation: request.translation,
+          ...(request.rotationDeg ? { rotationDeg: request.rotationDeg } : {}),
           ...(request.scale !== undefined ? { scale: request.scale } : {}),
           ...(request.pivot !== undefined ? { pivot: request.pivot } : {}),
           ...(request.axisRotation
@@ -30553,7 +30582,8 @@ export function App() {
   /** A face-list command's faces, lit as a sweep's are. */
   const inPlaceFocusFaces = useMemo<TopologySelection[] | null>(
     () =>
-      inPlaceFaceMode(inPlaceSpec, inPlace.options) === 'many' &&
+      (inPlaceFaceMode(inPlaceSpec, inPlace.options) === 'many' ||
+        inPlaceFaceMode(inPlaceSpec, inPlace.options) === 'pair') &&
       inPlace.slots.faces.length > 0
         ? inPlace.slots.faces.map((face) => ({
             bodyId: face.bodyId,

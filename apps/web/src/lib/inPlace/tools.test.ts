@@ -1285,6 +1285,101 @@ describe('body tools', () => {
     expect(spec.handles(slots, {}, CTX, {})).toEqual([]);
   });
 
+  // M11 (owner decision D5): which Split inputs a refusal names over the
+  // kept frame. The request stores the plane already slid, so the frames'
+  // own values, options and picks tell the plane and the offset apart.
+  it('split: a refusal names the inputs that changed since the frame that built', () => {
+    const spec = IN_PLACE_TOOL_SPECS.split;
+    const face = {
+      kind: 'face' as const,
+      origin: { x: 20, y: 5, z: 2 },
+      normal: { x: 1, y: 0, z: 0 }
+    };
+    const frame = (
+      values: Record<string, number>,
+      options: Record<string, string> = {},
+      slots: Partial<InPlaceSlots> = {}
+    ) => {
+      const picks = { ...EMPTY, bodies: [BODY], plane: face, ...slots };
+      const chosen = { planeMode: 'picked', keepOriginal: 'no', ...options };
+      const all = {
+        offset: 0,
+        planeOX: 0,
+        planeOY: 0,
+        planeOZ: 0,
+        planeNX: 0,
+        planeNY: 0,
+        planeNZ: 1,
+        ...values
+      };
+      return {
+        request: spec.request(picks, all, chosen, CTX, all)!,
+        inputs: { values: all, options: chosen, slots: picks }
+      };
+    };
+    const named = (
+      built: ReturnType<typeof frame>,
+      refused: ReturnType<typeof frame>
+    ) =>
+      spec.refusedInputs!(built.request, refused.request, {
+        built: built.inputs,
+        refused: refused.inputs
+      });
+    const built = frame({ offset: -8 });
+    expect(named(built, built)).toEqual([]);
+    expect(named(built, frame({ offset: 4 }))).toEqual(['Offset']);
+    expect(
+      named(built, frame({ offset: -8 }, { keepOriginal: 'yes' }))
+    ).toEqual(['Original']);
+    // Another face picked starts unslid: the pick is named, not the reset.
+    const other = {
+      kind: 'face' as const,
+      origin: { x: 0, y: 5, z: 2 },
+      normal: { x: -1, y: 0, z: 0 }
+    };
+    expect(named(built, frame({}, {}, { plane: other }))).toEqual(['Plane']);
+    // ...and a slide typed on it since is named with it.
+    expect(named(built, frame({ offset: 3 }, {}, { plane: other }))).toEqual([
+      'Plane',
+      'Offset'
+    ]);
+    // A datum plane picked is a plane change too.
+    expect(
+      named(
+        built,
+        frame({}, {}, { plane: { kind: 'datum', featureId: 'p' as FeatureId } })
+      )
+    ).toEqual(['Plane']);
+    // The plane typed instead of picked, then its own origin and normal.
+    const typed = frame({ offset: -8 }, { planeMode: 'typed' });
+    expect(named(built, typed)).toEqual(['Plane']);
+    expect(
+      named(typed, frame({ offset: -8, planeOX: 30 }, { planeMode: 'typed' }))
+    ).toEqual(['Origin']);
+    expect(
+      named(
+        typed,
+        frame({ offset: 0, planeNX: 1, planeNZ: 0 }, { planeMode: 'typed' })
+      )
+    ).toEqual(['Normal', 'Offset']);
+    // Another body is not an input changed on this one: null, so no frame
+    // of the old body stands for it, under a refusal or while it builds.
+    const witness = { ...BODY, bodyId: 'body_w' as BodyId };
+    expect(
+      named(built, frame({ offset: 4 }, {}, { bodies: [witness] }))
+    ).toBeNull();
+    // Without the frames, or for another tool's request, nothing is named.
+    expect(
+      spec.refusedInputs!(built.request, frame({ offset: 4 }).request)
+    ).toEqual([]);
+    expect(
+      spec.refusedInputs!(built.request, { tool: 'boolean' } as never, {
+        built: built.inputs,
+        refused: built.inputs
+      })
+    ).toEqual([]);
+  });
+
   it('scale: about the body centre, the handle reaching its corner', () => {
     const spec = IN_PLACE_TOOL_SPECS.scale;
     const slots = { ...EMPTY, bodies: [BODY] };
