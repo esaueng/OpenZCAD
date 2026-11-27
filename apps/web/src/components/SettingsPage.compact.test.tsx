@@ -125,6 +125,40 @@ describe('compact Settings', () => {
     expect(props.onClose).not.toHaveBeenCalled();
   });
 
+  it('moves focus to a pushed section’s heading, and back to its row', () => {
+    renderCompact();
+    const row = screen.getByRole('button', { name: 'Appearance' });
+    row.focus();
+    fireEvent.click(row);
+    const heading = screen.getByRole('heading', { level: 1 });
+    expect(heading).toHaveTextContent('Appearance');
+    expect(heading).toHaveFocus();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Back to all settings' })
+    );
+    expect(page()).toHaveClass('is-compact-list');
+    expect(screen.getByRole('button', { name: 'Appearance' })).toHaveFocus();
+
+    // Escape steps back to the same row, and a search result's section
+    // takes focus to its heading too.
+    fireEvent.click(screen.getByRole('button', { name: 'Viewport' }));
+    expect(screen.getByRole('heading', { level: 1 })).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.getByRole('button', { name: 'Viewport' })).toHaveFocus();
+    fireEvent.change(screen.getByLabelText('Find a setting'), {
+      target: { value: 'Theme' }
+    });
+    fireEvent.click(
+      within(
+        screen.getByRole('list', { name: 'Matching settings' })
+      ).getByRole('button', { name: /^Theme/ })
+    );
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Appearance'
+    );
+    expect(screen.getByRole('heading', { level: 1 })).toHaveFocus();
+  });
+
   it('steps back from a section on Escape before closing', () => {
     const { props } = renderCompact();
     fireEvent.click(screen.getByRole('button', { name: 'Viewport' }));

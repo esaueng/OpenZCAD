@@ -1224,8 +1224,15 @@ export function SettingsPage({
       : compactPushed
         ? 'section'
         : 'list';
-  compactBackRef.current =
-    compactMode === 'section' ? () => setCompactPushed(false) : null;
+  // Where focus goes once the compact page changes: a pushed section's
+  // heading, or, back on the list, the row that pushed it. Without it the
+  // control tapped went away and focus fell to the document's body.
+  const compactFocusRef = useRef<'heading' | SectionId | null>(null);
+  const compactBack = () => {
+    compactFocusRef.current = active;
+    setCompactPushed(false);
+  };
+  compactBackRef.current = compactMode === 'section' ? compactBack : null;
   // Only rows the open sections draw now, by the tests they draw them by.
   const compactResults =
     compactMode === 'search'
@@ -1242,6 +1249,7 @@ export function SettingsPage({
     (compactMode !== 'search' || compactResults.length > 0);
   const openCompactSection = (id: SectionId, settingTitle?: string) => {
     compactFoundRef.current = settingTitle ?? null;
+    compactFocusRef.current = 'heading';
     setActive(id);
     setCompactPushed(true);
     if (query) changeQuery('');
@@ -1263,6 +1271,21 @@ export function SettingsPage({
       .find((element) => element.textContent?.trim() === title)
       ?.closest<HTMLElement>('.setting-row');
     row?.scrollIntoView?.({ block: 'center' });
+  }, [active, compactMode]);
+
+  useLayoutEffect(() => {
+    const target = compactFocusRef.current;
+    if (!target) return;
+    compactFocusRef.current = null;
+    if (target === 'heading') {
+      headingRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    pageRef.current
+      ?.querySelector<HTMLElement>(
+        `.settings-nav nav button[data-section="${target}"]`
+      )
+      ?.focus();
   }, [active, compactMode]);
 
   return (
@@ -1306,6 +1329,7 @@ export function SettingsPage({
                   // Named outright: the label is a span beside a decorative
                   // icon, and a narrow rail once hid it entirely.
                   aria-label={section.label}
+                  data-section={compact ? section.id : undefined}
                   aria-current={active === section.id ? 'page' : undefined}
                   title={section.detail}
                   onClick={() =>
@@ -1373,7 +1397,7 @@ export function SettingsPage({
               type="button"
               className="settings-compact-back"
               aria-label="Back to all settings"
-              onClick={() => setCompactPushed(false)}
+              onClick={compactBack}
             >
               <ChevronLeft size={22} aria-hidden="true" />
             </button>
