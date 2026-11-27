@@ -19330,6 +19330,21 @@ export function App() {
       );
   }
 
+  /**
+   * The open project as the library lists it, under the name it has now: the
+   * library's row keeps the name it was listed with until the shelf is read
+   * again, so a rename in the workspace or the project sheet is not on it
+   * yet. A project the library has not listed is summarized from itself.
+   */
+  function openProjectSummary(current: ProjectDocument): ProjectSummary {
+    const listed = projects.find(
+      (summary) => summary.projectId === current.projectId
+    );
+    return listed
+      ? { ...listed, name: current.name }
+      : summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION);
+  }
+
   /** Copies `project` (or branches its save state); resolves the copy's id. */
   async function handleDuplicateProject(
     project: ProjectSummary,
@@ -40028,12 +40043,7 @@ export function App() {
             run: () => {
               const current = managerRef.current?.document;
               if (!current) return;
-              void handleDuplicateProject(
-                projects.find(
-                  (summary) => summary.projectId === current.projectId
-                ) ??
-                  summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION)
-              );
+              void handleDuplicateProject(openProjectSummary(current));
             }
           } satisfies PaletteCommand
         ]
@@ -41378,10 +41388,6 @@ export function App() {
         }}
       />
     ) : null;
-  // The open project as the library lists it, for its Properties.
-  const compactPropertiesSummary = (current: ProjectDocument) =>
-    projects.find((summary) => summary.projectId === current.projectId) ??
-    summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION);
   // Why IGES, which shares the File menu's STEP row, cannot export now.
   const compactExportReason =
     exportBodyIds.length === 0
@@ -44700,7 +44706,7 @@ export function App() {
           {projectPropertiesOpen && compactShell && doc ? (
             <Suspense fallback={null}>
               <LazyProjectPropertiesDialog
-                project={compactPropertiesSummary(doc)}
+                project={openProjectSummary(doc)}
                 loadProperties={loadProperties}
                 accountStatus={
                   !session
@@ -44712,7 +44718,7 @@ export function App() {
                         : 'Unknown — account listing unavailable'
                 }
                 encryptionFacts={{
-                  storageFormat: compactPropertiesSummary(doc).storageFormat,
+                  storageFormat: openProjectSummary(doc).storageFormat,
                   inAccount: cloudProjectIds.has(doc.projectId)
                 }}
                 {...(canRenameProject && !shareSession

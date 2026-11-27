@@ -45,38 +45,42 @@ export function CompactPanelSheet({ panels }: { panels: CompactPanels }) {
   };
   return (
     <div className="compact-panel-sheet">
-      <div
-        className="compact-segments"
-        role="tablist"
-        aria-label="Panels"
-        onKeyDown={onKeyDown}
-      >
-        {available.map((id) => {
-          const Icon = ICONS[id];
-          const active = id === open;
-          return (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              className={`compact-segment${active ? ' active' : ''}`}
-              aria-label={COMPACT_PANEL_TITLES[id]}
-              aria-selected={active}
-              tabIndex={active ? 0 : -1}
-              data-panel-segment={id}
-              onClick={() => {
-                if (!active) onOpen(id);
-              }}
-            >
-              <Icon size={20} aria-hidden="true" />
-              {active ? (
-                <span className="compact-segment-label" aria-hidden="true">
-                  {COMPACT_PANEL_TITLES[id]}
-                </span>
-              ) : null}
-            </button>
-          );
-        })}
+      {/* Opaque from edge to edge, so the rows scrolled under the tabs do
+          not show around them. */}
+      <div className="compact-segments-bar">
+        <div
+          className="compact-segments"
+          role="tablist"
+          aria-label="Panels"
+          onKeyDown={onKeyDown}
+        >
+          {available.map((id) => {
+            const Icon = ICONS[id];
+            const active = id === open;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                className={`compact-segment${active ? ' active' : ''}`}
+                aria-label={COMPACT_PANEL_TITLES[id]}
+                aria-selected={active}
+                tabIndex={active ? 0 : -1}
+                data-panel-segment={id}
+                onClick={() => {
+                  if (!active) onOpen(id);
+                }}
+              >
+                <Icon size={20} aria-hidden="true" />
+                {active ? (
+                  <span className="compact-segment-label" aria-hidden="true">
+                    {COMPACT_PANEL_TITLES[id]}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
       </div>
       <div
         className="compact-panel-body"

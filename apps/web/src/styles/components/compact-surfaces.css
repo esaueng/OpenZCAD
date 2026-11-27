@@ -121,25 +121,28 @@
   color: var(--color-text-muted);
 }
 
-/* The shelves: one segmented control, one word each. */
+/* The shelves: one segmented control, one word each. Each shelf is as wide
+   as its word and count, and the room left over is shared out, so a
+   shelf's word is whole at 360px (equal columns cut "Projects" with its
+   count beside it). These rules are the shelves' own: the panel sheet's
+   tabs share the class name. */
 .compact-segmented {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
+  display: flex;
   gap: 2px;
   padding: 2px;
   background: var(--color-surface);
   border-radius: var(--radius-md);
 }
 
-.compact-segment {
+.compact-segmented > .compact-segment {
+  flex: 1 1 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-width: 0;
+  gap: 4px;
+  min-width: var(--compact-target);
   min-height: var(--compact-target);
-  padding: 0 var(--sp-1);
+  padding: 0 6px;
   border: 0;
   border-radius: calc(var(--radius-md) - 2px);
   background: transparent;
@@ -147,13 +150,13 @@
   font-size: 15px;
 }
 
-.compact-segment[aria-pressed='true'] {
+.compact-segmented > .compact-segment[aria-pressed='true'] {
   color: var(--color-text);
   background: var(--color-accent-dim);
   font-weight: var(--fw-semibold);
 }
 
-.compact-segment-label {
+.compact-segmented .compact-segment-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -265,16 +268,81 @@
   margin: 4px 4px 0 0;
 }
 
+/* A row clears its 44px checkbox on the left and its two 44px buttons on
+   the right. */
+.start-screen[data-shell='compact'] .start-tile-grid.is-list {
+  --start-list-inset: calc(var(--compact-target) + 2px);
+}
+
 .start-screen[data-shell='compact'] .start-tile-grid.is-list .start-tile-open {
   min-height: 64px;
   padding-right: calc(var(--compact-target) * 2 + var(--sp-3));
 }
 
+/* The row's buttons and checkbox span its height, centred on it. The
+   regular list centres them with a translate, which the row's swipe offset
+   replaces here: they stood half a button low, into the next row. Every
+   row kind (project, folder) takes the swipe offset, 0 where it does not
+   swipe, so none keeps that translate with the stretched box. */
 .start-screen[data-shell='compact']
   .start-tile-grid.is-list
   .start-tile-actions {
-  top: 50%;
+  top: 0;
+  bottom: 0;
   align-items: center;
+  transform: translateX(var(--swipe-x, 0px));
+}
+
+/* Side by side on the row's middle line: the card's corner placement
+   (pin at the top, ⋯ at the foot) split them to the stretched box's top
+   and bottom edges. */
+.start-screen[data-shell='compact']
+  .start-tile-grid.is-list
+  .start-tile-actions
+  > .start-tile-action {
+  align-self: center;
+}
+
+.start-screen[data-shell='compact']
+  .start-tile-grid.is-list
+  .start-tile-select {
+  top: calc(50% - var(--compact-target) / 2);
+  left: 0;
+}
+
+/* The checkbox takes a finger: a 44px button drawing its 22px box. */
+.start-screen[data-shell='compact'] .start-tile-select {
+  width: var(--compact-target);
+  height: var(--compact-target);
+  margin: 0;
+  border: 0;
+  background: transparent;
+}
+
+.start-screen[data-shell='compact'] .start-tile-select::before {
+  content: '';
+  grid-area: 1 / 1;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.start-screen[data-shell='compact'] .start-tile-select[aria-checked='true'] {
+  background: transparent;
+}
+
+.start-screen[data-shell='compact']
+  .start-tile-select[aria-checked='true']::before {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+
+.start-screen[data-shell='compact'] .start-tile-select > svg {
+  position: relative;
+  grid-area: 1 / 1;
 }
 
 .start-screen[data-shell='compact']
@@ -708,6 +776,43 @@
   .setting-control
   :is(button, select, input:not([type='checkbox']):not([type='radio'])) {
   min-height: var(--compact-target);
+}
+
+/* A switch takes a finger: its 40 × 22 track drawn in a 44px square, the
+   invisible checkbox over all of it. */
+.settings-page[data-shell='compact'] .settings-toggle {
+  width: var(--compact-target);
+  height: var(--compact-target);
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-page[data-shell='compact'] .settings-toggle span {
+  position: relative;
+}
+
+/* The knob is placed in the track now, inside its 1px border. */
+.settings-page[data-shell='compact'] .settings-toggle span::after {
+  top: 2px;
+  left: 2px;
+}
+
+/* A segmented choice's options, and the toggle buttons the sections lay
+   out as choices (SpaceMouse axes, relation glyphs), are 44px both ways. */
+.settings-page[data-shell='compact'] .settings-segmented span {
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+}
+
+.settings-page[data-shell='compact']
+  :is(.space-mouse-axis-toggle, .relation-glyph-toggle) {
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+}
+
+.settings-page[data-shell='compact'] .relation-glyph-toggle {
+  width: var(--compact-target);
+  height: var(--compact-target);
 }
 
 .settings-compact-results {
