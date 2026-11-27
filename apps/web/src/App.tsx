@@ -303,6 +303,7 @@ import type {
   AccountDeletionScope,
   ArtifactRecord,
   BodyId,
+  EdgeTopologyReferenceV5,
   BodyTopology,
   BodyRepresentation,
   EntityId,
@@ -2128,6 +2129,7 @@ import {
   refusedMirrorMember,
   type MirrorSetMember
 } from './lib/inPlace/mirrorBodies';
+import { planeEdgeFromTopology } from './lib/inPlace/splitEdgePlane';
 import { imagePlacementPlane, placeImage } from './lib/inPlace/image';
 import {
   FIXED_POINT_OPTION,
@@ -23798,6 +23800,30 @@ export function App() {
           !representations[selection.bodyId] ||
           (command.editing?.data.featureKind === 'boolean' &&
             command.editing.ownBodyIds.includes(selection.bodyId));
+        // M11 (D2): with the body picked, a straight edge is half of a plane
+        // through two edges (Split). The plane is read once from the edges
+        // as they stand on screen, the preview's first, and stored by its
+        // numbers like a face's: nothing follows the edges afterwards.
+        if (
+          selection.kind === 'edge' &&
+          command.spec.planeFromEdges &&
+          command.slots.bodies.length > 0 &&
+          command.options.planeMode !== 'typed' &&
+          !additive
+        ) {
+          const edge =
+            selection.hash === undefined
+              ? null
+              : planeEdgeFromTopology(
+                  (
+                    previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+                    representations[selection.bodyId]
+                  )?.topology,
+                  selection.bodyId,
+                  selection.hash
+                );
+          return edge ? command.pickPlaneEdge(edge) : true;
+        }
         // With the body picked, a flat face is the plane to mirror or split
         // across; otherwise any face names its body. M11 (D4): Shift on
         // Mirror, which takes several bodies, toggles the clicked body.
@@ -30800,17 +30826,31 @@ export function App() {
   // The base version: command-owned selections are re-applied after an
   // undo or redo, which clears the selection while the command keeps them.
   const inPlaceBaseVersion = doc?.version ?? null;
+  // M11 (D2): a Split's edges held toward a plane through two edges are lit
+  // the same way, while it runs or edits.
+  const inPlaceLitEdges:
+    | readonly {
+        bodyId: BodyId;
+        hash: number;
+        topologyId?: string;
+        reference?: EdgeTopologyReferenceV5;
+      }[]
+    | null = !inPlace.active
+    ? null
+    : inPlaceSpec?.edgeMode && !inPlace.editing
+      ? inPlace.slots.edges
+      : inPlaceSpec?.planeFromEdges
+        ? (inPlace.slots.planeEdges ?? [])
+        : null;
   const inPlaceEdgeKey =
-    inPlace.active && inPlaceSpec?.edgeMode && !inPlace.editing
-      ? JSON.stringify(
-          inPlace.slots.edges.map((edge) => [edge.bodyId, edge.hash])
-        )
-      : null;
+    inPlaceLitEdges === null
+      ? null
+      : JSON.stringify(inPlaceLitEdges.map((edge) => [edge.bodyId, edge.hash]));
   const selectedEdgeKey = JSON.stringify(
     selectedEdges.map((edge) => [edge.bodyId, edge.hash])
   );
-  const inPlaceEdgesRef = useRef(inPlace.slots.edges);
-  inPlaceEdgesRef.current = inPlace.slots.edges;
+  const inPlaceEdgesRef = useRef(inPlaceLitEdges ?? []);
+  inPlaceEdgesRef.current = inPlaceLitEdges ?? [];
   const litInPlaceEdges = useRef(false);
   useEffect(() => {
     if (inPlaceEdgeKey === null) {

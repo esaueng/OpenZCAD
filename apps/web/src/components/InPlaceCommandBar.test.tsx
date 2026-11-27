@@ -12,6 +12,7 @@ import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { InPlaceCommandBar } from './InPlaceCommandBar';
 import { previewExpression } from '../lib/model';
+import { SPLIT_EDGE_PLANE_SENTENCES } from '../lib/refusalLanguage';
 import {
   ParameterDefinitionProvider,
   type ParameterDefinition
@@ -166,6 +167,29 @@ describe('InPlaceCommandBar', () => {
       screen.getByText('Technical details').closest('details')?.textContent
     ).toContain(diagnostic);
   });
+
+  // M11 (D2): a Split plane picked as two edges that give none is refused
+  // by its own code, before any rebuild: its sentence is the product's own,
+  // shown as written under the Plane input, with no Technical details.
+  it.each(Object.entries(SPLIT_EDGE_PLANE_SENTENCES))(
+    'shows the %s edge-plane refusal as written, after Plane',
+    (_code, sentence) => {
+      render(
+        <InPlaceCommandBar
+          title="Split"
+          hint="Pick a plane or flat face, or two straight edges"
+          refusal={sentence}
+          refusalInput="Plane"
+          canFinish={false}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+      expect(screen.getByRole('status').textContent).toBe(`Plane: ${sentence}`);
+      expect(screen.queryByText('Technical details')).toBeNull();
+      expect(screen.getByRole('button', { name: /Done/ })).toBeDisabled();
+    }
+  );
 
   // M11 (D4): a Mirror of several bodies names the body it could not
   // mirror, and says to take it out, around whatever the kernel's sentence

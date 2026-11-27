@@ -524,6 +524,95 @@ export function parallelDatumPlane(
   return reverseNormal ? flipped(frame) : frame;
 }
 
+/** Why two straight edges give no single plane. */
+export type EdgePairPlaneRefusal = 'collinear' | 'skew';
+
+/** The plane two straight edges lie in, or why they lie in none or many. */
+export type EdgePairPlane =
+  | { ok: true; origin: DatumVector; normal: DatumVector }
+  | { ok: false; code: EdgePairPlaneRefusal };
+
+/**
+ * M11 (owner decision D2): the plane through two straight edges, each given
+ * by its two ends, for a Split plane picked as a pair of edges. The result is
+ * plain numbers, computed once at pick time; nothing links it to the edges.
+ *
+ * - Valid: the edges are coplanar and not on one line, either crossing
+ *   (their lines meet, at an end or not) or parallel and apart.
+ * - `collinear`: both ends of the second edge lie within the linear
+ *   tolerance of the first edge's line (coincident edges among them), so
+ *   every plane through that line holds both. An edge with no length has no
+ *   line of its own and is refused the same way.
+ * - `skew`: the second edge leaves the plane through the first edge and the
+ *   second edge's end farther from the first's line by more than the linear
+ *   tolerance. A tilt shows here as its rise over the edge, so a long edge
+ *   turned by a tiny angle is refused once that rise passes the tolerance.
+ *
+ * The tolerance is the three-point plane's: {@link geometryTolerance} of the
+ * ends' span, floored at the rounding noise of their coordinates.
+ *
+ * The origin is the first edge's midpoint, so a pick order of the same pair
+ * gives a plane through the same line; neither edge's own direction matters.
+ * The normal is canonical (its first component beyond the direction quantum
+ * is positive, as {@link canonicalAxisDirection}), so it does not depend on
+ * which edge was picked first or which way either edge runs.
+ */
+export function edgePairPlane(
+  first: readonly [DatumVector, DatumVector],
+  second: readonly [DatumVector, DatumVector]
+): EdgePairPlane {
+  const points = [...first, ...second];
+  points.forEach((point, index) =>
+    requirePoint(point, index < 2 ? 'first edge' : 'second edge')
+  );
+  let span = 0;
+  for (let a = 0; a < points.length; a += 1) {
+    for (let b = a + 1; b < points.length; b += 1) {
+      span = Math.max(span, datumLength(datumSub(points[b]!, points[a]!)));
+    }
+  }
+  const magnitude = Math.max(...points.map((point) => datumLength(point)));
+  const tolerance = Math.max(
+    geometryTolerance(span),
+    magnitude * 8 * Number.EPSILON
+  );
+  const start = first[0];
+  const along = datumSub(first[1], start);
+  const length = datumLength(along);
+  const secondLength = datumLength(datumSub(second[1], second[0]));
+  if (length <= tolerance || secondLength <= tolerance) {
+    return { ok: false, code: 'collinear' };
+  }
+  const u = datumScale(along, 1 / length);
+  // Each end of the second edge's distance from the first edge's line.
+  const offLine = (point: DatumVector): number => {
+    const from = datumSub(point, start);
+    return datumLength(datumSub(from, datumScale(u, datumDot(from, u))));
+  };
+  const [near, far] =
+    offLine(second[0]) >= offLine(second[1])
+      ? [second[1], second[0]]
+      : [second[0], second[1]];
+  if (offLine(far) <= tolerance) return { ok: false, code: 'collinear' };
+  const across = datumCross(u, datumSub(far, start));
+  const normal = datumScale(across, 1 / datumLength(across));
+  if (Math.abs(datumDot(datumSub(near, start), normal)) > tolerance) {
+    return { ok: false, code: 'skew' };
+  }
+  // `+ 0` turns a negative zero into zero, so the stored plane reads and
+  // round-trips the same whichever way the edges were drawn.
+  const plain = (vector: DatumVector): DatumVector => ({
+    x: vector.x + 0,
+    y: vector.y + 0,
+    z: vector.z + 0
+  });
+  return {
+    ok: true,
+    origin: plain(datumScale(datumAdd(first[0], first[1]), 0.5)),
+    normal: plain(canonicalAxisDirection(normal))
+  };
+}
+
 /**
  * Schema v108: the in-plane u a plane with this unit normal takes when its
  * construction names none: the world axis least aligned with the normal
