@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Link2,
   Pause,
+  PencilLine,
   Pin,
   Play,
   Plus,
@@ -148,11 +149,14 @@ export function JointDetails({
   onStatus,
   model,
   joint,
-  onDelete
+  onDelete,
+  onRename
 }: AssemblyDetailsProps & {
   joint: AssemblyJoint;
   /** Deletes this joint (the panel announces it, with Undo). */
   onDelete?(): void;
+  /** Renames it in its row: touch's way to the row's double-click. */
+  onRename?(): void;
 }) {
   const playback = useAssemblyRuntime((s) => s.playback);
   const studyId = useAssemblyRuntime((s) => s.selectedStudyId);
@@ -392,17 +396,29 @@ export function JointDetails({
         <p className="assembly-muted">{sweepReason}</p>
       ) : null}
 
-      {onDelete ? (
+      {onDelete || onRename ? (
         <div className="assembly-detail-actions">
-          <button
-            type="button"
-            className="assembly-link-button is-danger"
-            title="Delete this joint (Delete). Undo brings it back."
-            onClick={onDelete}
-          >
-            <Trash2 size={12} aria-hidden="true" />
-            Delete joint
-          </button>
+          {onRename ? (
+            <button
+              type="button"
+              className="assembly-link-button"
+              onClick={onRename}
+            >
+              <PencilLine size={12} aria-hidden="true" />
+              Rename joint
+            </button>
+          ) : null}
+          {onDelete ? (
+            <button
+              type="button"
+              className="assembly-link-button is-danger"
+              title="Delete this joint (Delete). Undo brings it back."
+              onClick={onDelete}
+            >
+              <Trash2 size={12} aria-hidden="true" />
+              Delete joint
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -415,8 +431,13 @@ export function ComponentDetails({
   execute,
   onStatus,
   model,
-  component
-}: AssemblyDetailsProps & { component: AssemblyComponent }) {
+  component,
+  onRename
+}: AssemblyDetailsProps & {
+  component: AssemblyComponent;
+  /** Renames it in its row: touch's way to the row's double-click. */
+  onRename?(): void;
+}) {
   const app = { document, execute, onStatus };
   const role = model.solution.roles.get(component.id) ?? 'free';
   const link = model.solution.links.get(component.id);
@@ -485,6 +506,16 @@ export function ComponentDetails({
           <Pin size={13} aria-hidden="true" />
           {component.grounded ? 'Fixed' : 'Fix in place'}
         </button>
+        {onRename ? (
+          <button
+            type="button"
+            className="assembly-link-button"
+            onClick={onRename}
+          >
+            <PencilLine size={12} aria-hidden="true" />
+            Rename part
+          </button>
+        ) : null}
         <button
           type="button"
           className="assembly-link-button is-danger"

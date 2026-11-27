@@ -83,6 +83,18 @@ describe('AssemblyStudiesSection', () => {
     view.unmount();
   });
 
+  it('keys a new study from the saved pose, never the player’s preview (AS06)', () => {
+    const { manager, view } = mount(pivotProject({ study: false }));
+    assemblyRuntime.setActive(true);
+    const id = assemblyRuntime.startPreview();
+    assemblyRuntime.showPreview(id, new Map([['j_pivot', [45]]]));
+    fireEvent.click(screen.getByRole('button', { name: 'Add animation' }));
+    expect(manager.document.assembly?.studies[0]?.tracks[0]?.keys).toEqual([
+      { t: 0, value: 0, easing: 'linear' }
+    ]);
+    view.unmount();
+  });
+
   it('offers no Add while nothing can move', () => {
     const manager = pivotProject({ study: false });
     const set = manager.document.assembly!;

@@ -13,6 +13,8 @@ import {
   Play,
   Plus,
   SkipBack,
+  StepBack,
+  StepForward,
   Trash2,
   X
 } from 'lucide-react';
@@ -24,6 +26,7 @@ import {
   type AssemblyCouplingEnd,
   type AssemblyMotionStudy,
   type AssemblySet,
+  type AssemblyTrack,
   type UnitSystem
 } from '@openzcad/shared';
 import { unitSymbol } from '../../lib/assembly/assemblyUi';
@@ -77,6 +80,11 @@ export interface MotionStudyTimelineProps {
   floating?: boolean;
   /** The document's unit: a slide's values are in it. */
   lengthUnit?: UnitSystem;
+  /**
+   * Touch (U12 slice 8): buttons for the previous and next key, which a
+   * keyboard reaches with [ and ], beside Play.
+   */
+  touch?: boolean;
 }
 
 const SPEEDS = [0.5, 1, 2] as const;
@@ -101,6 +109,43 @@ function timeAt(element: HTMLElement, clientX: number, durationS: number) {
   const u = (clientX - rect.left) / rect.width;
   return Math.min(durationS, Math.max(0, u * durationS));
 }
+
+/**
+ * Touch (U12 slice 8): the key on `track` whose diamond is nearest a touch
+ * over its lane. A key's thumb-sized target covers its close neighbours',
+ * so the touch, not the topmost target, says which key it meant.
+ */
+function nearestKeyIndex(
+  lane: HTMLElement,
+  track: AssemblyTrack,
+  durationS: number,
+  clientX: number,
+  clientY: number,
+  fallback: number
+): number {
+  const rect = lane.getBoundingClientRect();
+  if (!(rect.width > 0) || !(durationS > 0)) return fallback;
+  let best = fallback;
+  let bestDistance = Infinity;
+  track.keys.forEach((key, index) => {
+    const x =
+      rect.left + rect.width * Math.min(1, Math.max(0, key.t / durationS));
+    const y = rect.top + (rect.height * keyValueY(track, key.value)) / 100;
+    const distance = Math.hypot(clientX - x, clientY - y);
+    if (distance < bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  });
+  return best;
+}
+
+/**
+ * Touch: a press on a lane or the ruler waits to see whether it is a tap,
+ * a sideways scrub or the page scrolling, and moves the playhead only for
+ * the first two.
+ */
+const TOUCH_SCRUB_SLOP_PX = 6;
 
 function percent(t: number, durationS: number): string {
   return `${(100 * Math.min(1, Math.max(0, t / durationS))).toFixed(3)}%`;
@@ -139,7 +184,8 @@ export function MotionStudyTimeline({
   onClose,
   readOnly = false,
   floating = false,
-  lengthUnit = 'mm'
+  lengthUnit = 'mm',
+  touch = false
 }: MotionStudyTimelineProps) {
   const selectedStudyId = useAssemblyRuntime((s) => s.selectedStudyId);
   const studyTimeS = useAssemblyRuntime((s) => s.studyTimeS);
@@ -154,6 +200,14 @@ export function MotionStudyTimeline({
   const [note, setNote] = useState<string | null>(null);
   const dragRef = useRef<KeyDrag | null>(null);
   const scrubRef = useRef<number | null>(null);
+  /** Touch: a lane press not yet known to be a tap or a scrub. */
+  const pendingScrubRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  /** Touch: the key the last press on a key meant, for its click. */
+  const pressedKeyRef = useRef<KeySelection | null>(null);
 
   const setRef = useRef(assembly);
   setRef.current = assembly;
@@ -337,12 +391,12 @@ export function MotionStudyTimeline({
       if (!track) continue;
       const joint = jointById.get(track.jointId);
       // What the part shows now: a pose dragged in the viewport, else the
-      // study's own value there.
+      // study's own value there. Never a player preview's pose (AS06).
       const value = joint
         ? currentJointValue(
             joint,
             track.dof,
-            shownJointValues(set, runtime.overrides, runtime.drivers)
+            shownJointValues(set, runtime.editOverrides, runtime.editDrivers)
           )
         : evaluateTrack(track, at);
       next = setKeyAt(next, index, at, value);
@@ -407,13 +461,16 @@ export function MotionStudyTimeline({
       setSelection(null);
   }
 
-  function jumpKey(direction: -1 | 1) {
+  /** The key `[` or `]` goes to from `at`, or null with none that way. */
+  function keyTarget(direction: -1 | 1, at: number): number | null {
     const scope = selection?.trackIndex ?? selectedTrack ?? undefined;
-    const at = getAssemblyRuntime().studyTimeS;
-    const target =
-      direction > 0
-        ? nextKeyTime(base, at, scope)
-        : previousKeyTime(base, at, scope);
+    return direction > 0
+      ? nextKeyTime(base, at, scope)
+      : previousKeyTime(base, at, scope);
+  }
+
+  function jumpKey(direction: -1 | 1) {
+    const target = keyTarget(direction, getAssemblyRuntime().studyTimeS);
     if (target !== null) seek(target);
   }
 
@@ -448,17 +505,57 @@ export function MotionStudyTimeline({
   function onScrubDown(event: ReactPointerEvent<HTMLElement>) {
     if (event.button !== 0) return;
     const element = event.currentTarget;
+    // A finger on a lane may be starting to scroll the sheet: nothing
+    // moves (and playback keeps playing) until it is a tap or a scrub.
+    if (touch && event.pointerType !== 'mouse') {
+      pendingScrubRef.current = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY
+      };
+      return;
+    }
     scrubRef.current = event.pointerId;
     capture(element, event.pointerId);
     seek(timeAt(element, event.clientX, base.durationS));
   }
 
   function onScrubMove(event: ReactPointerEvent<HTMLElement>) {
+    const pending = pendingScrubRef.current;
+    if (pending && pending.pointerId === event.pointerId) {
+      const dx = Math.abs(event.clientX - pending.x);
+      const dy = Math.abs(event.clientY - pending.y);
+      // Still within the slop: it may yet be a tap.
+      if (Math.max(dx, dy) < TOUCH_SCRUB_SLOP_PX) return;
+      pendingScrubRef.current = null;
+      // Mostly up or down: a scroll, whether or not the browser claims it
+      // (its pointerup must not count as a tap).
+      if (dx <= dy) return;
+      scrubRef.current = event.pointerId;
+      capture(event.currentTarget, event.pointerId);
+    }
     if (scrubRef.current !== event.pointerId) return;
     seek(timeAt(event.currentTarget, event.clientX, base.durationS));
   }
 
   function onScrubUp(event: ReactPointerEvent<HTMLElement>) {
+    const pending = pendingScrubRef.current;
+    if (pending && pending.pointerId === event.pointerId) {
+      pendingScrubRef.current = null;
+      // A tap, if the finger stayed within the slop: the playhead goes
+      // where it landed. Anything further was a swipe and moves nothing.
+      const dx = Math.abs(event.clientX - pending.x);
+      const dy = Math.abs(event.clientY - pending.y);
+      if (Math.max(dx, dy) < TOUCH_SCRUB_SLOP_PX)
+        seek(timeAt(event.currentTarget, pending.x, base.durationS));
+    }
+    if (scrubRef.current === event.pointerId) scrubRef.current = null;
+  }
+
+  function onScrubCancel(event: ReactPointerEvent<HTMLElement>) {
+    // The page scrolled instead: the playhead and playback are untouched.
+    if (pendingScrubRef.current?.pointerId === event.pointerId)
+      pendingScrubRef.current = null;
     if (scrubRef.current === event.pointerId) scrubRef.current = null;
   }
 
@@ -469,10 +566,23 @@ export function MotionStudyTimeline({
   ) {
     event.stopPropagation();
     if (event.button !== 0) return;
+    const lane = event.currentTarget.parentElement;
+    if (touch && lane) {
+      const track = base.tracks[trackIndex];
+      if (track)
+        keyIndex = nearestKeyIndex(
+          lane,
+          track,
+          base.durationS,
+          event.clientX,
+          event.clientY,
+          keyIndex
+        );
+      pressedKeyRef.current = { trackIndex, keyIndex };
+    }
     setSelection({ trackIndex, keyIndex });
     setSelectedTrack(trackIndex);
     if (readOnly) return;
-    const lane = event.currentTarget.parentElement;
     if (!lane) return;
     capture(event.currentTarget, event.pointerId);
     dragRef.current = {
@@ -569,6 +679,30 @@ export function MotionStudyTimeline({
             <Play size={14} aria-hidden="true" />
           )}
         </button>
+        {touch ? (
+          <>
+            <button
+              type="button"
+              className="motion-icon-button"
+              aria-label="Previous key"
+              title="Previous key ([)"
+              disabled={keyTarget(-1, studyTimeS) === null}
+              onClick={() => jumpKey(-1)}
+            >
+              <StepBack size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="motion-icon-button"
+              aria-label="Next key"
+              title="Next key (])"
+              disabled={keyTarget(1, studyTimeS) === null}
+              onClick={() => jumpKey(1)}
+            >
+              <StepForward size={14} aria-hidden="true" />
+            </button>
+          </>
+        ) : null}
         <span className="motion-time" aria-label="Playhead">
           {formatStudyTime(t)}
         </span>
@@ -780,11 +914,16 @@ export function MotionStudyTimeline({
                       className="motion-track-menu-item"
                       onClick={() => {
                         setAddOpen(false);
-                        const shown = getAssemblyRuntime();
+                        // The edit pose, never a player preview's (AS06).
+                        const runtime = getAssemblyRuntime();
                         const value = currentJointValue(
                           joint,
                           dof,
-                          shownJointValues(set, shown.overrides, shown.drivers)
+                          shownJointValues(
+                            set,
+                            runtime.editOverrides,
+                            runtime.editDrivers
+                          )
                         );
                         if (
                           commit(
@@ -815,7 +954,7 @@ export function MotionStudyTimeline({
           onPointerDown={onScrubDown}
           onPointerMove={onScrubMove}
           onPointerUp={onScrubUp}
-          onPointerCancel={onScrubUp}
+          onPointerCancel={onScrubCancel}
         >
           {ticks.map((tick) => (
             <span
@@ -904,7 +1043,7 @@ export function MotionStudyTimeline({
                 onPointerDown={onScrubDown}
                 onPointerMove={onScrubMove}
                 onPointerUp={onScrubUp}
-                onPointerCancel={onScrubUp}
+                onPointerCancel={onScrubCancel}
               >
                 <svg
                   className="motion-curve"
@@ -939,9 +1078,17 @@ export function MotionStudyTimeline({
                       onPointerMove={onKeyPointerMove}
                       onPointerUp={onKeyPointerUp}
                       onPointerCancel={onKeyPointerUp}
-                      onClick={() => {
-                        setSelection({ trackIndex, keyIndex });
-                        setSelectedTrack(trackIndex);
+                      onClick={(event) => {
+                        // A tap selects the key its press meant (touch);
+                        // Enter or Space, this one.
+                        const pressed = pressedKeyRef.current;
+                        pressedKeyRef.current = null;
+                        const meant =
+                          pressed && event.detail > 0
+                            ? pressed
+                            : { trackIndex, keyIndex };
+                        setSelection(meant);
+                        setSelectedTrack(meant.trackIndex);
                       }}
                     />
                   );
