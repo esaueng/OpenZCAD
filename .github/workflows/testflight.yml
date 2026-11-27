@@ -170,19 +170,36 @@ jobs:
           if [ -f "$RUNNER_TEMP/signing-redact" ]; then
             while IFS= read -r line; do identity+=("$line"); done < "$RUNNER_TEMP/signing-redact"
           fi
+          values=()
+          for value in "$APPLE_TEAM_ID" "$APP_STORE_CONNECT_KEY_ID" "$APP_STORE_CONNECT_ISSUER_ID" ${identity[@]+"${identity[@]}"}; do
+            [ -n "$value" ] && values+=("$value")
+          done
+          # Redacted copies go to their own folder, and only that folder is
+          # uploaded, so an original log never leaves the runner.
+          out="$RUNNER_TEMP/testflight-redacted"
+          rm -rf "$out"
+          mkdir -p "$out"
           for log in "$RUNNER_TEMP"/testflight/*.log; do
-            for value in "$APPLE_TEAM_ID" "$APP_STORE_CONNECT_KEY_ID" "$APP_STORE_CONNECT_ISSUER_ID" ${identity[@]+"${identity[@]}"}; do
-              [ -n "$value" ] || continue
-              VALUE="$value" perl -pi -e 's/\Q$ENV{VALUE}\E/[redacted]/g' "$log"
+            copy="$out/$(basename "$log")"
+            cp "$log" "$copy"
+            for value in ${values[@]+"${values[@]}"}; do
+              VALUE="$value" perl -pi -e 's/\Q$ENV{VALUE}\E/[redacted]/g' "$copy"
             done
           done
+          # Check the result rather than trust the rewrite's exit status.
+          for value in ${values[@]+"${values[@]}"}; do
+            if grep -rqF -- "$value" "$out"; then
+              echo "::error::A log still holds an account identifier; not uploading the logs."
+              rm -rf "$out"
+              exit 1
+            fi
+          done
 
-      # Only when every log was redacted: a redaction that stopped part way
-      # would otherwise publish the rest unredacted.
+      # Only the redacted copies, and only once every one passed the check.
       - name: Upload logs
         if: failure() && steps.redact.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: testflight-logs
-          path: ${{ runner.temp }}/testflight/*.log
+          path: ${{ runner.temp }}/testflight-redacted/*.log
           retention-days: 7

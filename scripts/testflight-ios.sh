@@ -55,6 +55,10 @@ work="${WORK_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/openzcad-testflight}"
 marker=".openzcad-testflight"
 # Only clear a directory this script made: WORK_DIR pointed at an existing
 # folder must not lose what is already there.
+if [ -e "$work" ] && [ ! -d "$work" ]; then
+  echo "WORK_DIR $work is not a directory" >&2
+  exit 1
+fi
 if [ -d "$work" ] && [ -n "$(ls -A "$work")" ] && [ ! -f "$work/$marker" ]; then
   echo "WORK_DIR $work is not empty and not an earlier run's directory" >&2
   exit 1
