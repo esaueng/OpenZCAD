@@ -1024,8 +1024,20 @@
 /* The action notice (a delete's Undo: a sheet, a view, the broken
    annotations in Draw) stands over the sheet at any height and the row of
    controls on it, where a finger can reach its Undo, not at the viewer's
-   foot under the sheet. Its Undo and dismiss take a finger. */
-.app-shell[data-shell='compact'] .viewer-area .toast {
+   foot under the sheet. It is drawn in its own host on the sheet's layer
+   (Toast.tsx), outside the stage the full sheet makes inert. Its Undo and
+   dismiss take a finger. */
+.compact-notice-host {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.compact-notice-host .toast {
+  pointer-events: auto;
+}
+
+.app-shell[data-shell='compact'] .compact-notice-host .toast {
   bottom: calc(
     var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2
   );
@@ -1034,9 +1046,20 @@
 
 /* A full sheet leaves no stage above it: the notice stands at its foot. */
 .app-shell[data-shell='compact']:has(.compact-sheet[data-detent='full'])
-  .viewer-area
+  .compact-notice-host
   .toast {
   bottom: var(--sp-2);
+}
+
+/* As on the regular stage (quiet-stage.css), a settled status only repeats
+   what the notice has just said, so it steps aside while the notice is up. */
+.app-shell[data-shell='compact']:has(.compact-notice-host .toast:not(.closing))
+  .workspace-toast.ready,
+.app-shell[data-shell='compact']:has(.compact-notice-host .toast:not(.closing))
+  .workspace-toast.ready
+  .workspace-toast-body {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .app-shell[data-shell='compact'] :is(.toast-action, .toast-dismiss) {
@@ -1531,14 +1554,14 @@
 
   /* The action notice stands on the stage beside the sheet, over the
      stage's own controls. */
-  .app-shell[data-shell='compact'] .viewer-area .toast {
+  .app-shell[data-shell='compact'] .compact-notice-host .toast {
     bottom: calc(var(--compact-target) + var(--sp-2) * 2);
   }
 
   .app-shell[data-shell='compact']:has(
       .compact-sheet:not([hidden], [data-detent='full'])
     )
-    .viewer-area
+    .compact-notice-host
     .toast {
     --notice-end: calc(var(--compact-side-sheet-w) + var(--sp-2));
   }

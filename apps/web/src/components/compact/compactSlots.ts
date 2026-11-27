@@ -127,6 +127,21 @@ export function useCompactOverlayHost(): CompactOverlayHost {
 }
 
 /**
+ * Where the action notice (a delete's Undo, as `ToastHost` draws it) goes in
+ * the compact workspace: a host on the sheet's own layer, over the sheet and
+ * outside the stage. The stage is inert while the sheet stands at full, so a
+ * notice drawn on it could be neither tapped nor focused there. Null in the
+ * regular workspace and until the compact chrome is up, where the notice
+ * stays on the stage.
+ */
+export const CompactNoticeHostContext = createContext<HTMLElement | null>(null);
+
+/** The compact notice host; null in the regular workspace. */
+export function useCompactNoticeHost(): HTMLElement | null {
+  return useContext(CompactNoticeHostContext);
+}
+
+/**
  * What the compact workspace's own controls need from the workspace: every
  * one runs a handler the regular workspace already has.
  */

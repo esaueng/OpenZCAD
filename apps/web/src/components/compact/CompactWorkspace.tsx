@@ -160,6 +160,8 @@ export interface CompactWorkspaceProps extends CompactChromeProps {
    * keypad): outside the stage, which is inert while the sheet is full.
    */
   onOverlayHost(element: HTMLElement | null): void;
+  /** Where the action notice goes: over the sheet, outside the stage. */
+  onNoticeHost?(element: HTMLElement | null): void;
 }
 
 /**
@@ -214,7 +216,8 @@ export default function CompactWorkspace({
   rowOnly = false,
   tray = null,
   onCommandRowHost,
-  onOverlayHost
+  onOverlayHost,
+  onNoticeHost
 }: CompactWorkspaceProps) {
   const chromeRef = useRef<HTMLDivElement | null>(null);
   const projectNameHintId = useId();
@@ -774,6 +777,13 @@ export default function CompactWorkspace({
           />
           {sheetContent}
         </BottomSheet>
+        {/* The action notice (a delete's Undo): over the sheet and outside
+            the stage, which is inert while the sheet stands at full. */}
+        <div
+          ref={onNoticeHost}
+          className="compact-notice-host"
+          {...{ [SHEET_OVERLAY_ATTRIBUTE]: '' }}
+        />
       </div>
 
       {modes.length > 1 ? (

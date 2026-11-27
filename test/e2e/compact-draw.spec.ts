@@ -758,6 +758,41 @@ test.describe('Draw in the compact sheet', () => {
         await expect(sheets).toHaveCount(1);
         await tapNoticeUndo(page);
         await expect(sheets).toHaveCount(2);
+
+        // At full height the stage under the sheet is inert: the notice
+        // stands outside it, so its Undo still takes a tap and focus.
+        const grabber = sheet(page).getByRole('slider', {
+          name: 'Sheet height'
+        });
+        if (size.width > size.height) {
+          // The side sheet's drag stops at half: full is the slider's end.
+          await grabber.press('End');
+        } else {
+          const grip = (await grabber.boundingBox())!;
+          await touchDrag(
+            page,
+            { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 },
+            { x: grip.x + grip.width / 2, y: 4 }
+          );
+        }
+        await expect(sheet(page)).toHaveAttribute('data-detent', 'full');
+        await expect(page.locator('.app-shell > .workspace')).toHaveAttribute(
+          'inert',
+          ''
+        );
+        await sheet(page).getByRole('button', { name: 'Delete Sheet 2' }).tap();
+        await expect(sheets).toHaveCount(1);
+        const undo = page
+          .locator('.toast')
+          .getByRole('button', { name: 'Undo' });
+        await expect(
+          undo.locator('xpath=ancestor-or-self::*[@inert]')
+        ).toHaveCount(0);
+        await undo.focus();
+        await expect(undo).toBeFocused();
+        await tapNoticeUndo(page);
+        await expect(sheets).toHaveCount(2);
+        await expect(sheet(page)).toHaveAttribute('data-detent', 'full');
         expect(errors).toEqual([]);
       }
     );
