@@ -532,39 +532,70 @@ export type EdgePairPlane =
   | { ok: true; origin: DatumVector; normal: DatumVector }
   | { ok: false; code: EdgePairPlaneRefusal };
 
+/** Lexicographic order of two points by x, then y, then z. */
+function comparePoints(a: DatumVector, b: DatumVector): number {
+  return a.x - b.x || a.y - b.y || a.z - b.z;
+}
+
+/**
+ * An edge with its ends in lexicographic order, and a pair of such edges in
+ * lexicographic order of their ends: the same two edges give the same pair
+ * whichever was picked first and whichever way each runs.
+ */
+function canonicalEdgePair(
+  first: readonly [DatumVector, DatumVector],
+  second: readonly [DatumVector, DatumVector]
+): [[DatumVector, DatumVector], [DatumVector, DatumVector]] {
+  const sorted = (
+    edge: readonly [DatumVector, DatumVector]
+  ): [DatumVector, DatumVector] =>
+    comparePoints(edge[0], edge[1]) <= 0
+      ? [edge[0], edge[1]]
+      : [edge[1], edge[0]];
+  const a = sorted(first);
+  const b = sorted(second);
+  const order = comparePoints(a[0], b[0]) || comparePoints(a[1], b[1]);
+  return order <= 0 ? [a, b] : [b, a];
+}
+
 /**
  * M11 (owner decision D2): the plane through two straight edges, each given
  * by its two ends, for a Split plane picked as a pair of edges. The result is
  * plain numbers, computed once at pick time; nothing links it to the edges.
  *
- * - Valid: the edges are coplanar and not on one line, either crossing
- *   (their lines meet, at an end or not) or parallel and apart.
- * - `collinear`: both ends of the second edge lie within the linear
- *   tolerance of the first edge's line (coincident edges among them), so
- *   every plane through that line holds both. An edge with no length has no
- *   line of its own and is refused the same way.
- * - `skew`: the second edge leaves the plane through the first edge and the
- *   second edge's end farther from the first's line by more than the linear
- *   tolerance. A tilt shows here as its rise over the edge, so a long edge
- *   turned by a tiny angle is refused once that rise passes the tolerance.
+ * The edges are put in a canonical order first ({@link canonicalEdgePair}),
+ * so swapping the picks or reversing either edge gives a bit-identical
+ * result, origin included. With `P` the first edge of that order, `Q` the
+ * second, and `t` the linear tolerance:
  *
- * The tolerance is the three-point plane's: {@link geometryTolerance} of the
- * ends' span, floored at the rounding noise of their coordinates.
+ * - The directions are parallel when their difference rises by at most `t`
+ *   over the longer edge (`sin θ · max length ≤ t`), so a short edge turned
+ *   well away from a long one is never taken for parallel.
+ * - `collinear`: parallel, and both ends of `Q` within `t` of `P`'s line
+ *   (coincident, overlapping and reversed edges among them). An edge no
+ *   longer than `t` has no line of its own and is refused the same way.
+ * - The normal is `P × Q` for edges that are not parallel, and `P` crossed
+ *   with the step between the edges' middles for parallel ones apart.
+ * - `skew`: an end of either edge lies farther than `t` from the plane
+ *   through the four ends' centroid with that normal. Two crossing edges a
+ *   distance `d` apart along the normal put each end `d / 2` off it.
  *
- * The origin is the first edge's midpoint, so a pick order of the same pair
- * gives a plane through the same line; neither edge's own direction matters.
+ * `t` is the three-point plane's: {@link geometryTolerance} of the ends'
+ * span, floored at the rounding noise of their coordinates.
+ *
+ * The origin is the centroid of the four ends, on the plane by construction.
  * The normal is canonical (its first component beyond the direction quantum
- * is positive, as {@link canonicalAxisDirection}), so it does not depend on
- * which edge was picked first or which way either edge runs.
+ * is positive, as {@link canonicalAxisDirection}).
  */
 export function edgePairPlane(
   first: readonly [DatumVector, DatumVector],
   second: readonly [DatumVector, DatumVector]
 ): EdgePairPlane {
-  const points = [...first, ...second];
-  points.forEach((point, index) =>
+  [...first, ...second].forEach((point, index) =>
     requirePoint(point, index < 2 ? 'first edge' : 'second edge')
   );
+  const [p, q] = canonicalEdgePair(first, second);
+  const points = [p[0], p[1], q[0], q[1]];
   let span = 0;
   for (let a = 0; a < points.length; a += 1) {
     for (let b = a + 1; b < points.length; b += 1) {
@@ -576,28 +607,45 @@ export function edgePairPlane(
     geometryTolerance(span),
     magnitude * 8 * Number.EPSILON
   );
-  const start = first[0];
-  const along = datumSub(first[1], start);
-  const length = datumLength(along);
-  const secondLength = datumLength(datumSub(second[1], second[0]));
-  if (length <= tolerance || secondLength <= tolerance) {
+  const alongP = datumSub(p[1], p[0]);
+  const alongQ = datumSub(q[1], q[0]);
+  const lengthP = datumLength(alongP);
+  const lengthQ = datumLength(alongQ);
+  if (lengthP <= tolerance || lengthQ <= tolerance) {
     return { ok: false, code: 'collinear' };
   }
-  const u = datumScale(along, 1 / length);
-  // Each end of the second edge's distance from the first edge's line.
-  const offLine = (point: DatumVector): number => {
-    const from = datumSub(point, start);
-    return datumLength(datumSub(from, datumScale(u, datumDot(from, u))));
-  };
-  const [near, far] =
-    offLine(second[0]) >= offLine(second[1])
-      ? [second[1], second[0]]
-      : [second[0], second[1]];
-  if (offLine(far) <= tolerance) return { ok: false, code: 'collinear' };
-  const across = datumCross(u, datumSub(far, start));
-  const normal = datumScale(across, 1 / datumLength(across));
-  if (Math.abs(datumDot(datumSub(near, start), normal)) > tolerance) {
-    return { ok: false, code: 'skew' };
+  const unitP = datumScale(alongP, 1 / lengthP);
+  const unitQ = datumScale(alongQ, 1 / lengthQ);
+  const across = datumCross(unitP, unitQ);
+  const sine = datumLength(across);
+  let normal: DatumVector;
+  if (sine * Math.max(lengthP, lengthQ) <= tolerance) {
+    // Parallel: on one line, or apart in the plane they share.
+    const offLine = (point: DatumVector): DatumVector => {
+      const from = datumSub(point, p[0]);
+      return datumSub(from, datumScale(unitP, datumDot(from, unitP)));
+    };
+    if (
+      datumLength(offLine(q[0])) <= tolerance &&
+      datumLength(offLine(q[1])) <= tolerance
+    ) {
+      return { ok: false, code: 'collinear' };
+    }
+    const middle = (edge: [DatumVector, DatumVector]) =>
+      datumScale(datumAdd(edge[0], edge[1]), 0.5);
+    const step = datumCross(unitP, datumSub(middle(q), middle(p)));
+    normal = datumScale(step, 1 / datumLength(step));
+  } else {
+    normal = datumScale(across, 1 / sine);
+  }
+  const centroid = datumScale(
+    datumAdd(datumAdd(p[0], p[1]), datumAdd(q[0], q[1])),
+    0.25
+  );
+  for (const point of points) {
+    if (Math.abs(datumDot(datumSub(point, centroid), normal)) > tolerance) {
+      return { ok: false, code: 'skew' };
+    }
   }
   // `+ 0` turns a negative zero into zero, so the stored plane reads and
   // round-trips the same whichever way the edges were drawn.
@@ -608,7 +656,7 @@ export function edgePairPlane(
   });
   return {
     ok: true,
-    origin: plain(datumScale(datumAdd(first[0], first[1]), 0.5)),
+    origin: plain(centroid),
     normal: plain(canonicalAxisDirection(normal))
   };
 }

@@ -48,6 +48,13 @@ function expectVec(actual: Vec3, expected: Vec3, digits = 12) {
   expect(actual.z).toBeCloseTo(expected.z, digits);
 }
 
+/** `value` moved up by `steps` units in the last place: exact bits. */
+function ulpsAbove(value: number, steps: number): number {
+  const bits = new BigUint64Array(new Float64Array([value]).buffer);
+  bits[0] = bits[0]! + BigInt(steps);
+  return new Float64Array(bits.buffer)[0]!;
+}
+
 function plane(first: [Vec3, Vec3], second: [Vec3, Vec3]) {
   const result = edgePairPlane(first, second);
   if (!result.ok) throw new Error(`refused: ${result.code}`);
@@ -66,17 +73,18 @@ describe('edgePairPlane (pure)', () => {
       [v(10, 0, 0), v(0, 0, 10)]
     );
     expectVec(oblique.normal, v(S, 0, S));
-    expectVec(oblique.origin, v(10, 5, 0));
+    expectVec(oblique.origin, v(7.5, 2.5, 2.5));
   });
 
   it('takes parallel edges apart, and near-parallel ones', () => {
-    // The block's bottom edge at x = 20 and its top edge at x = 0: x + z = 20.
+    // The block's bottom edge at x = 20 and its top edge at x = 0: x + z = 20,
+    // through the four ends' centroid.
     const parallel = plane(
       [v(20, 0, 0), v(20, 20, 0)],
       [v(0, 0, 20), v(0, 20, 20)]
     );
     expectVec(parallel.normal, v(S, 0, S));
-    expectVec(parallel.origin, v(20, 10, 0));
+    expectVec(parallel.origin, v(10, 10, 10));
     // Turned 1e-4 within z = 0: their lines meet far away, still in z = 0.
     const near = plane(
       [v(0, 0, 0), v(10, 0, 0)],
@@ -100,8 +108,9 @@ describe('edgePairPlane (pure)', () => {
       [v(10, 0, 0), v(0, 0, 0)]
     ] as [Vec3, Vec3][]) {
       expect(edgePairPlane(a, b)).toEqual({ ok: false, code: 'collinear' });
+      expect(edgePairPlane(b, a)).toEqual({ ok: false, code: 'collinear' });
     }
-    // An edge with no length has no line of its own.
+    // An edge no longer than the tolerance has no line of its own.
     expect(edgePairPlane(a, [v(0, 5, 0), v(0, 5, 0)])).toEqual({
       ok: false,
       code: 'collinear'
@@ -114,16 +123,27 @@ describe('edgePairPlane (pure)', () => {
       ok: false,
       code: 'collinear'
     });
-    const apart = edgePairPlane(a, [v(20, 2 * tol, 0), v(30, 2 * tol, 0)]);
-    expect(apart.ok).toBe(true);
+    expect(edgePairPlane(a, [v(20, 2 * tol, 0), v(30, 2 * tol, 0)]).ok).toBe(
+      true
+    );
+    // Turned off the line by a rise of 0.5 t over the edge: still one line.
+    expect(edgePairPlane(a, [v(20, 0, 0), v(30, 0.5 * tol, 0)])).toEqual({
+      ok: false,
+      code: 'collinear'
+    });
   });
 
   it('refuses skew edges just past the linear tolerance and takes them at it', () => {
+    // Crossing at right angles, h apart along z: each end sits h / 2 off the
+    // plane through the centroid, so h = 2t is the last height taken.
     const a: [Vec3, Vec3] = [v(0, 0, 0), v(10, 0, 0)];
-    // The second edge's far end lifted out of z = 0.
-    const at = edgePairPlane(a, [v(0, 10, 0), v(10, 10, tol)]);
-    expect(at.ok).toBe(true);
-    expect(edgePairPlane(a, [v(0, 10, 0), v(10, 10, 1.1 * tol)])).toEqual({
+    const at = (h: number): [Vec3, Vec3] => [v(5, -5, h), v(5, 5, h)];
+    expect(edgePairPlane(a, at(2 * tol)).ok).toBe(true);
+    expect(edgePairPlane(a, at(2.2 * tol))).toEqual({
+      ok: false,
+      code: 'skew'
+    });
+    expect(edgePairPlane(at(2.2 * tol), a)).toEqual({
       ok: false,
       code: 'skew'
     });
@@ -131,10 +151,6 @@ describe('edgePairPlane (pure)', () => {
     expect(
       edgePairPlane([v(20, 0, 0), v(20, 20, 0)], [v(0, 0, 20), v(20, 0, 20)])
     ).toEqual({ ok: false, code: 'skew' });
-    // A tilt shows as its rise over the edge: 1e-6 rad over 10 is 1e-5.
-    expect(
-      edgePairPlane(a, [v(0, 10, 0), v(10, 10, 10 * Math.sin(1e-6))]).ok
-    ).toBe(false);
   });
 
   it('gives a deterministic origin and a canonical normal', () => {
@@ -143,14 +159,110 @@ describe('edgePairPlane (pure)', () => {
     const forward = plane(a, b);
     // The raw cross product points down -z; the stored normal is canonical.
     expectVec(forward.normal, v(0, 0, 1));
-    // Neither edge's own direction matters.
-    const flipped = plane([a[1], a[0]], [b[1], b[0]]);
-    expect(flipped).toEqual(forward);
-    // The pick order moves only the origin, to the first edge's middle.
-    const swapped = plane(b, a);
-    expectVec(swapped.normal, forward.normal);
-    expectVec(forward.origin, v(5, 0, 0));
-    expectVec(swapped.origin, v(5, -5, 0));
+    expectVec(forward.origin, v(5, -2.5, 0));
+    // Neither the pick order nor either edge's direction changes a bit.
+    expect(plane([a[1], a[0]], [b[1], b[0]])).toEqual(forward);
+    expect(plane(b, a)).toEqual(forward);
+    expect(plane([b[1], b[0]], a)).toEqual(forward);
+  });
+
+  // Review of #2261 at 3aeb4cd: each pair gave a different answer in the
+  // other pick order before the edges were put in a canonical order.
+  it('refuses a short edge 0.005 off a long one in either order (review 1)', () => {
+    const a: [Vec3, Vec3] = [v(0, 0, 0), v(20, 0, 0)];
+    const b: [Vec3, Vec3] = [v(0, 1, 0.005), v(0, 1.00001, 0.005)];
+    expect(edgePairPlane(a, b)).toEqual({ ok: false, code: 'skew' });
+    expect(edgePairPlane(b, a)).toEqual({ ok: false, code: 'skew' });
+  });
+
+  it('gives one normal sign for a component at the direction quantum (review 2)', () => {
+    const a: [Vec3, Vec3] = [v(0, 0, 0), v(0, 0, 1)];
+    // 1.0000000000000005e-6, as the review wrote it.
+    const b: [Vec3, Vec3] = [v(0, 0, 2), v(1, ulpsAbove(1e-6, 3), 2)];
+    const forward = plane(a, b);
+    expect(plane(b, a)).toEqual(forward);
+    expect(plane([a[1], a[0]], [b[1], b[0]])).toEqual(forward);
+    expect(Math.abs(forward.normal.y)).toBeCloseTo(1, 9);
+  });
+
+  it('takes a short edge across a long one as their plane (review 3)', () => {
+    const a: [Vec3, Vec3] = [v(0, 0, 0), v(20, 0, 0)];
+    const b: [Vec3, Vec3] = [v(10, -8e-7, 0), v(10, 8e-7, 0)];
+    const forward = plane(a, b);
+    expectVec(forward.normal, v(0, 0, 1));
+    expect(plane(b, a)).toEqual(forward);
+  });
+
+  it('answers the same in either order for random pairs, near-degenerate ones included', () => {
+    // A seeded generator, so a failure names the pair that broke.
+    let seed = 0x2261;
+    const random = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 2 ** 32;
+    };
+    const point = (scale: number) =>
+      v(
+        (random() - 0.5) * scale,
+        (random() - 0.5) * scale,
+        (random() - 0.5) * scale
+      );
+    const along = (from: Vec3, direction: Vec3, length: number): Vec3 => {
+      const size = Math.hypot(direction.x, direction.y, direction.z) || 1;
+      return v(
+        from.x + (direction.x / size) * length,
+        from.y + (direction.y / size) * length,
+        from.z + (direction.z / size) * length
+      );
+    };
+    const statuses = new Set<string>();
+    for (let index = 0; index < 4000; index += 1) {
+      const kind = index % 5;
+      const a0 = point(40);
+      const direction = point(2);
+      const a: [Vec3, Vec3] = [a0, along(a0, direction, 1 + random() * 30)];
+      let b: [Vec3, Vec3];
+      const shortLength = tol * (0.5 + random() * 20);
+      const nudge = () => (random() - 0.5) * 4 * tol;
+      if (kind === 0) {
+        // Anything.
+        const b0 = point(40);
+        b = [b0, along(b0, point(2), random() * 30)];
+      } else if (kind === 1) {
+        // Short beside long, in a plane through the long one or just off it.
+        const b0 = along(a0, direction, random() * 10);
+        b = [
+          v(b0.x + nudge(), b0.y + nudge(), b0.z + nudge()),
+          along(b0, point(2), shortLength)
+        ];
+      } else if (kind === 2) {
+        // Near-parallel, nearly on one line.
+        const b0 = along(a0, direction, 5 + random() * 10);
+        const tilted = v(
+          direction.x + nudge(),
+          direction.y + nudge(),
+          direction.z + nudge()
+        );
+        b = [b0, along(b0, tilted, 1 + random() * 10)];
+      } else if (kind === 3) {
+        // Parallel and apart by a few tolerances.
+        const b0 = v(a0.x + nudge(), a0.y + nudge(), a0.z + 5 * nudge());
+        b = [b0, along(b0, direction, 1 + random() * 10)];
+      } else {
+        // Crossing, lifted by about the tolerance.
+        const b0 = along(a0, direction, random() * 10);
+        const lifted = v(b0.x + nudge(), b0.y + nudge(), b0.z + nudge());
+        b = [lifted, along(lifted, point(2), random() * 10)];
+      }
+      const forward = edgePairPlane(a, b);
+      const context = JSON.stringify({ a, b });
+      expect(edgePairPlane(b, a), context).toEqual(forward);
+      expect(edgePairPlane([a[1], a[0]], [b[1], b[0]]), context).toEqual(
+        forward
+      );
+      statuses.add(forward.ok ? 'ok' : forward.code);
+    }
+    // The generator reaches every outcome.
+    expect([...statuses].sort()).toEqual(['collinear', 'ok', 'skew']);
   });
 
   it('throws on a point that is not finite', () => {
@@ -282,7 +394,7 @@ describe('Split on the plane through two block edges (exact)', () => {
     );
     if ('refused' in picked) throw new Error(picked.refused);
     expectVec(picked.normal, v(S, 0, S));
-    expectVec(picked.origin, v(20, 10, 0));
+    expectVec(picked.origin, v(10, 10, 10));
     const split = addSplitFeature(start.document, {
       name: 'Split',
       targetBodyId: start.bodyId,

@@ -178,7 +178,7 @@ test(
       .toEqual([4000, 4000]);
 
     // 4. Done: one History row, two bodies, the plane stored as numbers
-    // through the first edge's middle with the canonical normal.
+    // through the four ends' centroid with the canonical normal.
     await done(bar).click();
     await expect(bar).toHaveCount(0);
     await expect(historyRows(page)).toHaveCount(rowsBefore + 1, {
@@ -192,7 +192,7 @@ test(
       [vector.x, vector.y, vector.z].map(Number);
     const [ox, oy, oz] = numbers(stored!.origin);
     expect([ox, oy, oz].map((value) => Math.round(value! * 1e6) / 1e6)).toEqual(
-      [20, 10, 0]
+      [10, 10, 10]
     );
     const [nx, ny, nz] = numbers(stored!.normal);
     expect(nx).toBeCloseTo(Math.SQRT1_2, 9);

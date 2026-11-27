@@ -95,10 +95,10 @@ describe('Split plane through two edges in the in-place command', () => {
     });
     expect(hook.result.current.refusal).toBeNull();
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
-    // The plane x + z = 20, through the first edge's middle, as numbers.
+    // The plane x + z = 20, through the four ends' centroid, as numbers.
     expect(splitValue(built.at(-1))).toMatchObject({
       targetBodyId: BLOCK,
-      origin: { x: '20', y: '10', z: '0' },
+      origin: { x: '10', y: '10', z: '10' },
       normal: { x: S, y: '0', z: S }
     });
     act(() => {
@@ -122,9 +122,9 @@ describe('Split plane through two edges in the in-place command', () => {
     });
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
     const value = splitValue(built.at(-1));
-    // The first edge's middle (0, 10, 20), slid 2 along (1, 0, 1)/√2.
-    expect(Number(value.origin.x)).toBeCloseTo(Math.SQRT2, 12);
-    expect(Number(value.origin.z)).toBeCloseTo(20 + Math.SQRT2, 12);
+    // The centroid (10, 10, 10), slid 2 along (1, 0, 1)/√2.
+    expect(Number(value.origin.x)).toBeCloseTo(10 + Math.SQRT2, 12);
+    expect(Number(value.origin.z)).toBeCloseTo(10 + Math.SQRT2, 12);
     expect(value.normal).toEqual({ x: S, y: '0', z: S });
   });
 
