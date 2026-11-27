@@ -134,6 +134,13 @@ interface WorkspaceReadoutProps {
    */
   notice?: ReactNode;
   /**
+   * U12: the notice is a refused edit's. The compact workspace leaves out
+   * the guidance line, so it takes this notice into its sheet, where the
+   * edit it explains is, as it takes a command's bar. The regular workspace
+   * ignores it.
+   */
+  noticeInSheet?: boolean;
+  /**
    * U09: an in-place command's bar. It takes the guidance row while a
    * command runs, so its step is read where every hint is.
    */
@@ -193,7 +200,8 @@ export function WorkspaceReadout({
   promptResting = false,
   instructionDetails = null,
   pick = null,
-  notice = null,
+  notice: givenNotice = null,
+  noticeInSheet = false,
   commandRow: givenCommandRow = null,
   projectName,
   featureCount,
@@ -209,8 +217,15 @@ export function WorkspaceReadout({
   const laneRef = useRef<HTMLDivElement>(null);
   // The compact workspace takes an in-place command's bar into its sheet
   // (U12); the lane then reads as one with no command row.
-  const compactRowHost = useCompactCommandRowHost(givenCommandRow !== null);
+  // A refused edit's notice goes there too, while no command's bar has the
+  // row (a running command reads before the notice, as on the stage).
+  const sheetNotice =
+    noticeInSheet && givenCommandRow === null ? givenNotice : null;
+  const compactRowHost = useCompactCommandRowHost(
+    givenCommandRow !== null || sheetNotice !== null
+  );
   const commandRow = compactRowHost ? null : givenCommandRow;
+  const notice = compactRowHost && sheetNotice !== null ? null : givenNotice;
   const hasCommandRow = commandRow !== null;
   const hasSelectionGuidance =
     !hasCommandRow && (pick !== null || notice !== null);
@@ -474,7 +489,9 @@ export function WorkspaceReadout({
             </CompactCommandTrayContext.Provider>,
             compactRowHost
           )
-        : null}
+        : compactRowHost && sheetNotice !== null
+          ? createPortal(sheetNotice, compactRowHost)
+          : null}
       {/* The foot of the stage: one line of guidance over the search bar,
           led by what is picked. The guidance is the prompt the summary below
           already carries for assistive tech, so it is drawn here but hidden

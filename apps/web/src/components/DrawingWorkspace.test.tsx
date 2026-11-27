@@ -53,6 +53,7 @@ import {
   type ProjectionBodyInput
 } from '../lib/drawing/projectView';
 import type * as SheetSources from '../lib/drawing/sheetSources';
+import { COMPACT_PANEL_ORDER } from './compact/panelSheet';
 
 // Pass-through, counted: fingerprinting is the costly step a drag must skip.
 vi.mock('../lib/drawing/sheetSources', async (importOriginal) => {
@@ -3989,6 +3990,16 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
           fileCommands: [],
           selectionLabel: null,
           reducedMotion: true,
+          panels: {
+            open: null,
+            available: COMPACT_PANEL_ORDER,
+            disabledReason: null,
+            content: null,
+            onOpen: vi.fn(),
+            warningCount: 0
+          },
+          selection: null,
+          editRefusal: null,
           sheetKey: ''
         }}
         compactTray={<CompactModeTray mode="drawing" />}

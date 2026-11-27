@@ -1,10 +1,17 @@
-import { createContext, useCallback, useContext, useLayoutEffect } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  type ReactNode
+} from 'react';
 import type { WorkspaceMode } from '../../lib/panelState';
-import type { WorkspaceSaveState } from '../../lib/cloudProjectAutosave';
 import type {
   SelectionCalloutVerb,
   SelectionCalloutVerbId
 } from '../../lib/selectionCallout';
+import type { CompactPanelId } from './panelSheet';
+import type { WorkspaceSaveState } from '../../lib/cloudProjectAutosave';
 import type { CommandContext } from '../../lib/commandContext';
 import type { ToolAvailability, ToolId } from '../../lib/tools';
 import type { PaletteCommand } from '../CommandBar';
@@ -100,6 +107,21 @@ export function raiseCompactSheet(
 }
 
 /**
+ * Asks the compact sheet of the shell holding `from` to come down from full
+ * height to half (U12 review), so the stage it holds inert takes focus and
+ * taps again. What a global key opens on the stage (the command bar, the
+ * assistant) asks first, from the keymap, so it opens usable. Below full it
+ * does nothing; outside a compact shell it goes nowhere.
+ */
+export const COMPACT_SHEET_YIELD_EVENT = 'openzcad:compact-sheet-yield';
+
+export function yieldCompactSheet(from: Element | null): void {
+  from
+    ?.closest('.app-shell')
+    ?.dispatchEvent(new CustomEvent(COMPACT_SHEET_YIELD_EVENT));
+}
+
+/**
  * The compact frame is up but its chrome (loaded lazily) has not yet given
  * the host: what goes there waits rather than drawing on the stage first.
  */
@@ -140,6 +162,15 @@ export const CompactNoticeHostContext = createContext<HTMLElement | null>(null);
 export function useCompactNoticeHost(): HTMLElement | null {
   return useContext(CompactNoticeHostContext);
 }
+
+/**
+ * Marks what the compact sheet made inert while it stands at full height
+ * (U12 slice 5). The workspace keymap reads it: a stage held behind the
+ * sheet is out of reach of the model's keys, but the global ones (Ctrl+\,
+ * Ctrl+K, Undo and the rest) still apply, as they do over the regular
+ * workspace's panels.
+ */
+export const SHEET_INERT_ATTRIBUTE = 'data-sheet-inert';
 
 /**
  * What the compact workspace's own controls need from the workspace: every
@@ -184,12 +215,72 @@ export interface CompactChromeProps {
    */
   onMakeCopy?(): void;
   reducedMotion: boolean;
+  /** The panel sheet (slice 5): History, Objects and the rest. */
+  panels: CompactPanels;
+  /** What the selection sheet offers for the current pick (slice 5). */
+  selection: CompactSelectionSheet | null;
+  /**
+   * The top bar's "Edit not applied": the latest refused edit, with the
+   * handler that brings it back (its message, its form and the value
+   * tried). Null while there is none.
+   */
+  editRefusal: { message: string; onReview(): void } | null;
   /**
    * Build's tray at rest (U12 slice 4): the suggested verbs and the All
    * tools sheet. Null outside Build, while a sketch is open and while
    * modeling is locked, where the tray has nothing of Build's to offer.
    */
   build?: CompactBuildProps | null;
+}
+
+/**
+ * The panel sheet (U12 slice 5): one segmented sheet page for the model
+ * panels and Comments. The workspace holds which panel is open, so every
+ * route to a panel (More, the command bar, Ctrl+\, the warning count)
+ * opens the same page.
+ */
+export interface CompactPanels {
+  /** The panel shown, or null while the sheet is shut. */
+  open: CompactPanelId | null;
+  /** The segments on offer, in order. */
+  available: readonly CompactPanelId[];
+  /** Why the panels cannot open now (a mode without them), or null. */
+  disabledReason: string | null;
+  /** The open panel's body, drawn from the workspace's current state. */
+  content: ReactNode;
+  /** Opens a panel, or shuts the sheet with null. */
+  onOpen(panel: CompactPanelId | null): void;
+  /** Warnings on the model; the header's count opens Diagnostics. */
+  warningCount: number;
+}
+
+/** One action the selection sheet offers. */
+export interface CompactSelectionAction {
+  id: string;
+  label: string;
+  icon?: ReactNode;
+  /** Why it cannot run now, shown in place of running it; null runs. */
+  disabledReason?: string | null;
+  run(): void;
+}
+
+/**
+ * The selection sheet (U12 slice 5): the pick's verbs as the verb rail
+ * offers them, the picks a double-click makes on the regular stage, and
+ * the selection filter.
+ */
+export interface CompactSelectionSheet {
+  /** The verb rail's verbs for the pick, as the rail draws them. */
+  verbs: readonly SelectionCalloutVerb[];
+  onVerb(id: SelectionCalloutVerbId): void;
+  /** Select body, Select connected: each only where it applies. */
+  picks: readonly CompactSelectionAction[];
+  filter: {
+    options: readonly { id: string; label: string }[];
+    /** The filter in force. */
+    current: string;
+    onChange(id: string): void;
+  } | null;
 }
 
 /** A stored file the File menu lists, ready to save. */

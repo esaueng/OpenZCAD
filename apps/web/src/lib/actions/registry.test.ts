@@ -87,7 +87,7 @@ describe('action registry', () => {
     const builders: Record<ActionMenu, string> = {
       viewport: 'function handleViewportContextMenu(',
       selection: 'function openViewportSelectionContextMenu(',
-      'history-row': 'function handleFeatureContextMenu('
+      'history-row': 'function featureMenuEntries('
     };
     for (const [menu, start] of Object.entries(builders) as [
       ActionMenu,
@@ -279,8 +279,8 @@ describe('action registry', () => {
         'view-show-all'
       ].sort()
     );
-    // A face's Look at stays with the selection sheet (slice 4).
-    expect(COMPACT_ENTRIES['view-normal-to-face']).toBeUndefined();
+    // A face's Look at is the model's long-press action sheet (slice 5).
+    expect(COMPACT_ENTRIES['view-normal-to-face']).toBe('action-sheet');
     // Tweak's exports were reached from the overflow menu already.
     expect(COMPACT_ENTRIES['file-export-step']).toBe('overflow-menu');
     expect(COMPACT_ENTRIES['file-export-mesh']).toBe('overflow-menu');
@@ -317,5 +317,38 @@ describe('action registry', () => {
     expect(pendingCompactActions().length).toBe(
       ACTIONS.length - Object.keys(COMPACT_ENTRIES).length
     );
+  });
+
+  it('reaches every panel, selection and action sheet entry by taps in the compact e2e', () => {
+    // U12 slice 5 marks these surfaces; its spec names each action it runs
+    // with `reached(id)`, driving them by taps, swipes and holds alone.
+    const surfaces = new Set([
+      'panel-sheet',
+      'selection-sheet',
+      'action-sheet'
+    ]);
+    const marked = Object.entries(COMPACT_ENTRIES)
+      .filter(([, surface]) => surface !== undefined && surfaces.has(surface))
+      .map(([id]) => id)
+      .sort();
+    expect(marked.length).toBeGreaterThan(0);
+    const spec = readFileSync(
+      resolve(src, '..', '..', '..', 'test/e2e/compact-panels.spec.ts'),
+      'utf8'
+    );
+    const reached = new Set(literalIds(spec, /\breached\('([^']+)'\)/g));
+    expect(marked.filter((id) => !reached.has(id))).toEqual([]);
+    // Nothing reached is left unmarked, or named that is not an action.
+    expect([...reached].sort()).toEqual(marked);
+    // Taps only: no key, hover, right button or double-click drives it.
+    for (const input of [
+      'keyboard.',
+      '.press(',
+      '.hover(',
+      'dblclick',
+      "button: 'right'"
+    ]) {
+      expect(spec, input).not.toContain(input);
+    }
   });
 });

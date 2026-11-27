@@ -16,6 +16,7 @@ import CompactDrawTray, {
 } from './CompactDrawTray';
 import CompactModeTray from './CompactModeTray';
 import { CompactTrayContext, useCompactTrayHost } from './compactSlots';
+import { COMPACT_PANEL_ORDER } from './panelSheet';
 
 function sheets(overrides: Partial<CompactDrawSheets> = {}): CompactDrawSheets {
   return {
@@ -118,6 +119,16 @@ function shell(props: Parameters<typeof Stage>[0]) {
         fileCommands: [],
         selectionLabel: null,
         reducedMotion: true,
+        panels: {
+          open: null,
+          available: COMPACT_PANEL_ORDER,
+          disabledReason: null,
+          content: null,
+          onOpen: vi.fn(),
+          warningCount: 0
+        },
+        selection: null,
+        editRefusal: null,
         sheetKey: ''
       }}
       compactTray={<CompactModeTray mode="drawing" />}

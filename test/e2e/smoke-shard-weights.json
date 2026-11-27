@@ -26,6 +26,8 @@
   "compact-build.spec.ts": 20,
   "compact-draw.spec.ts": 60,
   "compact-library-settings.spec.ts": 20,
+  "compact-panel-gates.spec.ts": 30,
+  "compact-panels.spec.ts": 30,
   "compact-shell.spec.ts": 12,
   "compact-view-tweak.spec.ts": 24,
   "configuration-export.spec.ts": 14,

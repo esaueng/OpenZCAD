@@ -5,6 +5,7 @@ import {
   sharedProjectSnapshotDocument
 } from '@openzcad/document-core';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
+import { dropTapAfterFling } from './compactHelpers';
 import { expect, stubAnonymousApi, stubApi, test } from './openzcad-fixtures';
 import {
   createE2eeServer,
@@ -29,6 +30,8 @@ const SIZES = [
 const LAYOUT_KEY = 'openzcad.layout:v1';
 
 test.use({ hasTouch: true, isMobile: true });
+// The row swipes here end in taps CI's Linux Chromium drops.
+test.beforeEach(({ page }) => dropTapAfterFling(page));
 
 async function preferCompact(page: Page) {
   await page.addInitScript((key) => {

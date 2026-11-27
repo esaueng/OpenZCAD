@@ -31,14 +31,18 @@ export interface WorkspaceTourSignals {
 export type TourKeyLabel = (commandId: string) => string | undefined;
 
 /**
- * A step's words: the touch wording on a device that only takes touch
- * (`touch`), where there is no key to press or button to right-click.
+ * A step's words: the compact workspace's own wording where it has one
+ * (`compact`, U12), where there is no rail; otherwise the touch wording on
+ * a device that only takes touch (`touch`), where there is no key to press
+ * or button to right-click.
  */
 export function tourStepBody(
   step: WorkspaceTourStep,
   keyLabel: TourKeyLabel,
-  touch = false
+  touch = false,
+  compact = false
 ): string {
+  if (compact && step.compactBody) return step.compactBody;
   if (touch) return step.touchBody;
   return typeof step.body === 'function' ? step.body(keyLabel) : step.body;
 }
@@ -56,6 +60,11 @@ export interface WorkspaceTourStep {
    * rather than Enter, a held row rather than a right-click (I12).
    */
   touchBody: string;
+  /**
+   * The lesson in the compact workspace (U12 slice 5), for a step whose
+   * chrome is not there: it has no rail, and its panels open in a sheet.
+   */
+  compactBody?: string;
   /**
    * Chrome the step points at, outlined while the step is up. A selector
    * list outlines every part it names: the rail and the button at its foot.
@@ -116,6 +125,8 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
     body: 'History on the right lists every feature and replays them in order. If it is closed, open History from the rail. Drag the grip to reorder, right-click a row for actions, and roll back with the clock on a row.',
     touchBody:
       'History on the right lists every feature and replays them in order. If it is closed, tap History in the rail. Drag the grip to reorder, touch and hold a row for its actions, and roll back with the clock on a row.',
+    compactBody:
+      'History lists every feature and replays them in order. Open it from More › Panels. Tap a step to edit it, swipe it for Suppress, Delete or Roll back, drag the grip to reorder, and touch and hold for the rest.',
     targetSelector: '.rail-panels [aria-label="History panel"]',
     // Never done ahead of time: the step is how the user learns the history
     // is the model, so it is always shown. The tips stay over the open panel
