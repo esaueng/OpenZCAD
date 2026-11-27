@@ -201,6 +201,31 @@ export const COMPACT_ENTRIES: Readonly<
   'body-visibility': 'view-tray',
   'view-isolate-body': 'view-tray',
   'view-show-all': 'view-tray',
+  // Slice 6, the sketch: its draw tools in the tray (a slot's other types,
+  // the polygon among them, in the tray's own chooser), Finish in the
+  // header, and the rest on the All sketch tools page: the modify tools,
+  // construction, dimension, Extrude, and the selection's Select all, Copy
+  // and Paste (also on the page the selection chip opens).
+  'sketch-select': 'sketch-tray',
+  'sketch-line': 'sketch-tray',
+  'sketch-arc': 'sketch-tray',
+  'sketch-circle': 'sketch-tray',
+  'sketch-rectangle': 'sketch-tray',
+  'sketch-polygon': 'sketch-tray',
+  'sketch-ellipse': 'sketch-tray',
+  'sketch-spline': 'sketch-tray',
+  'sketch-text': 'sketch-tray',
+  'sketch-project': 'sketch-tray',
+  'sketch-finish': 'header',
+  'sketch-extrude': 'sketch-sheet',
+  'sketch-dimension': 'sketch-sheet',
+  'sketch-construction': 'sketch-sheet',
+  'sketch-trim': 'sketch-sheet',
+  'sketch-extend': 'sketch-sheet',
+  'sketch-offset': 'sketch-sheet',
+  'sketch-select-all': 'sketch-sheet',
+  'sketch-copy': 'sketch-sheet',
+  'sketch-paste': 'sketch-sheet',
   // Slice 8, Assemble's sheet: the Joints page's Add (the joint card), a
   // part's Fix in place on the Parts page, and a joint's Play; the motion
   // study timeline's buttons for what its keys do, Previous key and Next key

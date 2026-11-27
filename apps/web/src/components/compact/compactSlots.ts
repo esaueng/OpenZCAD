@@ -231,7 +231,28 @@ export interface CompactChromeProps {
    * modeling is locked, where the tray has nothing of Build's to offer.
    */
   build?: CompactBuildProps | null;
+  /**
+   * An open sketch (U12 slice 6), which takes over the shell: the header
+   * names the sketch with its solve state and Finish, the mode tabs go, and
+   * the sketch's tray (the workspace's `compactTray`) stands at peek. The
+   * selection chip opens the tray's selection page. Null outside a sketch.
+   */
+  sketch?: CompactSketchChrome | null;
 }
+
+/** What the compact header shows of an open sketch. */
+export interface CompactSketchChrome {
+  name: string;
+  /** The last solve's state, or null before one has run. */
+  solve: { tone: 'ok' | 'info' | 'warn'; label: string } | null;
+  onFinish(): void;
+}
+
+/**
+ * The sketch tray's page for the current pick: the entity's editor and the
+ * selection's actions (select all, copy, paste). The selection chip opens it.
+ */
+export const SKETCH_SELECTION_PAGE = 'sketch-selection';
 
 /**
  * The panel sheet (U12 slice 5): one segmented sheet page for the model
@@ -367,6 +388,11 @@ export interface CompactTraySlot {
   openPage(key: string, title: string): void;
   /** Back to the tray, the sheet at peek. */
   closePage(): void;
+  /**
+   * Where the tray draws what stands on the stage just above the sheet
+   * (the sketch's relations row), or null until the stage layer is up.
+   */
+  stageHost: HTMLElement | null;
 }
 
 export const CompactTrayContext = createContext<CompactTraySlot | null>(null);

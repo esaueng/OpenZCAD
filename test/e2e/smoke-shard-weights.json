@@ -29,6 +29,7 @@
   "compact-panel-gates.spec.ts": 30,
   "compact-panels.spec.ts": 30,
   "compact-shell.spec.ts": 12,
+  "compact-sketch.spec.ts": 49,
   "compact-view-tweak.spec.ts": 24,
   "configuration-export.spec.ts": 14,
   "configuration-instances.spec.ts": 12,

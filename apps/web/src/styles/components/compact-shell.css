@@ -40,13 +40,9 @@
 /* ── What the compact frame does not draw ── */
 
 .app-shell[data-shell='compact'] > .topbar,
+.app-shell[data-shell='compact'] .instrument-rail,
 .app-shell[data-shell='compact']
-  .instrument-rail:not(:has(> .sketch-relations)),
-.app-shell[data-shell='compact']
-  .instrument-rail:has(> .sketch-relations)
-  > :not(.sketch-relations),
-.app-shell[data-shell='compact']
-  .workspace-column-float:has(> .workspace-column):not(:has(.sketch-rail)),
+  .workspace-column-float:has(> .workspace-column),
 .app-shell[data-shell='compact'] .panel-resizer,
 .app-shell[data-shell='compact'] .panels-hidden-pill {
   display: none;
@@ -592,7 +588,8 @@
   background: var(--color-surface-hover);
 }
 
-.compact-menu-row:disabled {
+.compact-menu-row:disabled,
+.compact-menu-row[aria-disabled='true'] {
   color: var(--color-text-dim);
   cursor: not-allowed;
 }
@@ -1115,257 +1112,6 @@
   box-shadow: none;
 }
 
-/* ── Sketching (a stopgap until slice 6 draws the compact sketch) ──
-   The frame hides the column and the instrument rail, which is where a
-   sketch keeps its tools, its relations and Finish. While a sketch is open
-   both come back as compact rails: the tools and Finish down the stage's
-   left edge, the relations down its right under the cube, each above the
-   floating undo pair and the sheet, scrolling when the stage is short,
-   with 44px targets. Finish is the column's foot, which stays while the
-   tools scroll. */
-
-.app-shell[data-shell='compact']
-  .workspace.has-column
-  .viewer-area
-  .workspace-column-float:has(.sketch-rail) {
-  top: var(--sp-2);
-  left: max(var(--sp-2), env(safe-area-inset-left));
-  bottom: calc(
-    var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2
-  );
-  width: auto;
-  max-height: none;
-  align-items: flex-start;
-  /* Still a containing block, for the polygon's sides error. */
-  transform: translateY(0);
-}
-
-.app-shell[data-shell='compact']
-  .workspace-column-float:has(.sketch-rail)
-  > .workspace-column {
-  flex: 0 0 auto;
-  max-height: 100%;
-}
-
-.app-shell[data-shell='compact']
-  .workspace-column-float:has(.sketch-rail)
-  .workspace-column-tools {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: none;
-  overflow-y: auto;
-}
-
-.app-shell[data-shell='compact']
-  .workspace-column
-  .sketch-rail
-  button:not(.sketch-type-tile, .sketch-type-cycle),
-.app-shell[data-shell='compact']
-  .workspace-column-footer
-  .workspace-column-finish {
-  width: var(--compact-target);
-  height: var(--compact-target);
-}
-
-.app-shell[data-shell='compact']
-  .workspace-column-float:has(.sketch-rail)
-  .workspace-column-footer {
-  padding: var(--sp-1);
-}
-
-/* The stage's notices stand between the two rails, not over Finish. */
-.app-shell[data-shell='compact']
-  .workspace.column-layout:has(.sketch-rail)
-  :is(.workspace-toast, .activity-lane) {
-  left: calc(
-    max(var(--sp-2), env(safe-area-inset-left)) + var(--compact-target) +
-      var(--sp-2) * 3
-  );
-  right: calc(
-    max(var(--sp-2), env(safe-area-inset-right)) + var(--compact-target) +
-      var(--sp-2) * 3
-  );
-}
-
-/* The scale bar steps right of the rail. */
-.app-shell[data-shell='compact']:has(.sketch-rail)
-  .workspace.column-layout
-  .viewport-scale-indicator {
-  left: calc(
-    max(var(--sp-2), env(safe-area-inset-left)) + var(--compact-target) +
-      var(--sp-2) * 3
-  );
-}
-
-.app-shell[data-shell='compact']
-  .workspace.column-layout
-  .viewer-area
-  .instrument-rail:has(> .sketch-relations) {
-  top: calc(var(--sp-2) * 2 + var(--cube-size, 88px));
-  right: max(var(--sp-2), env(safe-area-inset-right));
-  bottom: calc(
-    var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2
-  );
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0;
-  /* The relations are the one island left in it. */
-  background: none;
-  border: 0;
-  box-shadow: none;
-  transform: none;
-}
-
-.app-shell[data-shell='compact']
-  .workspace.column-layout
-  .viewer-area
-  .instrument-rail:has(> .sketch-relations)
-  > :not(.sketch-relations) {
-  display: none;
-}
-
-.app-shell[data-shell='compact']
-  .workspace.column-layout
-  .viewer-area
-  .instrument-rail
-  > .sketch-relations {
-  position: static;
-  display: flex;
-  flex-direction: column;
-  width: auto;
-  min-height: 0;
-  max-height: 100%;
-  padding: var(--sp-1);
-  overflow-y: auto;
-  scrollbar-width: none;
-  direction: ltr;
-}
-
-/* The point relations' menu takes the rail's island as its box, outside the
-   scroller, so the scroll does not clip it. */
-.app-shell[data-shell='compact']
-  .instrument-rail
-  > .sketch-relations
-  .sketch-relation-slot.sketch-point-relations-anchor {
-  position: static;
-}
-
-.app-shell[data-shell='compact']
-  .instrument-rail
-  > .sketch-relations
-  :is(.sketch-relation, .sketch-point-relation) {
-  min-width: var(--compact-target);
-  height: var(--compact-target);
-  flex: 0 0 auto;
-}
-
-.app-shell[data-shell='compact']
-  .instrument-rail
-  > .sketch-relations
-  .sketch-relation-name {
-  display: none;
-}
-
-/* A tool's type strip (and Offset's and a pattern's options) stands in the
-   rail under its tool, inside the rail's scroller. Beside the rail it lay
-   over the canvas, where the first drawing tap chose a type instead of
-   placing a point, and on a short stage it ran past the stage's foot, out
-   of reach of the rail's scroll. Each choice is a 44px icon tile; its name
-   stays in the tree for assistive technology and the tool's own button
-   names the type in use. */
-.app-shell[data-shell='compact']
-  .workspace-column
-  .sketch-rail
-  :is(.sketch-circle-tool, .sketch-modify-tool) {
-  flex-direction: column;
-  align-items: center;
-}
-
-.app-shell[data-shell='compact']
-  .workspace-column-float:has(.sketch-rail)
-  .sketch-rail
-  .sketch-type-strip {
-  position: static;
-  width: auto;
-  max-width: none;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  margin-top: 2px;
-  padding: 2px;
-  box-shadow: none;
-  animation: none;
-}
-
-.app-shell[data-shell='compact']
-  .workspace-column
-  .sketch-rail
-  .sketch-offset-joins {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-
-.app-shell[data-shell='compact']
-  .workspace-column
-  .sketch-rail
-  :is(.sketch-type-tile, .sketch-type-cycle) {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: var(--compact-target);
-  height: var(--compact-target);
-  padding: 0;
-}
-
-.app-shell[data-shell='compact']
-  .workspace-column
-  .sketch-rail
-  :is(.sketch-type-tile, .sketch-type-sides)
-  > span:not([role]) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
-.app-shell[data-shell='compact']
-  .workspace-column
-  .sketch-rail
-  .sketch-type-sides {
-  height: auto;
-  padding: 0;
-}
-
-.app-shell[data-shell='compact']
-  .workspace-column
-  .sketch-rail
-  .sketch-type-sides
-  input {
-  width: var(--compact-target);
-  height: var(--compact-target);
-  padding: 0 4px;
-  text-align: center;
-}
-
-/* A refused side count is said beside the rail, outside its scroller. */
-.app-shell[data-shell='compact']
-  .workspace-column
-  .sketch-rail
-  .sketch-type-sides-error {
-  position: fixed;
-  top: auto;
-  right: auto;
-  left: calc(100% + var(--sp-2));
-  width: max-content;
-  max-width: 60vw;
-  white-space: normal;
-}
-
 /* ── Feature forms and operation cards in the sheet ── */
 
 .app-shell[data-shell='compact'] .compact-sheet .feature-form .form-actions {
@@ -1565,26 +1311,6 @@
     .compact-notice-host
     .toast {
     --notice-end: calc(var(--compact-side-sheet-w) + var(--sp-2));
-  }
-
-  /* A sketch's rails keep the stage's height: the sheet stands beside
-     them, not under them, so they reserve its width rather than its
-     height (at half, its height is the stage's, which left the rails
-     none). The tools are on the stage's left, clear of the sheet; the
-     relations step left of it. */
-  .app-shell[data-shell='compact']
-    .workspace.has-column
-    .viewer-area
-    .workspace-column-float:has(.sketch-rail) {
-    bottom: calc(var(--compact-target) + var(--sp-2) * 2);
-  }
-
-  .app-shell[data-shell='compact']:has(.compact-sheet:not([hidden]))
-    .workspace.column-layout
-    .viewer-area
-    .instrument-rail:has(> .sketch-relations) {
-    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
-    bottom: calc(var(--compact-target) + var(--sp-2) * 2);
   }
 }
 
@@ -1976,6 +1702,324 @@
 
 .compact-switch[aria-checked='true'] > span {
   transform: translateX(20px);
+}
+
+/* ── The sketch (U12 slice 6) ────────────────────────────────
+   An open sketch takes over the shell. The header names it, with its solve
+   state as a dot and Finish; the mode tabs go. The tray at peek is the
+   draw tools as one scrolling row of 44 px icons, a tool's types chosen in
+   that row (never over the canvas), and All sketch tools pinned at its
+   end. The relations that fit the pick stand as a chip row on the stage,
+   above the undo pair; the rest is the sheet's pages. No rail stands on
+   the stage, so the canvas keeps its whole width. */
+
+.compact-solve-dot.is-ok {
+  background: var(--color-success);
+}
+
+.compact-solve-dot.is-info {
+  background: var(--color-accent);
+}
+
+.compact-solve-dot.is-warn {
+  background: var(--color-error);
+}
+
+.compact-solve-dot.is-unsolved {
+  background: var(--color-text-dim);
+}
+
+.compact-finish-button {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: var(--compact-target);
+  height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-3) 0 var(--sp-2);
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+}
+
+.compact-finish-button:focus-visible,
+.compact-relation-chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* The tools scroll; Finish spline before them and All sketch tools after
+   them stay put. */
+.compact-tray.is-sketch {
+  justify-content: flex-start;
+}
+
+.compact-sketch-tools {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.compact-sketch-tools::-webkit-scrollbar {
+  display: none;
+}
+
+.compact-sketch-tools > .compact-tray-button {
+  flex: 0 0 auto;
+}
+
+.compact-tray.is-mode .compact-tray-button[aria-checked='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+/* A tool with types: a small corner mark says a hold opens them. */
+.compact-tray-button.has-types::before {
+  content: '';
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  border-style: solid;
+  border-width: 0 0 5px 5px;
+  border-color: transparent transparent currentColor;
+  opacity: 0.6;
+}
+
+.compact-tray-button.has-types {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+.compact-tray.is-mode .compact-tray-button.is-confirm {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+/* The polygon's side count, in the type row. */
+.compact-sketch-types .sketch-type-sides {
+  flex: 0 0 auto;
+  height: var(--compact-target);
+  padding: 0 var(--sp-1);
+}
+
+.compact-sketch-types .sketch-type-sides input {
+  box-sizing: border-box;
+  width: 56px;
+  height: var(--compact-target);
+  font-size: 16px;
+  text-align: center;
+}
+
+/* A refused count is said above the tray, on the stage's side. */
+.compact-sketch-types .sketch-type-sides-error {
+  position: fixed;
+  top: auto;
+  right: var(--sp-2);
+  bottom: calc(var(--compact-sheet-h, 0px) + var(--sp-2));
+  max-width: calc(100vw - var(--sp-2) * 2);
+  white-space: normal;
+}
+
+/* The relations row: on the stage, over the undo pair and the chip. */
+.compact-stage-tray {
+  flex: 1 0 100%;
+  min-width: 0;
+}
+
+.compact-stage-tray:empty {
+  display: none;
+}
+
+.compact-relations {
+  display: flex;
+  gap: var(--sp-2);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  /* Only the chips take taps: the row's empty end is the canvas's. */
+  pointer-events: none;
+}
+
+.compact-relations::-webkit-scrollbar {
+  display: none;
+}
+
+.compact-relation-chip {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-2);
+  font-size: 15px;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.compact-relation-chip[aria-pressed='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+/* A sketch's notices ("Sketching on the XY plane") stand over the undo
+   pair and a relations row, never under the sheet; the scale bar steps out
+   while the relations row stands where it was. */
+.app-shell[data-shell='compact']:has(.compact-tray.is-sketch)
+  .workspace.column-layout
+  :is(.workspace-toast, .activity-lane) {
+  left: max(var(--sp-2), env(safe-area-inset-left));
+  right: max(var(--sp-2), env(safe-area-inset-right));
+  bottom: calc(
+    var(--compact-sheet-h, 0px) + var(--compact-target) * 2 + var(--sp-2) * 3
+  );
+}
+
+.app-shell[data-shell='compact']:has(.compact-stage-tray:not(:empty))
+  .viewport-scale-indicator {
+  visibility: hidden;
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .app-shell[data-shell='compact']:has(.compact-tray.is-sketch)
+    .workspace.column-layout
+    :is(.workspace-toast, .activity-lane) {
+    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
+    bottom: calc(var(--compact-target) * 2 + var(--sp-2) * 3);
+  }
+}
+
+/* ── The sketch's pages ── */
+
+.compact-sketch-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.compact-sketch-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.compact-sketch-heading {
+  margin: 0;
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+  color: var(--color-text-muted);
+}
+
+.compact-choice[aria-checked='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+.compact-choice:disabled {
+  color: var(--color-text-dim);
+  cursor: not-allowed;
+}
+
+.compact-sketch-options {
+  margin-top: var(--sp-1);
+}
+
+/* The palette in the page's flow, not a flyout's frame. */
+.compact-sketch-palette {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  border-top: 0;
+}
+
+.compact-sketch-palette .sketch-palette-content {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+  animation: none;
+}
+
+.compact-sketch-palette .sketch-palette-content fieldset {
+  grid-template-columns: minmax(0, 1fr);
+  min-inline-size: 0;
+}
+
+.compact-sketch-palette label {
+  min-height: var(--compact-target);
+  font-size: 15px;
+}
+
+/* Every control in a sketch page takes a thumb either way. */
+.compact-sketch-page :is(button, select, summary, input) {
+  box-sizing: border-box;
+  min-width: var(--compact-target);
+  min-height: var(--compact-target);
+}
+
+/* A box to tick: a thumb's square around a drawn check. */
+.compact-sketch-page :is(input[type='checkbox'], input[type='radio']) {
+  appearance: none;
+  flex: 0 0 auto;
+  width: var(--compact-target);
+  height: var(--compact-target);
+  margin: 0 0 0 calc(var(--sp-2) * -1);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: linear-gradient(var(--color-surface-2), var(--color-surface-2))
+    center / 22px 22px no-repeat;
+  cursor: pointer;
+}
+
+.compact-sketch-page input[type='radio'] {
+  background: radial-gradient(
+      circle,
+      var(--color-surface-2) 10px,
+      transparent 11px
+    )
+    center / 22px 22px no-repeat;
+}
+
+.compact-sketch-page :is(input[type='checkbox'], input[type='radio']):checked {
+  background:
+    radial-gradient(circle, var(--color-on-accent) 4px, transparent 5px)
+      center / 22px 22px no-repeat,
+    linear-gradient(var(--color-accent), var(--color-accent)) center / 22px 22px
+      no-repeat;
+}
+
+.compact-sketch-page
+  :is(input[type='checkbox'], input[type='radio']):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -4px;
+}
+
+.compact-sketch-page :is(input[type='checkbox'], input[type='radio']):disabled {
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compact-relation-chip,
+  .compact-finish-button {
+    transition: none;
+  }
 }
 
 /* ── The header's warning count (slice 5) ──
