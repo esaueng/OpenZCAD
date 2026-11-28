@@ -1,11 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  addPrimitiveFeature,
   addSketchFeature,
+  addSplitFeature,
+  booleanBodies,
   createProjectDocument,
   findSketch,
   holeBody,
   listFeaturesInOrder,
-  sheetMetalBody
+  sheetMetalBody,
+  transformBody
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
@@ -32,14 +36,18 @@ import {
   type SheetMetalBend,
   type SketchId,
   type SketchObjectData,
-  type SketchProfileReference
+  type SketchProfileReference,
+  type UnitSystem
 } from '@openzcad/shared';
 import { computeSketchRegions, profileContainsPoint } from '@openzcad/geometry';
+import { sheetScalesAfter } from '../packages/kernel-adapter/src/exact-sheet-metal';
 import { importDxfSketch } from '../apps/web/src/lib/dxfImport';
 import {
   bendTableCsv,
   bendTableRows,
-  flatPatternChangedWarning
+  flatPatternChangedWarning,
+  flatPatternFilesHint,
+  flatPatternScaledNote
 } from '../apps/web/src/lib/sheetMetalFlatPattern';
 import {
   flatPatternTarget,
@@ -144,6 +152,9 @@ function sheet(
     base?: ProjectDocument;
     name?: string;
     fixedPoint?: [number, number];
+    /** Thickness and bend radius in the base's units; absent is T and R. */
+    thickness?: number;
+    bendRadius?: number;
   } = {}
 ): Sheet {
   const { document: withSketch, sketchId } = addSketchFeature(
@@ -162,8 +173,8 @@ function sheet(
     profiles: cells
       ? cells.map((point) => cellAt(withSketch, sketchId, point))
       : [{ all: true, sourceEntityIds: objectIds.slice(0, blank.length) }],
-    thickness: T,
-    bendRadius: R,
+    thickness: options.thickness ?? T,
+    bendRadius: options.bendRadius ?? R,
     kFactor: K,
     relief: { shape: 'none' },
     bends: bends(objectIds.slice(blank.length), sketchId)
@@ -619,7 +630,8 @@ describe('review fixes (PR #1560)', { timeout: 240_000 }, () => {
           lineLength: 0.04
         }
       ],
-      changedBy: []
+      changedBy: [],
+      scaledBy: []
     };
     expect(flatPatternBendNote(pattern.bends[0]!)).toBe('UP 90° R0.0004');
     expect(flatPatternDxf(pattern, 'm')).toContain('UP 90\\U+00B0 R0.0004');
@@ -649,3 +661,677 @@ describe('review fixes (PR #1560)', { timeout: 240_000 }, () => {
     ]);
   });
 });
+
+const UNIT_MM: Record<UnitSystem, number> = {
+  mm: 1,
+  cm: 10,
+  m: 1000,
+  inch: 25.4
+};
+
+/** The L bracket at its physical millimetre size in a `units` document. */
+const lBracketIn = (units: UnitSystem) => {
+  const u = 1 / UNIT_MM[units];
+  return sheet(
+    [rectangle(0, 0, L_BLANK * u, WIDTH * u)],
+    [line(L_LINE * u, 0, L_LINE * u, WIDTH * u)],
+    ([lineId], sketchId) => [bend('b1', sketchId, lineId!)],
+    undefined,
+    {
+      base: createProjectDocument('Flat pattern', user, units),
+      thickness: T * u,
+      bendRadius: R * u
+    }
+  );
+};
+
+/** The DASHED line type's total and dash/gap lengths, as written. */
+function dashedPattern(text: string): { total: number; dashes: number[] } {
+  const record = dxfSection(text, 'TABLES').find(
+    (entry) => entry.type === 'LTYPE' && value(entry, 2) === 'DASHED'
+  )!;
+  return {
+    total: num(record, 40),
+    dashes: record.groups
+      .filter(([code]) => code === 49)
+      .map(([, entry]) => Number(entry))
+  };
+}
+
+function insunits(text: string): string | undefined {
+  const groups = dxfSection(text, 'HEADER').flatMap((record) => record.groups);
+  return groups[groups.findIndex(([, v]) => v === '$INSUNITS') + 1]?.[1];
+}
+
+describe(
+  'flat-pattern units and scale (#2306, #2122, #2305)',
+  { timeout: 240_000 },
+  () => {
+    // Metres are covered by the writer's own test: this L bracket at metre
+    // scale trips the build's absolute volume check, not the export.
+    it.each([
+      ['mm', '4'],
+      ['cm', '5'],
+      ['inch', '1']
+    ] as const)(
+      'writes a %s DXF whose geometry and bend dashes match the mm part physically',
+      async (units, code) => {
+        const part = lBracketIn(units);
+        const pattern = await adapter.sheetMetalFlatPattern(
+          part.document,
+          part.featureId
+        );
+        const text = flatPatternDxf(pattern, units);
+        expect(insunits(text)).toBe(code);
+        const mm = UNIT_MM[units];
+        // The dash, the gap and the cycle are 0.5, 0.25 and 0.75 mm in
+        // every unit, not 0.75 of the file's unit.
+        const dashed = dashedPattern(text);
+        expect(dashed.total * mm).toBeCloseTo(0.75, 6);
+        expect(dashed.dashes).toHaveLength(2);
+        expect(dashed.dashes[0]! * mm).toBeCloseTo(0.5, 6);
+        expect(dashed.dashes[1]! * mm).toBeCloseTo(-0.25, 6);
+        // The geometry is the same physical part.
+        const entities = dxfSection(text, 'ENTITIES');
+        const outline = entities.filter((record) => value(record, 8) === '0');
+        const xs = outline.flatMap((r) => [num(r, 10), num(r, 11)]);
+        const ys = outline.flatMap((r) => [num(r, 20), num(r, 21)]);
+        expect((Math.max(...xs) - Math.min(...xs)) * mm).toBeCloseTo(
+          L_BLANK,
+          4
+        );
+        expect((Math.max(...ys) - Math.min(...ys)) * mm).toBeCloseTo(WIDTH, 4);
+        const [up] = entities.filter(
+          (record) => value(record, 8) === 'BEND_UP'
+        );
+        expect(num(up!, 10) * mm).toBeCloseTo(L_LINE, 4);
+        expect(Math.abs(num(up!, 21) - num(up!, 20)) * mm).toBeCloseTo(
+          WIDTH,
+          4
+        );
+      }
+    );
+
+    it('exports the scaled blank after an in-place Scale, and labels it', async () => {
+      const bracket = lBracket();
+      const before = await adapter.sheetMetalFlatPattern(
+        bracket.document,
+        bracket.featureId
+      );
+      expect(before.scaledBy).toEqual([]);
+      const scaled = transformBody(bracket.document, {
+        name: 'Scale 1',
+        targetBodyId: bracket.bodyId,
+        translation: { x: 0, y: 0, z: 0 },
+        scale: 1.25,
+        pivot: { x: 10, y: 20, z: 5 }
+      });
+      const after = await adapter.sheetMetalFlatPattern(
+        scaled.document,
+        bracket.featureId
+      );
+      expect(after.scaledBy.map((entry) => [entry.name, entry.factor])).toEqual(
+        [['Scale 1', 1.25]]
+      );
+      // A Scale changes no material: the pattern is not "before" it.
+      expect(after.changedBy).toEqual([]);
+      expect(after.thickness).toBeCloseTo(T * 1.25, 9);
+      expect(after.bends[0]!.insideRadius).toBeCloseTo(R * 1.25, 9);
+      expect(after.bends[0]!.bendAllowance).toBeCloseTo(
+        before.bends[0]!.bendAllowance * 1.25,
+        9
+      );
+      expect(after.bends[0]!.lineLength).toBeCloseTo(WIDTH * 1.25, 9);
+      expect(after.bends[0]!.angleDeg).toBeCloseTo(90, 9);
+      expect(after.bends[0]!.kFactor).toBeCloseTo(K, 9);
+      const extents = flatPatternExtents(after);
+      expect(extents.width).toBeCloseTo(L_BLANK * 1.25, 6);
+      expect(extents.height).toBeCloseTo(WIDTH * 1.25, 6);
+      // The DXF a shop receives carries the scaled sizes, not the old blank.
+      const text = flatPatternDxf(after, 'mm');
+      expect(text).not.toBe(flatPatternDxf(before, 'mm'));
+      const entities = dxfSection(text, 'ENTITIES');
+      const outline = entities.filter((record) => value(record, 8) === '0');
+      const xs = outline.flatMap((r) => [num(r, 10), num(r, 11)]);
+      const ys = outline.flatMap((r) => [num(r, 20), num(r, 21)]);
+      expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(L_BLANK * 1.25, 6);
+      expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(WIDTH * 1.25, 6);
+      const [up] = entities.filter((record) => value(record, 8) === 'BEND_UP');
+      expect(num(up!, 10)).toBeCloseTo(L_LINE * 1.25, 6);
+      expect(Math.abs(num(up!, 21) - num(up!, 20))).toBeCloseTo(
+        WIDTH * 1.25,
+        6
+      );
+      const [note] = entities.filter(
+        (record) => value(record, 8) === 'BEND_NOTES'
+      );
+      expect(value(note!, 1)).toBe('UP 90\\U+00B0 R2.5');
+      expect(bendTableRows(after)[0]).toMatchObject({ insideRadius: '2.5' });
+      expect(flatPatternScaledNote(after.scaledBy)).toBe(
+        'Scaled ×1.25 by Scale 1; every length here is the scaled part’s.'
+      );
+      expect(flatPatternScaledNote([])).toBeNull();
+    });
+
+    it('compounds Scales, and ignores a plain move and a scaled copy', async () => {
+      const bracket = lBracket();
+      let document = transformBody(bracket.document, {
+        name: 'Move 1',
+        targetBodyId: bracket.bodyId,
+        translation: { x: 30, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 45 }
+      }).document;
+      document = transformBody(document, {
+        name: 'Scaled copy',
+        targetBodyId: bracket.bodyId,
+        translation: { x: 0, y: 200, z: 0 },
+        scale: 3,
+        copy: true
+      }).document;
+      const moved = await adapter.sheetMetalFlatPattern(
+        document,
+        bracket.featureId
+      );
+      expect(moved.scaledBy).toEqual([]);
+      expect(flatPatternExtents(moved).width).toBeCloseTo(L_BLANK, 6);
+      for (const [name, scale] of [
+        ['Scale 1', 2],
+        ['Scale 2', 0.5],
+        ['Scale 3', 1.5]
+      ] as const) {
+        document = transformBody(document, {
+          name,
+          targetBodyId: bracket.bodyId,
+          translation: { x: 0, y: 0, z: 0 },
+          scale
+        }).document;
+      }
+      const scaled = await adapter.sheetMetalFlatPattern(
+        document,
+        bracket.featureId
+      );
+      expect(scaled.scaledBy.map((entry) => entry.name)).toEqual([
+        'Scale 1',
+        'Scale 2',
+        'Scale 3'
+      ]);
+      expect(flatPatternExtents(scaled).width).toBeCloseTo(L_BLANK * 1.5, 6);
+      expect(scaled.thickness).toBeCloseTo(T * 1.5, 9);
+      expect(flatPatternScaledNote(scaled.scaledBy)).toBe(
+        'Scaled ×1.5 by Scale 1, Scale 2 and Scale 3; every length here is the scaled part’s.'
+      );
+    });
+
+    it('names the files unit in words, never "in in"', () => {
+      expect(flatPatternFilesHint('inch')).toMatch(
+        /Files are at 1:1 scale in inches\.$/
+      );
+      expect(flatPatternFilesHint('mm')).toMatch(
+        /Files are at 1:1 scale in millimeters\.$/
+      );
+      expect(flatPatternFilesHint('inch')).not.toMatch(/\bin in\b/);
+    });
+  }
+);
+
+/** `document` with one feature manually suppressed. */
+function suppressed(
+  document: ProjectDocument,
+  featureId: FeatureId
+): ProjectDocument {
+  const [nodeId, node] = Object.entries(document.nodes).find(
+    ([, entry]) => entry.kind === 'feature' && entry.featureId === featureId
+  )!;
+  return {
+    ...document,
+    nodes: {
+      ...document.nodes,
+      [nodeId]: {
+        ...node,
+        metadata: { ...node.metadata, [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+      }
+    }
+  };
+}
+
+const scaleOf = (
+  document: ProjectDocument,
+  targetBodyId: BodyId,
+  scale: number,
+  name = 'Scale 1'
+) =>
+  transformBody(document, {
+    name,
+    targetBodyId,
+    translation: { x: 0, y: 0, z: 0 },
+    scale
+  }).document;
+
+/** Across the L bracket's fixed flange only: a Split here builds. */
+const flangePlane = {
+  origin: { x: 20, y: 0, z: 0 },
+  normal: { x: 1, y: 0, z: 0 }
+};
+/** Along the bracket, through its bend: the kernel refuses this Split. */
+const throughBendPlane = {
+  origin: { x: 0, y: WIDTH / 2, z: 0 },
+  normal: { x: 0, y: 1, z: 0 }
+};
+
+describe(
+  'flat-pattern scale follows the body the build scaled (PR #2415 review)',
+  { timeout: 240_000 },
+  () => {
+    const scales = (pattern: SheetMetalFlatPattern) =>
+      pattern.scaledBy.map((entry) => [entry.name, entry.factor]);
+    const volumeOf = async (document: ProjectDocument, bodyId: BodyId) => {
+      const derived = await adapter.syncDocument(document);
+      expect(failures(derived)).toEqual([]);
+      const body = derived.bodyRepresentations[bodyId]!;
+      expect(body.consumed).toBe(false);
+      return body.volume;
+    };
+    const failures = (derived: {
+      featureWarnings?: { kind?: string; featureName: string }[];
+    }) =>
+      (derived.featureWarnings ?? [])
+        .filter((warning) => warning.kind === 'build-failed')
+        .map((warning) => warning.featureName);
+
+    it('applies a Scale on the result of a suppressed Hole, which the build passes through', async () => {
+      const bracket = lBracket();
+      const built = await adapter.syncDocument(bracket.document);
+      const sheetVolume = built.bodyRepresentations[bracket.bodyId]!.volume;
+      const top = built.bodyRepresentations[
+        bracket.bodyId
+      ]!.topology!.faces.find(
+        (face) => face.reference?.lineageName === 'sheet.face.top[fixed]'
+      )!;
+      const drilled = holeBody(bracket.document, {
+        name: 'Hole 1',
+        targetBodyId: bracket.bodyId,
+        faceHash: top.hash,
+        faceReference: top.reference,
+        position: { u: 0, v: 0 },
+        positionAnchor: 'centroid',
+        diameter: 6,
+        depthMode: 'through',
+        style: 'simple'
+      });
+      const hole = listFeaturesInOrder(drilled.document).at(-1)!;
+      const document = suppressed(
+        scaleOf(drilled.document, drilled.bodyId, 2),
+        hole.featureId
+      );
+      // The build: the uncut sheet stands under the Hole's id, doubled.
+      expect(await volumeOf(document, drilled.bodyId)).toBeCloseTo(
+        sheetVolume * 8,
+        3
+      );
+      const pattern = await adapter.sheetMetalFlatPattern(
+        document,
+        bracket.featureId
+      );
+      expect(scales(pattern)).toEqual([['Scale 1', 2]]);
+      expect(flatPatternExtents(pattern).width).toBeCloseTo(L_BLANK * 2, 6);
+      expect(pattern.thickness).toBeCloseTo(T * 2, 9);
+    });
+
+    it('keeps a Split original as the sheet: its Scale applies, a half’s does not', async () => {
+      const bracket = lBracket();
+      const split = addSplitFeature(bracket.document, {
+        name: 'Split 1',
+        targetBodyId: bracket.bodyId,
+        plane: flangePlane,
+        keepOriginal: true
+      });
+      const sheetVolume = await volumeOf(split.document, bracket.bodyId);
+      const original = scaleOf(split.document, bracket.bodyId, 2);
+      expect(await volumeOf(original, bracket.bodyId)).toBeCloseTo(
+        sheetVolume * 8,
+        3
+      );
+      const scaled = await adapter.sheetMetalFlatPattern(
+        original,
+        bracket.featureId
+      );
+      expect(scales(scaled)).toEqual([['Scale 1', 2]]);
+      expect(flatPatternExtents(scaled).width).toBeCloseTo(L_BLANK * 2, 6);
+
+      const half = scaleOf(split.document, split.bodyId, 2);
+      expect(await volumeOf(half, bracket.bodyId)).toBeCloseTo(sheetVolume, 3);
+      const unscaled = await adapter.sheetMetalFlatPattern(
+        half,
+        bracket.featureId
+      );
+      expect(scales(unscaled)).toEqual([]);
+      expect(flatPatternExtents(unscaled).width).toBeCloseTo(L_BLANK, 6);
+    });
+
+    it('keeps a Boolean’s kept tool as the sheet: its Scale applies, the result’s does not', async () => {
+      const bracket = lBracket();
+      const withBox = addPrimitiveFeature(bracket.document, {
+        name: 'Box 1',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+      const boxBodyId = withBox.bodyOrder.at(-1)!;
+      const cut = booleanBodies(withBox, {
+        name: 'Subtract 1',
+        operation: 'subtract',
+        targetBodyIds: [boxBodyId, bracket.bodyId],
+        keepOriginals: 'tools'
+      });
+      const sheetVolume = await volumeOf(cut.document, bracket.bodyId);
+      const tool = scaleOf(cut.document, bracket.bodyId, 2);
+      expect(await volumeOf(tool, bracket.bodyId)).toBeCloseTo(
+        sheetVolume * 8,
+        3
+      );
+      const scaled = await adapter.sheetMetalFlatPattern(
+        tool,
+        bracket.featureId
+      );
+      expect(scales(scaled)).toEqual([['Scale 1', 2]]);
+
+      const result = scaleOf(cut.document, cut.bodyId, 2);
+      expect(await volumeOf(result, bracket.bodyId)).toBeCloseTo(
+        sheetVolume,
+        3
+      );
+      const unscaled = await adapter.sheetMetalFlatPattern(
+        result,
+        bracket.featureId
+      );
+      expect(scales(unscaled)).toEqual([]);
+      expect(flatPatternExtents(unscaled).width).toBeCloseTo(L_BLANK, 6);
+    });
+
+    it('refuses a sheet whose pieces carry different scales, and scales one that is whole again', async () => {
+      const bracket = lBracket();
+      const split = addSplitFeature(bracket.document, {
+        name: 'Split 1',
+        targetBodyId: bracket.bodyId,
+        plane: flangePlane
+      });
+      // Unscaled pieces: the blank as built, with the Split named.
+      const plain = await adapter.sheetMetalFlatPattern(
+        split.document,
+        bracket.featureId
+      );
+      expect(scales(plain)).toEqual([]);
+      expect(plain.changedBy.map((entry) => entry.name)).toEqual(['Split 1']);
+      // One piece doubled: neither 1× nor 2× is the part.
+      const lopsided = scaleOf(split.document, split.secondBodyId, 2);
+      expect(await volumeOf(lopsided, split.secondBodyId)).toBeCloseTo(
+        20 * WIDTH * T * 8,
+        3
+      );
+      await expect(
+        adapter.sheetMetalFlatPattern(lopsided, bracket.featureId)
+      ).rejects.toThrow(
+        '"Scale 1" scales only part of what "Bracket" became, so its flat pattern has no single scale. Scale the whole sheet before it is divided, or suppress "Scale 1".'
+      );
+      // Rejoined, then scaled: one body, one scale.
+      const joined = booleanBodies(split.document, {
+        name: 'Union 1',
+        operation: 'union',
+        targetBodyIds: [split.bodyId, split.secondBodyId]
+      });
+      const rejoined = scaleOf(joined.document, joined.bodyId, 2);
+      await volumeOf(rejoined, joined.bodyId);
+      const whole = await adapter.sheetMetalFlatPattern(
+        rejoined,
+        bracket.featureId
+      );
+      expect(scales(whole)).toEqual([['Scale 1', 2]]);
+    });
+
+    it('refuses a scale when the build does not hold the sheet where the history says', () => {
+      const bracket = lBracket();
+      const feature = listFeaturesInOrder(bracket.document).find(
+        (entry) => entry.featureId === bracket.featureId
+      )!;
+      const gone = { failed: () => false, live: () => false };
+      // With no Scale after the sheet there is nothing to get wrong.
+      expect(sheetScalesAfter(bracket.document, {}, feature, gone)).toEqual([]);
+      const scaled = scaleOf(bracket.document, bracket.bodyId, 2);
+      expect(() => sheetScalesAfter(scaled, {}, feature, gone)).toThrow(
+        '"Bracket" could not be followed through the features after it, so its flat pattern cannot tell whether "Scale 1" scaled it. Suppress the Scale steps to export the sheet as built.'
+      );
+      expect(
+        sheetScalesAfter(scaled, {}, feature, {
+          failed: () => false,
+          live: (bodyId) => bodyId === bracket.bodyId
+        }).map((entry) => entry.factor)
+      ).toEqual([2]);
+    });
+
+    it('leaves the sheet whole under its own id when the build refuses a Split', async () => {
+      const bracket = lBracket();
+      const split = addSplitFeature(bracket.document, {
+        name: 'Split 1',
+        targetBodyId: bracket.bodyId,
+        plane: throughBendPlane
+      });
+      const document = scaleOf(split.document, bracket.bodyId, 2);
+      const derived = await adapter.syncDocument(document);
+      expect(failures(derived)).toEqual(['Split 1']);
+      expect(derived.bodyRepresentations[bracket.bodyId]!.consumed).toBe(false);
+      const pattern = await adapter.sheetMetalFlatPattern(
+        document,
+        bracket.featureId
+      );
+      expect(scales(pattern)).toEqual([['Scale 1', 2]]);
+      expect(flatPatternExtents(pattern).width).toBeCloseTo(L_BLANK * 2, 6);
+    });
+
+    /** A 20 cube from `x` to `x + 20`, y 10 to 30, standing on z = 0. */
+    const stock = (document: ProjectDocument, name: string, x: number) => {
+      const withBox = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      });
+      const bodyId = withBox.bodyOrder.at(-1)!;
+      return {
+        document: transformBody(withBox, {
+          name: `Move ${name}`,
+          targetBodyId: bodyId,
+          translation: { x, y: 10, z: 0 }
+        }).document,
+        bodyId
+      };
+    };
+    /** The bracket joined to stock from x = -8 to x = 12. */
+    const withStock = (base: ProjectDocument, bracketBodyId: BodyId) => {
+      const block = stock(base, 'Stock', -8);
+      return booleanBodies(block.document, {
+        name: 'Union 1',
+        operation: 'union',
+        targetBodyIds: [bracketBodyId, block.bodyId]
+      });
+    };
+    const mergeRefusal =
+      '"Union 1" combines "Bracket" with other material, so its flat pattern cannot tell whether "Scale 1" after it scaled the sheet or only that material. Scale the sheet before "Union 1", or suppress "Scale 1".';
+
+    // Re-check finding 1: the Boolean result's id outlives the sheet in it.
+    it('refuses a Scale after a Boolean merged the sheet with stock, even where no sheet is left', async () => {
+      const bracket = lBracket();
+      const union = withStock(bracket.document, bracket.bodyId);
+      // No Scale after the merge: the blank as built, the Boolean named.
+      const plain = await adapter.sheetMetalFlatPattern(
+        union.document,
+        bracket.featureId
+      );
+      expect(scales(plain)).toEqual([]);
+      expect(flatPatternExtents(plain).width).toBeCloseTo(L_BLANK, 6);
+      expect(plain.changedBy.map((entry) => entry.name)).toContain('Union 1');
+      // Two tools that keep only the stock left of the bracket, x -8 to -2.
+      const first = stock(union.document, 'Tool A', -22);
+      const second = stock(first.document, 'Tool B', -22);
+      const kept = booleanBodies(second.document, {
+        name: 'Intersect 1',
+        operation: 'intersect',
+        targetBodyIds: [union.bodyId, first.bodyId, second.bodyId]
+      });
+      const stockVolume = 6 * 20 * 20;
+      expect(await volumeOf(kept.document, kept.bodyId)).toBeCloseTo(
+        stockVolume,
+        3
+      );
+      const scaled = scaleOf(kept.document, kept.bodyId, 2);
+      // The build doubled stock only: no sheet material was scaled.
+      expect(await volumeOf(scaled, kept.bodyId)).toBeCloseTo(
+        stockVolume * 8,
+        3
+      );
+      await expect(
+        adapter.sheetMetalFlatPattern(scaled, bracket.featureId)
+      ).rejects.toThrow(mergeRefusal);
+      // The plain union doubled is refused too: the rule does not guess.
+      await expect(
+        adapter.sheetMetalFlatPattern(
+          scaleOf(union.document, union.bodyId, 2),
+          bracket.featureId
+        )
+      ).rejects.toThrow(mergeRefusal);
+    });
+
+    // Re-check finding 2: the sheet is wholly in the other half.
+    it('names the merge, not a partial scale, when a Scale follows a Split of the merged body', async () => {
+      const bracket = lBracket();
+      const union = withStock(bracket.document, bracket.bodyId);
+      const split = addSplitFeature(union.document, {
+        name: 'Split 1',
+        targetBodyId: union.bodyId,
+        plane: {
+          origin: { x: -4, y: 0, z: 0 },
+          normal: { x: 1, y: 0, z: 0 }
+        }
+      });
+      // The negative half is stock only, x -8 to -4.
+      const stockVolume = 4 * 20 * 20;
+      expect(await volumeOf(split.document, split.secondBodyId)).toBeCloseTo(
+        stockVolume,
+        3
+      );
+      const scaled = scaleOf(split.document, split.secondBodyId, 2);
+      expect(await volumeOf(scaled, split.secondBodyId)).toBeCloseTo(
+        stockVolume * 8,
+        3
+      );
+      const refusal = await adapter
+        .sheetMetalFlatPattern(scaled, bracket.featureId)
+        .then(
+          () => null,
+          (error: Error) => error.message
+        );
+      expect(refusal).toBe(mergeRefusal);
+      expect(refusal).not.toContain('scales only part');
+      // A Scale before the merge is the sheet's own and still applies.
+      const early = scaleOf(bracket.document, bracket.bodyId, 2);
+      const merged = withStock(early, bracket.bodyId);
+      await volumeOf(merged.document, merged.bodyId);
+      const pattern = await adapter.sheetMetalFlatPattern(
+        merged.document,
+        bracket.featureId
+      );
+      expect(scales(pattern)).toEqual([['Scale 1', 2]]);
+      expect(flatPatternExtents(pattern).width).toBeCloseTo(L_BLANK * 2, 6);
+    });
+
+    // Re-check finding 3: equal factors are not one scale of the sheet.
+    it('refuses two separate Scales of the two halves at one factor', async () => {
+      const bracket = lBracket();
+      const split = addSplitFeature(bracket.document, {
+        name: 'Split 1',
+        targetBodyId: bracket.bodyId,
+        plane: flangePlane
+      });
+      const sheetVolume =
+        (await volumeOf(split.document, split.bodyId)) +
+        (await volumeOf(split.document, split.secondBodyId));
+      // Each half doubled about its own pivot: the halves no longer meet.
+      const one = scaleOf(split.document, split.bodyId, 2, 'Scale A');
+      const both = transformBody(one, {
+        name: 'Scale B',
+        targetBodyId: split.secondBodyId,
+        translation: { x: 0, y: 0, z: 0 },
+        scale: 2,
+        pivot: { x: -50, y: 0, z: 0 }
+      }).document;
+      expect(
+        (await volumeOf(both, split.bodyId)) +
+          (await volumeOf(both, split.secondBodyId))
+      ).toBeCloseTo(sheetVolume * 8, 3);
+      await expect(
+        adapter.sheetMetalFlatPattern(both, bracket.featureId)
+      ).rejects.toThrow(
+        '"Scale A" scales only part of what "Bracket" became, so its flat pattern has no single scale. Scale the whole sheet before it is divided, or suppress "Scale A".'
+      );
+    });
+
+    it('samples a curved cutout to the chord budget of the scaled part', async () => {
+      const [cx, cy, rx, ry] = [20, 15, 8, 4];
+      const plate = sheet(
+        [
+          rectangle(0, 0, 100, 30),
+          {
+            objectKind: 'ellipse',
+            centerX: cx,
+            centerY: cy,
+            radiusX: rx,
+            radiusY: ry,
+            rotationDeg: 0
+          }
+        ],
+        [line(60, 0, 60, 30)],
+        ([lineId], sketchId) => [bend('b1', sketchId, lineId!)],
+        // The cell outside the ellipse: the ellipse is a cutout.
+        [{ x: 2, y: 2 }]
+      );
+      /** Largest chord-midpoint distance from the ellipse scaled by `s`. */
+      const deviation = (pattern: SheetMetalFlatPattern, s: number) => {
+        const polylines = pattern.loops
+          .filter((loop) => !loop.outer)
+          .flatMap((loop) => loop.entities)
+          .flatMap((entity) => (entity.kind === 'polyline' ? [entity] : []));
+        expect(polylines.length).toBeGreaterThan(0);
+        let worst = 0;
+        let count = 0;
+        for (const { points } of polylines) {
+          count += points.length;
+          for (let index = 0; index + 1 < points.length; index += 1) {
+            const x =
+              ((points[index]![0] + points[index + 1]![0]) / 2 - cx * s) /
+              (rx * s);
+            const y =
+              ((points[index]![1] + points[index + 1]![1]) / 2 - cy * s) /
+              (ry * s);
+            // First-order distance to the ellipse: |f| / |grad f|.
+            const f = x * x + y * y - 1;
+            const gradient = 2 * Math.hypot(x / (rx * s), y / (ry * s));
+            worst = Math.max(worst, Math.abs(f) / gradient);
+          }
+        }
+        return { worst, count };
+      };
+      const before = deviation(
+        await adapter.sheetMetalFlatPattern(plate.document, plate.featureId),
+        1
+      );
+      // 0.02 mm is the DXF polyline budget (POLYLINE_DEFLECTION_MM).
+      expect(before.worst).toBeLessThanOrEqual(0.02 * 1.01);
+      const after = deviation(
+        await adapter.sheetMetalFlatPattern(
+          scaleOf(plate.document, plate.bodyId, 50),
+          plate.featureId
+        ),
+        50
+      );
+      expect(after.worst).toBeLessThanOrEqual(0.02 * 1.01);
+      expect(after.count).toBeGreaterThan(before.count);
+    });
+  }
+);

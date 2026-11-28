@@ -481,5 +481,9 @@ describe('critical and affected CI selection', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 30_000);
+    // Vitest's related discovery walks the whole project's import graph:
+    // about 26 s on an idle machine, past 30 s under the daily full run's
+    // coverage and parallel files. The deadline is this case's own budget,
+    // not a bound on discovery.
+  }, 120_000);
 });

@@ -157,7 +157,10 @@ describe('CompactHistoryList', () => {
     );
     // Where the click does come, it lands on the step slid back under the
     // finger: it opens nothing and deletes nothing twice.
-    fireEvent.click(target.querySelector('.compact-row-main')!);
+    fireEvent.click(target.querySelector('.compact-row-main')!, {
+      clientX: 363,
+      clientY: 20
+    });
     expect(props.onEditStep).not.toHaveBeenCalled();
     expect(props.onDeleteFeatures).toHaveBeenCalledTimes(1);
 
@@ -191,6 +194,7 @@ describe('CompactHistoryList', () => {
       });
       const finger = {
         pointerType: 'touch',
+        isPrimary: true,
         pointerId: 14,
         clientX: 30,
         clientY: 20
@@ -200,7 +204,7 @@ describe('CompactHistoryList', () => {
       expect(props.onRollbackAfterFeature).toHaveBeenCalledTimes(1);
       // A prompt the action opened under the finger is not answered by the
       // same tap's click.
-      fireEvent.click(prompt);
+      fireEvent.click(prompt, { clientX: 30, clientY: 20 });
       expect(outside).not.toHaveBeenCalled();
       // The next press is a tap of its own.
       fireEvent.pointerDown(prompt, { ...finger, pointerId: 15 });
@@ -254,6 +258,7 @@ describe('CompactHistoryList', () => {
     });
     const finger = {
       pointerType: 'touch',
+      isPrimary: true,
       pointerId: 16,
       clientX: 360,
       clientY: 20

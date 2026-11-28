@@ -248,7 +248,12 @@ async function tapUntilPicked(
 const annotationCount = (page: Page) =>
   canvas(page).locator('.drawing-annotation-hit').count();
 
-/** One finger dragged across the screen, as a touch. */
+/**
+ * One finger dragged across the screen, as a touch. It lifts on the move, a
+ * flick: on Aura (Linux, ChromeOS) Chromium's gesture layer then starts a
+ * fling, and the next tap only stops it, with no mousedown, mouseup or
+ * click (see `dropTapAfterFling`).
+ */
 async function touchDrag(
   page: Page,
   from: { x: number; y: number },
@@ -891,6 +896,10 @@ test.describe('Draw in the compact sheet', () => {
           .getByRole('list', { name: 'Sheets' })
           .getByRole('listitem');
         await expect(sheets).toHaveCount(2);
+        // As every new sheet here: its views drawn before it is acted on.
+        await expect(
+          canvas(page).locator('[data-view="top"]:not(.is-placeholder)')
+        ).toHaveCount(1, { timeout: 60_000 });
         await sheet(page).getByRole('button', { name: 'Delete Sheet 2' }).tap();
         await expect(sheets).toHaveCount(1);
         await tapNoticeUndo(page);
@@ -906,6 +915,9 @@ test.describe('Draw in the compact sheet', () => {
           await grabber.press('End');
         } else {
           const grip = (await grabber.boundingBox())!;
+          // Flicked, so the Delete tap below is the tap that stops a fling:
+          // on Linux and ChromeOS it makes no click, and Delete runs on its
+          // lift (review case: the sheet stayed).
           await touchDrag(
             page,
             { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 },

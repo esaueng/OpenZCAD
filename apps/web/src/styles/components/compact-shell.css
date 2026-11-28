@@ -1103,21 +1103,31 @@
   bottom: var(--sp-2);
 }
 
-/* The stage's status ("Added box.", "Section on" and its Undo) stands
-   over the undo pair, where the action notice stands, clear of the sheet
-   at peek and half. Placed by the regular stage's notice lane it stood at
-   the stage's foot, under the sheet: a strip of it showed over the sheet at
-   peek and a tap there reached its Undo, which turned Section back off. A
-   sketch's notices stand higher still, over its relations row (below). At
-   full the line moves onto the sheet's layer (further below). */
+/* The stage's status ("Added box.", "Undid Fillet edges.", "Section on"
+   and its Undo) stands at the stage's top, under the header and left of
+   the view cube, as a phone's banners do: over the undo pair it sat on the
+   model and among the controls the thumb works (the owner's choice). The
+   activity lane stands with it. At full the line moves onto the sheet's
+   layer (further below). */
 .app-shell[data-shell='compact']
   .workspace.column-layout
   :is(.workspace-toast, .activity-lane) {
+  top: var(--sp-2);
+  bottom: auto;
   left: max(var(--sp-2), env(safe-area-inset-left));
-  right: max(var(--sp-2), env(safe-area-inset-right));
-  bottom: calc(
-    var(--compact-sheet-h, 0px) + var(--compact-target) + var(--sp-2) * 2
+  right: calc(
+    max(var(--sp-2), env(safe-area-inset-right)) + var(--compact-cube-clear)
   );
+}
+
+.app-shell[data-shell='compact'] {
+  /* The view cube's corner and a gap: what the status keeps clear of. */
+  --compact-cube-clear: 96px;
+}
+
+/* Draw's stage has no cube there but its sheet zoom, four 44px buttons. */
+.app-shell[data-shell='compact']:has(.drawing-workspace) {
+  --compact-cube-clear: calc(var(--compact-target) * 4 + var(--sp-2) * 4);
 }
 
 /* The line itself takes no tap, on the stage or on the sheet's layer: over
@@ -1178,31 +1188,15 @@
 }
 
 /* Held landscape, beside the side sheet rather than centred on the whole
-   width, where the sheet covered its right half. */
+   width, where the sheet covers the stage's right side. */
 @media (orientation: landscape) and (max-height: 500px) {
   .app-shell[data-shell='compact']:has(.compact-sheet:not([hidden]))
     .workspace.column-layout
     :is(.workspace-toast, .activity-lane) {
-    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
-    bottom: calc(var(--compact-target) + var(--sp-2) * 2);
-  }
-}
-
-/* A tray's row on the stage (Assemble's Exploded chip) stands over the
-   undo pair: the status stands over that row in turn. */
-.app-shell[data-shell='compact']:has(.compact-stage-tray:not(:empty))
-  .workspace.column-layout
-  :is(.workspace-toast, .activity-lane) {
-  bottom: calc(
-    var(--compact-sheet-h, 0px) + var(--compact-target) * 2 + var(--sp-2) * 3
-  );
-}
-
-@media (orientation: landscape) and (max-height: 500px) {
-  .app-shell[data-shell='compact']:has(.compact-stage-tray:not(:empty))
-    .workspace.column-layout
-    :is(.workspace-toast, .activity-lane) {
-    bottom: calc(var(--compact-target) * 2 + var(--sp-2) * 3);
+    /* The cube moves beside the sheet at half: clear of both. */
+    right: calc(
+      var(--compact-side-sheet-w) + var(--sp-2) + var(--compact-cube-clear)
+    );
   }
 }
 
@@ -2152,31 +2146,12 @@
   color: var(--color-accent);
 }
 
-/* A sketch's notices ("Sketching on the XY plane") stand over the undo
-   pair and a relations row, never under the sheet; the scale bar steps out
-   while the relations row stands where it was. */
-.app-shell[data-shell='compact']:has(.compact-tray.is-sketch)
-  .workspace.column-layout
-  :is(.workspace-toast, .activity-lane) {
-  left: max(var(--sp-2), env(safe-area-inset-left));
-  right: max(var(--sp-2), env(safe-area-inset-right));
-  bottom: calc(
-    var(--compact-sheet-h, 0px) + var(--compact-target) * 2 + var(--sp-2) * 3
-  );
-}
-
+/* A sketch's notices ("Sketching on the XY plane") stand at the stage's
+   top, as every status does; the scale bar steps out while the relations
+   row stands where it was. */
 .app-shell[data-shell='compact']:has(.compact-stage-tray:not(:empty))
   .viewport-scale-indicator {
   visibility: hidden;
-}
-
-@media (orientation: landscape) and (max-height: 500px) {
-  .app-shell[data-shell='compact']:has(.compact-tray.is-sketch)
-    .workspace.column-layout
-    :is(.workspace-toast, .activity-lane) {
-    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
-    bottom: calc(var(--compact-target) * 2 + var(--sp-2) * 3);
-  }
 }
 
 /* ── The sketch's pages ── */

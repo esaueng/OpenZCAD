@@ -5,11 +5,15 @@ import {
   toUserId,
   type BodyId,
   type FeatureId,
-  type ProjectDocument
+  type FeatureNode,
+  type ProjectDocument,
+  type SketchId
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
+  addSplitFeature,
   assertNoNewHistoryFork,
+  bodyPiecesAfter,
   booleanBodies,
   chamferEdges,
   createBodyFeatureIds,
@@ -23,6 +27,7 @@ import {
   mirrorBody,
   moveFeature,
   newHistoryForks,
+  patternBody,
   setNodeMetadata,
   transformBody
 } from './index';
@@ -721,5 +726,427 @@ describe('history fork detection', () => {
       expect(historyForks(resumed)).toHaveLength(1);
       expect(newHistoryForks(extra.document, resumed)).toEqual([]);
     });
+  });
+});
+
+/**
+ * PR #2415 review: where a body's material is by the end of the history, by
+ * the ids the build assigns. The flat pattern reads its Scale from this.
+ */
+describe('bodyPiecesAfter', () => {
+  const built = { failed: () => false, inactive: () => false };
+
+  function block(name: string, document?: ProjectDocument) {
+    const ids = createBodyFeatureIds();
+    return {
+      document: addPrimitiveFeature(
+        document ??
+          createProjectDocument('Pieces', toUserId('user_body_pieces'), 'mm'),
+        {
+          name,
+          bodyName: name,
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 10, depth: 10 },
+          ids
+        }
+      ),
+      bodyId: ids.bodyId,
+      featureId: ids.featureId
+    };
+  }
+
+  function fillet(document: ProjectDocument, name: string, target: BodyId) {
+    const ids = createBodyFeatureIds();
+    return {
+      document: filletEdges(document, {
+        name,
+        targetBodyId: target,
+        edgeHashes: [101],
+        size: 1,
+        ids
+      }).document,
+      ...ids
+    };
+  }
+
+  const scale = (document: ProjectDocument, name: string, target: BodyId) =>
+    transformBody(document, {
+      name,
+      targetBodyId: target,
+      translation: { x: 0, y: 0, z: 0 },
+      scale: 2
+    }).document;
+
+  const flagged = (
+    document: ProjectDocument,
+    featureId: FeatureId,
+    key: string
+  ) =>
+    setNodeMetadata(document, {
+      nodeId: listFeaturesInOrder(document).find(
+        (feature) => feature.featureId === featureId
+      )!.id,
+      metadata: { [key]: true }
+    });
+
+  /** Each piece as `[bodyId, live, transform names]`. */
+  const pieces = (
+    document: ProjectDocument,
+    originId: FeatureId,
+    outcomes: Parameters<typeof bodyPiecesAfter>[2] = built
+  ) =>
+    bodyPiecesAfter(
+      document,
+      listFeaturesInOrder(document).find(
+        (feature) => feature.featureId === originId
+      )!,
+      outcomes
+    ).map((piece) => [
+      piece.bodyId,
+      piece.live,
+      piece.transforms.map((feature) => feature.name)
+    ]);
+
+  const plane = { origin: { x: 0, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } };
+
+  it('follows a replacement to its result, suppressed or failed included, and records in-place transforms', () => {
+    const box = block('Block');
+    const first = fillet(box.document, 'Fillet 1', box.bodyId);
+    const document = scale(first.document, 'Scale 1', first.bodyId);
+    expect(pieces(document, box.featureId)).toEqual([
+      [first.bodyId, true, ['Scale 1']]
+    ]);
+    // Manually suppressed: the build passes the block through under the
+    // fillet's id, so the Scale still lands on it.
+    expect(
+      pieces(
+        flagged(document, first.featureId, FEATURE_SUPPRESSED_METADATA_KEY),
+        box.featureId
+      )
+    ).toEqual([[first.bodyId, true, ['Scale 1']]]);
+    // Failed: the same pass-through.
+    expect(
+      pieces(document, box.featureId, {
+        ...built,
+        failed: (feature) => feature.featureId === first.featureId
+      })
+    ).toEqual([[first.bodyId, true, ['Scale 1']]]);
+    // Paused by a rollback: nothing is passed, the block stays itself.
+    expect(
+      pieces(
+        flagged(
+          document,
+          first.featureId,
+          FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY
+        ),
+        box.featureId
+      )
+    ).toEqual([[box.bodyId, true, []]]);
+    // A Scale the build refused, or a suppressed one, is not recorded.
+    const refused = listFeaturesInOrder(document).at(-1)!;
+    expect(
+      pieces(document, box.featureId, {
+        ...built,
+        failed: (feature) => feature.featureId === refused.featureId
+      })
+    ).toEqual([[first.bodyId, true, []]]);
+    expect(
+      pieces(
+        flagged(document, refused.featureId, FEATURE_SUPPRESSED_METADATA_KEY),
+        box.featureId
+      )
+    ).toEqual([[first.bodyId, true, []]]);
+  });
+
+  it('stays on a kept original and does not follow a copy, a mirror or a stale branch', () => {
+    const box = block('Block');
+    const split = addSplitFeature(box.document, {
+      name: 'Split 1',
+      targetBodyId: box.bodyId,
+      plane,
+      keepOriginal: true
+    });
+    const half = scale(split.document, 'Scale half', split.bodyId);
+    const both = scale(half, 'Scale original', box.bodyId);
+    expect(pieces(both, box.featureId)).toEqual([
+      [box.bodyId, true, ['Scale original']]
+    ]);
+    const copy = transformBody(box.document, {
+      name: 'Copy 1',
+      targetBodyId: box.bodyId,
+      translation: { x: 20, y: 0, z: 0 },
+      scale: 3,
+      copy: true
+    });
+    const mirrored = mirrorBody(copy.document, {
+      name: 'Mirror 1',
+      targetBodyId: box.bodyId,
+      plane
+    });
+    expect(
+      pieces(scale(mirrored.document, 'Scale copy', copy.bodyId), box.featureId)
+    ).toEqual([[box.bodyId, true, []]]);
+    // A fork: the second fillet builds on the block the first replaced.
+    const first = fillet(box.document, 'Fillet 1', box.bodyId);
+    const stale = fillet(first.document, 'Fillet 2', box.bodyId);
+    expect(
+      pieces(scale(stale.document, 'Scale stale', stale.bodyId), box.featureId)
+    ).toEqual([[first.bodyId, true, []]]);
+  });
+
+  it('gives a consuming Split two pieces, and a union one body holding both', () => {
+    const box = block('Block');
+    const split = addSplitFeature(box.document, {
+      name: 'Split 1',
+      targetBodyId: box.bodyId,
+      plane
+    });
+    const half = scale(split.document, 'Scale half', split.secondBodyId);
+    expect(pieces(half, box.featureId)).toEqual([
+      [split.bodyId, true, []],
+      [split.secondBodyId, true, ['Scale half']]
+    ]);
+    const joined = booleanBodies(half, {
+      name: 'Union 1',
+      operation: 'union',
+      targetBodyIds: [split.bodyId, split.secondBodyId]
+    });
+    expect(
+      pieces(scale(joined.document, 'Scale all', joined.bodyId), box.featureId)
+    ).toEqual([
+      [joined.bodyId, true, ['Scale all']],
+      [joined.bodyId, true, ['Scale half', 'Scale all']]
+    ]);
+  });
+
+  it('follows a boolean by what each operand becomes', () => {
+    const box = block('Block');
+    const other = block('Other', box.document);
+    const boolean = (
+      operation: 'union' | 'subtract' | 'intersect',
+      targetBodyIds: BodyId[],
+      keepOriginals?: 'all' | 'target' | 'tools'
+    ) =>
+      booleanBodies(other.document, {
+        name: 'Boolean 1',
+        operation,
+        targetBodyIds,
+        ...(keepOriginals ? { keepOriginals } : {})
+      });
+    // The first operand is replaced by the result.
+    const base = boolean('subtract', [box.bodyId, other.bodyId]);
+    expect(pieces(base.document, box.featureId)).toEqual([
+      [base.bodyId, true, []]
+    ]);
+    // A subtract's consumed tool is out of the model.
+    const tool = boolean('subtract', [other.bodyId, box.bodyId]);
+    expect(pieces(tool.document, box.featureId)).toEqual([
+      [box.bodyId, false, []]
+    ]);
+    // Kept, as a tool or as the target, it stays itself.
+    for (const kept of [
+      boolean('subtract', [other.bodyId, box.bodyId], 'tools'),
+      boolean('subtract', [box.bodyId, other.bodyId], 'target'),
+      boolean('union', [other.bodyId, box.bodyId], 'all')
+    ]) {
+      expect(
+        pieces(scale(kept.document, 'Scale 1', kept.bodyId), box.featureId)
+      ).toEqual([[box.bodyId, true, []]]);
+    }
+    // A union or an intersect carries its other operands into the result,
+    // unless it is switched off: then only the first operand is in it.
+    for (const operation of ['union', 'intersect'] as const) {
+      const merged = boolean(operation, [other.bodyId, box.bodyId]);
+      expect(pieces(merged.document, box.featureId)).toEqual([
+        [merged.bodyId, true, []]
+      ]);
+      expect(
+        pieces(merged.document, box.featureId, {
+          ...built,
+          inactive: () => true
+        })
+      ).toEqual([[box.bodyId, false, []]]);
+      // Failed, it passes only its first operand through.
+      expect(
+        pieces(merged.document, box.featureId, {
+          ...built,
+          failed: (feature) => feature.name === 'Boolean 1'
+        })
+      ).toEqual([[box.bodyId, true, []]]);
+    }
+  });
+
+  /** Each piece as `[bodyId, merging feature or null, transforms before it]`. */
+  const merges = (
+    document: ProjectDocument,
+    originId: FeatureId,
+    outcomes: Parameters<typeof bodyPiecesAfter>[2] = built
+  ) =>
+    bodyPiecesAfter(
+      document,
+      listFeaturesInOrder(document).find(
+        (feature) => feature.featureId === originId
+      )!,
+      outcomes
+    ).map((piece) => [
+      piece.bodyId,
+      piece.merge?.feature.name ?? null,
+      piece.merge?.transformsBefore ?? null
+    ]);
+
+  // PR #2415 re-check: once a body is combined with other material the ids
+  // no longer say where its own material is, so the piece records the merge.
+  it('marks a piece a boolean combined with another body, and counts the transforms before it', () => {
+    const box = block('Block');
+    const other = block('Other', box.document);
+    const early = scale(other.document, 'Scale early', box.bodyId);
+    for (const operation of ['union', 'intersect', 'subtract'] as const) {
+      const merged = booleanBodies(early, {
+        name: 'Boolean 1',
+        operation,
+        targetBodyIds: [box.bodyId, other.bodyId]
+      });
+      const document = scale(merged.document, 'Scale late', merged.bodyId);
+      expect(pieces(document, box.featureId)).toEqual([
+        [merged.bodyId, true, ['Scale early', 'Scale late']]
+      ]);
+      expect(merges(document, box.featureId)).toEqual([
+        [merged.bodyId, 'Boolean 1', 1]
+      ]);
+      // Switched off, failed or suppressed, it combined nothing.
+      const boolean = listFeaturesInOrder(document).find(
+        (feature) => feature.name === 'Boolean 1'
+      )!;
+      for (const skipped of [
+        merges(document, box.featureId, { ...built, inactive: () => true }),
+        merges(document, box.featureId, {
+          ...built,
+          failed: (feature) => feature.featureId === boolean.featureId
+        }),
+        merges(
+          flagged(document, boolean.featureId, FEATURE_SUPPRESSED_METADATA_KEY),
+          box.featureId
+        )
+      ]) {
+        expect(skipped).toEqual([[merged.bodyId, null, null]]);
+      }
+    }
+    // Kept, the block is still a body of its own material.
+    const kept = booleanBodies(early, {
+      name: 'Boolean 1',
+      operation: 'union',
+      targetBodyIds: [box.bodyId, other.bodyId],
+      keepOriginals: 'all'
+    });
+    expect(merges(kept.document, box.featureId)).toEqual([
+      [box.bodyId, null, null]
+    ]);
+  });
+
+  it('does not mark a union of the halves a Split made, and marks one that takes in another body', () => {
+    const box = block('Block');
+    const other = block('Other', box.document);
+    const split = addSplitFeature(other.document, {
+      name: 'Split 1',
+      targetBodyId: box.bodyId,
+      plane
+    });
+    const rejoined = booleanBodies(split.document, {
+      name: 'Union 1',
+      operation: 'union',
+      targetBodyIds: [split.bodyId, split.secondBodyId]
+    });
+    expect(merges(rejoined.document, box.featureId)).toEqual([
+      [rejoined.bodyId, null, null],
+      [rejoined.bodyId, null, null]
+    ]);
+    // The first merge is the one recorded, not a later one.
+    const withOther = booleanBodies(rejoined.document, {
+      name: 'Union 2',
+      operation: 'union',
+      targetBodyIds: [rejoined.bodyId, other.bodyId]
+    });
+    const again = block('Third', withOther.document);
+    const twice = booleanBodies(again.document, {
+      name: 'Union 3',
+      operation: 'union',
+      targetBodyIds: [withOther.bodyId, again.bodyId]
+    });
+    expect(merges(twice.document, box.featureId)).toEqual([
+      [twice.bodyId, 'Union 2', 0],
+      [twice.bodyId, 'Union 2', 0]
+    ]);
+    // One half joined to another body: only that half is merged.
+    const half = booleanBodies(split.document, {
+      name: 'Union 1',
+      operation: 'union',
+      targetBodyIds: [other.bodyId, split.secondBodyId]
+    });
+    expect(merges(half.document, box.featureId)).toEqual([
+      [split.bodyId, null, null],
+      [half.bodyId, 'Union 1', 0]
+    ]);
+  });
+
+  it('marks an add extrude and a pattern of the body, not a cut or a fillet', () => {
+    const box = block('Block');
+    /** An extrude onto `target`: a primitive's node with extrude data. */
+    const extrude = (
+      name: string,
+      operation: 'add' | 'cut' | 'intersect',
+      inPlace = false
+    ) => {
+      const made = block(name, box.document);
+      const node = listFeaturesInOrder(made.document).find(
+        (feature) => feature.featureId === made.featureId
+      )!;
+      const bodyId = inPlace ? box.bodyId : made.bodyId;
+      const feature: FeatureNode = {
+        ...node,
+        bodyId,
+        featureKind: 'extrude',
+        data: {
+          featureKind: 'extrude',
+          sketchId: 'sketch_profile' as SketchId,
+          distance: 5,
+          operation,
+          targetBodyId: box.bodyId
+        }
+      };
+      return {
+        document: {
+          ...made.document,
+          nodes: { ...made.document.nodes, [node.id]: feature }
+        },
+        bodyId
+      };
+    };
+    for (const inPlace of [false, true]) {
+      const added = extrude('Extrude 1', 'add', inPlace);
+      expect(
+        merges(scale(added.document, 'Scale 1', added.bodyId), box.featureId)
+      ).toEqual([[added.bodyId, 'Extrude 1', 0]]);
+    }
+    for (const operation of ['cut', 'intersect'] as const) {
+      const removed = extrude('Extrude 1', operation);
+      expect(merges(removed.document, box.featureId)).toEqual([
+        [removed.bodyId, null, null]
+      ]);
+    }
+    const repeated = patternBody(box.document, {
+      name: 'Pattern 1',
+      targetBodyId: box.bodyId,
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 20
+    });
+    expect(merges(repeated.document, box.featureId)).toEqual([
+      [repeated.bodyId, 'Pattern 1', 0]
+    ]);
+    const rounded = fillet(box.document, 'Fillet 1', box.bodyId);
+    expect(merges(rounded.document, box.featureId)).toEqual([
+      [rounded.bodyId, null, null]
+    ]);
   });
 });
