@@ -358,7 +358,6 @@ import {
   type StepExportOptions
 } from './step-export-metadata';
 import { repeatStepExport } from './repeat-step-export';
-import { bsplineSupportSurfaces } from './exact-support-surface';
 import {
   planStepPmi,
   type StepPmiEntry,
@@ -1686,7 +1685,11 @@ function exportAssembly(
 /** A STEP file and the model PMI it leaves out (#2258). */
 export interface StepExportReport {
   text: string;
-  /** One "<entry> — <reason>" per omitted PMI entry; empty when none. */
+  /**
+   * One "<entry> — <reason>" per omitted PMI entry, then one "face type not
+   * verified: <characteristic> on a freeform face" per form tolerance
+   * written on a face whose surface class is not analytic; empty when none.
+   */
   warnings: string[];
 }
 
@@ -1699,8 +1702,7 @@ export interface StepExportReport {
  * gone from the model or did not build, unless the user chose the bodies
  * (`bodySelection`), or whose body has more than one solid, or whose face no
  * longer resolves (the workspace shows each broken), is left out and
- * reported. A frame's tolerance is restated in the export's unit, and a
- * B-spline face carries the analytic surface it lies on (#2321).
+ * reported. A frame's tolerance is restated in the export's unit.
  */
 function stepPmiEntries(
   kernel: RemusKernel,
@@ -1768,16 +1770,10 @@ function stepPmiEntries(
       });
       continue;
     }
-    const surface = String(kernel.getSurfaceType(handle));
-    const support =
-      surface === 'bspline'
-        ? bsplineSupportSurfaces(kernel, solid, new Set([handle])).get(handle)
-        : undefined;
     const face = {
       solid: solidIndex,
       face: faceIndex,
-      surface,
-      ...(support ? { support } : {})
+      surface: String(kernel.getSurfaceType(handle))
     };
     if (annotation.kind === 'datum-feature')
       entries.push({ kind: 'datum', letter: annotation.letter, face, name });
@@ -1848,9 +1844,14 @@ function writeStepBodies(
     )
   );
   if (planned.entries.length > 0) metadata.pmi = planned.entries;
-  const warnings = [...resolved.omitted, ...planned.omitted].map(
-    (omission) => `${omission.name} — ${omission.reason}`
-  );
+  const warnings = [
+    ...[...resolved.omitted, ...planned.omitted].map(
+      (omission) => `${omission.name} — ${omission.reason}`
+    ),
+    // #2321: a form tolerance written on a freeform face, whose surface
+    // nothing checked, is said rather than passed off as verified.
+    ...planned.unverified
+  ];
   // Never fuse: a boolean union changes the geometry (overlaps merge,
   // coincident faces weld). Every root of the arena document becomes its
   // own MANIFOLD_SOLID_BREP inside one shape representation, so the
@@ -3996,9 +3997,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           );
         }
         const publicationAxisTest = boreAxisMeasurement(kernel, solid);
-        // #2321: what each B-spline face lies on, for the form tolerances
-        // model PMI may put on it.
-        const supportSurfaces = bsplineSupportSurfaces(kernel, solid);
         for (let index = 0; index < faceOffsets.length - 1; index += 1) {
           const start = faceOffsets[index]!;
           const end = faceOffsets[index + 1]!;
@@ -4049,9 +4047,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               publicationAxisTest
             )
           };
-          const supportSurface = supportSurfaces.get(handle);
-          if (supportSurface && publishedFace.geometry)
-            publishedFace.geometry.supportSurface = supportSurface;
           faceTopologyByHandle.set(handle, publishedFace);
           topology.faces.push(publishedFace);
         }

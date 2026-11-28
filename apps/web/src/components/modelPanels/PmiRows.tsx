@@ -159,8 +159,7 @@ function rowActions(
         previous.kind === 'feature-control-frame'
           ? modelPmiSurfaceError(
               previous.characteristic,
-              pick.geometry?.surfaceType,
-              pick.geometry?.supportSurface
+              pick.geometry?.surfaceType
             )
           : null;
       if (surface) {
@@ -458,8 +457,7 @@ function FrameFields(props: {
                 (characteristic !== frame.characteristic &&
                   modelPmiSurfaceError(
                     characteristic,
-                    props.geometry?.surfaceType,
-                    props.geometry?.supportSurface
+                    props.geometry?.surfaceType
                   ) !== null)
               }
             >

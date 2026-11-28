@@ -15,6 +15,7 @@ import {
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   modelPmiSurfaceError,
+  modelPmiSurfaceUnverified,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
@@ -157,23 +158,27 @@ describe('model PMI on compatible faces (#2321)', () => {
     // Orientation, location, profile and runout take any face.
     expect(modelPmiSurfaceError('position', 'plane')).toBeNull();
     expect(modelPmiSurfaceError('position', 'bspline')).toBeNull();
-    // A B-spline face is judged by the analytic surface it was shown to lie
-    // on, and refused when none was established.
-    expect(
-      modelPmiSurfaceError('cylindricity', 'bspline', 'cylinder')
-    ).toBeNull();
-    expect(modelPmiSurfaceError('flatness', 'bspline', 'cylinder')).toBe(
-      'Flatness applies to a planar face, and this face is cylindrical.'
+    // A face whose class says nothing of its shape (a B-spline, an unknown
+    // one) is not refused; an export says the form tolerance is unchecked.
+    expect(modelPmiSurfaceError('cylindricity', 'bspline')).toBeNull();
+    expect(modelPmiSurfaceError('flatness', 'bspline')).toBeNull();
+    expect(modelPmiSurfaceError('cylindricity', undefined)).toBeNull();
+    expect(modelPmiSurfaceError('circularity', 'revolution')).toBeNull();
+    expect(modelPmiSurfaceUnverified('cylindricity', 'bspline')).toBe(
+      'face type not verified: Cylindricity on a freeform face'
     );
-    expect(modelPmiSurfaceError('cylindricity', 'bspline')).toBe(
-      'Cylindricity applies to a cylindrical face, and this B-spline face could not be shown to be one.'
+    expect(modelPmiSurfaceUnverified('flatness', undefined)).toBe(
+      'face type not verified: Flatness on a freeform face'
     );
-    expect(modelPmiSurfaceError('flatness', undefined)).toBe(
-      "Flatness applies to a planar face, and this face's surface is not known."
-    );
+    // Nothing to verify on an analytic face (the table judges it) or for a
+    // characteristic that takes any face.
+    expect(modelPmiSurfaceUnverified('cylindricity', 'cylinder')).toBeNull();
+    expect(modelPmiSurfaceUnverified('cylindricity', 'plane')).toBeNull();
+    expect(modelPmiSurfaceUnverified('profile-surface', 'bspline')).toBeNull();
+    expect(modelPmiSurfaceUnverified('position', 'bspline')).toBeNull();
   });
 
-  it('judges an imported B-spline face by the surface it lies on, in the workspace and in AP242', async () => {
+  it('allows form tolerances on an imported B-spline face and says AP242 did not verify them', async () => {
     const manager = new CommandManager(
       createProjectDocument('Imported', toUserId('test'))
     );
@@ -191,12 +196,13 @@ describe('model PMI on compatible faces (#2321)', () => {
       .bodyRepresentations;
     const faces = bodies[bodyId]!.topology!.faces;
     // Every face of the file is a B-spline; the kernel calls the flat ones
-    // planes, and the rational side stays a B-spline until it is analysed.
+    // planes, and the rational side (really a cylinder) stays a B-spline.
     const side = faces.find(
       (face) => face.geometry?.surfaceType === 'bspline'
     )!;
-    expect(side.geometry).toMatchObject({ supportSurface: 'cylinder' });
+    expect(side).toBeDefined();
     const ref = pmiFaceRef(bodies, bodyId, side.hash)!;
+    // A new frame on a freeform face starts as profile of a surface.
     expect(
       draftModelPmi(
         'feature-control-frame',
@@ -206,39 +212,53 @@ describe('model PMI on compatible faces (#2321)', () => {
         'mm',
         side.geometry
       )
-    ).toMatchObject({ characteristic: 'cylindricity' });
+    ).toMatchObject({ characteristic: 'profile-surface' });
     const cylindricity = frame('cyl', ref, {
       characteristic: 'cylindricity',
       amount: 0.004
     });
     const flatness = frame('flat', ref, { characteristic: 'flatness' });
+    const profile = frame('prof', ref, { characteristic: 'profile-surface' });
+    const marked = datum('a', 'A', ref);
+    // Nothing shows either form tolerance cannot control the face, so
+    // Objects keeps both (no existing frame breaks).
     const resolved = resolveModelPmi(
-      { annotations: [cylindricity, flatness] },
+      { annotations: [cylindricity, flatness, profile, marked] },
       bodies
     );
-    expect(resolved.get(id('cyl'))).toMatchObject({ ok: true });
-    expect(resolved.get(id('flat'))).toMatchObject({
-      ok: false,
-      reason: 'surface-incompatible',
-      message:
-        'Flatness applies to a planar face, and this face is cylindrical.'
-    });
-    const good = await adapter.exportStepReport(
-      { ...document, pmi: { annotations: [cylindricity] } },
+    for (const pmiId of ['cyl', 'flat', 'prof', 'a'])
+      expect(resolved.get(id(pmiId))).toMatchObject({ ok: true });
+    // AP242 writes both, and says of each that its face was not verified;
+    // a datum and a profile on the same face need no warning.
+    const step = await adapter.exportStepReport(
+      {
+        ...document,
+        pmi: { annotations: [cylindricity, flatness, profile, marked] }
+      },
       [bodyId],
       AP242
     );
-    expect(good.warnings).toEqual([]);
-    expect(good.text).toMatch(/CYLINDRICITY_TOLERANCE\('cylindricity'/);
-    const bad = await adapter.exportStepReport(
-      { ...document, pmi: { annotations: [flatness] } },
-      [bodyId],
-      AP242
-    );
-    expect(bad.text).not.toMatch(/FLATNESS_TOLERANCE/);
-    expect(bad.warnings).toEqual([
-      'Flatness | 0.1 — Flatness applies to a planar face, and this face is cylindrical'
+    expect(step.text).toMatch(/CYLINDRICITY_TOLERANCE\('cylindricity'/);
+    expect(step.text).toMatch(/FLATNESS_TOLERANCE\(/);
+    expect(step.text).toMatch(/SURFACE_PROFILE_TOLERANCE\(/);
+    expect(step.text).toMatch(/DATUM\('datum A'/);
+    expect(step.warnings).toEqual([
+      'face type not verified: Cylindricity on a freeform face',
+      'face type not verified: Flatness on a freeform face'
     ]);
+    expect(stepPmiOmissionNote(step.warnings)).toBe(
+      'AP242 wrote 2 PMI entries unchecked: face type not verified: Cylindricity on a freeform face; face type not verified: Flatness on a freeform face.'
+    );
+    expect(stepPmiOmissionClause('1 body', step.warnings)).toBe(
+      '1 body; 2 PMI entries unchecked'
+    );
+    // Profile and datum alone: nothing to say.
+    const quiet = await adapter.exportStepReport(
+      { ...document, pmi: { annotations: [profile, marked] } },
+      [bodyId],
+      AP242
+    );
+    expect(quiet.warnings).toEqual([]);
   }, 120_000);
 
   it('shows a cylindricity frame moved to a flat cap broken, and drafts a fitting one', async () => {
@@ -665,6 +685,45 @@ describe('AP242 export reports omitted PMI (#2258)', () => {
       new Set(['A'])
     );
     expect(planned.omitted).toEqual([]);
+    expect(planned.unverified).toEqual([]);
     expect(planned.entries).toHaveLength(3);
+    // A form tolerance on a freeform face is kept and said; on an
+    // incompatible analytic face it is left out and said.
+    const freeform = planStepPmi(
+      [
+        {
+          kind: 'frame',
+          name: 'Cylindricity | 0.1',
+          characteristic: 'cylindricity',
+          amount: 0.1,
+          diameterZone: false,
+          datums: [],
+          face: face(0, 'bspline')
+        },
+        {
+          kind: 'frame',
+          name: 'Cylindricity | 0.2',
+          characteristic: 'cylindricity',
+          amount: 0.2,
+          diameterZone: false,
+          datums: [],
+          face: face(0, 'plane')
+        }
+      ],
+      [0],
+      ['Part'],
+      new Set()
+    );
+    expect(freeform.entries).toHaveLength(1);
+    expect(freeform.unverified).toEqual([
+      'face type not verified: Cylindricity on a freeform face'
+    ]);
+    expect(freeform.omitted).toEqual([
+      {
+        name: 'Cylindricity | 0.2',
+        reason:
+          'Cylindricity applies to a cylindrical face, and this face is planar'
+      }
+    ]);
   });
 });

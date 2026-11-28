@@ -25,18 +25,16 @@ import { PmiRows } from './PmiRows';
 const BODY = 'body_pin';
 const BARREL = 101;
 const CAP = 202;
-/** An imported B-spline side shown to lie on a cylinder, and a free-form one. */
-const SPLINE_SIDE = 303;
+/** An imported B-spline face, whose class says nothing of its shape. */
 const FREEFORM = 404;
 
-const face = (hash: number, surfaceType: string, supportSurface?: string) => ({
+const face = (hash: number, surfaceType: string) => ({
   topologyId: `face_${hash}`,
   hash,
   triangleStart: 0,
   triangleCount: 0,
   geometry: {
     surfaceType,
-    ...(supportSurface ? { supportSurface } : {}),
     area: 1,
     center: { x: 0, y: 0, z: hash === CAP ? 16 : 8 }
   }
@@ -48,7 +46,6 @@ const representations = {
       faces: [
         face(BARREL, 'cylinder'),
         face(CAP, 'plane'),
-        face(SPLINE_SIDE, 'bspline', 'cylinder'),
         face(FREEFORM, 'bspline')
       ],
       edges: []
@@ -188,7 +185,7 @@ describe('PmiRows', () => {
     expect(alert).not.toHaveTextContent(/re-pick/);
   });
 
-  it('judges a B-spline face by the surface it lies on, and refuses form tolerances on one with none', () => {
+  it('lets a frame move to a B-spline face and offers every characteristic there', () => {
     const flatness: ModelPmiAnnotation = {
       ...cylindricity,
       face: { bodyId: BODY, hash: CAP } as ModelPmiAnnotation['face'],
@@ -197,49 +194,36 @@ describe('PmiRows', () => {
     };
     act(() => {
       setSelectedPmiId(id('cyl'));
-      setPmiFace({ bodyId: BODY, hash: SPLINE_SIDE });
+      setPmiFace({ bodyId: BODY, hash: FREEFORM });
     });
     const onCommand = renderRows([flatness]);
     fireEvent.click(
       screen.getByRole('button', { name: /Move to selected face/ })
     );
-    expect(onCommand).not.toHaveBeenCalled();
-    expect(screen.getByRole('status')).toHaveTextContent(
-      'Flatness applies to a planar face, and this face is cylindrical.'
-    );
-    const options = () => {
-      const menu = screen.getByRole('combobox', { name: 'Characteristic' });
-      return (value: string) =>
-        menu.querySelector<HTMLOptionElement>(`option[value="${value}"]`)!
-          .disabled;
-    };
+    // Nothing shows flatness cannot control the face; AP242 says it was
+    // not verified instead.
+    expect(onCommand).toHaveBeenCalledTimes(1);
     cleanup();
     act(() => setPmiFace(null));
-    renderRows([
-      {
-        ...cylindricity,
-        face: { bodyId: BODY, hash: SPLINE_SIDE } as ModelPmiAnnotation['face']
-      }
-    ]);
-    let disabled = options();
-    expect(disabled('flatness')).toBe(true);
-    expect(disabled('circularity')).toBe(false);
-    expect(screen.queryByRole('alert')).toBeNull();
-    cleanup();
     renderRows([
       {
         ...cylindricity,
         face: { bodyId: BODY, hash: FREEFORM } as ModelPmiAnnotation['face']
       }
     ]);
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Cylindricity applies to a cylindrical face, and this B-spline face could not be shown to be one.'
-    );
-    disabled = options();
-    expect(disabled('flatness')).toBe(true);
-    expect(disabled('circularity')).toBe(true);
-    expect(disabled('straightness')).toBe(true);
-    expect(disabled('profile-surface')).toBe(false);
+    expect(screen.queryByRole('alert')).toBeNull();
+    const menu = screen.getByRole('combobox', { name: 'Characteristic' });
+    const disabled = (value: string) =>
+      menu.querySelector<HTMLOptionElement>(`option[value="${value}"]`)!
+        .disabled;
+    for (const characteristic of [
+      'flatness',
+      'cylindricity',
+      'circularity',
+      'straightness',
+      'profile-surface'
+    ])
+      expect(disabled(characteristic)).toBe(false);
   });
 
   it('keeps judging a frame by its face while a datum it names is undeclared', () => {

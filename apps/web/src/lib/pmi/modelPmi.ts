@@ -4,7 +4,6 @@ import {
   type GeometryBodyRepresentation,
   DRAWING_DATUM_REQUIRED_CHARACTERISTICS,
   formatModelPmiAmount,
-  modelPmiFaceSurface,
   modelPmiName,
   modelPmiSurfaceError,
   type BodyId,
@@ -115,8 +114,7 @@ export function resolveModelPmi(
     if (annotation.kind === 'feature-control-frame') {
       const surface = modelPmiSurfaceError(
         annotation.characteristic,
-        found.entry.geometry?.surfaceType,
-        found.entry.geometry?.supportSurface
+        found.entry.geometry?.surfaceType
       );
       if (surface) {
         out.set(annotation.pmiId, {
@@ -222,9 +220,9 @@ export function pmiFaceRef(
  * landing on `anchor`. A frame starts as a form tolerance, which needs no
  * datum, that applies to the face's surface (`modelPmiSurfaceError`):
  * cylindricity on a cylinder, circularity on another surface of
- * revolution, flatness on a plane. A B-spline face counts as the surface it
- * was shown to lie on; one with no established surface starts as profile
- * of a surface, which any face takes.
+ * revolution, flatness on a plane. Any other face (a B-spline face, whose
+ * class does not say what surface it is) starts as profile of a surface,
+ * which any face takes.
  */
 export function draftModelPmi(
   kind: ModelPmiAnnotation['kind'],
@@ -232,7 +230,7 @@ export function draftModelPmi(
   anchor: Vector3,
   pmi: ModelPmiSet | undefined,
   units: UnitSystem,
-  geometry?: Pick<FaceGeometry, 'surfaceType' | 'supportSurface'>
+  geometry?: Pick<FaceGeometry, 'surfaceType'>
 ): ModelPmiAnnotation {
   const base = {
     pmiId: createModelPmiId(),
@@ -249,10 +247,7 @@ export function draftModelPmi(
         )
       )
     };
-  const surface = modelPmiFaceSurface(
-    geometry?.surfaceType,
-    geometry?.supportSurface
-  );
+  const surface = geometry?.surfaceType;
   return {
     ...base,
     kind,

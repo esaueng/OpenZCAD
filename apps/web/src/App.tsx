@@ -23044,10 +23044,12 @@ export function App() {
       save(): Promise<boolean>;
       warnings: number;
       /**
-       * #2258: the model PMI the file left out, one "<entry> — <reason>"
-       * each: said after the outcome, and the card waits to be read.
+       * #2258/#2321: what the file says about its model PMI: one
+       * "<entry> — <reason>" per entry left out, one "face type not
+       * verified: …" per form tolerance written on a freeform face. Said
+       * after the outcome, and the card waits to be read.
        */
-      omittedPmi?: readonly string[];
+      pmiWarnings?: readonly string[];
     }>;
     /** The status once the file is saved, when not the export's own. */
     completed?(bodies: string): string;
@@ -23108,8 +23110,8 @@ export function App() {
         ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
         : '';
       const bodies = `${countLabel(exportBodyIds.length, 'body', 'bodies')}${hiddenNote}`;
-      const omittedPmi = produced.omittedPmi ?? [];
-      const pmiNote = stepPmiOmissionNote(omittedPmi);
+      const pmiWarnings = produced.pmiWarnings ?? [];
+      const pmiNote = stepPmiOmissionNote(pmiWarnings);
       const outcome =
         produced.warnings > 0
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
@@ -23122,7 +23124,7 @@ export function App() {
       );
       sink.finish({
         tone: pmiNote ? 'warning' : 'ok',
-        message: stepPmiOmissionClause(bodies, omittedPmi),
+        message: stepPmiOmissionClause(bodies, pmiWarnings),
         landed: true
       });
     } catch (error) {
@@ -23382,11 +23384,11 @@ export function App() {
         if (!('text' in result)) {
           throw new Error('The STEP export returned no text.');
         }
-        // The STEP's only warnings are the model PMI it left out (#2258).
+        // The STEP's only warnings are about its model PMI (#2258/#2321).
         return {
           save: () => saveCadTextFile(fileName, 'step', result.text),
           warnings: 0,
-          omittedPmi: result.warnings
+          pmiWarnings: result.warnings
         };
       }
     });

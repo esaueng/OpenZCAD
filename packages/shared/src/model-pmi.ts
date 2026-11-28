@@ -159,9 +159,10 @@ export function assertModelPmiSet(value: unknown): void {
  * cylinders, circularity one between concentric circles in each section of
  * a surface of revolution, and straightness one about the straight line
  * elements a surface has. A characteristic not listed applies to any face.
- * A B-spline face counts as the analytic surface it was shown to lie on
- * (`FaceGeometry.supportSurface`); one whose support is not established
- * takes none of these.
+ * A face whose surface class is not one of these analytic types (a B-spline
+ * face, say) is not refused: its class does not say what it is, so a form
+ * tolerance on it is allowed and an AP242 export says it was not verified
+ * (`modelPmiSurfaceUnverified`).
  */
 export const MODEL_PMI_CHARACTERISTIC_SURFACES: Readonly<
   Partial<Record<DrawingGeometricCharacteristic, readonly string[]>>
@@ -180,50 +181,56 @@ const ANALYTIC_SURFACES: Readonly<Record<string, string>> = {
   torus: 'toroidal'
 };
 
-/**
- * The analytic surface a face is, for the form tolerances it can take: its
- * own class when that is analytic, else the surface a B-spline face was
- * shown to lie on (`supportSurface`); undefined when neither is known.
- */
-export function modelPmiFaceSurface(
-  surfaceType: string | undefined,
-  supportSurface?: string
-): string | undefined {
-  if (surfaceType !== undefined && ANALYTIC_SURFACES[surfaceType])
-    return surfaceType;
-  return supportSurface !== undefined && ANALYTIC_SURFACES[supportSurface]
-    ? supportSurface
-    : undefined;
+/** Whether `surfaceType` is an analytic class the surface table judges. */
+export function isModelPmiAnalyticSurface(
+  surfaceType: string | undefined
+): boolean {
+  return (
+    surfaceType !== undefined && ANALYTIC_SURFACES[surfaceType] !== undefined
+  );
 }
 
 /**
  * Why `characteristic` cannot control a face on `surfaceType` (the
- * kernel's surface class: 'plane', 'cylinder', 'bspline', …) and
- * `supportSurface` (the analytic surface a B-spline face lies on, when
- * shown), or null when it can. Fails closed: a face whose surface is not
- * known to be one the characteristic needs is refused.
+ * kernel's surface class: 'plane', 'cylinder', …), or null when it can.
+ * Only an analytic face is judged; any other (B-spline, unknown) is not
+ * refused, and `modelPmiSurfaceUnverified` says so instead.
  */
 export function modelPmiSurfaceError(
   characteristic: DrawingGeometricCharacteristic,
-  surfaceType: string | undefined,
-  supportSurface?: string
+  surfaceType: string | undefined
 ): string | null {
   const allowed = MODEL_PMI_CHARACTERISTIC_SURFACES[characteristic];
-  if (!allowed) return null;
-  const surface = modelPmiFaceSurface(surfaceType, supportSurface);
-  if (surface !== undefined && allowed.includes(surface)) return null;
-  const kinds = allowed.map((kind) => ANALYTIC_SURFACES[kind]!);
+  if (!allowed || surfaceType === undefined) return null;
+  const actual = ANALYTIC_SURFACES[surfaceType];
+  if (actual === undefined || allowed.includes(surfaceType)) return null;
+  const kinds = allowed.map((surface) => ANALYTIC_SURFACES[surface]!);
   const list =
     kinds.length === 1
       ? kinds[0]!
       : `${kinds.slice(0, -1).join(', ')} or ${kinds[kinds.length - 1]!}`;
-  const face =
-    surface !== undefined
-      ? `this face is ${ANALYTIC_SURFACES[surface]!}`
-      : surfaceType === undefined
-        ? "this face's surface is not known"
-        : `this ${surfaceType === 'bspline' ? 'B-spline' : surfaceType} face could not be shown to be one`;
-  return `${DRAWING_CHARACTERISTIC_LABELS[characteristic]} applies to a ${list} face, and ${face}.`;
+  return `${DRAWING_CHARACTERISTIC_LABELS[characteristic]} applies to a ${list} face, and this face is ${actual}.`;
+}
+
+/** How every "face type not verified" export warning starts. */
+export const MODEL_PMI_UNVERIFIED_WARNING_PREFIX = 'face type not verified: ';
+
+/**
+ * #2321: the export warning for a form tolerance that needs a particular
+ * analytic surface on a face whose class is not analytic (a B-spline face,
+ * or one whose class is unknown): "face type not verified: Cylindricity on
+ * a freeform face". The frame is written, but nothing checked that the face
+ * is the surface the characteristic controls, so the export never stays
+ * silent about it. Null when the characteristic needs no surface or the
+ * face is analytic (then `modelPmiSurfaceError` judges it).
+ */
+export function modelPmiSurfaceUnverified(
+  characteristic: DrawingGeometricCharacteristic,
+  surfaceType: string | undefined
+): string | null {
+  if (!MODEL_PMI_CHARACTERISTIC_SURFACES[characteristic]) return null;
+  if (isModelPmiAnalyticSurface(surfaceType)) return null;
+  return `${MODEL_PMI_UNVERIFIED_WARNING_PREFIX}${DRAWING_CHARACTERISTIC_LABELS[characteristic]} on a freeform face`;
 }
 
 /** Fixed decimals with trailing zeros trimmed; never "-0". */

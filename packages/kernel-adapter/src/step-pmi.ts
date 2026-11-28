@@ -24,6 +24,7 @@
 
 import {
   modelPmiSurfaceError,
+  modelPmiSurfaceUnverified,
   type DrawingGeometricCharacteristic,
   type DrawingMaterialCondition
 } from '@openzcad/shared';
@@ -37,11 +38,6 @@ export interface StepPmiFace {
   face: number;
   /** The kernel's surface type of the face: 'plane', 'cylinder', …. */
   surface: string;
-  /**
-   * #2321: the analytic surface a B-spline face was shown to lie on
-   * (`FaceGeometry.supportSurface`); what form tolerances it takes.
-   */
-  support?: string;
 }
 
 export type StepPmiEntry =
@@ -76,20 +72,28 @@ const SLOTS = ['primary', 'secondary', 'tertiary'];
  * face's surface (cylindricity on a plane), or when a datum it names is not
  * declared on the model, not written to this file, or on another part
  * (`partOf`: each solid's part, by writer order; `partNames` names them).
- * `declared` holds the datum letters the model declares.
+ * `declared` holds the datum letters the model declares. A form tolerance
+ * kept on a face whose class is not analytic (a B-spline face) is written,
+ * since nothing shows it cannot control that face, and listed in
+ * `unverified` ("face type not verified: Cylindricity on a freeform face").
  */
 export function planStepPmi(
   entries: readonly StepPmiEntry[],
   partOf: readonly number[],
   partNames: readonly string[],
   declared: ReadonlySet<string>
-): { entries: StepPmiEntry[]; omitted: StepPmiOmission[] } {
+): {
+  entries: StepPmiEntry[];
+  omitted: StepPmiOmission[];
+  unverified: string[];
+} {
   const datumPart = new Map<string, number>();
   for (const entry of entries)
     if (entry.kind === 'datum')
       datumPart.set(entry.letter, partOf[entry.face.solid] ?? -1);
   const kept: StepPmiEntry[] = [];
   const omitted: StepPmiOmission[] = [];
+  const unverified: string[] = [];
   for (const entry of entries) {
     if (entry.kind === 'datum') {
       kept.push(entry);
@@ -124,8 +128,13 @@ export function planStepPmi(
       continue;
     }
     kept.push(entry);
+    const unchecked = modelPmiSurfaceUnverified(
+      entry.characteristic,
+      entry.face.surface
+    );
+    if (unchecked) unverified.push(unchecked);
   }
-  return { entries: kept, omitted };
+  return { entries: kept, omitted, unverified };
 }
 
 /** The tolerance entity each characteristic is written as. */
@@ -295,11 +304,7 @@ export function appendStepPmi(
       entry.datums.some(
         (reference) => !datums.has(key(part, reference.letter))
       ) ||
-      modelPmiSurfaceError(
-        entry.characteristic,
-        entry.face.surface,
-        entry.face.support
-      ) !== null
+      modelPmiSurfaceError(entry.characteristic, entry.face.surface) !== null
     )
       continue;
     const face = faceEntity(entry.face);
