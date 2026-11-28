@@ -490,7 +490,10 @@ describe('BottomSheet', () => {
       expect(sheet().contains(control)).toBe(true);
       control.focus();
       fireEvent.keyDown(control, { key: 'Escape' });
-      expect(screen.queryByRole('heading', { name: 'More' }), detent).toBeNull();
+      expect(
+        screen.queryByRole('heading', { name: 'More' }),
+        detent
+      ).toBeNull();
       expect(onWindowKey, detent).not.toHaveBeenCalled();
       unmount();
     }
@@ -779,6 +782,156 @@ describe('BottomSheet', () => {
       // A field elsewhere is not the sheet's to move.
       body.scrollTop = 0;
       screen.getByRole('button', { name: 'Outside' }).focus();
+      act(() => {
+        window.dispatchEvent(new Event('resize'));
+        vi.advanceTimersToNextFrame();
+      });
+      expect(body.scrollTop).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('BottomSheet at peek on its row', () => {
+  const rect = (height: number) =>
+    ({
+      top: 0,
+      bottom: height,
+      left: 0,
+      right: 0,
+      width: 0,
+      height
+    }) as DOMRect;
+
+  it('is its row and a grip: no Close, the slider still there', () => {
+    render(
+      <Harness hasRoot initial={[{ type: 'set-detent', detent: 'peek' }]}>
+        <button type="button">Tray verb</button>
+      </Harness>
+    );
+    // The space review: a 44px row of its own held the grip and a Close
+    // that did nothing at peek.
+    expect(sheet()).toHaveClass('is-row');
+    expect(screen.queryByRole('button', { name: 'Close sheet' })).toBeNull();
+    const grabber = screen.getByRole('slider', { name: 'Sheet height' });
+    fireEvent.keyDown(grabber, { key: 'End' });
+    expect(sheet().dataset.detent).toBe('full');
+    expect(sheet()).not.toHaveClass('is-row');
+    expect(
+      screen.getByRole('button', { name: 'Close sheet' })
+    ).toBeInTheDocument();
+  });
+
+  it('is not a row under a page, nor with nothing of the workspace in it', () => {
+    render(
+      <Harness hasRoot initial={[{ type: 'push', page: page('more') }]}>
+        <button type="button">Tray verb</button>
+      </Harness>
+    );
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Sheet height' }), {
+      key: 'Home'
+    });
+    expect(sheet().dataset.detent).toBe('peek');
+    expect(sheet()).not.toHaveClass('is-row');
+  });
+
+  it('drags from its surface, and a tap there moves nothing', () => {
+    render(
+      <Harness hasRoot initial={[{ type: 'set-detent', detent: 'peek' }]}>
+        <p>Row surface</p>
+        <button type="button">Tray verb</button>
+      </Harness>
+    );
+    const surface = screen.getByText('Row surface');
+    vi.spyOn(sheet(), 'getBoundingClientRect').mockReturnValue(rect(64));
+    vi.spyOn(sheet().parentElement!, 'getBoundingClientRect').mockReturnValue(
+      rect(800)
+    );
+    // A tap: no height change.
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 1, clientY: 700 });
+    fireEvent.pointerUp(surface, { button: 0, pointerId: 1, clientY: 700 });
+    expect(sheet().dataset.detent).toBe('peek');
+    // A press on a control is the control's.
+    const verb = screen.getByRole('button', { name: 'Tray verb' });
+    fireEvent.pointerDown(verb, { button: 0, pointerId: 2, clientY: 700 });
+    fireEvent.pointerMove(verb, { pointerId: 2, clientY: 340 });
+    fireEvent.pointerUp(verb, { pointerId: 2, clientY: 340 });
+    expect(sheet().dataset.detent).toBe('peek');
+    // A drag up from the surface lands on the nearest height.
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 3, clientY: 700 });
+    fireEvent.pointerMove(surface, { pointerId: 3, clientY: 340 });
+    fireEvent.pointerUp(surface, { pointerId: 3, clientY: 340 });
+    expect(sheet().dataset.detent).toBe('half');
+  });
+
+  it('opens a page of fields on its grabber, not the keyboard', () => {
+    // The space review: Draw's Properties focused the sheet name, and the
+    // keyboard left the drawing a sliver beside it.
+    function Fields() {
+      const { state, dispatch } = useSheet(true);
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => dispatch({ type: 'push', page: page('props') })}
+          >
+            Open props
+          </button>
+          <BottomSheet
+            label="Workspace sheet"
+            state={state}
+            dispatch={dispatch}
+            hasRoot
+            renderPage={() => ({
+              title: 'Properties',
+              content: (
+                <label>
+                  Sheet name
+                  <input defaultValue="Sheet 1" />
+                </label>
+              )
+            })}
+          >
+            <p>Root</p>
+          </BottomSheet>
+        </>
+      );
+    }
+    render(<Fields />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open props' }));
+    expect(screen.getByLabelText('Sheet name')).not.toHaveFocus();
+    expect(screen.getByRole('slider', { name: 'Sheet height' })).toHaveFocus();
+  });
+});
+
+describe('BottomSheet focus reveal', () => {
+  it('leaves a focused control that is not a text field where it is', () => {
+    // The preview check: Draw's Properties opened on its Paper control, and
+    // the reveal scrolled the Name field above it out of sight.
+    vi.useFakeTimers({ toFake: ['requestAnimationFrame'] });
+    try {
+      render(
+        <Harness hasRoot initial={[{ type: 'set-detent', detent: 'half' }]}>
+          <button type="button">Paper</button>
+        </Harness>
+      );
+      const control = screen.getByRole('button', { name: 'Paper' });
+      const body = control.closest<HTMLElement>('.compact-sheet-body')!;
+      control.focus();
+      const rect = (top: number, bottom: number) =>
+        ({
+          top,
+          bottom,
+          left: 0,
+          right: 0,
+          width: 0,
+          height: bottom - top
+        }) as DOMRect;
+      vi.spyOn(body, 'getBoundingClientRect').mockReturnValue(rect(400, 560));
+      vi.spyOn(control, 'getBoundingClientRect').mockReturnValue(
+        rect(600, 640)
+      );
       act(() => {
         window.dispatchEvent(new Event('resize'));
         vi.advanceTimersToNextFrame();
