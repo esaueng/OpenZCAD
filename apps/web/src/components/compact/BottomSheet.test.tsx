@@ -1076,6 +1076,19 @@ describe('BottomSheet at peek on its row', () => {
     fireEvent.pointerUp(body(), { pointerId: 4, clientX: 140, clientY: 210 });
     expect(body().dataset.page).toBe('more');
     expect(sheet().dataset.nav).toBe('pop');
+    // From the edge beside the title too (the re-review): the head's Back
+    // stands there, and a swipe begun on it still goes back.
+    const back = screen.getByRole('button', { name: 'Back' });
+    fireEvent.pointerDown(back, {
+      button: 0,
+      pointerId: 5,
+      clientX: 8,
+      clientY: 20
+    });
+    fireEvent.pointerMove(back, { pointerId: 5, clientX: 140, clientY: 24 });
+    expect(body().style.transform).toBe('translateX(132px)');
+    fireEvent.pointerUp(back, { pointerId: 5, clientX: 140, clientY: 24 });
+    expect(sheet().querySelector('.compact-sheet-body[data-page]')).toBeNull();
   });
 
   it('comes up to half when a field on a page at peek is tapped to type in', () => {

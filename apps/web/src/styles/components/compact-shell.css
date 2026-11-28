@@ -28,6 +28,40 @@
     env(safe-area-inset-bottom);
 }
 
+/* Typing into a sheet page on a touch screen (All tools' search, a
+   name): the on-screen keyboard stands where the tabs were, so they go,
+   as a phone's tab bar does, and their row is the page's room for what the
+   field finds. On a Pro Max they cut the one result off (the motion
+   review). */
+@media (pointer: coarse) {
+  .app-shell[data-shell='compact']:has(
+      .compact-sheet-body[data-page]
+        :is(
+          input:not([type='checkbox'], [type='radio'], [type='range']),
+          textarea,
+          [contenteditable='true']
+        ):focus:not([inputmode='none'])
+    ) {
+    grid-template-rows:
+      calc(var(--compact-header-h) + env(safe-area-inset-top))
+      minmax(0, 1fr)
+      0;
+  }
+
+  .app-shell[data-shell='compact']:has(
+      .compact-sheet-body[data-page]
+        :is(
+          input:not([type='checkbox'], [type='radio'], [type='range']),
+          textarea,
+          [contenteditable='true']
+        ):focus:not([inputmode='none'])
+    )
+    > .compact-chrome
+    > .compact-tabs {
+    display: none;
+  }
+}
+
 .app-shell[data-shell='compact'] > .workspace {
   grid-row: 2;
 }
@@ -750,9 +784,13 @@
   opacity: calc(1.25 - var(--sheet-raise) * 5);
 }
 
-/* A page follows a swipe from its leading edge (BottomSheet's swipe back)
-   and springs back when let go short of going back. The page scrolls up
-   and down; sideways is the swipe's. */
+/* A page follows a swipe from its leading edge (BottomSheet's swipe back),
+   begun on the page or its head, and springs back when let go short of
+   going back. The page scrolls up and down; sideways is the swipe's. */
+.compact-sheet:not(.is-row) > .compact-sheet-head {
+  touch-action: pan-y;
+}
+
 .compact-sheet-body[data-page] {
   touch-action: pan-y;
   transition:

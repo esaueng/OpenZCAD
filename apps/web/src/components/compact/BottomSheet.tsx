@@ -862,7 +862,15 @@ export function BottomSheet({
       >
         {/* The sheet's own controls and pages keep their Enter; the
           workspace's content under them keeps the workspace's keys. */}
-        <div className="compact-sheet-head" {...{ [OWN_ENTER_ATTRIBUTE]: '' }}>
+        <div
+          className="compact-sheet-head"
+          {...{ [OWN_ENTER_ATTRIBUTE]: '' }}
+          // The leading edge beside the title swipes back as the page's does.
+          onPointerDown={page ? onPagePointerDown : undefined}
+          onPointerMove={page ? onPagePointerMove : undefined}
+          onPointerUp={page ? onPagePointerUp : undefined}
+          onPointerCancel={page ? onPagePointerCancel : undefined}
+        >
           {page ? (
             <button
               type="button"
