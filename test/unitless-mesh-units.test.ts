@@ -946,6 +946,20 @@ describe(
 );
 
 describe('scaleUnitlessMeshFile', () => {
+  it('refuses a very long malformed number without backtracking', () => {
+    const token = `${'9'.repeat(200_000)}x`;
+    const source = `v ${token} 0 0
+v 1 0 0
+v 0 1 0
+f 1 2 3
+`;
+    const started = performance.now();
+    expect(() =>
+      scaleUnitlessMeshFile('obj', encoder.encode(source), 25.4)
+    ).toThrow(/not a number/);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
   it('rewrites only OBJ vertex positions, byte for byte elsewhere', () => {
     const source = [
       '# made in inches',

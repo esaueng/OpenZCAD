@@ -96,7 +96,10 @@ const TOKEN = new RegExp(`[^${RUST_SPACE}]+`, 'g');
  * digits with an optional point and exponent. No hexadecimal, no blank, no
  * separators — the things `Number()` would add.
  */
-const RUST_DECIMAL = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+// `\d+(?:\.\d*)?` rather than `\d+\.?\d*`: the same strings, but with no
+// way to split a digit run between two quantifiers, so a long malformed
+// token is refused in linear time instead of backtracking quadratically.
+const RUST_DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 /** What they read as a number that is not one a vertex can sit at. */
 const RUST_NON_FINITE = /^[+-]?(?:inf|infinity|nan)$/i;
 const RUST_INTEGER = /^[+-]?\d+$/;
