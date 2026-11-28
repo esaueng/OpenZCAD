@@ -32,7 +32,8 @@
    name): the on-screen keyboard stands where the tabs were, so they go,
    as a phone's tab bar does, and their row is the page's room for what the
    field finds. On a Pro Max they cut the one result off (the motion
-   review). */
+   review). Their height goes to zero, so the stage layer, which reserves
+   it for them, comes down to the keyboard too, and the sheet with it. */
 @media (pointer: coarse) {
   .app-shell[data-shell='compact']:has(
       .compact-sheet-body[data-page]
@@ -42,10 +43,7 @@
           [contenteditable='true']
         ):focus:not([inputmode='none'])
     ) {
-    grid-template-rows:
-      calc(var(--compact-header-h) + env(safe-area-inset-top))
-      minmax(0, 1fr)
-      0;
+    --compact-tabs-h: 0px;
   }
 
   .app-shell[data-shell='compact']:has(
@@ -802,6 +800,16 @@
   transition: none;
 }
 
+/* Reduced motion: a swipe let go short comes back at once, and a mode's
+   tray fades in. */
+.compact-sheet.is-reduced-motion .compact-sheet-body[data-page] {
+  transition: none;
+}
+
+.compact-sheet.is-reduced-motion .compact-tray-slot.is-entering {
+  animation-name: compact-motion-fade;
+}
+
 /* Reduced motion: pages and tiles fade in place, without the slide. */
 .compact-sheet.is-reduced-motion[data-nav] > .compact-sheet-body,
 .compact-sheet.is-reduced-motion[data-nav] .compact-tool-grid > li {
@@ -815,6 +823,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .compact-sheet-body[data-page] {
+    transition: none;
+  }
+
   .compact-sheet[data-nav] > .compact-sheet-body,
   .compact-sheet[data-nav] .compact-tool-grid > li {
     animation-name: compact-motion-fade;

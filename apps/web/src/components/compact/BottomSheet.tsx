@@ -197,6 +197,8 @@ interface BottomSheetProps {
 const HELD_ROW_STRETCH = 40;
 /** How far a page swiped from its leading edge goes back, in CSS px. */
 const SWIPE_BACK_PX = 80;
+/** What runs a sideways swipe of its own, which the swipe back leaves. */
+const OWN_SWIPE = '.compact-row, [role="slider"]';
 /** How near the sheet's leading edge a swipe back starts, in CSS px. */
 const SWIPE_EDGE_PX = 28;
 
@@ -642,6 +644,9 @@ export function BottomSheet({
   // scroll, and the finger anywhere else is the page's own.
   const onPagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || page === null || !sheetRef.current) return;
+    // A row with a swipe of its own (History's rollback and actions) keeps
+    // it, even begun at the edge.
+    if ((event.target as Element | null)?.closest(OWN_SWIPE)) return;
     const box = sheetRef.current.getBoundingClientRect();
     if (event.clientX - box.left > SWIPE_EDGE_PX) return;
     swipeRef.current = {
@@ -918,7 +923,14 @@ export function BottomSheet({
         </div>
         {/* The workspace's content stays mounted under a pushed page, so a
           form mid-edit keeps what was typed when the page is popped. */}
-        <div className="compact-sheet-body" hidden={page !== null}>
+        {/* Under a page it is inert as well as hidden: drawn through the
+          page while that is pulled down, it is a picture, and focus never
+          lands on it there. */}
+        <div
+          className="compact-sheet-body"
+          hidden={page !== null}
+          inert={page !== null}
+        >
           {children}
         </div>
         {page ? (

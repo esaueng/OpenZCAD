@@ -1091,6 +1091,51 @@ describe('BottomSheet at peek on its row', () => {
     expect(sheet().querySelector('.compact-sheet-body[data-page]')).toBeNull();
   });
 
+  it('leaves a row’s own swipe to it, and keeps the row under a page out of focus', () => {
+    // The code review: History's rollback swipe, begun at the edge, popped
+    // the panel; and the tray drawn through a page pulled down took Tab.
+    function Rows() {
+      const { state, dispatch } = useSheet(true);
+      useEffect(() => {
+        dispatch({ type: 'push', page: page('history') });
+      }, [dispatch]);
+      return (
+        <BottomSheet
+          label="Workspace sheet"
+          state={state}
+          dispatch={dispatch}
+          hasRoot
+          renderPage={() => ({
+            title: 'History',
+            content: <div className="compact-row">Step 1</div>
+          })}
+        >
+          <button type="button">Tray verb</button>
+        </BottomSheet>
+      );
+    }
+    render(<Rows />);
+    vi.spyOn(sheet(), 'getBoundingClientRect').mockReturnValue(rect(400));
+    const root = sheet().querySelector<HTMLElement>(
+      '.compact-sheet-body:not([data-page])'
+    )!;
+    expect(root).toHaveAttribute('inert');
+    const row = screen.getByText('Step 1');
+    fireEvent.pointerDown(row, {
+      button: 0,
+      pointerId: 1,
+      clientX: 8,
+      clientY: 200
+    });
+    fireEvent.pointerMove(row, { pointerId: 1, clientX: 140, clientY: 204 });
+    fireEvent.pointerUp(row, { pointerId: 1, clientX: 140, clientY: 204 });
+    expect(
+      sheet().querySelector('.compact-sheet-body[data-page]')
+    ).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(root).not.toHaveAttribute('inert');
+  });
+
   it('comes up to half when a field on a page at peek is tapped to type in', () => {
     // The motion review: All tools' search at peek found Fillet under the
     // sheet's edge.
