@@ -107,7 +107,7 @@ describe('saved Offset Face rim policy', () => {
       normalizeDocument({
         ...doc,
         schemaVersion: 154
-      } as ProjectDocument)
+      } as unknown as ProjectDocument)
     ).toThrow(/rim policy/i);
     const command = offset(source).serialize();
     Object.assign(command.payload.operation, { ambiguousRim: 'legacyReplay' });
