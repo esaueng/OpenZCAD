@@ -613,8 +613,7 @@ describe('the off-paper check and the page agree on the paper’s edge (#2166)',
     x,
     y: 50,
     sizeMm: 3,
-    text: 'EDGE NOTE',
-    align: 'start' as const
+    text: 'EDGE NOTE'
   });
   const head = (x: number) => ({
     kind: 'dimension' as const,
