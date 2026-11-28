@@ -186,7 +186,11 @@ function main() {
         resolve(output, 'DerivedData'),
         '-parallel-testing-enabled',
         'NO',
-        'CODE_SIGNING_ALLOWED=NO',
+        // Signed to run locally: an unsigned simulator build has no
+        // Keychain, so neither the native session's refresh token nor
+        // WebKit's stored WebCrypto keys (ADR-024 device keys) would work.
+        'CODE_SIGN_IDENTITY=-',
+        'CODE_SIGNING_ALLOWED=YES',
         test ? 'test' : 'build'
       ],
       { stdio: ['ignore', log, log] }

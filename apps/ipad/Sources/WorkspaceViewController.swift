@@ -15,6 +15,14 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
     private var bootstrapGeneration = 0
     private var processRecoveries = 0
     private var textZoom: CGFloat = 1
+    private var bridge: NativeBridge?
+    private var bridgeInstalled = false
+    private var testing = false
+    /// The web app's device-local cloud switch, which builds before the
+    /// native session forced off on every load. Released once, so a choice
+    /// the person makes afterwards stands.
+    private static let cloudSwitchKey = "openzcad-cloud-functions-enabled:v1"
+    private static let cloudSwitchReleased = "openzcad.cloud-switch-released:v1"
 
     private let idiom = WorkspaceIdiom.current
 
@@ -36,8 +44,22 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
         configuration.websiteDataStore = testing
             ? WKWebsiteDataStore(forIdentifier: PrototypeStorage.testStore) : .default()
         if testing { migrationDefaultsKey += "-tests" }
+        self.testing = testing
         let server = BundleServer(root: root)
         self.server = server
+        // The cloud session (ADR-026). UI tests keep theirs in memory so
+        // they never touch this device's Keychain item.
+        let store: RefreshTokenStore = testing ? MemoryRefreshTokenStore() : KeychainRefreshTokenStore()
+        if !testing { KeychainRefreshTokenStore.removeLeftoverAfterInstall(store: store) }
+        let session = NativeSession(store: store)
+        let proxy = ApiProxy(session: session)
+        proxy.admits = { [weak self] candidate in self?.admitsNative(candidate) ?? false }
+        server.proxy = proxy
+        let signIn = NativeSignIn()
+        signIn.presenter = self
+        let bridge = NativeBridge(session: session, signIn: signIn)
+        bridge.admits = { [weak self] candidate in self?.admitsNative(candidate) ?? false }
+        self.bridge = bridge
         configuration.setURLSchemeHandler(server, forURLScheme: BundleServer.scheme)
         installUserScripts(in: configuration.userContentController)
         webView = WKWebView(frame: .zero, configuration: configuration)
@@ -69,6 +91,7 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
             controller.applyTextSize()
         }
         if UserDefaults.standard.bool(forKey: migrationDefaultsKey) {
+            installBridge()
             webView.load(URLRequest(url: BundleServer.origin))
         } else {
             bootstrap = .legacy
@@ -89,12 +112,14 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
     /// changes, for the documents loaded after.
     private func installUserScripts(in controller: WKUserContentController) {
         controller.removeAllUserScripts()
-        // A bounded local-only prototype. Reuse the app's existing cloud gate
-        // before any module reads it; no credentials or E2EE contracts change.
-        controller.addUserScript(WKUserScript(
-            source: "localStorage.setItem('openzcad-cloud-functions-enabled:v1', 'false');",
-            injectionTime: .atDocumentStart, forMainFrameOnly: true
-        ))
+        // Tests stay offline: they keep the switch forced off.
+        if testing || !UserDefaults.standard.bool(forKey: Self.cloudSwitchReleased) {
+            controller.addUserScript(WKUserScript(
+                source: testing ? "localStorage.setItem('\(Self.cloudSwitchKey)', 'false');"
+                    : "localStorage.removeItem('\(Self.cloudSwitchKey)');",
+                injectionTime: .atDocumentStart, forMainFrameOnly: true
+            ))
+        }
         for source in idiom.documentStartScripts {
             controller.addUserScript(WKUserScript(
                 source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true
@@ -150,8 +175,25 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
             (url.scheme == "blob" || Self.isWorkspaceURL(url)) {
             decisionHandler(.download)
         } else {
-            decisionHandler(Self.isWorkspaceURL(url) ? .allow : .cancel)
+            // `/api/*` is data for fetch, never a document.
+            decisionHandler(Self.isWorkspaceURL(url) && !BundleServer.isApiRequest(url) ? .allow : .cancel)
         }
+    }
+
+    /// The native session's admission: the workspace's own web view, past
+    /// its bootstrap, showing the workspace origin.
+    private func admitsNative(_ candidate: WKWebView) -> Bool {
+        candidate === webView && bootstrap == .workspace && bridgeInstalled
+            && candidate.url.map(Self.isWorkspaceURL) == true
+    }
+
+    /// Registers the message handler, only for the workspace and only in
+    /// the page's content world. Never in the legacy loopback bootstrap.
+    private func installBridge() {
+        guard !bridgeInstalled, bootstrap == .workspace, let bridge else { return }
+        webView.configuration.userContentController.addScriptMessageHandler(
+            bridge, contentWorld: .page, name: NativeBridge.name)
+        bridgeInstalled = true
     }
 
     static func isWorkspaceURL(_ url: URL) -> Bool {
@@ -164,6 +206,11 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
         failureLabel = nil
         // A zoom that changed while this document was loading.
         if textZoom != 1 { webView.evaluateJavaScript(WorkspaceIdiom.viewportScript(zoom: textZoom)) }
+        if !testing, bootstrap == .workspace, webView.url.map(Self.isWorkspaceURL) == true,
+           !UserDefaults.standard.bool(forKey: Self.cloudSwitchReleased) {
+            UserDefaults.standard.set(true, forKey: Self.cloudSwitchReleased)
+            installUserScripts(in: webView.configuration.userContentController)
+        }
         guard bootstrap != .workspace else { return }
         let generation = bootstrapGeneration
         Task { @MainActor in
@@ -183,6 +230,7 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
                     pendingSnapshot = nil
                     UserDefaults.standard.set(true, forKey: migrationDefaultsKey)
                     bootstrap = .workspace
+                    installBridge()
                     webView.load(URLRequest(url: BundleServer.origin))
                 case .workspace: break
                 }

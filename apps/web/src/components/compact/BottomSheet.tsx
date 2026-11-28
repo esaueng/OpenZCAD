@@ -6,6 +6,7 @@ import {
   useReducer,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode
@@ -14,6 +15,7 @@ import {
   CLOSED_SHEET,
   SHEET_DETENTS,
   SHEET_DETENT_NAMES,
+  SHEET_PEEK_PX,
   nearestDetent,
   sheetEscape,
   sheetReducer,
@@ -22,10 +24,7 @@ import {
   type SheetState
 } from './sheetState';
 import { OWN_ENTER_ATTRIBUTE } from '../../lib/exactEntryShortcut';
-import {
-  SHEET_INERT_ATTRIBUTE,
-  SHEET_OVERLAY_ATTRIBUTE
-} from './compactSlots';
+import { SHEET_INERT_ATTRIBUTE, SHEET_OVERLAY_ATTRIBUTE } from './compactSlots';
 
 /** What a press on the sheet's surface leaves to itself, not to a drag. */
 const SURFACE_DRAG_EXCLUDED =
@@ -120,6 +119,17 @@ function isTextField(element: HTMLElement): boolean {
   );
 }
 
+/** Whether focus is in a field on a sheet page, which the keyboard serves. */
+function typingInActive(): boolean {
+  const active = document.activeElement;
+  return (
+    active instanceof HTMLElement &&
+    active.closest('.compact-sheet-body[data-page]') !== null &&
+    isTextField(active) &&
+    active.inputMode !== 'none'
+  );
+}
+
 /** What opened a page, to give focus back to when the page goes. */
 interface PageOpener {
   element: HTMLElement | null;
@@ -172,7 +182,39 @@ interface BottomSheetProps {
    * All tools) and the sheet does not rise on its own into blank space.
    */
   onRowRaise?(detent: 'half' | 'full'): boolean;
+  /**
+   * What the row raised opens (`onRowRaise`'s page), drawn under the row
+   * while it is dragged up: the page comes into view as the sheet follows
+   * the finger, tile by tile, rather than only once the finger lets go.
+   */
+  rowRaisePreview?: { title: string; content: ReactNode };
+  /**
+   * The open page dragged, or stepped, down to peek: the workspace puts
+   * its pages away, back to its row (a sheet that holds only a tray), so
+   * a pull down undoes a pull up. While dragged down the row shows
+   * through the page as it goes.
+   */
+  onPageLower?(): void;
+  /**
+   * A row with nothing under it holds at peek: raised, it would stand
+   * over blank space (View's, Tweak's or Draw's tray alone). A drag up
+   * stretches it a little and lets it spring back, and the slider's keys
+   * leave it. A row whose content runs past peek still rises.
+   */
+  holdFittingRow?: boolean;
 }
+
+/** How far a held row stretches under a drag, at most, in CSS px. */
+const HELD_ROW_STRETCH = 40;
+/** How far a page swiped from its leading edge goes back, in CSS px. */
+const SWIPE_BACK_PX = 80;
+/** What runs a sideways swipe of its own, which the swipe back leaves. */
+const OWN_SWIPE = '.compact-row, [role="slider"]';
+/** How near the sheet's leading edge a swipe back starts, in CSS px. */
+const SWIPE_EDGE_PX = 28;
+
+/** How a page came to stand in the sheet, for its entrance. */
+type SheetNav = 'push' | 'pop' | 'drag';
 
 /**
  * The compact workspace's one bottom sheet (U12 slice 2). Peek, half and
@@ -194,7 +236,10 @@ export function BottomSheet({
   background,
   companions,
   onHeight,
-  onRowRaise
+  onRowRaise,
+  rowRaisePreview,
+  onPageLower,
+  holdFittingRow = false
 }: BottomSheetProps) {
   const sheetRef = useRef<HTMLElement | null>(null);
   const grabberRef = useRef<HTMLDivElement | null>(null);
@@ -209,8 +254,30 @@ export function BottomSheet({
      * row into blank space.
      */
     tapIsNothing?: boolean;
+    /**
+     * What the drag shows as it goes: the row's page coming up under it
+     * (`raise`), or the row coming back through a page (`lower`).
+     */
+    morph: 'raise' | 'lower' | null;
+    /** A row with nothing under it: the drag only stretches it. */
+    hold?: boolean;
   } | null>(null);
+  // A swipe from the page's leading edge, which goes back (as a navigation
+  // stack's edge swipe does), the page following the finger.
+  const swipeRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null>(null);
+  const [swipeX, setSwipeX] = useState<number | null>(null);
   const [dragHeight, setDragHeight] = useState<number | null>(null);
+  const [dragMorph, setDragMorph] = useState<'raise' | 'lower' | null>(null);
+  // How far the dragged sheet stands between its row (0) and half height
+  // (1): the morph's progress, as `--sheet-raise`.
+  const [dragRaise, setDragRaise] = useState(0);
+  // A page the drag already showed comes in without its own entrance.
+  const draggedInRef = useRef(false);
   // Alternates on every change of height, so the reduced-motion fade
   // replays each time.
   const [fadeTurn, setFadeTurn] = useState(false);
@@ -332,6 +399,19 @@ export function BottomSheet({
     previousStackRef.current = current;
     const sheet = sheetRef.current;
     if (!sheet) return;
+    // The entrance of what now shows: a page pushed slides in from the
+    // trailing edge, one popped back to from the leading edge, and one a
+    // drag already drew stays as it is.
+    if (stackKeys !== previous.join('\u0000')) {
+      const nav: SheetNav = draggedInRef.current
+        ? 'drag'
+        : current.length > previous.length ||
+            (current.length === previous.length && current.length > 0)
+          ? 'push'
+          : 'pop';
+      draggedInRef.current = false;
+      sheet.dataset.nav = nav;
+    }
     const top = current[current.length - 1];
     if (top !== undefined && !previous.includes(top)) {
       const opener = lastFocusRef.current;
@@ -443,10 +523,25 @@ export function BottomSheet({
   // drags the sheet too (its surface).
   const asRow = detent === 'peek' && page === null && hasRoot;
   /** The row raised to `next`: the workspace's to answer, if it will. */
-  const rowRaised = (next: SheetDetent) =>
-    asRow &&
-    (next === 'half' || next === 'full') &&
-    onRowRaise?.(next) === true;
+  const rowRaised = (next: SheetDetent, dragged = false) => {
+    if (!asRow || (next !== 'half' && next !== 'full')) return false;
+    if (onRowRaise?.(next) !== true) return false;
+    draggedInRef.current = dragged && rowRaisePreview !== undefined;
+    return true;
+  };
+  /** The page lowered to `next`: back to the row, if the workspace will. */
+  const pageLowered = (next: SheetDetent, dragged = false) => {
+    if (
+      page === null ||
+      !onPageLower ||
+      (next !== 'peek' && next !== 'closed')
+    ) {
+      return false;
+    }
+    draggedInRef.current = dragged;
+    onPageLower();
+    return true;
+  };
   const hostHeight = () =>
     sheetRef.current?.parentElement?.getBoundingClientRect().height ?? 0;
   // A phone held landscape draws the sheet at the stage's side
@@ -457,6 +552,28 @@ export function BottomSheet({
           .getPropertyValue('--compact-side-sheet')
           .trim() === '1'
       : false;
+  /** The row holds at peek: its content fits there, with nothing under it. */
+  const rowHolds = () => {
+    if (!asRow || !holdFittingRow || onRowRaise) return false;
+    const body = sheetRef.current?.querySelector<HTMLElement>(
+      ':scope > .compact-sheet-body:not([data-page])'
+    );
+    return Boolean(body && body.scrollHeight <= body.clientHeight + 2);
+  };
+  /** A drag's morph from where it starts: up from the row, down from a page. */
+  const morphFrom = (): 'raise' | 'lower' | null =>
+    asRow && onRowRaise && rowRaisePreview
+      ? 'raise'
+      : page !== null && onPageLower
+        ? 'lower'
+        : null;
+  /** Where `height` stands between the row (0) and half height (1). */
+  const raiseAt = (height: number) => {
+    const host = hostHeight();
+    const half = isSideSheet() ? host : host / 2;
+    const span = Math.max(1, half - SHEET_PEEK_PX);
+    return Math.max(0, Math.min(1, (height - SHEET_PEEK_PX) / span));
+  };
 
   const onGrabberPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !sheetRef.current) return;
@@ -465,7 +582,9 @@ export function BottomSheet({
       startY: event.clientY,
       startHeight: sheetRef.current.getBoundingClientRect().height,
       moved: false,
-      tapIsNothing: asRow
+      tapIsNothing: asRow,
+      morph: morphFrom(),
+      hold: rowHolds()
     };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
@@ -475,9 +594,16 @@ export function BottomSheet({
     const delta = drag.startY - event.clientY;
     if (!drag.moved && Math.abs(delta) < 4) return;
     drag.moved = true;
-    setDragHeight(
-      Math.max(0, Math.min(hostHeight(), drag.startHeight + delta))
-    );
+    // A held row gives a little, less the further it is pulled.
+    const height = drag.hold
+      ? drag.startHeight +
+        HELD_ROW_STRETCH * (1 - 1 / (1 + Math.max(0, delta) / 120))
+      : Math.max(0, Math.min(hostHeight(), drag.startHeight + delta));
+    setDragHeight(height);
+    if (drag.morph) {
+      setDragMorph(drag.morph);
+      setDragRaise(raiseAt(height));
+    }
   };
   const onGrabberPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
@@ -486,13 +612,11 @@ export function BottomSheet({
     if (drag.moved) {
       const height = drag.startHeight + (drag.startY - event.clientY);
       setDragHeight(null);
-      const next = nearestDetent(
-        height,
-        hostHeight(),
-        canClose,
-        isSideSheet()
-      );
-      if (rowRaised(next)) return;
+      setDragMorph(null);
+      if (drag.hold) return;
+      const next = nearestDetent(height, hostHeight(), canClose, isSideSheet());
+      if (rowRaised(next, true)) return;
+      if (drag.morph === 'lower' && pageLowered(next, true)) return;
       dispatch({ type: 'set-detent', detent: next });
     } else if (!drag.tapIsNothing) {
       // A tap toggles between peek and half; from full it comes down.
@@ -505,6 +629,7 @@ export function BottomSheet({
   const onGrabberPointerCancel = () => {
     dragRef.current = null;
     setDragHeight(null);
+    setDragMorph(null);
   };
   // At peek the sheet is its one row (`asRow`): its grabber is a thin grip,
   // so the row's own surface drags it too, between and around its controls.
@@ -518,16 +643,129 @@ export function BottomSheet({
       startY: event.clientY,
       startHeight: sheetRef.current.getBoundingClientRect().height,
       moved: false,
-      tapIsNothing: true
+      tapIsNothing: true,
+      morph: morphFrom(),
+      hold: rowHolds()
     };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
+
+  // A page swiped from its leading edge goes back. Only a swipe that
+  // starts at the edge and runs sideways: one up or down is the page's
+  // scroll, and the finger anywhere else is the page's own.
+  const onPagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || page === null || !sheetRef.current) return;
+    // A row with a swipe of its own (History's rollback and actions) keeps
+    // it, even begun at the edge.
+    if ((event.target as Element | null)?.closest(OWN_SWIPE)) return;
+    const box = sheetRef.current.getBoundingClientRect();
+    if (event.clientX - box.left > SWIPE_EDGE_PX) return;
+    swipeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false
+    };
+  };
+  const onPagePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const swipe = swipeRef.current;
+    if (!swipe || swipe.pointerId !== event.pointerId) return;
+    const dx = event.clientX - swipe.startX;
+    const dy = event.clientY - swipe.startY;
+    if (!swipe.active) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) {
+        swipeRef.current = null;
+        return;
+      }
+      if (dx < 10 || dx <= Math.abs(dy)) return;
+      swipe.active = true;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    }
+    setSwipeX(Math.max(0, dx));
+  };
+  const onPagePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const swipe = swipeRef.current;
+    if (!swipe || swipe.pointerId !== event.pointerId) return;
+    swipeRef.current = null;
+    if (!swipe.active) return;
+    setSwipeX(null);
+    if (event.clientX - swipe.startX >= SWIPE_BACK_PX) {
+      dispatch({ type: 'pop' });
+    }
+  };
+  const onPagePointerCancel = () => {
+    swipeRef.current = null;
+    setSwipeX(null);
+  };
+
+  // A field on a page lowered to peek, tapped to type in: the sheet comes
+  // up to half, so what the field finds (All tools' search) shows above
+  // the keyboard rather than under the sheet's edge.
+  useEffect(() => {
+    const sheet = sheetRef.current;
+    if (!sheet || detent !== 'peek') return;
+    const onFocus = (event: FocusEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || !isTextField(target)) return;
+      if (!target.closest('.compact-sheet-body[data-page]')) return;
+      dispatch({ type: 'set-detent', detent: 'half' });
+    };
+    sheet.addEventListener('focusin', onFocus);
+    return () => sheet.removeEventListener('focusin', onFocus);
+  }, [detent, dispatch]);
+
+  // Typing on a page (`is-typing`): the shell gives the tabs' row to the
+  // keyboard while a field there has focus (compact-shell.css). It holds
+  // through a tap on the sheet's own controls (a name's Save, Back) until
+  // that tap is done: Chromium focuses the button as it is pressed, and
+  // the tabs coming back then moved the sheet 58px under the finger, so
+  // the tap missed it. iOS leaves focus in the field.
+  const [typing, setTyping] = useState(false);
+  useEffect(() => {
+    const sheet = sheetRef.current;
+    if (!sheet) return;
+    const onPage = (node: unknown): node is HTMLElement =>
+      node instanceof HTMLElement &&
+      sheet.contains(node) &&
+      node.closest('.compact-sheet-body[data-page]') !== null;
+    let frame = 0;
+    const settle = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setTyping(typingInActive()));
+    };
+    const onIn = (event: FocusEvent) => {
+      if (onPage(event.target) && typingInActive()) setTyping(true);
+    };
+    const onOut = (event: FocusEvent) => {
+      const next = event.relatedTarget;
+      if (!(next instanceof Node && sheet.contains(next))) {
+        setTyping(false);
+        return;
+      }
+      document.addEventListener('click', settle, { once: true });
+      document.addEventListener('keyup', settle, { once: true });
+    };
+    sheet.addEventListener('focusin', onIn);
+    sheet.addEventListener('focusout', onOut);
+    return () => {
+      cancelAnimationFrame(frame);
+      sheet.removeEventListener('focusin', onIn);
+      sheet.removeEventListener('focusout', onOut);
+      document.removeEventListener('click', settle);
+      document.removeEventListener('keyup', settle);
+    };
+  }, []);
+  // A page that goes takes its field with it.
+  useEffect(() => {
+    setTyping(typingInActive());
+  }, [stackKeys]);
 
   const onGrabberKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = (next: SheetDetent) => {
       event.preventDefault();
       event.stopPropagation();
-      if (rowRaised(next)) return;
+      if (rowRaised(next) || pageLowered(next)) return;
+      if ((next === 'half' || next === 'full') && rowHolds()) return;
       dispatch({ type: 'set-detent', detent: next });
     };
     switch (event.key) {
@@ -535,7 +773,7 @@ export function BottomSheet({
       case 'PageUp':
         event.preventDefault();
         event.stopPropagation();
-        if (rowRaised('half')) return;
+        if (rowRaised('half') || rowHolds()) return;
         dispatch({ type: 'step-up' });
         return;
       case 'ArrowDown':
@@ -548,6 +786,7 @@ export function BottomSheet({
         }
         event.preventDefault();
         event.stopPropagation();
+        if (detent === 'half' && pageLowered('peek')) return;
         dispatch({
           type: 'set-detent',
           detent: detent === 'full' ? 'half' : 'peek'
@@ -631,15 +870,29 @@ export function BottomSheet({
   }, [detent]);
 
   const level = SHEET_DETENTS.indexOf(detent as 'peek');
+  const morph = dragHeight !== null ? dragMorph : null;
   const style =
-    dragHeight !== null ? { height: `${Math.round(dragHeight)}px` } : undefined;
+    dragHeight !== null
+      ? ({
+          height: `${Math.round(dragHeight)}px`,
+          ...(morph ? { '--sheet-raise': dragRaise.toFixed(3) } : {})
+        } as CSSProperties)
+      : undefined;
   return (
     <>
       <section
         ref={sheetRef}
         className={`compact-sheet${dragHeight !== null ? ' is-dragging' : ''}${
           reducedMotion ? ' is-reduced-motion' : ''
-        }${fadeTurn ? ' fade-a' : ' fade-b'}${asRow ? ' is-row' : ''}`}
+        }${fadeTurn ? ' fade-a' : ' fade-b'}${asRow ? ' is-row' : ''}${
+          typing && page !== null ? ' is-typing' : ''
+        }${
+          morph === 'raise'
+            ? ' is-raising'
+            : morph === 'lower'
+              ? ' is-lowering'
+              : ''
+        }`}
         data-detent={detent}
         aria-label={label}
         hidden={detent === 'closed'}
@@ -649,6 +902,18 @@ export function BottomSheet({
         onPointerMove={onGrabberPointerMove}
         onPointerUp={onGrabberPointerUp}
         onPointerCancel={onGrabberPointerCancel}
+        onAnimationEnd={(event) => {
+          // A pop's entrance plays once: a root left marked would slide in
+          // again each time the sheet came back from closed.
+          const sheet = event.currentTarget;
+          if (
+            sheet.dataset.nav === 'pop' &&
+            event.target instanceof Element &&
+            event.target.parentElement === sheet
+          ) {
+            delete sheet.dataset.nav;
+          }
+        }}
         onTransitionEnd={(event) => {
           if (
             event.target === event.currentTarget &&
@@ -661,7 +926,15 @@ export function BottomSheet({
       >
         {/* The sheet's own controls and pages keep their Enter; the
           workspace's content under them keeps the workspace's keys. */}
-        <div className="compact-sheet-head" {...{ [OWN_ENTER_ATTRIBUTE]: '' }}>
+        <div
+          className="compact-sheet-head"
+          {...{ [OWN_ENTER_ATTRIBUTE]: '' }}
+          // The leading edge beside the title swipes back as the page's does.
+          onPointerDown={page ? onPagePointerDown : undefined}
+          onPointerMove={page ? onPagePointerMove : undefined}
+          onPointerUp={page ? onPagePointerUp : undefined}
+          onPointerCancel={page ? onPagePointerCancel : undefined}
+        >
           {page ? (
             <button
               type="button"
@@ -709,17 +982,60 @@ export function BottomSheet({
         </div>
         {/* The workspace's content stays mounted under a pushed page, so a
           form mid-edit keeps what was typed when the page is popped. */}
-        <div className="compact-sheet-body" hidden={page !== null}>
+        {/* Under a page it is inert as well as hidden: drawn through the
+          page while that is pulled down, it is a picture, and focus never
+          lands on it there. */}
+        <div
+          className="compact-sheet-body"
+          hidden={page !== null}
+          inert={page !== null}
+        >
           {children}
         </div>
         {page ? (
           <div
-            className="compact-sheet-body"
             key={page.key}
             data-page={page.key}
+            className={`compact-sheet-body${swipeX !== null ? ' is-swiping' : ''}`}
+            style={
+              swipeX !== null
+                ? {
+                    transform: `translateX(${Math.round(swipeX)}px)`,
+                    opacity: Math.max(0.4, 1 - swipeX / 320)
+                  }
+                : undefined
+            }
+            onPointerDown={onPagePointerDown}
+            onPointerMove={onPagePointerMove}
+            onPointerUp={onPagePointerUp}
+            onPointerCancel={onPagePointerCancel}
             {...{ [OWN_ENTER_ATTRIBUTE]: '' }}
           >
             {drawn?.content}
+          </div>
+        ) : null}
+        {/* The page the row opens when let go, drawn as it will stand
+          (its head, then its body) and uncovered as the sheet is pulled
+          up: a picture only, which the finger never reaches. */}
+        {morph === 'raise' && rowRaisePreview ? (
+          <div className="compact-sheet-raise" aria-hidden="true" inert>
+            <div className="compact-sheet-raise-head">
+              <span className="compact-sheet-raise-icon">
+                <ChevronLeft size={22} />
+              </span>
+              <span className="compact-sheet-raise-title">
+                <span className="compact-sheet-grip" />
+                <span className="compact-sheet-title">
+                  {rowRaisePreview.title}
+                </span>
+              </span>
+              <span className="compact-sheet-raise-icon">
+                <X size={20} />
+              </span>
+            </div>
+            <div className="compact-sheet-raise-body">
+              {rowRaisePreview.content}
+            </div>
           </div>
         ) : null}
       </section>

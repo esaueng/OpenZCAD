@@ -435,6 +435,10 @@ import {
 import { resolveBoundaryRegionReference } from './lib/profileProvenance';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
 import {
+  projectionPickProjects,
+  projectionRepickAccepts
+} from './lib/sketch/projectionPickEdges';
+import {
   SKETCH_RELATION_GLYPHS,
   sketchRelationGlyphs,
   sketchRelationKeepOuts,
@@ -659,6 +663,7 @@ import {
   type CadBinaryExportFormat,
   type DesktopMenuCommand
 } from './lib/desktopBridge';
+import { isIosShell, nativeSignIn, NativeShellError } from './lib/nativeShell';
 import type { MeshExportPackage } from './lib/meshExportPackage';
 import {
   cloudFunctionsAreEnabled,
@@ -1027,7 +1032,11 @@ import {
   idleWorkspaceHint,
   platformShortcutLabel
 } from './lib/platformShortcut';
-import { retireStatus, type StatusEntry } from './lib/statusLifetime';
+import {
+  retireStatus,
+  statusEntryTone,
+  type StatusEntry
+} from './lib/statusLifetime';
 import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
 import type {
   KeypadHold,
@@ -3873,7 +3882,7 @@ export function App() {
     pendingInvitationToken
       ? 'Sign in to open the shared project automatically.'
       : desktopAuthorizationAttempt
-        ? 'Sign in if needed, then approve OpenZCAD for macOS.'
+        ? 'Sign in if needed, then approve the OpenZCAD app.'
         : // Settings' own footer says where changes save; the header is
           // for news (an error, a sign-in step), not a second copy of it.
           ''
@@ -4316,6 +4325,7 @@ export function App() {
         detail?: string;
         unlogged?: boolean;
         immediate?: boolean;
+        tone?: 'ready' | 'warning';
       }
     ) => {
       const at = Date.now();
@@ -4324,6 +4334,7 @@ export function App() {
         text,
         ...(options?.detail ? { detail: options.detail } : {}),
         ...(options?.unlogged ? { unlogged: true } : {}),
+        ...(options?.tone ? { tone: options.tone } : {}),
         at,
         sticky: options?.sticky ?? false,
         ...(options?.immediate || options?.sticky ? { immediate: true } : {})
@@ -11245,7 +11256,10 @@ export function App() {
     // An Undo, Delete or boolean that ended it already reported its outcome,
     // perhaps offering Undo; keep that and add the notice to it.
     const offersUndo = undoableStatusAt === statusEntry.at;
-    setStatus(offersUndo ? `${statusEntry.text} ${notice}` : notice);
+    setStatus(
+      offersUndo ? `${statusEntry.text} ${notice}` : notice,
+      offersUndo && statusEntry.tone ? { tone: statusEntry.tone } : undefined
+    );
     if (offersUndo) setUndoableStatusAt(lastStatusAtRef.current);
   }, [
     isolationState,
@@ -17473,6 +17487,7 @@ export function App() {
   }
 
   async function handleStartDesktopLogin() {
+    if (isIosShell()) return handleStartShellLogin();
     setSettingsBusy(true);
     setSettingsMessage('Opening secure sign-in in your browser…');
     let authorized = false;
@@ -17503,12 +17518,35 @@ export function App() {
     }
   }
 
+  /**
+   * The iPhone and iPad app's sign-in (ADR-026): Swift shows the code, opens
+   * the approval page in a private sheet and redeems the attempt. The page
+   * then reads its session through the native proxy, as any reload would.
+   */
+  async function handleStartShellLogin() {
+    setSettingsBusy(true);
+    setSettingsMessage('Opening secure sign-in…');
+    try {
+      await nativeSignIn();
+      await activateCloudSession(await api.session());
+    } catch (error) {
+      setSettingsMessage(
+        error instanceof NativeShellError && error.name === 'NotAllowedError'
+          ? 'Sign-in was cancelled.'
+          : errorMessage(error, 'Sign-in failed.')
+      );
+      throw error;
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
   async function handleApproveDesktopLogin() {
     if (!desktopAuthorizationAttempt) {
       throw new Error('The desktop sign-in attempt is missing.');
     }
     setSettingsBusy(true);
-    setSettingsMessage('Connecting OpenZCAD for macOS…');
+    setSettingsMessage('Connecting the OpenZCAD app…');
     try {
       await api.approveDesktopLogin(
         desktopAuthorizationAttempt,
@@ -17516,11 +17554,11 @@ export function App() {
       );
       setDesktopAuthorizationApproved(true);
       setSettingsMessage(
-        'OpenZCAD for macOS is connected. You can return to the app.'
+        'The OpenZCAD app is connected. You can return to it.'
       );
     } catch (error) {
       setSettingsMessage(
-        errorMessage(error, 'Could not connect OpenZCAD for macOS.')
+        errorMessage(error, 'Could not connect the OpenZCAD app.')
       );
       throw error;
     } finally {
@@ -26277,7 +26315,8 @@ export function App() {
         if (executeCommand(commit.command)) {
           done();
           setStatus(
-            `Copied ${pick.objects.length} projected ${pick.objects.length === 1 ? 'edge' : 'edges'} into the sketch.${left}`
+            `Copied ${pick.objects.length} projected ${pick.objects.length === 1 ? 'edge' : 'edges'} into the sketch.${left}`,
+            { tone: left === '' ? 'ready' : 'warning' }
           );
         }
         return;
@@ -26288,6 +26327,7 @@ export function App() {
         validateDerived: (derived) =>
           assertProjectionsResolve(derived, commit.objectIds),
         successMessage: `Projected ${pick.objects.length} linked ${pick.objects.length === 1 ? 'edge' : 'edges'}.${left}`,
+        successTone: left === '' ? 'ready' : 'warning',
         onSuccess: done,
         onFailure: (message) => setStatus(message)
       });
@@ -27310,6 +27350,56 @@ export function App() {
   );
   // The viewport's copy of the session also knows whether a solve or rebuild
   // owns the sketch, so a click cannot place text the card has disabled.
+  /**
+   * I01: what the Project tool would accept, so its hover lights only that:
+   * a pick that projects onto the sketch plane, and under a re-pick one
+   * edge projecting to the repaired object's kind of curve — the rules its
+   * commit applies (`lib/sketch/projectionPickEdges`).
+   */
+  const referenceSession =
+    interaction.mode === 'sketch' && interaction.session.tool === 'project'
+      ? interaction.session
+      : null;
+  const referenceSketchId = referenceSession?.sketchId ?? null;
+  const referenceMode = referenceSession
+    ? (referenceSession.projectMode ?? 'linked')
+    : null;
+  const sketchReferenceAccepts = useMemo(() => {
+    if (!referenceMode || !doc || !sketchBasis) {
+      return undefined;
+    }
+    const sketch = referenceSketchId
+      ? (findSketch(doc, referenceSketchId as SketchId) ?? null)
+      : null;
+    const basis = sketchBasis;
+    if (projectionRepair) {
+      const repaired = ownEntry(doc.nodes, projectionRepair.objectId);
+      const objectKind =
+        repaired?.kind === 'sketch-object' ? repaired.data.objectKind : null;
+      return (selection: TopologySelection) =>
+        objectKind !== null &&
+        projectionRepickAccepts({
+          document: doc,
+          sketch,
+          selection,
+          basis,
+          repairing: projectionRepair.objectId,
+          objectKind,
+          lineagePending: true
+        });
+    }
+    const mode = referenceMode;
+    return (selection: TopologySelection) =>
+      projectionPickProjects({
+        document: doc,
+        sketch,
+        selection,
+        basis,
+        mode,
+        lineagePending: true
+      });
+  }, [referenceMode, referenceSketchId, doc, sketchBasis, projectionRepair]);
+
   const sketchModeForViewer = useMemo(
     () =>
       sketchModeState && {
@@ -27317,7 +27407,10 @@ export function App() {
         relations: sketchRelationChips,
         relationStrokes: sketchRelationStrokeSegments,
         relationKeepOuts: sketchRelationKeepOutPoints,
-        textDraftBusy: sketchSolving || geometryBusy
+        textDraftBusy: sketchSolving || geometryBusy,
+        ...(sketchReferenceAccepts
+          ? { referenceAccepts: sketchReferenceAccepts }
+          : {})
       },
     [
       sketchModeState,
@@ -27325,7 +27418,8 @@ export function App() {
       sketchRelationStrokeSegments,
       sketchRelationKeepOutPoints,
       sketchSolving,
-      geometryBusy
+      geometryBusy,
+      sketchReferenceAccepts
     ]
   );
 
@@ -39690,9 +39784,10 @@ export function App() {
           {...(statusEntry.detail ? { detail: statusEntry.detail } : {})}
           logged={!statusEntry.unlogged}
           tone={
-            /fail|error|invalid|unable|denied/i.test(status)
+            statusEntry.tone ??
+            (/fail|error|invalid|unable|denied/i.test(status)
               ? 'warning'
-              : 'ready'
+              : 'ready')
           }
           workspace="Projects"
         />
@@ -39769,12 +39864,10 @@ export function App() {
       ? 'warning'
       : !exactGeometryReady
         ? 'running'
-        : // A refusal is a warning, not a "ready" dot (design review I77).
-          /fail|error|invalid|unable|denied|cannot|can't|not changed|not applied|no change|refus/i.test(
-              status
-            )
-          ? 'warning'
-          : 'ready';
+        : // The outcome's own tone where it was set with one: read from
+          // the text, a success naming a feature "Error Check" stood over
+          // a full compact sheet as a warning.
+          statusEntryTone(statusEntry);
 
   // The measurement workbench, only while Measure is on: View and Tweak
   // float it over the stage, Build gives it the command slot so it never

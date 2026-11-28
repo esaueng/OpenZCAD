@@ -201,12 +201,18 @@ describe('the compact tray', () => {
     render(shell('view', <CompactModeTray mode="view" {...viewProps()} />));
     const views = await trayButton('View tools', 'Standard views');
     await waitFor(() => expect(detent()).toBe('peek'));
+    // The tray alone is one row with nothing under it: it holds at peek
+    // rather than rise over blank space (the motion review).
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Sheet height' }), {
+      key: 'End'
+    });
+    expect(detent()).toBe('peek');
+    fireEvent.click(views);
+    expect(screen.getByRole('heading', { name: 'Views' })).toBeVisible();
     fireEvent.keyDown(screen.getByRole('slider', { name: 'Sheet height' }), {
       key: 'End'
     });
     await waitFor(() => expect(detent()).toBe('full'));
-    fireEvent.click(views);
-    expect(screen.getByRole('heading', { name: 'Views' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     await waitFor(() => expect(detent()).toBe('peek'));
   });
@@ -442,7 +448,9 @@ describe('the compact Tweak tray', () => {
       within(list).queryByRole('button', { name: /plate_t|r1\b/ })
     ).toBeNull();
     // The value is still set by its id.
-    fireEvent.click(within(list).getByRole('button', { name: 'Increase Plate t' }));
+    fireEvent.click(
+      within(list).getByRole('button', { name: 'Increase Plate t' })
+    );
     await waitFor(() =>
       expect(props.onSetParameter).toHaveBeenCalledWith('plate_t', '5')
     );

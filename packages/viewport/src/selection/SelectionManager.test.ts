@@ -215,6 +215,28 @@ describe('edge hover styling', () => {
     expect(renders()).toBe(afterFirstCandidate);
   });
 
+  it('lights only the hovered edge, not its smooth run, when asked to', () => {
+    const { manager, setBodies } = makeManager();
+    const { bodyId, overlay, selection, hit, topology } = makeBatchedEdge(true);
+    setBodies([{ bodyId, topology } as unknown as BodyRepresentation]);
+    const hovered = candidate({ kind: 'edge', selection, hit });
+
+    manager.applyHover(hovered, { edgeRun: false });
+    expect(overlay.hoverEdges.geometry.instanceCount).toBe(2);
+    expect(manager.hoveredEdgeTopologyIds()).toEqual([selection.topologyId]);
+
+    // The same edge under the default rule relights with its run, and back.
+    manager.applyHover(hovered);
+    expect(overlay.hoverEdges.geometry.instanceCount).toBe(3);
+    expect(manager.hoveredEdgeTopologyIds()).toHaveLength(2);
+    manager.applyHover(hovered, { edgeRun: false });
+    expect(overlay.hoverEdges.geometry.instanceCount).toBe(2);
+    expect(manager.hoveredEdgeTopologyIds()).toEqual([selection.topologyId]);
+
+    manager.applyHover(null, { edgeRun: false });
+    expect(manager.hoveredEdgeTopologyIds()).toEqual([]);
+  });
+
   it('does not duplicate a selected edge with the batched hover overlay', () => {
     const { manager } = makeManager();
     const { overlay, selection, hit } = makeBatchedEdge();

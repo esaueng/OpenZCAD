@@ -7,16 +7,15 @@ import {
   createSketchFeatureIds,
   listFeaturesInOrder
 } from '@openzcad/document-core';
-import {
-  orientLikeStored,
-  projectEdgeToSketch,
-  projectableCurveFromTopology,
-  type PlaneBasis
-} from '@openzcad/geometry';
+import { orientLikeStored, type PlaneBasis } from '@openzcad/geometry';
 import { ownEntry } from '@openzcad/shared';
+import {
+  documentPickEdges,
+  projectionPickOutcome,
+  sameProjectionSource
+} from './projectionPickEdges';
 import type {
   DerivedState,
-  EdgeTopology,
   EntityId,
   ProjectDocument,
   SketchId,
@@ -44,63 +43,10 @@ export interface ProjectionPick {
   skipped: string[];
 }
 
-function sameSource(
-  a: SketchProjectionSource | undefined,
-  b: SketchProjectionSource | undefined
-): boolean {
-  return (
-    a !== undefined &&
-    b !== undefined &&
-    a.bodyId === b.bodyId &&
-    a.edgeReference.producingFeatureId === b.edgeReference.producingFeatureId &&
-    a.edgeReference.lineageName === b.edgeReference.lineageName
-  );
-}
-
-/**
- * The linked sources a sketch already projects, so a pick does not repeat
- * one. A re-pick leaves out the object being repaired: its own source is
- * the one being replaced.
- */
-function linkedSources(
-  document: ProjectDocument,
-  sketch: SketchNode | null,
-  except?: string
-): SketchProjectionSource[] {
-  return (sketch?.objectIds ?? []).flatMap((objectId) => {
-    if (objectId === except) return [];
-    const node = ownEntry(document.nodes, objectId);
-    const projection =
-      node?.kind === 'sketch-object' ? node.data.projection : undefined;
-    return projection?.mode === 'linked' ? [projection.source] : [];
-  });
-}
+const sameSource = sameProjectionSource;
 
 /** The published edges a pick names: one edge, or a face's boundary. */
-function pickedEdges(
-  document: ProjectDocument,
-  selection: TopologySelection
-): EdgeTopology[] {
-  const edges =
-    ownEntry(document.derived.bodyRepresentations, selection.bodyId)?.topology
-      ?.edges ?? [];
-  if (selection.kind === 'edge') {
-    const edge = edges.find((candidate) =>
-      selection.topologyId !== undefined
-        ? candidate.topologyId === selection.topologyId
-        : candidate.hash === selection.hash
-    );
-    return edge ? [edge] : [];
-  }
-  if (selection.kind === 'face' && selection.hash !== undefined) {
-    return edges.filter(
-      (edge) =>
-        edge.displayRole !== 'seam' &&
-        edge.adjacentFaceHashes?.includes(selection.hash!) === true
-    );
-  }
-  return [];
-}
+const pickedEdges = documentPickEdges;
 
 /**
  * Projects a picked edge, or each edge bounding a picked face, onto the
@@ -118,11 +64,11 @@ export function projectionFromPick(input: {
   /** A re-pick: the object whose source the pick replaces. */
   repairing?: string;
 }): ProjectionPick {
-  const { document, selection, basis, mode, construction } = input;
+  const { selection, mode, construction } = input;
   if (selection.kind === 'body') {
     throw new Error('Pick a model edge, or a face for its whole boundary.');
   }
-  const edges = pickedEdges(document, selection);
+  const { edges, added, skipped } = projectionPickOutcome(input);
   if (edges.length === 0) {
     throw new Error(
       selection.kind === 'face'
@@ -130,48 +76,21 @@ export function projectionFromPick(input: {
         : 'That edge is no longer part of the model.'
     );
   }
-  const existing = linkedSources(document, input.sketch, input.repairing);
-  const objects: SketchObjectData[] = [];
-  const skipped: string[] = [];
-  for (const edge of edges) {
-    const source = edge.reference
-      ? { bodyId: selection.bodyId, edgeReference: edge.reference }
-      : undefined;
-    if (mode === 'linked' && !source) {
-      skipped.push(
-        'an edge has no verified identity, so it cannot stay linked (project it unlinked instead)'
-      );
-      continue;
-    }
-    if (
-      mode === 'linked' &&
-      existing.some((entry) => sameSource(entry, source))
-    ) {
-      skipped.push('an edge is already projected linked into this sketch');
-      continue;
-    }
-    const outcome = projectEdgeToSketch(
-      projectableCurveFromTopology(edge),
-      basis
-    );
-    if (outcome.status === 'refused') {
-      skipped.push(outcome.reason.replace(/\.$/, ''));
-      continue;
-    }
+  const objects: SketchObjectData[] = added.map(({ source, data }) => {
     const projection: SketchProjection =
       mode === 'linked'
         ? { mode: 'linked', source: source! }
         : { mode: 'unlinked', ...(source ? { source } : {}) };
-    objects.push({
-      ...outcome.data,
+    return {
+      ...data,
       ...(construction ? { construction: true } : {}),
       projection
-    });
-  }
+    };
+  });
   if (objects.length === 0) {
-    throw new Error(`Nothing to project: ${[...new Set(skipped)].join('; ')}.`);
+    throw new Error(`Nothing to project: ${skipped.join('; ')}.`);
   }
-  return { objects, skipped: [...new Set(skipped)] };
+  return { objects, skipped };
 }
 
 /** Acquire idle-skipped lineage once before accepting or refusing a linked pick. */
