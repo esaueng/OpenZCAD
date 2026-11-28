@@ -98,6 +98,22 @@ function formatDeviation(value: number): string {
   return value >= 0.01 ? value.toFixed(3) : value.toPrecision(2);
 }
 
+/**
+ * A deviation over its limit, with as many digits as it takes to read as
+ * over it: 0.0804 mm against 0.08 mm is "0.0804", not the "0.080" that
+ * would have the sentence say 0.080 exceeds 0.08.
+ */
+function formatDeviationOver(value: number, limit: number): string {
+  const usual = formatDeviation(value);
+  if (Number(usual) > limit) return usual;
+  for (let digits = 3; digits <= 15; digits += 1) {
+    const text =
+      value >= 0.01 ? value.toFixed(digits + 1) : value.toPrecision(digits);
+    if (Number(text) > limit) return text;
+  }
+  return String(value);
+}
+
 const FORMAT_OPTIONS: {
   format: MeshExportDialogFormat;
   label: string;
@@ -467,11 +483,10 @@ export function ExportDialog({
     packageFormats,
     resolveExportUnits(exportUnits, documentUnits)
   );
-  // Over the limit at the precision it is shown: a deviation that reads as
-  // the limit itself is not flagged as above it.
+  // Over the limit as measured, not as rounded for display: 0.0804 mm is
+  // over 0.08 mm although three decimals show both as 0.080.
   const overLimit =
-    report !== null &&
-    Number(formatDeviation(report.result.maxDeviation)) > report.deflection;
+    report !== null && report.result.maxDeviation > report.deflection;
 
   return (
     <div className="modal-backdrop">
@@ -733,7 +748,7 @@ export function ExportDialog({
             <p className="export-dialog-measure" role="status">
               {/* Watertight is not within tolerance (#2080): a mesh over the
                   chosen limit says so before it is exported. */}
-              {`${report.result.triangleCount.toLocaleString('en-US')} ${report.result.triangleCount === 1 ? 'triangle' : 'triangles'} · measured deviation ${formatDeviation(report.result.maxDeviation)} mm ${overLimit ? 'exceeds' : 'of'} ${overLimit ? 'the ' : ''}${report.deflection} mm allowed${report.result.sampled ? ' (sampled)' : ''}${overLimit ? '. Choose a finer quality and re-check, or export to accept it.' : ''}`}
+              {`${report.result.triangleCount.toLocaleString('en-US')} ${report.result.triangleCount === 1 ? 'triangle' : 'triangles'} · measured deviation ${overLimit ? formatDeviationOver(report.result.maxDeviation, report.deflection) : formatDeviation(report.result.maxDeviation)} mm ${overLimit ? 'exceeds' : 'of'} ${overLimit ? 'the ' : ''}${report.deflection} mm allowed${report.result.sampled ? ' (sampled)' : ''}${overLimit ? '. Choose a finer quality and re-check, or export to accept it.' : ''}`}
             </p>
           ) : null}
           {report && !staleReport ? (

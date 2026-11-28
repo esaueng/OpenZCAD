@@ -419,15 +419,32 @@ describe('ExportDialog', () => {
     ).toBeVisible();
   });
 
-  it('keeps millimetre packages on the slicer sentence', async () => {
+  /**
+   * The same disclosure in millimetres: a 3MF that declares millimetres does
+   * not make its STL companion say so. Only a single-format export keeps the
+   * slicer sentence.
+   */
+  it('names each format’s unit in a mixed millimetre package too', async () => {
     const user = userEvent.setup();
     renderDialog({ onExportUnitsChange: vi.fn() });
+    expect(
+      screen.getByText(
+        'Exports all bodies (2) in millimeters, ready for slicing.'
+      )
+    ).toBeVisible();
     await user.click(
       screen.getByRole('checkbox', { name: 'Also export STL (binary)' })
     );
     expect(
       screen.getByText(
-        'Exports all bodies (2) in millimeters, ready for slicing.'
+        'Exports all bodies (2): 3MF in millimeters, declared in the package; STL (binary) in millimeters, which the file does not record.'
+      )
+    ).toBeVisible();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Also export OBJ' }));
+    expect(
+      screen.getByText(
+        'Exports all bodies (2): 3MF in millimeters, declared in the package; STL (binary) and OBJ in millimeters, which those files do not record.'
       )
     ).toBeVisible();
   });
@@ -458,7 +475,48 @@ describe('ExportDialog', () => {
     expect(screen.getByRole('button', { name: /^Export 3MF/ })).toBeEnabled();
   });
 
-  it('does not flag a deviation that reads as the limit itself', async () => {
+  /**
+   * The comparison is on the measured value, not on its three-decimal
+   * rendering: 0.0804 mm is over a 0.08 mm limit although it rounds to
+   * 0.080, and the text carries the digits that show the overrun.
+   */
+  it('flags a deviation over the limit by less than the usual precision shows', async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      onCheckQuality: vi.fn(async (): Promise<MeshQualityReport> => ({
+        ...watertight('body_a', 'body_b'),
+        maxDeviation: 0.0804
+      }))
+    });
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    expect(
+      await screen.findByText(
+        '24 triangles · measured deviation 0.0804 mm exceeds the 0.08 mm allowed. Choose a finer quality and re-check, or export to accept it.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('shows as many digits as it takes to read above the limit', async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      onCheckQuality: vi.fn(async (): Promise<MeshQualityReport> => ({
+        ...watertight('body_a', 'body_b'),
+        maxDeviation: 0.08000004
+      }))
+    });
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    expect(
+      await screen.findByText(
+        /measured deviation 0\.08000004 mm exceeds the 0\.08 mm allowed\./
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('does not flag a deviation that is the limit itself', async () => {
     const user = userEvent.setup();
     renderDialog({
       onCheckQuality: vi.fn(async (): Promise<MeshQualityReport> => ({

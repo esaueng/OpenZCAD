@@ -91,9 +91,10 @@ interface MeshPlacement {
  * millimetres *before* the translator reads the file (#2096), so the
  * translator, the tessellation and the rebuild check all see the numbers a
  * millimetre copy of the same part would hold, and the same physical mesh
- * imports to the same triangles whichever unit its file was written in. A
- * PLY whose positions are integers cannot be rewritten in its own type; it
- * is read as written and scaled after the tessellation, before the check.
+ * imports to the same triangles whichever unit its file was written in. The
+ * translator offers no unit scale or weld distance to pass instead, so the
+ * file is what changes; a file whose positions cannot all be rewritten is
+ * refused rather than read at the wrong size.
  */
 export async function importMeshFile(
   format: MeshImportFormat,
@@ -108,25 +109,18 @@ export async function importMeshFile(
   if (format === 'obj') {
     assertObjTriangleBudget(data, policy);
   }
-  // Budgets are charged on the file as the user picked it; the rewrite may
-  // spell the same numbers in more digits, and is bounded by the same budget
-  // twice over so a pathological rewrite still cannot grow without limit.
-  let readingScale = 1;
+  // Budgets are charged on the file as the user picked it. The rewrite may
+  // spell the same numbers in more digits, so it carries its own: the
+  // translator's vertex ceiling and twice the byte ceiling, both enforced
+  // while it scans, before anything is allocated for what it finds.
   let maxInputBytes = policy.maxInputBytes;
   if ((format === 'obj' || format === 'ply') && readAs !== 'mm') {
-    const factor = millimetresPerUnit(readAs);
-    const scaled = scaleUnitlessMeshFile(format, data, factor);
-    if (scaled) {
-      if (scaled.byteLength > 2 * policy.maxInputBytes) {
-        throw new Error(
-          `This ${policy.label} file is too large to read in the chosen unit; convert it to millimeters first.`
-        );
-      }
-      data = scaled;
-      maxInputBytes = Math.max(maxInputBytes, scaled.byteLength);
-    } else {
-      readingScale = factor;
-    }
+    data = scaleUnitlessMeshFile(format, data, millimetresPerUnit(readAs), {
+      label: policy.label,
+      maxVertices: policy.maxEntities,
+      maxOutputBytes: 2 * policy.maxInputBytes
+    });
+    maxInputBytes = Math.max(maxInputBytes, data.byteLength);
   }
   // Read before parsing: a package that cannot be read, or that asks for
   // something this import will not do, refuses without spending the parse.
@@ -182,9 +176,6 @@ export async function importMeshFile(
         ? solids.map((solid) => ({ solid, transform: glbTransform }))
         : solids.map(identityPlacement)
     ));
-    if (readingScale !== 1) {
-      vertices = vertices.map((value) => value * readingScale);
-    }
 
     const triangleCount = indices.length / 3;
     if (triangleCount === 0) {

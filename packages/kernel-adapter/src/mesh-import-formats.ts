@@ -21,6 +21,7 @@ export type MeshImportFormat = '3mf' | 'obj' | 'glb' | 'ply';
 export {
   scaleUnitlessMeshFile,
   unitlessMeshExtent,
+  type UnitlessMeshBudget,
   type UnitlessMeshFormat
 } from './unitless-mesh-units';
 

@@ -73,7 +73,8 @@ function listed(items: readonly string[]): string {
  * its formats is written. A single format keeps the sentence it always had;
  * a mixed package names every group, so an unrecorded unit is never hidden
  * behind a format that declares one, and the export unit is never hidden
- * behind glTF's metres.
+ * behind glTF's metres. Millimetres are no exception: a 3MF that declares
+ * them says nothing for the STL beside it.
  */
 export function meshExportUnitsSentence(
   scopeLabel: string,
@@ -94,10 +95,10 @@ export function meshExportUnitsSentence(
   if (groups.fixed.length === unique.length) {
     return `Exports ${scopeLabel} in meters, the unit glTF defines.`;
   }
-  if (groups.fixed.length === 0 && units === 'mm') {
-    return `Exports ${scopeLabel} in millimeters, ready for slicing.`;
-  }
   if (unique.length === 1) {
+    if (units === 'mm') {
+      return `Exports ${scopeLabel} in millimeters, ready for slicing.`;
+    }
     return groups.declared.length > 0
       ? `Exports ${scopeLabel} in ${unitName}, declared in the package.`
       : `Exports ${scopeLabel} in ${unitName}. The file does not record its unit.`;
@@ -111,11 +112,9 @@ export function meshExportUnitsSentence(
       groups.unrecorded.map((format) => DIALOG_LABELS[format])
     );
     parts.push(
-      units === 'mm'
-        ? `${names} in millimeters`
-        : groups.unrecorded.length === 1
-          ? `${names} in ${unitName}, which the file does not record`
-          : `${names} in ${unitName}, which those files do not record`
+      groups.unrecorded.length === 1
+        ? `${names} in ${unitName}, which the file does not record`
+        : `${names} in ${unitName}, which those files do not record`
     );
   }
   if (groups.fixed.length > 0) {
