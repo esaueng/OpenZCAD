@@ -1458,8 +1458,9 @@ function exportAssemblyPlacements(
 
 /**
  * Whether the model shows a body, as Assemble resolves its parts: from the
- * exact build when there is one (built, not consumed, not hidden by a
- * parameter), else from the document's own representations.
+ * exact build when there is one (built, with solids or a mesh reference's
+ * facets, not consumed, not hidden by a parameter), else from the
+ * document's own representations.
  */
 function exportLiveBody(
   document: ProjectDocument,
@@ -1467,10 +1468,12 @@ function exportLiveBody(
 ): (bodyId: BodyId) => boolean {
   if (!build) return (bodyId) => isLiveAssemblyBody(document, bodyId);
   const hidden = getParameterHiddenBodyIds(document);
+  const built = (bodyId: BodyId) => {
+    const shape = build.shapes.get(bodyId);
+    return !!shape && (shape.solids.length > 0 || !!shape.referenceMesh);
+  };
   return (bodyId) =>
-    (build.shapes.get(bodyId)?.solids.length ?? 0) > 0 &&
-    !build.consumed.has(bodyId) &&
-    !hidden.has(bodyId);
+    built(bodyId) && !build.consumed.has(bodyId) && !hidden.has(bodyId);
 }
 
 /** Whether a column-major 4×4 is exactly the identity. */
@@ -1529,8 +1532,17 @@ function transformedPoints(
  * hold a different part (or none, where the active row suppresses it)
  * without saying so.
  */
-function refuseConfiguredAssemblyExport(document: ProjectDocument): void {
-  const overrides = assemblyConfigurationOverrides(document);
+function refuseConfiguredAssemblyExport(
+  document: ProjectDocument,
+  /**
+   * The bodies the export writes; a part outside them puts nothing in the
+   * file and is not refused. Omitted for a whole-model export.
+   */
+  bodyIds?: readonly BodyId[]
+): void {
+  const overrides = assemblyConfigurationOverrides(document, bodyIds, (id) =>
+    isLiveAssemblyBody(document, id)
+  );
   if (overrides.length === 0) return;
   const table = document.configurations!;
   const active =
@@ -5847,7 +5859,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     options: ExportUnitOptions & { fileName?: string } = {}
   ): Promise<string> {
-    refuseConfiguredAssemblyExport(document);
+    refuseConfiguredAssemblyExport(document, bodyIds);
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
@@ -5896,7 +5908,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     options: StepExportOptions = {}
   ): Promise<string> {
-    refuseConfiguredAssemblyExport(document);
+    refuseConfiguredAssemblyExport(document, bodyIds);
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) =>
@@ -5954,6 +5966,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     options: StepExportOptions = {}
   ): Promise<StepBodiesExport> {
+    // A whole-model export: every part is in it.
     refuseConfiguredAssemblyExport(document);
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
@@ -6491,7 +6504,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     deflection: number = STL_EXPORT_DEFLECTION,
     options: MeshExportTolerances = {}
   ): Promise<string> {
-    refuseConfiguredAssemblyExport(document);
+    refuseConfiguredAssemblyExport(document, bodyIds);
     const units = options.units ?? 'mm';
     const angular = explicitAngularTolerance(options.angularTolerance);
     // The deflection is physical millimetres; the solids are in `units`.
@@ -6573,7 +6586,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     if (!Number.isFinite(deflection) || deflection <= 0) {
       throw new Error('Mesh export deflection must be a positive number.');
     }
-    refuseConfiguredAssemblyExport(document);
+    refuseConfiguredAssemblyExport(document, bodyIds);
     // glTF defines metres, which the root node states over a millimetre
     // tessellation (glb-scene.ts); no other unit can be written into it.
     const units = format === 'glb' ? 'mm' : (options.units ?? 'mm');

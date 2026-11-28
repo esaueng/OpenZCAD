@@ -23,7 +23,7 @@ import {
 import {
   documentPrintClearance,
   effectiveConfigurationRow,
-  documentForConfiguration,
+  documentForConfigurationExport,
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
@@ -130,6 +130,12 @@ import {
   exportScopeLabel,
   type ExportScope
 } from './lib/exportScope';
+import {
+  exportScopeBodies,
+  exportScopeBodyName,
+  exportTargetFor,
+  type ExportTarget
+} from './lib/modelExportScope';
 import {
   DESKTOP_IMAGE_MAX_PIXELS,
   initialImageSketchId,
@@ -11716,17 +11722,13 @@ export function App() {
         exportScopeInfo: null
       };
     }
-    const bodyName = (bodyId: BodyId) =>
-      ownEntry(doc.derived.bodyRepresentations, bodyId)?.name ?? bodyId;
+    const bodyName = (bodyId: BodyId) => exportScopeBodyName(doc, bodyId);
     const scope = exportScope(
-      Object.values(doc.derived.bodyRepresentations).map((body) => ({
-        bodyId: body.bodyId,
-        exportable:
-          (body.exportableStep || body.meshReference === true) &&
-          !body.consumed,
-        hidden: hiddenBodyIds.has(body.bodyId),
-        withheld: failedHistoryBodies.has(body.bodyId)
-      })),
+      exportScopeBodies(
+        doc,
+        (bodyId) => hiddenBodyIds.has(bodyId),
+        (bodyId) => failedHistoryBodies.has(bodyId)
+      ),
       selectedBody?.bodyId ?? null
     );
     const withheld = scope.withheldIds.flatMap((bodyId) => {
@@ -22934,39 +22936,12 @@ export function App() {
     setMeshExportOpen(true);
   }
 
-  /**
-   * F06: what an export of `rowId` writes. The active row (or none) is the
-   * model as shown, with the export scope's bodies. Another row is built for
-   * the file alone from `documentForConfiguration`, nothing in the open
-   * document changes, and it writes every body that row shows.
-   */
-  function exportTarget(rowId: string | null): {
-    document: ProjectDocument;
-    bodyIds: BodyId[];
-    allShownBodies: boolean;
-    rowName: string | null;
-  } | null {
+  /** F06: what an export of `rowId` writes (`exportTargetFor`). */
+  function exportTarget(rowId: string | null): ExportTarget | null {
     if (!doc) return null;
     // Another row's sketches are solved for its values when an export
     // starts (`solvedExportTarget`); this stays synchronous for the checks.
-    const set = doc.configurations;
-    const row =
-      rowId && set && rowId !== set.activeRowId
-        ? set.rows.find((entry) => entry.id === rowId)
-        : undefined;
-    if (!row)
-      return {
-        document: doc,
-        bodyIds: exportBodyIds,
-        allShownBodies: false,
-        rowName: null
-      };
-    return {
-      document: documentForConfiguration(doc, row.id),
-      bodyIds: [],
-      allShownBodies: true,
-      rowName: row.name
-    };
+    return exportTargetFor(doc, rowId, exportBodyIds);
   }
 
   /**
@@ -28372,7 +28347,7 @@ export function App() {
     let current = true;
     let target: ProjectDocument;
     try {
-      target = documentForConfiguration(exportRowDocument, exportRowId);
+      target = documentForConfigurationExport(exportRowDocument, exportRowId);
     } catch (error) {
       setStatus(errorMessage(error, 'That configuration cannot be built.'));
       setExportRowBodies({
@@ -45252,9 +45227,7 @@ export function App() {
                       : []
                     : exportBodyIds.map((bodyId) => ({
                         bodyId,
-                        name:
-                          ownEntry(doc.derived.bodyRepresentations, bodyId)
-                            ?.name ?? bodyId,
+                        name: exportScopeBodyName(doc, bodyId),
                         meshReference: ownEntry(
                           doc.derived.bodyRepresentations,
                           bodyId

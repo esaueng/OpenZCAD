@@ -6,8 +6,13 @@ import {
   addConfigurationColumn,
   addConfigurationRow,
   addPrimitiveFeature,
+  assemblyConfigurationOnlyBodies,
+  assemblyConfigurationOverrides,
   createConfigurations,
   createProjectDocument,
+  documentForConfiguration,
+  documentForConfigurationExport,
+  importMeshBody,
   listParameters,
   setAssemblyExplode,
   setConfigurationCell,
@@ -30,7 +35,9 @@ import {
   RemusKernel,
   loadRemusTranslators
 } from '../packages/kernel-adapter/src/remus-runtime';
+import { parseStl } from '@openzcad/io-stl';
 import { exportedModel } from './support/three-mf-export';
+import { coincidentBoxSoup } from './support/mesh-import-fixtures';
 import { stepOccurrenceFrames } from './e2e/step-occurrence-frames';
 
 /**
@@ -276,7 +283,113 @@ describe('assembly placements in formats without structure (AS04, #2391)', () =>
     ] as Box;
     expectBox(extent as Box, expected, 3);
   }, 120_000);
+
+  it.each(['stl-ascii', 'stl-binary'] as const)(
+    'writes an imported mesh reference posed in %s',
+    async (format) => {
+      const { document, base, scan, ids, posedScan } = await meshHinge();
+      expect(posedScan).not.toEqual(scan);
+      const extent = async (bodyIds: BodyId[]) =>
+        stlExtent(
+          await adapter.exportMesh(document, bodyIds, {
+            format,
+            deflection: 0.05
+          })
+        );
+      // The reference alone, then beside an exact part.
+      expectBox(await extent([ids.scan]), posedScan, 3);
+      expectBox(
+        await extent([ids.base, ids.scan]),
+        [
+          ...[0, 1, 2].map((axis) => Math.min(base[axis]!, posedScan[axis]!)),
+          ...[3, 4, 5].map((axis) => Math.max(base[axis]!, posedScan[axis]!))
+        ] as Box,
+        3
+      );
+      // The other mesh formats take no reference at all, so none of them
+      // can write it unposed.
+      for (const other of ['3mf', 'obj', 'ply', 'glb'] as const)
+        await expect(
+          adapter.exportMesh(document, [ids.scan], {
+            format: other,
+            deflection: 0.05
+          })
+        ).rejects.toThrow(/mesh reference has no exact solid/);
+    },
+    120_000
+  );
 });
+
+/** Every STL vertex's extent, ASCII or binary. */
+function stlExtent(bytes: Uint8Array): Box {
+  const parsed = parseStl(bytes.slice().buffer, 'assembly.stl');
+  const axis = (a: number) =>
+    Array.from(parsed.vertices).filter((_, i) => i % 3 === a);
+  return [
+    ...[0, 1, 2].map((a) => Math.min(...axis(a))),
+    ...[0, 1, 2].map((a) => Math.max(...axis(a)))
+  ] as Box;
+}
+
+/** The hinge, with an imported mesh reference as its moving part. */
+async function meshHinge() {
+  const imported = importMeshBody(
+    createProjectDocument('Scan hinge', toUserId('user_as04')),
+    {
+      name: 'Scan',
+      artifactId: 'artifact_scan_hinge',
+      sourceName: 'scan.stl',
+      ...coincidentBoxSoup()
+    }
+  );
+  let document = addPrimitiveFeature(imported.document, {
+    name: 'Base',
+    bodyName: 'Base',
+    primitiveKind: 'box',
+    dimensions: { width: 40, height: 10, depth: 20 }
+  });
+  const scanId = imported.bodyId;
+  const baseId = document.bodyOrder.find((id) => id !== scanId)!;
+  document = addAssemblyComponents(document, {
+    components: [
+      { componentId: 'c_base', name: 'Base', bodyId: baseId, grounded: true },
+      { componentId: 'c_scan', name: 'Scan', bodyId: scanId, grounded: false }
+    ]
+  });
+  const pivot = {
+    origin: { x: 5, y: 5, z: 0 },
+    zAxis: { x: 0, y: 0, z: 1 },
+    xAxis: { x: 1, y: 0, z: 0 }
+  };
+  document = addAssemblyJoint(document, {
+    joint: {
+      id: 'j_pivot',
+      name: 'Pivot',
+      kind: 'cylindrical',
+      parent: { componentId: 'c_base', frame: pivot },
+      child: { componentId: 'c_scan', frame: pivot },
+      values: [90, 10],
+      limits: [null, null]
+    }
+  });
+  const derived = await adapter.syncDocument(document);
+  expect(derived.bodyRepresentations[scanId]?.meshReference).toBe(true);
+  const boxOf = (bodyId: BodyId): Box => {
+    const b = derived.bodyRepresentations[bodyId]!.bbox;
+    return [b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z];
+  };
+  const pose = transformToMatrix4(
+    solveAssembly(document.assembly!).poses.get('c_scan')!
+  );
+  const synced: ProjectDocument = { ...document, derived };
+  return {
+    document: synced,
+    ids: { base: baseId, scan: scanId },
+    base: boxOf(baseId),
+    scan: boxOf(scanId),
+    posedScan: posedBox(boxOf(scanId), pose)
+  };
+}
 
 /**
  * #2389's fixture: a plate whose width the configuration drives (Narrow 20,
@@ -381,11 +494,87 @@ describe('assembly parts in another configuration (F06, #2389)', () => {
     // Wide active: the lug is suppressed in the model, kept by its part.
     document = activateConfiguration(document, { rowId: 'wide' });
     expect(await adapter.documentExportBodyIds(document)).toEqual([ids[0]]);
-    for (const result of await everyExport(document, [ids[0]!]))
+    // The app's export scope adds the body only the part's row builds.
+    const synced: ProjectDocument = {
+      ...document,
+      derived: await adapter.syncDocument(document)
+    };
+    expect(assemblyConfigurationOnlyBodies(synced)).toEqual([
+      { bodyId: ids[1], name: 'Indicator lug' }
+    ]);
+    for (const result of await everyExport(synced, ids))
       expect(String((result as PromiseRejectedResult).reason)).toMatch(
         /Assemble shows Plate in Narrow and Indicator lug in Narrow, but an export writes every part in the active configuration, Wide\. Set their Configuration to follow the model, or make Narrow the active configuration/
       );
+    // The lug alone, which the active row does not build, is still named.
+    await expect(adapter.exportStep(synced, [ids[1]!])).rejects.toThrow(
+      /Assemble shows Indicator lug in Narrow, but/
+    );
   }, 120_000);
+
+  it('refuses only for parts inside the export scope', async () => {
+    const { document: start, ids } = configuredPlate();
+    const document = updateAssemblyComponent(start, {
+      componentId: 'c_plate',
+      configurationId: 'wide'
+    });
+    const [plate, lug] = ids as [BodyId, BodyId];
+    // The plate hidden or unselected: the lug alone exports.
+    for (const result of await Promise.allSettled([
+      adapter.exportStep(document, [lug]),
+      adapter.exportIges(document, [lug]),
+      adapter.exportMesh(document, [lug], { format: '3mf', deflection: 0.1 }),
+      adapter.exportMesh(document, [lug], {
+        format: 'stl-binary',
+        deflection: 0.1
+      }),
+      adapter.exportStl(document, [lug])
+    ]))
+      expect(result.status).toBe('fulfilled');
+    expect(assemblyConfigurationOverrides(document, [lug])).toEqual([]);
+    await expect(adapter.exportStep(document, [plate])).rejects.toThrow(
+      /Assemble shows Plate in Wide/
+    );
+    // A whole-model export holds every part.
+    await expect(adapter.exportStepBodies(document)).rejects.toThrow(
+      /Assemble shows Plate in Wide/
+    );
+  }, 120_000);
+
+  it('exports another row with every part in it, pinned or not', async () => {
+    // Narrow active; Plate names Narrow, the lug names Wide.
+    const { document: start, ids } = configuredPlate();
+    let document = updateAssemblyComponent(start, {
+      componentId: 'c_plate',
+      configurationId: 'narrow'
+    });
+    document = updateAssemblyComponent(document, {
+      componentId: 'c_lug',
+      configurationId: 'wide'
+    });
+    // Built as it stands, the Wide row keeps Plate pinned to Narrow, which
+    // its export would refuse.
+    expect(
+      assemblyConfigurationOverrides(documentForConfiguration(document, 'wide'))
+    ).toHaveLength(1);
+    const wide = documentForConfigurationExport(document, 'wide');
+    expect(wide.configurations?.activeRowId).toBe('wide');
+    expect(
+      wide.assembly?.components.map((c) => c.configurationId ?? null)
+    ).toEqual([null, null]);
+    expect(assemblyConfigurationOverrides(wide)).toEqual([]);
+    const shown = await adapter.documentExportBodyIds(wide);
+    expect(shown).toEqual([ids[0]]);
+    for (const result of await everyExport(wide, shown))
+      expect(result.status).toBe('fulfilled');
+    // The written plate is Wide's 45 mm.
+    const boxes = await igesSolidBoxes(await adapter.exportIges(wide, shown));
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0]![3] - boxes[0]![0]).toBeCloseTo(45, 4);
+    // The open document is untouched, and its active row keeps the pins.
+    expect(document.configurations?.activeRowId).toBe('narrow');
+    expect(documentForConfigurationExport(document, 'narrow')).toBe(document);
+  }, 240_000);
 
   it('exports a part that names the active row, or follows the model', async () => {
     const { document: start, ids } = configuredPlate();

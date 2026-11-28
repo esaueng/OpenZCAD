@@ -544,3 +544,34 @@ export function documentForConfiguration(
     ? document
     : activateConfiguration(document, { rowId });
 }
+
+/**
+ * F06: the document an export of configuration `rowId` writes. The active
+ * row is the model as Assemble shows it, each part's own Configuration
+ * included (an export refuses while one names another row). Another row is
+ * a request for that configuration: the model with `rowId` active and every
+ * assembly part following it, as View draws a row. A part's own
+ * Configuration pins it in Assemble's presentation of the active model, so
+ * it does not carry into a named row's file, and a part pinned to the row
+ * being exported is in it either way. Not a command: nothing is stored.
+ */
+export function documentForConfigurationExport(
+  document: ProjectDocument,
+  rowId: string
+): ProjectDocument {
+  const built = documentForConfiguration(document, rowId);
+  const set = built.assembly;
+  if (
+    built === document ||
+    !set ||
+    !set.components.some((c) => c.configurationId !== undefined)
+  )
+    return built;
+  return {
+    ...built,
+    assembly: {
+      ...set,
+      components: set.components.map(({ configurationId: _, ...c }) => c)
+    }
+  };
+}

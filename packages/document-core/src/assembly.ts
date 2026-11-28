@@ -749,18 +749,32 @@ export interface AssemblyConfigurationOverride {
  * anything built from the document alone (an export, for one) has only the
  * active row's geometry for it. A part naming the active row, or a row no
  * longer in the table (which Assemble draws as the active row), is left out.
+ *
+ * With `bodyIds`, only the parts an export of those bodies writes count: a
+ * part whose own body, or the live body it shows now (`isLive`, as
+ * `assemblyComponentBodies` resolves it), is one of them. A part outside
+ * that scope, a hidden one say, puts nothing in the file. Without
+ * `bodyIds` every part counts, as for a whole-model export.
  */
 export function assemblyConfigurationOverrides(
-  document: ProjectDocument
+  document: ProjectDocument,
+  bodyIds?: readonly BodyId[],
+  isLive?: (bodyId: BodyId) => boolean
 ): AssemblyConfigurationOverride[] {
   const set = document.assembly;
   const table = document.configurations;
   if (!set || !table) return [];
   const rows = new Map(table.rows.map((row) => [row.id, row]));
+  const scope = bodyIds ? new Set(bodyIds) : null;
+  const shown = scope ? assemblyComponentBodies(document, isLive) : null;
   const overrides: AssemblyConfigurationOverride[] = [];
   for (const c of set.components) {
     const row = c.configurationId ? rows.get(c.configurationId) : undefined;
     if (!row || row.id === table.activeRowId) continue;
+    if (scope) {
+      const body = shown!.get(c.id);
+      if (!scope.has(c.bodyId) && !(body && scope.has(body))) continue;
+    }
     overrides.push({
       componentId: c.id,
       componentName: c.name,
@@ -769,4 +783,32 @@ export function assemblyConfigurationOverrides(
     });
   }
   return overrides;
+}
+
+/**
+ * F06: each part Assemble draws from its own row although the active row
+ * builds no body for it (the active row suppresses its feature, say), as
+ * the body it would show. An export scope read from the model's own bodies
+ * would leave such a part out, and with it the refusal naming it, so the
+ * scope adds these.
+ */
+export function assemblyConfigurationOnlyBodies(
+  document: ProjectDocument
+): { bodyId: BodyId; name: string }[] {
+  const built = document.derived.bodyRepresentations;
+  const present = (bodyId: BodyId) =>
+    Object.hasOwn(built, bodyId) && !built[bodyId]!.consumed;
+  const shown = assemblyComponentBodies(document, present);
+  const components = new Map(
+    (document.assembly?.components ?? []).map((c) => [c.id, c])
+  );
+  const seen = new Set<BodyId>();
+  const result: { bodyId: BodyId; name: string }[] = [];
+  for (const entry of assemblyConfigurationOverrides(document)) {
+    const component = components.get(entry.componentId)!;
+    if (shown.get(component.id) || seen.has(component.bodyId)) continue;
+    seen.add(component.bodyId);
+    result.push({ bodyId: component.bodyId, name: component.name });
+  }
+  return result;
 }
