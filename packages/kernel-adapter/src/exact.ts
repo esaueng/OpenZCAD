@@ -358,6 +358,7 @@ import {
   type StepExportOptions
 } from './step-export-metadata';
 import { repeatStepExport } from './repeat-step-export';
+import { bsplineSupportSurfaces } from './exact-support-surface';
 import {
   planStepPmi,
   type StepPmiEntry,
@@ -1693,17 +1694,21 @@ export interface StepExportReport {
  * D07: the model's PMI as the STEP writer will place it: each entry's face
  * resolved on its body's built solid (lineage, then hash; fail-closed) and
  * located by its index in that solid's faces, which is the order the writer
- * walks its shell. An entry on a body the file does not write is not
- * eligible; one whose body has more than one solid, or whose face no longer
- * resolves (the workspace shows it broken), is left out and reported. A
- * frame's tolerance is restated in the export's unit.
+ * walks its shell. An entry on a body the export leaves out by choice (a
+ * selected body's file, a hidden body) is not eligible. One whose body is
+ * gone from the model or did not build, unless the user chose the bodies
+ * (`bodySelection`), or whose body has more than one solid, or whose face no
+ * longer resolves (the workspace shows each broken), is left out and
+ * reported. A frame's tolerance is restated in the export's unit, and a
+ * B-spline face carries the analytic surface it lies on (#2321).
  */
 function stepPmiEntries(
   kernel: RemusKernel,
   build: ExactBuildResult,
   document: ProjectDocument,
   bodies: readonly { bodyId: BodyId; solids: number[] }[],
-  units: UnitSystem
+  units: UnitSystem,
+  bodySelection: boolean
 ): { entries: StepPmiEntry[]; omitted: StepPmiOmission[] } {
   const annotations = document.pmi?.annotations ?? [];
   const omitted: StepPmiOmission[] = [];
@@ -1719,8 +1724,17 @@ function stepPmiEntries(
   const written = new Set(bodies.map((body) => body.bodyId));
   for (const annotation of annotations) {
     const bodyId = annotation.face.bodyId;
-    if (!written.has(bodyId)) continue;
     const name = modelPmiName(annotation);
+    if (!written.has(bodyId)) {
+      // A dangling body is never one the export left out on purpose
+      // (#2258): say so on a whole-model file.
+      if (bodySelection) continue;
+      if (!document.bodyOrder.includes(bodyId))
+        omitted.push({ name, reason: 'its body is no longer on the model' });
+      else if (!build.shapes.get(bodyId)?.solids.length)
+        omitted.push({ name, reason: 'its body has no solid to write' });
+      continue;
+    }
     const solidIndex = firstSolid.get(bodyId);
     const shape = build.shapes.get(bodyId);
     if (solidIndex === undefined || !shape || shape.solids.length !== 1) {
@@ -1754,10 +1768,16 @@ function stepPmiEntries(
       });
       continue;
     }
+    const surface = String(kernel.getSurfaceType(handle));
+    const support =
+      surface === 'bspline'
+        ? bsplineSupportSurfaces(kernel, solid, new Set([handle])).get(handle)
+        : undefined;
     const face = {
       solid: solidIndex,
       face: faceIndex,
-      surface: String(kernel.getSurfaceType(handle))
+      surface,
+      ...(support ? { support } : {})
     };
     if (annotation.kind === 'datum-feature')
       entries.push({ kind: 'datum', letter: annotation.letter, face, name });
@@ -1791,7 +1811,14 @@ function writeStepBodies(
 ): StepExportReport {
   const resolved =
     build && options.protocol === 'ap242'
-      ? stepPmiEntries(kernel, build, document, bodies, options.units ?? 'mm')
+      ? stepPmiEntries(
+          kernel,
+          build,
+          document,
+          bodies,
+          options.units ?? 'mm',
+          options.bodySelection === true
+        )
       : { entries: [], omitted: [] };
   const metadata: StepExportMetadata = {
     productName: document.name,
@@ -3969,6 +3996,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           );
         }
         const publicationAxisTest = boreAxisMeasurement(kernel, solid);
+        // #2321: what each B-spline face lies on, for the form tolerances
+        // model PMI may put on it.
+        const supportSurfaces = bsplineSupportSurfaces(kernel, solid);
         for (let index = 0; index < faceOffsets.length - 1; index += 1) {
           const start = faceOffsets[index]!;
           const end = faceOffsets[index + 1]!;
@@ -4019,6 +4049,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               publicationAxisTest
             )
           };
+          const supportSurface = supportSurfaces.get(handle);
+          if (supportSurface && publishedFace.geometry)
+            publishedFace.geometry.supportSurface = supportSurface;
           faceTopologyByHandle.set(handle, publishedFace);
           topology.faces.push(publishedFace);
         }

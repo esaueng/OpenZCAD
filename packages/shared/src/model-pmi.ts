@@ -159,8 +159,9 @@ export function assertModelPmiSet(value: unknown): void {
  * cylinders, circularity one between concentric circles in each section of
  * a surface of revolution, and straightness one about the straight line
  * elements a surface has. A characteristic not listed applies to any face.
- * A face whose surface class is not one of these analytic types (a B-spline
- * face, say) is not refused: its class does not say what it is.
+ * A B-spline face counts as the analytic surface it was shown to lie on
+ * (`FaceGeometry.supportSurface`); one whose support is not established
+ * takes none of these.
  */
 export const MODEL_PMI_CHARACTERISTIC_SURFACES: Readonly<
   Partial<Record<DrawingGeometricCharacteristic, readonly string[]>>
@@ -180,23 +181,49 @@ const ANALYTIC_SURFACES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * The analytic surface a face is, for the form tolerances it can take: its
+ * own class when that is analytic, else the surface a B-spline face was
+ * shown to lie on (`supportSurface`); undefined when neither is known.
+ */
+export function modelPmiFaceSurface(
+  surfaceType: string | undefined,
+  supportSurface?: string
+): string | undefined {
+  if (surfaceType !== undefined && ANALYTIC_SURFACES[surfaceType])
+    return surfaceType;
+  return supportSurface !== undefined && ANALYTIC_SURFACES[supportSurface]
+    ? supportSurface
+    : undefined;
+}
+
+/**
  * Why `characteristic` cannot control a face on `surfaceType` (the
- * kernel's surface class: 'plane', 'cylinder', …), or null when it can.
+ * kernel's surface class: 'plane', 'cylinder', 'bspline', …) and
+ * `supportSurface` (the analytic surface a B-spline face lies on, when
+ * shown), or null when it can. Fails closed: a face whose surface is not
+ * known to be one the characteristic needs is refused.
  */
 export function modelPmiSurfaceError(
   characteristic: DrawingGeometricCharacteristic,
-  surfaceType: string | undefined
+  surfaceType: string | undefined,
+  supportSurface?: string
 ): string | null {
   const allowed = MODEL_PMI_CHARACTERISTIC_SURFACES[characteristic];
-  if (!allowed || surfaceType === undefined) return null;
-  const actual = ANALYTIC_SURFACES[surfaceType];
-  if (actual === undefined || allowed.includes(surfaceType)) return null;
-  const kinds = allowed.map((surface) => ANALYTIC_SURFACES[surface]!);
+  if (!allowed) return null;
+  const surface = modelPmiFaceSurface(surfaceType, supportSurface);
+  if (surface !== undefined && allowed.includes(surface)) return null;
+  const kinds = allowed.map((kind) => ANALYTIC_SURFACES[kind]!);
   const list =
     kinds.length === 1
       ? kinds[0]!
       : `${kinds.slice(0, -1).join(', ')} or ${kinds[kinds.length - 1]!}`;
-  return `${DRAWING_CHARACTERISTIC_LABELS[characteristic]} applies to a ${list} face, and this face is ${actual}.`;
+  const face =
+    surface !== undefined
+      ? `this face is ${ANALYTIC_SURFACES[surface]!}`
+      : surfaceType === undefined
+        ? "this face's surface is not known"
+        : `this ${surfaceType === 'bspline' ? 'B-spline' : surfaceType} face could not be shown to be one`;
+  return `${DRAWING_CHARACTERISTIC_LABELS[characteristic]} applies to a ${list} face, and ${face}.`;
 }
 
 /** Fixed decimals with trailing zeros trimmed; never "-0". */

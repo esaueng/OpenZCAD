@@ -4,10 +4,12 @@ import {
   type GeometryBodyRepresentation,
   DRAWING_DATUM_REQUIRED_CHARACTERISTICS,
   formatModelPmiAmount,
+  modelPmiFaceSurface,
   modelPmiName,
   modelPmiSurfaceError,
   type BodyId,
   type DrawingFaceRef,
+  type FaceGeometry,
   type FaceTopology,
   type ModelPmiAnnotation,
   type ModelPmiId,
@@ -59,6 +61,12 @@ export type ModelPmiResolution =
         | 'datum-undefined'
         | 'surface-incompatible';
       message: string;
+      /**
+       * The face the entry resolved to, when the face is fine and the
+       * frame is broken for another reason: the editor still judges
+       * characteristics by it.
+       */
+      face?: FaceTopology;
     };
 
 export { modelPmiName };
@@ -107,13 +115,15 @@ export function resolveModelPmi(
     if (annotation.kind === 'feature-control-frame') {
       const surface = modelPmiSurfaceError(
         annotation.characteristic,
-        found.entry.geometry?.surfaceType
+        found.entry.geometry?.surfaceType,
+        found.entry.geometry?.supportSurface
       );
       if (surface) {
         out.set(annotation.pmiId, {
           ok: false,
           reason: 'surface-incompatible',
-          message: surface
+          message: surface,
+          face: found.entry
         });
         continue;
       }
@@ -124,7 +134,8 @@ export function resolveModelPmi(
         out.set(annotation.pmiId, {
           ok: false,
           reason: 'datum-undefined',
-          message: undeclaredDatumMessage(undeclared)
+          message: undeclaredDatumMessage(undeclared),
+          face: found.entry
         });
         continue;
       }
@@ -211,7 +222,9 @@ export function pmiFaceRef(
  * landing on `anchor`. A frame starts as a form tolerance, which needs no
  * datum, that applies to the face's surface (`modelPmiSurfaceError`):
  * cylindricity on a cylinder, circularity on another surface of
- * revolution, flatness otherwise.
+ * revolution, flatness on a plane. A B-spline face counts as the surface it
+ * was shown to lie on; one with no established surface starts as profile
+ * of a surface, which any face takes.
  */
 export function draftModelPmi(
   kind: ModelPmiAnnotation['kind'],
@@ -219,7 +232,7 @@ export function draftModelPmi(
   anchor: Vector3,
   pmi: ModelPmiSet | undefined,
   units: UnitSystem,
-  surfaceType?: string
+  geometry?: Pick<FaceGeometry, 'surfaceType' | 'supportSurface'>
 ): ModelPmiAnnotation {
   const base = {
     pmiId: createModelPmiId(),
@@ -236,17 +249,21 @@ export function draftModelPmi(
         )
       )
     };
+  const surface = modelPmiFaceSurface(
+    geometry?.surfaceType,
+    geometry?.supportSurface
+  );
   return {
     ...base,
     kind,
     characteristic:
-      surfaceType === 'cylinder'
+      surface === 'cylinder'
         ? 'cylindricity'
-        : surfaceType === 'cone' ||
-            surfaceType === 'sphere' ||
-            surfaceType === 'torus'
+        : surface === 'cone' || surface === 'sphere' || surface === 'torus'
           ? 'circularity'
-          : 'flatness',
+          : surface === 'plane'
+            ? 'flatness'
+            : 'profile-surface',
     amount: DEFAULT_AMOUNT[units]
   };
 }

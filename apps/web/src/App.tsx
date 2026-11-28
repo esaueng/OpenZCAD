@@ -23343,6 +23343,10 @@ export function App() {
     }
     const source = doc;
     const { bodyIds, allShownBodies, rowName } = target;
+    // #2258: a selected body's file leaves the rest of the model's PMI out
+    // of scope; a whole-model file names PMI it cannot place.
+    const bodySelection =
+      !allShownBodies && exportScopeInfo?.selection === true;
     const fileName = `${exportStemFor(rowName)}.step`;
     await runExportJob({
       fileName,
@@ -23358,6 +23362,7 @@ export function App() {
         const result = await geometry.exportModel('step', exported, bodyIds, {
           ...options,
           ...(allShownBodies ? { allShownBodies: true } : {}),
+          ...(bodySelection ? { bodySelection: true } : {}),
           fileName,
           units: exportUnitsFor(doc.units),
           stepProtocol: appSettingsRef.current.files.stepProtocol

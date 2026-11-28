@@ -37,6 +37,11 @@ export interface StepPmiFace {
   face: number;
   /** The kernel's surface type of the face: 'plane', 'cylinder', …. */
   surface: string;
+  /**
+   * #2321: the analytic surface a B-spline face was shown to lie on
+   * (`FaceGeometry.supportSurface`); what form tolerances it takes.
+   */
+  support?: string;
 }
 
 export type StepPmiEntry =
@@ -93,7 +98,8 @@ export function planStepPmi(
     const name = entry.name ?? entry.characteristic;
     const surface = modelPmiSurfaceError(
       entry.characteristic,
-      entry.face.surface
+      entry.face.surface,
+      entry.face.support
     );
     if (surface) {
       omitted.push({ name, reason: surface.replace(/\.$/, '') });
@@ -289,7 +295,11 @@ export function appendStepPmi(
       entry.datums.some(
         (reference) => !datums.has(key(part, reference.letter))
       ) ||
-      modelPmiSurfaceError(entry.characteristic, entry.face.surface) !== null
+      modelPmiSurfaceError(
+        entry.characteristic,
+        entry.face.surface,
+        entry.face.support
+      ) !== null
     )
       continue;
     const face = faceEntity(entry.face);

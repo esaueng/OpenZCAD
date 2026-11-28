@@ -12,6 +12,7 @@ import {
   modelPmiSurfaceError,
   type DrawingGeometricCharacteristic,
   type DrawingMaterialCondition,
+  type FaceGeometry,
   type GeometryBodyRepresentation,
   type BodyId,
   type ModelPmiAnnotation,
@@ -97,7 +98,7 @@ function pickedFace(
     );
     return null;
   }
-  return { face, anchor, surfaceType: topology?.geometry?.surfaceType };
+  return { face, anchor, geometry: topology?.geometry };
 }
 
 function rowActions(
@@ -121,7 +122,7 @@ function rowActions(
         pick.anchor,
         document.pmi,
         document.units,
-        pick.surfaceType
+        pick.geometry
       );
       if (workspace.execute(commandFactories.addModelPmi({ annotation }))) {
         setSelectedPmiId(annotation.pmiId);
@@ -156,7 +157,11 @@ function rowActions(
       // control (cylindricity to a flat cap).
       const surface =
         previous.kind === 'feature-control-frame'
-          ? modelPmiSurfaceError(previous.characteristic, pick.surfaceType)
+          ? modelPmiSurfaceError(
+              previous.characteristic,
+              pick.geometry?.surfaceType,
+              pick.geometry?.supportSurface
+            )
           : null;
       if (surface) {
         workspace.status(
@@ -343,9 +348,7 @@ function PmiEditor(props: {
       ) : (
         <FrameFields
           frame={annotation}
-          surfaceType={
-            resolution?.ok ? resolution.face.geometry?.surfaceType : undefined
-          }
+          geometry={resolution?.face?.geometry}
           letters={props.letters}
           units={actions.units}
           disabled={disabled}
@@ -373,8 +376,11 @@ function PmiEditor(props: {
 
 function FrameFields(props: {
   frame: Frame;
-  /** The resolved face's surface class, which some characteristics need. */
-  surfaceType: string | undefined;
+  /**
+   * The resolved face's geometry, also while the frame is broken for a
+   * reason other than its face: some characteristics need its surface.
+   */
+  geometry: FaceGeometry | undefined;
   letters: string[];
   units: string;
   disabled: boolean;
@@ -450,8 +456,11 @@ function FrameFields(props: {
                   )) ||
                 // #2321: not one that cannot control this face.
                 (characteristic !== frame.characteristic &&
-                  modelPmiSurfaceError(characteristic, props.surfaceType) !==
-                    null)
+                  modelPmiSurfaceError(
+                    characteristic,
+                    props.geometry?.surfaceType,
+                    props.geometry?.supportSurface
+                  ) !== null)
               }
             >
               {DRAWING_CHARACTERISTIC_LABELS[characteristic]}

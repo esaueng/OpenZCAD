@@ -246,6 +246,11 @@ export type GeometryWorkerRequest =
       /** 'step' only: the application protocol to state; AP214 when unset. */
       stepProtocol?: StepProtocol;
       /**
+       * 'step' only: `bodyIds` is the user's selection, so PMI on other
+       * bodies is not reported as left out (#2258).
+       */
+      bodySelection?: boolean;
+      /**
        * F06: ignore `bodyIds` and write every body the document itself shows
        * once built — a configuration that is not the displayed one, whose
        * bodies the caller cannot list.
@@ -1822,6 +1827,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
               ...(request.fileName ? { fileName: request.fileName } : {}),
               ...(request.stepProtocol
                 ? { protocol: request.stepProtocol }
+                : {}),
+              ...(request.bodySelection && !request.allShownBodies
+                ? { bodySelection: true }
                 : {})
             })
           : null;

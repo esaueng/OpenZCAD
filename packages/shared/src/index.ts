@@ -4224,6 +4224,16 @@ export interface FaceGeometry {
    * outer boundary, sampled (as `centroid` is) for a curved one.
    */
   outerCentroid?: Vector3;
+  /**
+   * #2321: the analytic surface ('plane', 'cylinder', 'cone', 'sphere' or
+   * 'torus') a B-spline face was shown to lie on: the kernel's elementary
+   * recognition names it and samples across the face's surface lie on it
+   * within linear model tolerance. Absent on an analytic face, whose
+   * {@link surfaceType} already says it, and on a B-spline face whose
+   * support could not be established, which consumers must treat as
+   * unknown rather than as any surface.
+   */
+  supportSurface?: string;
   /** Outward unit normal; present for exact planar surfaces. */
   normal?: Vector3;
   /**

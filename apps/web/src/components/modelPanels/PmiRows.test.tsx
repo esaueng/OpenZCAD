@@ -1,4 +1,10 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen
+} from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AnyCommand } from '@openzcad/command-system';
 import type {
@@ -19,14 +25,18 @@ import { PmiRows } from './PmiRows';
 const BODY = 'body_pin';
 const BARREL = 101;
 const CAP = 202;
+/** An imported B-spline side shown to lie on a cylinder, and a free-form one. */
+const SPLINE_SIDE = 303;
+const FREEFORM = 404;
 
-const face = (hash: number, surfaceType: string) => ({
+const face = (hash: number, surfaceType: string, supportSurface?: string) => ({
   topologyId: `face_${hash}`,
   hash,
   triangleStart: 0,
   triangleCount: 0,
   geometry: {
     surfaceType,
+    ...(supportSurface ? { supportSurface } : {}),
     area: 1,
     center: { x: 0, y: 0, z: hash === CAP ? 16 : 8 }
   }
@@ -35,7 +45,12 @@ const face = (hash: number, surfaceType: string) => ({
 const representations = {
   [BODY]: {
     topology: {
-      faces: [face(BARREL, 'cylinder'), face(CAP, 'plane')],
+      faces: [
+        face(BARREL, 'cylinder'),
+        face(CAP, 'plane'),
+        face(SPLINE_SIDE, 'bspline', 'cylinder'),
+        face(FREEFORM, 'bspline')
+      ],
       edges: []
     }
   }
@@ -171,5 +186,88 @@ describe('PmiRows', () => {
       "Broken: This frame's secondary datum C is not declared on the model. Add a datum feature C to a face, or choose a declared datum in that slot. Or delete the frame."
     );
     expect(alert).not.toHaveTextContent(/re-pick/);
+  });
+
+  it('judges a B-spline face by the surface it lies on, and refuses form tolerances on one with none', () => {
+    const flatness: ModelPmiAnnotation = {
+      ...cylindricity,
+      face: { bodyId: BODY, hash: CAP } as ModelPmiAnnotation['face'],
+      characteristic: 'flatness',
+      amount: 0.1
+    };
+    act(() => {
+      setSelectedPmiId(id('cyl'));
+      setPmiFace({ bodyId: BODY, hash: SPLINE_SIDE });
+    });
+    const onCommand = renderRows([flatness]);
+    fireEvent.click(
+      screen.getByRole('button', { name: /Move to selected face/ })
+    );
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Flatness applies to a planar face, and this face is cylindrical.'
+    );
+    const options = () => {
+      const menu = screen.getByRole('combobox', { name: 'Characteristic' });
+      return (value: string) =>
+        menu.querySelector<HTMLOptionElement>(`option[value="${value}"]`)!
+          .disabled;
+    };
+    cleanup();
+    act(() => setPmiFace(null));
+    renderRows([
+      {
+        ...cylindricity,
+        face: { bodyId: BODY, hash: SPLINE_SIDE } as ModelPmiAnnotation['face']
+      }
+    ]);
+    let disabled = options();
+    expect(disabled('flatness')).toBe(true);
+    expect(disabled('circularity')).toBe(false);
+    expect(screen.queryByRole('alert')).toBeNull();
+    cleanup();
+    renderRows([
+      {
+        ...cylindricity,
+        face: { bodyId: BODY, hash: FREEFORM } as ModelPmiAnnotation['face']
+      }
+    ]);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Cylindricity applies to a cylindrical face, and this B-spline face could not be shown to be one.'
+    );
+    disabled = options();
+    expect(disabled('flatness')).toBe(true);
+    expect(disabled('circularity')).toBe(true);
+    expect(disabled('straightness')).toBe(true);
+    expect(disabled('profile-surface')).toBe(false);
+  });
+
+  it('keeps judging a frame by its face while a datum it names is undeclared', () => {
+    act(() => setSelectedPmiId(id('pos')));
+    // Position on the flat cap, its datum A deleted.
+    renderRows([
+      {
+        pmiId: id('pos'),
+        kind: 'feature-control-frame',
+        face: { bodyId: BODY, hash: CAP } as ModelPmiAnnotation['face'],
+        anchor: { x: 0, y: 0, z: 16 },
+        characteristic: 'position',
+        amount: 0.1,
+        datums: [{ letter: 'A' }]
+      }
+    ]);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "This frame's primary datum A is not declared on the model."
+    );
+    const characteristic = screen.getByRole('combobox', {
+      name: 'Characteristic'
+    });
+    const option = (value: string) =>
+      characteristic.querySelector<HTMLOptionElement>(
+        `option[value="${value}"]`
+      )!;
+    expect(option('cylindricity').disabled).toBe(true);
+    expect(option('circularity').disabled).toBe(true);
+    expect(option('flatness').disabled).toBe(false);
   });
 });

@@ -8,6 +8,7 @@ import {
   addPrimitiveFeature,
   createObjectFolder,
   createProjectDocument,
+  listNodesByKind,
   normalizeDocument,
   transformBody
 } from '@openzcad/document-core';
@@ -32,6 +33,7 @@ import {
   stepPmiOmissionClause,
   stepPmiOmissionNote
 } from '../apps/web/src/lib/pmi/stepPmiDisclosure';
+import { subtractFixture } from './support/subtract-curved';
 
 /**
  * Model PMI integrity: a form tolerance only on a face it can control
@@ -152,12 +154,92 @@ describe('model PMI on compatible faces (#2321)', () => {
     expect(modelPmiSurfaceError('straightness', 'sphere')).toMatch(
       /this face is spherical/
     );
-    // Orientation, location, profile and runout take any face, and a face
-    // whose class says nothing of its shape (a B-spline) is not refused.
+    // Orientation, location, profile and runout take any face.
     expect(modelPmiSurfaceError('position', 'plane')).toBeNull();
-    expect(modelPmiSurfaceError('cylindricity', 'bspline')).toBeNull();
-    expect(modelPmiSurfaceError('cylindricity', undefined)).toBeNull();
+    expect(modelPmiSurfaceError('position', 'bspline')).toBeNull();
+    // A B-spline face is judged by the analytic surface it was shown to lie
+    // on, and refused when none was established.
+    expect(
+      modelPmiSurfaceError('cylindricity', 'bspline', 'cylinder')
+    ).toBeNull();
+    expect(modelPmiSurfaceError('flatness', 'bspline', 'cylinder')).toBe(
+      'Flatness applies to a planar face, and this face is cylindrical.'
+    );
+    expect(modelPmiSurfaceError('cylindricity', 'bspline')).toBe(
+      'Cylindricity applies to a cylindrical face, and this B-spline face could not be shown to be one.'
+    );
+    expect(modelPmiSurfaceError('flatness', undefined)).toBe(
+      "Flatness applies to a planar face, and this face's surface is not known."
+    );
   });
+
+  it('judges an imported B-spline face by the surface it lies on, in the workspace and in AP242', async () => {
+    const manager = new CommandManager(
+      createProjectDocument('Imported', toUserId('test'))
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Target',
+        artifactId: 'artifact_target',
+        sourceName: 'trimmed-nurbs-target.step',
+        stepText: subtractFixture('trimmed-nurbs-target.step')
+      })
+    );
+    const document = manager.document;
+    const bodyId = document.bodyOrder[0] as BodyId;
+    const bodies: Bodies = (await adapter.syncDocument(document))
+      .bodyRepresentations;
+    const faces = bodies[bodyId]!.topology!.faces;
+    // Every face of the file is a B-spline; the kernel calls the flat ones
+    // planes, and the rational side stays a B-spline until it is analysed.
+    const side = faces.find(
+      (face) => face.geometry?.surfaceType === 'bspline'
+    )!;
+    expect(side.geometry).toMatchObject({ supportSurface: 'cylinder' });
+    const ref = pmiFaceRef(bodies, bodyId, side.hash)!;
+    expect(
+      draftModelPmi(
+        'feature-control-frame',
+        ref,
+        { x: 0, y: 0, z: 0 },
+        undefined,
+        'mm',
+        side.geometry
+      )
+    ).toMatchObject({ characteristic: 'cylindricity' });
+    const cylindricity = frame('cyl', ref, {
+      characteristic: 'cylindricity',
+      amount: 0.004
+    });
+    const flatness = frame('flat', ref, { characteristic: 'flatness' });
+    const resolved = resolveModelPmi(
+      { annotations: [cylindricity, flatness] },
+      bodies
+    );
+    expect(resolved.get(id('cyl'))).toMatchObject({ ok: true });
+    expect(resolved.get(id('flat'))).toMatchObject({
+      ok: false,
+      reason: 'surface-incompatible',
+      message:
+        'Flatness applies to a planar face, and this face is cylindrical.'
+    });
+    const good = await adapter.exportStepReport(
+      { ...document, pmi: { annotations: [cylindricity] } },
+      [bodyId],
+      AP242
+    );
+    expect(good.warnings).toEqual([]);
+    expect(good.text).toMatch(/CYLINDRICITY_TOLERANCE\('cylindricity'/);
+    const bad = await adapter.exportStepReport(
+      { ...document, pmi: { annotations: [flatness] } },
+      [bodyId],
+      AP242
+    );
+    expect(bad.text).not.toMatch(/FLATNESS_TOLERANCE/);
+    expect(bad.warnings).toEqual([
+      'Flatness | 0.1 — Flatness applies to a planar face, and this face is cylindrical'
+    ]);
+  }, 120_000);
 
   it('shows a cylindricity frame moved to a flat cap broken, and drafts a fitting one', async () => {
     const m = await plateAndPin();
@@ -175,7 +257,9 @@ describe('model PMI on compatible faces (#2321)', () => {
       ok: false,
       reason: 'surface-incompatible',
       message:
-        'Cylindricity applies to a cylindrical face, and this face is planar.'
+        'Cylindricity applies to a cylindrical face, and this face is planar.',
+      // The face itself is fine, so the editor still judges by it.
+      face: m.faces.cap
     });
     // A new frame starts as a form tolerance its face can take.
     const draft = (face: FaceTopology) =>
@@ -185,7 +269,7 @@ describe('model PMI on compatible faces (#2321)', () => {
         { x: 0, y: 0, z: 0 },
         undefined,
         'mm',
-        face.geometry?.surfaceType
+        face.geometry
       );
     expect(draft(m.faces.barrel)).toMatchObject({
       characteristic: 'cylindricity'
@@ -384,7 +468,8 @@ describe('broken-frame guidance (#2260)', () => {
       ok: false,
       reason: 'datum-undefined',
       message:
-        "This frame's secondary datum C is not declared on the model. Add a datum feature C to a face, or choose a declared datum in that slot."
+        "This frame's secondary datum C is not declared on the model. Add a datum feature C to a face, or choose a declared datum in that slot.",
+      face: m.faces.barrel
     });
   }, 120_000);
 });
@@ -502,6 +587,49 @@ describe('AP242 export reports omitted PMI (#2258)', () => {
     expect(alone.warnings).toEqual([
       'Parallelism | 0.1 | A — its primary datum A is on a face or body this file does not write'
     ]);
+  }, 120_000);
+
+  it('names PMI whose body no longer exists on a whole-model export, and not on a selected body', async () => {
+    const m = await plateAndPin();
+    const plateFeature = listNodesByKind(m.document, 'feature').find(
+      (node) => node.name === 'Plate'
+    )!;
+    const manager = new CommandManager({
+      ...m.document,
+      pmi: {
+        annotations: [
+          datum('a', 'A', m.ref(m.faces.plateBottom)),
+          frame('cyl', m.ref(m.faces.barrel), {
+            characteristic: 'cylindricity',
+            amount: 0.004
+          })
+        ]
+      }
+    });
+    manager.execute(
+      commandFactories.deleteFeature({
+        featureId: plateFeature.featureId
+      })
+    );
+    const document = manager.document;
+    expect(document.bodyOrder).toEqual([m.pinId]);
+    // Objects shows the datum broken: its body is gone.
+    const bodies = (await adapter.syncDocument(document)).bodyRepresentations;
+    expect(resolveModelPmi(document.pmi, bodies).get(id('a'))).toMatchObject({
+      ok: false,
+      reason: 'body-missing'
+    });
+    const whole = await adapter.exportStepReport(document, [m.pinId], AP242);
+    expect(whole.text).toMatch(/CYLINDRICITY_TOLERANCE\(/);
+    expect(whole.warnings).toEqual([
+      'Datum A — its body is no longer on the model'
+    ]);
+    // A body the user chose leaves the rest of the model out of scope.
+    const chosen = await adapter.exportStepReport(document, [m.pinId], {
+      ...AP242,
+      bodySelection: true
+    });
+    expect(chosen.warnings).toEqual([]);
   }, 120_000);
 
   it('plans entries against the file’s parts without the kernel', () => {

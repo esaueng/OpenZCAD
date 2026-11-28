@@ -27,6 +27,13 @@ export interface StepExportOptions extends ExportUnitOptions {
   timestamp?: string;
   /** The application protocol the file states; AP214 when unset. */
   protocol?: StepProtocol;
+  /**
+   * The user chose these bodies (a selected body), so model PMI on any
+   * other body is out of the file's scope and not reported as left out.
+   * Unset for a whole-model export, which names PMI on a body that is gone
+   * or did not build (#2258).
+   */
+  bodySelection?: boolean;
 }
 
 /** Why a body was left out of a whole-document STEP. */
