@@ -1,17 +1,23 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createProjectDocument } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { toUserId, type BodyId, type ProjectDocument } from '@openzcad/shared';
+import type { ProjectDocument } from '@openzcad/shared';
 import {
   RemusKernel,
   loadRemusTranslators
 } from '../packages/kernel-adapter/src/remus-runtime';
-import { meshWindingNumber } from '../packages/kernel-adapter/src/result-acceptance';
+import {
+  SUBTRACT_RECIPES as REFERENCE,
+  commitSubtract,
+  expectVolume,
+  importSubtractRecipe,
+  meshEncloses,
+  reimportedStepSolids,
+  subtractFixture
+} from './support/subtract-curved';
 
 /**
  * Issue #1242: Subtract of overlapping curved STEP bodies committed the
@@ -30,28 +36,14 @@ import { meshWindingNumber } from '../packages/kernel-adapter/src/result-accepta
  * Each recipe pins its outcome on the current Remus build, so a kernel
  * update that changes one fails here and is re-qualified rather than
  * absorbed. A pinned refusal is the acceptable outcome, never a wrong body.
+ *
+ * The STEP check below re-imports the export into Remus. For the check by a
+ * second kernel, set `OPENZCAD_SUBTRACT_EXPORT_DIR` to a directory: each
+ * recipe's reloaded export is written there as `<recipe>.step`, for
+ * `check_exports.py` beside the fixtures to measure with OCCT.
  */
 
-interface Recipe {
-  target: string;
-  tool: string;
-  targetVolume: number;
-  toolVolume: number;
-  cutVolume: number;
-  sharedVolume: number;
-  witness: [number, number, number];
-  witnessClearance: number;
-}
-
-const fixture = (name: string) =>
-  readFileSync(
-    new URL(`./fixtures/step/subtract-curved/${name}`, import.meta.url),
-    'utf8'
-  );
-const REFERENCE = JSON.parse(fixture('reference.json')) as Record<
-  string,
-  Recipe
->;
+const EXPORT_DIR = process.env.OPENZCAD_SUBTRACT_EXPORT_DIR;
 
 type Outcome =
   { kind: 'cut' } | { kind: 'refused'; family: string; code: string };
@@ -86,31 +78,6 @@ const EXPECTED: Record<string, { outcome: Outcome }> = {
   }
 };
 
-/** Volumes agree with OCCT's to a part in a thousand (tessellated measure). */
-function expectVolume(actual: number | undefined, expected: number): void {
-  expect(actual).toBeDefined();
-  expect(Math.abs(actual! - expected)).toBeLessThan(expected * 1e-3);
-}
-
-/**
- * Whether a body's display mesh encloses the witness. Independent of the
- * kernel's point classifier, which the issue found misplacing the overlap.
- */
-function meshEncloses(
-  body: { mesh: { vertices: ArrayLike<number>; indices: ArrayLike<number> } },
-  point: readonly number[]
-): boolean {
-  return (
-    meshWindingNumber(
-      {
-        positions: Float64Array.from(body.mesh.vertices),
-        indices: Uint32Array.from(body.mesh.indices)
-      },
-      point
-    ) > 0.5
-  );
-}
-
 describe('Subtract of overlapping curved STEP bodies (#1242)', () => {
   let adapter: ExactKernelAdapter;
   beforeAll(async () => {
@@ -127,23 +94,7 @@ describe('Subtract of overlapping curved STEP bodies (#1242)', () => {
   for (const [name, recipe] of Object.entries(REFERENCE)) {
     it(`${name}: removes the overlap or refuses before consuming the inputs`, async () => {
       const expected = EXPECTED[name]!;
-      const manager = new CommandManager(
-        createProjectDocument(`Subtract ${name}`, toUserId('user_1242'))
-      );
-      for (const [label, file] of [
-        ['Target', recipe.target],
-        ['Tool', recipe.tool]
-      ] as const) {
-        manager.execute(
-          commandFactories.importStep({
-            name: label,
-            artifactId: `artifact_${label.toLowerCase()}`,
-            sourceName: file,
-            stepText: fixture(file)
-          })
-        );
-      }
-      const [target, tool] = manager.document.bodyOrder as [BodyId, BodyId];
+      const { manager, target, tool } = importSubtractRecipe(name);
 
       const imported = await adapter.syncDocument(manager.document);
       expect(imported.warnings).toEqual([]);
@@ -156,14 +107,7 @@ describe('Subtract of overlapping curved STEP bodies (#1242)', () => {
       expect(meshEncloses(targetBody, recipe.witness)).toBe(true);
       expect(meshEncloses(toolBody, recipe.witness)).toBe(true);
 
-      manager.execute(
-        commandFactories.booleanBodies({
-          name: 'Subtract',
-          operation: 'subtract',
-          targetBodyIds: [target, tool]
-        })
-      );
-      const result = manager.document.bodyOrder.at(-1)!;
+      const result = commitSubtract(manager, target, tool);
 
       const check = async (
         derived: Awaited<ReturnType<ExactKernelAdapter['syncDocument']>>
@@ -220,49 +164,29 @@ describe('Subtract of overlapping curved STEP bodies (#1242)', () => {
           reloadedDocument,
           reloadedDocument.bodyOrder
         );
-        // Independent STEP check: the export re-imported into a fresh
-        // kernel holds the reference volumes, and the witness lies in the
-        // target only when the Subtract was refused.
-        const io = await loadRemusTranslators();
-        const kernel = new RemusKernel();
-        try {
-          const solids = [
-            ...kernel.deserializeSolids(
-              io.importStep(new TextEncoder().encode(step))
-            )
-          ];
-          const volumes = solids
-            .map((solid) => kernel.volume(solid, 0.01))
-            .sort((a, b) => a - b);
-          const expectedVolumes = (
-            expected.outcome.kind === 'cut'
-              ? [recipe.cutVolume]
-              : [recipe.targetVolume, recipe.toolVolume]
-          ).sort((a, b) => a - b);
-          expect(volumes).toHaveLength(expectedVolumes.length);
-          volumes.forEach((volume, index) =>
+        if (EXPORT_DIR) {
+          mkdirSync(EXPORT_DIR, { recursive: true });
+          writeFileSync(`${EXPORT_DIR}/${name}.step`, step);
+        }
+        // STEP check: the export re-imported into a fresh kernel holds the
+        // reference volumes, and the witness lies in the target only when
+        // the Subtract was refused.
+        const solids = await reimportedStepSolids(step, recipe.witness);
+        const expectedVolumes = (
+          expected.outcome.kind === 'cut'
+            ? [recipe.cutVolume]
+            : [recipe.targetVolume, recipe.toolVolume]
+        ).sort((a, b) => a - b);
+        expect(solids).toHaveLength(expectedVolumes.length);
+        solids
+          .map((solid) => solid.volume)
+          .sort((a, b) => a - b)
+          .forEach((volume, index) =>
             expectVolume(volume, expectedVolumes[index]!)
           );
-          const inside = solids.filter((solid) => {
-            const mesh = kernel.tessellateSolid(solid, 0.01);
-            try {
-              return (
-                meshWindingNumber(
-                  {
-                    positions: mesh.positions.slice(),
-                    indices: mesh.indices.slice()
-                  },
-                  recipe.witness
-                ) > 0.5
-              );
-            } finally {
-              mesh.free();
-            }
-          });
-          expect(inside).toHaveLength(expected.outcome.kind === 'cut' ? 0 : 2);
-        } finally {
-          kernel.free();
-        }
+        expect(solids.filter((solid) => solid.enclosesPoint)).toHaveLength(
+          expected.outcome.kind === 'cut' ? 0 : 2
+        );
       } finally {
         fresh.dispose();
       }
@@ -279,6 +203,40 @@ describe('Subtract of overlapping curved STEP bodies (#1242)', () => {
         recipe.targetVolume
       );
       expectVolume(undone.bodyRepresentations[tool]!.volume, recipe.toolVolume);
+    }, 120_000);
+  }
+
+  // The issue's third step: "Remus 122's direct classifier still reports the
+  // wrong overlap classification on all four." The adapter's first
+  // kept-overlap gate asks this classifier, so a pin that misplaces the
+  // witness again leaves only the tessellated gate standing.
+  for (const [name, recipe] of Object.entries(REFERENCE)) {
+    it(`${name}: the kernel classifies the witness as OCCT does`, async () => {
+      const io = await loadRemusTranslators();
+      const kernel = new RemusKernel();
+      try {
+        const imported = (file: string) =>
+          kernel.deserializeSolids(
+            io.importStep(new TextEncoder().encode(subtractFixture(file)))
+          )[0]!;
+        const classify = (solid: number) =>
+          (['classifyPoint', 'classifyPointRobust'] as const).map((method) =>
+            kernel[method](solid, ...recipe.witness, 1e-9)
+          );
+        const target = imported(recipe.target);
+        const tool = imported(recipe.tool);
+        expect(classify(target)).toEqual(['inside', 'inside']);
+        expect(classify(tool)).toEqual(['inside', 'inside']);
+        if (EXPECTED[name]!.outcome.kind === 'cut') {
+          const cut = kernel.cut(
+            kernel.copySolid(target),
+            kernel.copySolid(tool)
+          );
+          expect(classify(cut)).toEqual(['outside', 'outside']);
+        }
+      } finally {
+        kernel.free();
+      }
     }, 120_000);
   }
 });
