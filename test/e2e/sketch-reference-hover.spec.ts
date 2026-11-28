@@ -3,6 +3,8 @@ import {
   createPrimitiveInPlace,
   expect,
   expectBodyCount,
+  finishInPlaceCommand,
+  pressTool,
   stubApi,
   test,
   waitForStillViewport
@@ -42,6 +44,14 @@ async function screenPoints(
 const hoverTarget = (canvas: Locator) =>
   canvas.evaluate((element) => element.dataset.e2eHoverTarget ?? null);
 
+/** The topology ids the viewport's edge overlay actually lights. */
+const litEdges = (canvas: Locator) =>
+  canvas.evaluate((element) =>
+    element.dataset.e2eHoverEdges
+      ? element.dataset.e2eHoverEdges.split(',')
+      : []
+  );
+
 /**
  * Rests the pointer on each point in turn, long enough for the hover dwell
  * to settle, and returns the first hover the viewer reports as an edge.
@@ -51,7 +61,7 @@ async function restUntilEdge(page: Page, canvas: Locator, points: Point[]) {
     await page.mouse.move(point.x, point.y);
     await page.waitForTimeout(120);
     const target = await hoverTarget(canvas);
-    if (target?.startsWith('edge:')) return target;
+    if (target?.startsWith('edge:')) return { target, point };
   }
   return null;
 }
@@ -108,7 +118,10 @@ test(
       }))
     );
     const lit = await restUntilEdge(page, canvas, sweep);
-    expect(lit, 'a model edge under the pointer is lit').toMatch(/^edge:./);
+    expect(lit?.target, 'a model edge under the pointer is lit').toMatch(
+      /^edge:./
+    );
+    const edgePoint = lit!.point;
 
     // Over the sketch's own line, nothing is lit, and the canvas keeps no
     // stale highlight from the edge.
@@ -129,6 +142,100 @@ test(
     await expect.poll(() => hoverTarget(canvas)).toBeNull();
 
     // A hover changed nothing: the sketch still holds only the drawn line.
-    await expect(page.getByRole('contentinfo')).not.toContainText('Projected');
+    const status = page.getByRole('contentinfo');
+    await expect(status).not.toContainText('Projected');
+
+    // Project that edge, then arm Re-pick source on the projected line. A
+    // re-pick takes exactly one edge, so the top face — four boundary
+    // edges — is refused and gets no highlight, while an edge still lights.
+    await page.keyboard.press('u');
+    await page.mouse.click(edgePoint.x, edgePoint.y);
+    await expect(status).toContainText('Projected 1 linked edge.', {
+      timeout: 30_000
+    });
+    await rail.getByRole('button', { name: 'Select', exact: true }).click();
+    const [projectedMid] = await screenPoints(canvas, [{ x: 10, y: 0 }]);
+    await page.mouse.click(projectedMid!.x, projectedMid!.y);
+    const repick = page.getByRole('button', { name: 'Re-pick source' });
+    await expect(repick).toBeVisible();
+    await repick.click();
+    await expect(status).toContainText(
+      'Click the model edge that should replace this projection'
+    );
+    await expect(
+      rail.getByRole('button', { name: 'Project edges', exact: true })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await page.mouse.move(faceCenter!.x, faceCenter!.y);
+    await page.waitForTimeout(300);
+    expect(await hoverTarget(canvas)).toBeNull();
+    const relit = await restUntilEdge(page, canvas, sweep);
+    expect(relit?.target, 'an edge still lights under a re-pick').toMatch(
+      /^edge:./
+    );
+  }
+);
+
+test(
+  'Project lights the one edge of a smooth run it would take, not the run',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await stubApi(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Reference hover run');
+    await page.getByRole('button', { name: 'New project' }).click();
+    const canvas = page.locator('.viewer-host canvas');
+
+    // Rounding every edge of a box makes each face boundary a smooth run
+    // of lines and arcs, which plain hover lights as a whole.
+    await createPrimitiveInPlace(page, 'box', {
+      sizes: { width: '20', depth: '10', height: '5' }
+    });
+    await expectBodyCount(page, 1);
+    await pressTool(page, /^Fillet/);
+    const filletBar = page.getByRole('group', { name: 'Fillet command' });
+    await filletBar.locator('summary').click();
+    await filletBar
+      .getByRole('button', { name: 'Select all 12 edges' })
+      .click();
+    await filletBar.locator('summary').click();
+    await finishInPlaceCommand(page, 'Fillet');
+    await expect(
+      page.locator('.feature-row', { hasText: 'Fillet' })
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.inspector-float > *')).toHaveCount(0);
+    await expect(page.getByRole('contentinfo')).not.toContainText(
+      /Preparing model|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
+      { timeout: 30_000 }
+    );
+
+    await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+    await page.getByRole('button', { name: 'Top (XY)' }).click();
+    const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
+    await expect(rail).toBeVisible();
+    await waitForStillViewport(page);
+    await page.keyboard.press('u');
+
+    // Across the front of the rounded top: every edge met lights alone,
+    // the one Project would take, and never the run it continues into.
+    const sweep = await screenPoints(
+      canvas,
+      Array.from({ length: 41 }, (_, index) => ({
+        x: 10,
+        y: 2 - index * 0.1
+      }))
+    );
+    let edgesLit = 0;
+    for (const point of sweep) {
+      await page.mouse.move(point.x, point.y);
+      await page.waitForTimeout(120);
+      const target = await hoverTarget(canvas);
+      if (!target?.startsWith('edge:')) continue;
+      edgesLit += 1;
+      expect(await litEdges(canvas)).toEqual([target.slice('edge:'.length)]);
+    }
+    expect(edgesLit, 'the sweep crossed a rounded edge').toBeGreaterThan(0);
   }
 );

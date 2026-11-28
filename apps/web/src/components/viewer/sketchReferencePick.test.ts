@@ -3,6 +3,7 @@ import type { BodyId } from '@openzcad/shared';
 import type { PickCandidate } from '@openzcad/viewport';
 import {
   isSketchReferenceSelection,
+  sketchReferenceHover,
   sketchReferenceHoverApplies,
   sketchReferencePick,
   sketchToolTakesReference
@@ -62,6 +63,26 @@ describe('sketchReferencePick', () => {
     expect(sketchReferencePick([sketchCurve(1), region(2)])).toBeNull();
     expect(sketchReferencePick([topology('body', 'b', 1)])).toBeNull();
     expect(sketchReferencePick([])).toBeNull();
+  });
+});
+
+describe('sketchReferenceHover', () => {
+  const onlyEdges = (selection: { kind: string }) => selection.kind === 'edge';
+
+  it('lights what the click takes when the step accepts it', () => {
+    const stack = [sketchCurve(0.5), topology('edge', 'e1', 1)];
+    expect(sketchReferenceHover(stack)?.selection?.topologyId).toBe('e1');
+    expect(sketchReferenceHover(stack, onlyEdges)?.selection?.topologyId).toBe(
+      'e1'
+    );
+  });
+
+  it('lights nothing when the step would refuse the pick', () => {
+    // A re-pick that refuses the face under the pointer does not reach
+    // past it to the edge behind: the click would take the face.
+    const stack = [topology('face', 'f1', 1), topology('edge', 'e1', 2)];
+    expect(sketchReferenceHover(stack, onlyEdges)).toBeNull();
+    expect(sketchReferenceHover([sketchCurve(1)], () => true)).toBeNull();
   });
 });
 

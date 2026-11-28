@@ -38,6 +38,24 @@ export function sketchReferencePick<
 }
 
 /**
+ * What the reference step's hover lights: the candidate the click would
+ * take, and only when the step would accept it (`accepts`, e.g. a re-pick
+ * that needs exactly one source edge). A refused pick lights nothing — the
+ * hover never skips past it to something behind that the click would not
+ * reach.
+ */
+export function sketchReferenceHover<
+  T extends { selection: TopologySelection | null }
+>(
+  stack: readonly T[],
+  accepts?: (selection: TopologySelection) => boolean
+): T | null {
+  const candidate = sketchReferencePick(stack);
+  if (!candidate?.selection) return null;
+  return !accepts || accepts(candidate.selection) ? candidate : null;
+}
+
+/**
  * Whether a pointer may preview the reference under it. Touch has no hover:
  * a finger's move is a press, and nothing is lit ahead of it.
  */

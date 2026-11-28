@@ -372,6 +372,7 @@ import {
   type SketchModeRig
 } from './viewer/sketchModeController';
 import {
+  sketchReferenceHover,
   sketchReferenceHoverApplies,
   sketchReferencePick,
   sketchToolTakesReference
@@ -760,6 +761,12 @@ export interface SketchModeState {
   snapTolerancePx: number;
   /** True while a line chain (or drag) is in flight; cleared by Escape. */
   drawing: boolean;
+  /**
+   * I01: whether the reference step (Project) would take a picked edge or
+   * face, so its hover lights only what the click would be accepted for.
+   * Absent takes any edge or face.
+   */
+  referenceAccepts?: (selection: TopologySelection) => boolean;
   /** Committed objects of the session's sketch, rendered in blue. */
   objects: { id: string; data: SketchObjectData }[];
   /** Held-line shape identities qualify names without changing solver picks. */
@@ -8690,13 +8697,24 @@ export function ModelViewer({
     /** Applies a hover now and tells the dwell that is what is on screen. */
     function applyHover(result: PickCandidate | null) {
       hoverDwellRef.current.reset(result);
-      selection.applyHover(result);
+      // I01: Project takes the one edge under the pointer, never the smooth
+      // run it continues into, so its hover lights that edge alone.
+      selection.applyHover(result, {
+        edgeRun: !sketchToolTakesReference(sketchModeRef.current?.tool)
+      });
       if (e2eCanvasHooksEnabled) {
         const hovered = result?.selection;
         if (hovered) {
           renderer.domElement.dataset.e2eHoverTarget = `${hovered.kind}:${hovered.topologyId ?? ''}`;
         } else {
           delete renderer.domElement.dataset.e2eHoverTarget;
+        }
+        // What the edge overlay actually lights, not what was asked for.
+        const lit = selection.hoveredEdgeTopologyIds();
+        if (lit.length > 0) {
+          renderer.domElement.dataset.e2eHoverEdges = lit.join(',');
+        } else {
+          delete renderer.domElement.dataset.e2eHoverEdges;
         }
       }
       const nextProfileId = result?.region?.profileId ?? null;
@@ -8897,7 +8915,10 @@ export function ModelViewer({
           sketchModeRef.current?.tool,
           event.pointerType
         )
-          ? sketchReferencePick(picker.pickAll(event))
+          ? sketchReferenceHover(
+              picker.pickAll(event),
+              sketchModeRef.current?.referenceAccepts
+            )
           : null;
         const verdict = hoverDwellRef.current.propose(
           reference,
@@ -17388,11 +17409,17 @@ export function ModelViewer({
   // I01: a reference step's hover belongs to that step. Leaving it — another
   // sketch tool, or the sketch closing — drops whatever it lit, since the
   // tools after it do not hover the model and would leave it standing.
+  // Entering it, or its rule changing (a re-pick armed or disarmed), drops
+  // a highlight lit under the previous rule; the next pointer move relights.
   const sketchReferenceStep = sketchToolTakesReference(sketchMode?.tool);
+  const sketchReferenceAccepts = sketchReferenceStep
+    ? sketchMode?.referenceAccepts
+    : undefined;
   useEffect(() => {
     if (!sketchReferenceStep) return;
+    clearPointerHoverRef.current?.();
     return () => clearPointerHoverRef.current?.();
-  }, [sketchReferenceStep]);
+  }, [sketchReferenceStep, sketchReferenceAccepts]);
 
   // Region-detected sketch rendering: curves stay readable while bounded
   // cells get cached fill, boundary, marker, and plane-local pick targets.

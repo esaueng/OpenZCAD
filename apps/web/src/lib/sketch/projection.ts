@@ -14,6 +14,7 @@ import {
   type PlaneBasis
 } from '@openzcad/geometry';
 import { ownEntry } from '@openzcad/shared';
+import { projectionPickEdges } from './projectionPickEdges';
 import type {
   DerivedState,
   EdgeTopology,
@@ -81,25 +82,11 @@ function pickedEdges(
   document: ProjectDocument,
   selection: TopologySelection
 ): EdgeTopology[] {
-  const edges =
+  return projectionPickEdges(
     ownEntry(document.derived.bodyRepresentations, selection.bodyId)?.topology
-      ?.edges ?? [];
-  if (selection.kind === 'edge') {
-    const edge = edges.find((candidate) =>
-      selection.topologyId !== undefined
-        ? candidate.topologyId === selection.topologyId
-        : candidate.hash === selection.hash
-    );
-    return edge ? [edge] : [];
-  }
-  if (selection.kind === 'face' && selection.hash !== undefined) {
-    return edges.filter(
-      (edge) =>
-        edge.displayRole !== 'seam' &&
-        edge.adjacentFaceHashes?.includes(selection.hash!) === true
-    );
-  }
-  return [];
+      ?.edges ?? [],
+    selection
+  );
 }
 
 /**

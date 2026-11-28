@@ -435,6 +435,10 @@ import {
 import { resolveBoundaryRegionReference } from './lib/profileProvenance';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
 import {
+  projectionPickProjects,
+  projectionRepickAccepts
+} from './lib/sketch/projectionPickEdges';
+import {
   SKETCH_RELATION_GLYPHS,
   sketchRelationGlyphs,
   sketchRelationKeepOuts,
@@ -27310,6 +27314,42 @@ export function App() {
   );
   // The viewport's copy of the session also knows whether a solve or rebuild
   // owns the sketch, so a click cannot place text the card has disabled.
+  /**
+   * I01: what the Project tool would accept, so its hover lights only that:
+   * a pick that projects onto the sketch plane, and under a re-pick one
+   * edge projecting to the repaired object's kind of curve — the rules its
+   * commit applies (`lib/sketch/projectionPickEdges`).
+   */
+  const sketchReferenceAccepts = useMemo(() => {
+    if (sketchModeState?.tool !== 'project' || !doc || !sketchBasis) {
+      return undefined;
+    }
+    const representations = doc.derived.bodyRepresentations;
+    const edgesOf = (selection: TopologySelection) =>
+      ownEntry(representations, selection.bodyId)?.topology?.edges ?? [];
+    const repaired = projectionRepair
+      ? ownEntry(doc.nodes, projectionRepair.objectId)
+      : undefined;
+    if (projectionRepair) {
+      const objectKind =
+        repaired?.kind === 'sketch-object' ? repaired.data.objectKind : null;
+      return (selection: TopologySelection) =>
+        objectKind !== null &&
+        projectionRepickAccepts({
+          edges: edgesOf(selection),
+          selection,
+          basis: sketchBasis,
+          objectKind
+        });
+    }
+    return (selection: TopologySelection) =>
+      projectionPickProjects({
+        edges: edgesOf(selection),
+        selection,
+        basis: sketchBasis
+      });
+  }, [sketchModeState?.tool, doc, sketchBasis, projectionRepair]);
+
   const sketchModeForViewer = useMemo(
     () =>
       sketchModeState && {
@@ -27317,7 +27357,10 @@ export function App() {
         relations: sketchRelationChips,
         relationStrokes: sketchRelationStrokeSegments,
         relationKeepOuts: sketchRelationKeepOutPoints,
-        textDraftBusy: sketchSolving || geometryBusy
+        textDraftBusy: sketchSolving || geometryBusy,
+        ...(sketchReferenceAccepts
+          ? { referenceAccepts: sketchReferenceAccepts }
+          : {})
       },
     [
       sketchModeState,
@@ -27325,7 +27368,8 @@ export function App() {
       sketchRelationStrokeSegments,
       sketchRelationKeepOutPoints,
       sketchSolving,
-      geometryBusy
+      geometryBusy,
+      sketchReferenceAccepts
     ]
   );
 
