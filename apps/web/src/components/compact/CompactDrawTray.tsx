@@ -338,6 +338,10 @@ function ViewsPage({
  * does follow a run on the lift is swallowed, so nothing runs twice. A
  * mouse, the keyboard and a screen reader click.
  *
+ * Only one finger or a pen's tip runs a button, and only as it lifts over
+ * that button: the button holds the pointer it pressed, so a lift past its
+ * edge, still within the slop, comes to it too.
+ *
  * Not disposed as the button goes: an action that removes its row (Done,
  * Delete) runs on the lift, and the click that may follow must still be
  * swallowed then, not land on what is drawn in its place. The swallow ends
@@ -352,7 +356,17 @@ function useLiftTaps<K extends string>() {
     },
     onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
       if (taps.release(event) !== key) return;
-      taps.ran();
+      // A disabled button is lifted on too: it runs nothing, and swallows
+      // no click after.
+      if (event.currentTarget.disabled) return;
+      const box = event.currentTarget.getBoundingClientRect();
+      const over =
+        event.clientX >= box.left &&
+        event.clientX <= box.right &&
+        event.clientY >= box.top &&
+        event.clientY <= box.bottom;
+      if (!over) return;
+      taps.ran(event);
       action();
     },
     onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) =>
