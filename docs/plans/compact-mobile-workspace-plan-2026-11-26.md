@@ -447,7 +447,9 @@ shipping. The iOS work runs alongside the shell slices:
       `viewerResponsiveContracts.test.ts`.
     - `touch-targets`, `touch-navigation` and `touchContracts` are kept.
 13. **Native sign-in bridge.**
-    - The ADR first, then the Swift AuthenticationServices bridge, the
+    - The ADR first:
+      [ADR-026](../adrs/ADR-026-native-ios-passkey-sign-in-bridge.md)
+      (proposed). Then the Swift AuthenticationServices bridge, the
       associated-domains entitlement and the web-side bridge adapter for
       passkeys and the session.
     - It is reviewed as security-sensitive work, independently of slice
