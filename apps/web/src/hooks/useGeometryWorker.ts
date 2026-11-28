@@ -438,12 +438,14 @@ export interface GeometryWorkerApi {
   ): Promise<AssemblyInterferenceReport>;
   /**
    * AS04 through motion: the clash query at each position of a sweep, on
-   * one build of the model.
+   * one build of the model. `sweep` names the sweep a request is one of, so
+   * the worker builds the configuration rows its parts name once for all.
    */
   assemblyInterferenceSweep(
     document: ProjectDocument,
     components: AssemblySweepComponent[],
-    positions: AssemblySweepPosition[]
+    positions: AssemblySweepPosition[],
+    sweep?: string
   ): Promise<AssemblySweepWorkerReport>;
   /**
    * M09 analysis overlays: the exact per-face analysis of the named bodies,
@@ -1903,12 +1905,13 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ? posted.promise
         : Promise.reject(new Error('Geometry worker is unavailable.'));
     },
-    assemblyInterferenceSweep(document, components, positions) {
+    assemblyInterferenceSweep(document, components, positions, sweep) {
       const posted = postRequest(sweepRequests.current, {
         type: 'assembly-interference-sweep',
         document: documentForWorker(document),
         components,
-        positions
+        positions,
+        ...(sweep === undefined ? {} : { sweep })
       });
       return posted.ok
         ? posted.promise

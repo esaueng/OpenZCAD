@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import {
   assemblyInterferenceOperands,
+  modelContentHash,
   sortInterferencePairs,
   summarizeInterference
 } from '@openzcad/document-core';
@@ -14,7 +15,15 @@ import {
   assemblyRuntime,
   useAssemblyRuntime
 } from '../../lib/assembly/assemblyRuntime';
-import { describeInterference } from '../../lib/assembly/interferenceUi';
+import { assemblyViewLeavesRest } from '../../lib/assembly/assemblyView';
+import {
+  checkedPartName,
+  describeInterference,
+  describeInterferenceSummary,
+  INTERFERENCE_OTHER_POSITION,
+  INTERFERENCE_OUTDATED_HEADLINE,
+  INTERFERENCE_OUTDATED_STATUS
+} from '../../lib/assembly/interferenceUi';
 import { AssemblyMotionInterference } from './AssemblyMotionInterference';
 import type { AssemblySweepCheck } from '@openzcad/document-core';
 
@@ -33,29 +42,6 @@ function plural(count: number, one: string, many = `${one}s`) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-type InterferenceSummary = ReturnType<typeof summarizeInterference>;
-
-/**
- * "No parts overlap" is a claim about every pair. A pair the kernel could
- * not decide, or a part with no geometry to check, leaves it unproven.
- */
-function incomplete(summary: InterferenceSummary): boolean {
-  return summary.unknown > 0 || summary.missing > 0;
-}
-
-function unchecked(summary: InterferenceSummary): string {
-  return [
-    summary.unknown > 0
-      ? `${plural(summary.unknown, 'pair')} could not be checked exactly`
-      : '',
-    summary.missing > 0
-      ? `${plural(summary.missing, 'part')} had no geometry to check`
-      : ''
-  ]
-    .filter(Boolean)
-    .join(' and ');
-}
-
 /**
  * AS04: exact pairwise interference of the assembled parts. Check runs the
  * M09 clash query on every pair of components at their solved pose (never
@@ -63,6 +49,17 @@ function unchecked(summary: InterferenceSummary): string {
  * attention; a pair's witness opens under it and picks both parts on the
  * model. A result is tied to the model and poses it checked, and says so
  * when either has changed since.
+ *
+ * The pose checked is the saved one, the rest position, whatever the view
+ * shows: every summary names it, and says so outright while a study, a
+ * scrub, a sweep's "Show" or the exploded view draws the parts somewhere
+ * else (#2154).
+ *
+ * A check that returns after its inputs changed is shown as out of date,
+ * and its summary is not posted to the workspace status as if current. Its
+ * inputs are the model's content (`modelContentHash`), not only the
+ * document version: a model can be replaced at the same version. A check
+ * that returns after this section is gone (Assemble was left) posts nothing.
  */
 export function AssemblyInterferenceSection({
   document,
@@ -80,14 +77,42 @@ export function AssemblyInterferenceSection({
   const [openPair, setOpenPair] = useState<string | null>(null);
   const run = useRef(0);
   const selected = useAssemblyRuntime((s) => s.selectedComponentIds);
+  const overrides = useAssemblyRuntime((s) => s.overrides);
+  const placementOverrides = useAssemblyRuntime((s) => s.placementOverrides);
+  const exploded = useAssemblyRuntime((s) => s.exploded);
+  const explodeOverrides = useAssemblyRuntime((s) => s.explodeOverrides);
   const set = document.assembly;
+  // Whether the view draws the parts away from the pose this check reads.
+  const elsewhere = assemblyViewLeavesRest(set, {
+    overrides,
+    placementOverrides,
+    exploded,
+    explodeOverrides
+  });
   const { operands, missing } = useMemo(
     () => assemblyInterferenceOperands(document),
     [document]
   );
-  const key = `${document.version}:${JSON.stringify(operands)}`;
+  // The model a result is of: its content, whatever its version says.
+  const model = useMemo(
+    () =>
+      `${document.projectId}:${document.version}:${modelContentHash(document)}`,
+    [document]
+  );
+  const key = `${model}:${JSON.stringify(operands)}`;
+  // What a check that is still running is compared with when it returns.
+  // Read only while mounted: once the section is gone nothing is current,
+  // and this would only ever hold what was current when it went.
+  const current = useRef(key);
+  current.current = key;
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const names = new Map(set?.components.map((c) => [c.id, c.name]) ?? []);
-  const name = (id: string) => names.get(id) ?? 'Removed part';
   const enough = operands.length >= 2;
 
   const start = () => {
@@ -96,24 +121,22 @@ export function AssemblyInterferenceSection({
     setOpenPair(null);
     check(document, operands).then(
       (report) => {
-        if (run.current !== token) return;
+        if (!mounted.current || run.current !== token) return;
         // Components the main thread could not resolve are missing too.
         const merged = {
           ...report,
           missing: [...new Set([...missing, ...report.missing])]
         };
         setState({ kind: 'done', key, report: merged });
-        const summary = summarizeInterference(merged);
+        // Of the parts as they were when it started: not the current ones.
         onStatus(
-          summary.interfering > 0
-            ? `Interference: ${plural(summary.interfering, 'pair')} of parts overlap.`
-            : incomplete(summary)
-              ? `Interference: no overlap found, but ${unchecked(summary)}.`
-              : 'Interference: no parts overlap.'
+          current.current === key
+            ? describeInterferenceSummary(summarizeInterference(merged)).status
+            : INTERFERENCE_OUTDATED_STATUS
         );
       },
       (error: unknown) => {
-        if (run.current !== token) return;
+        if (!mounted.current || run.current !== token) return;
         const message =
           error instanceof Error ? error.message : 'The check failed.';
         setState({ kind: 'failed', key, message });
@@ -124,7 +147,16 @@ export function AssemblyInterferenceSection({
 
   const stale = state.kind !== 'idle' && state.key !== key;
   const report = state.kind === 'done' ? state.report : null;
+  // What a sweep may take for the pairs its motion leaves at rest: a result
+  // of the model and the positions as they are now, and no other.
+  const currentRest = report && !stale ? report : null;
   const summary = report ? summarizeInterference(report) : null;
+  // As checked: a part in another configuration row is named with its row.
+  const name = (id: string) =>
+    checkedPartName(
+      names.get(id) ?? 'Removed part',
+      report?.configurations?.[id]
+    );
   const attention = report
     ? sortInterferencePairs(report.pairs).filter(
         (pair) =>
@@ -142,20 +174,22 @@ export function AssemblyInterferenceSection({
               ? `Checking ${plural((operands.length * (operands.length - 1)) / 2, 'pair')} exactly…`
               : state.kind === 'failed'
                 ? `The check failed: ${state.message}`
-                : summary
-                  ? summary.interfering > 0
-                    ? `${plural(summary.interfering, 'pair')} overlap.`
-                    : incomplete(summary)
-                      ? `No overlap found, but ${unchecked(summary)}.`
-                      : 'No parts overlap.'
-                  : 'Checks every pair of parts as assembled, with the exact kernel.'}
+                : // The live region: an old result's clearance is never
+                  // read out as if it held now.
+                  stale
+                  ? INTERFERENCE_OUTDATED_HEADLINE
+                  : summary
+                    ? `${describeInterferenceSummary(summary).headline}${
+                        elsewhere ? ` ${INTERFERENCE_OTHER_POSITION}` : ''
+                      }`
+                    : 'Checks every pair of parts at the rest position, with the exact kernel.'}
         </p>
         <button
           type="button"
           className="assembly-link-button"
           disabled={!enough || state.kind === 'running'}
           onClick={start}
-          title="Exact pairwise check of the assembled parts"
+          title="Exact pairwise check of the parts at the rest position"
         >
           {state.kind === 'idle' ? 'Check' : 'Check again'}
         </button>
@@ -235,6 +269,8 @@ export function AssemblyInterferenceSection({
       {checkSweep ? (
         <AssemblyMotionInterference
           document={document}
+          model={model}
+          rest={currentRest}
           check={checkSweep}
           onStatus={onStatus}
         />

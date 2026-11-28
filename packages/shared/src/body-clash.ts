@@ -77,7 +77,13 @@ export interface BodyClashUnknown {
 export type BodyClashVerdict =
   BodyClashInterference | BodyClashClear | BodyClashUnknown;
 
-/** One assembly component, posed, as the interference check reads it. */
+/**
+ * One assembly component, posed, as the interference check reads it.
+ * `bodyId` is the model's live body the part stands for. A part whose own
+ * Configuration names another row than the model's active one is checked as
+ * that row builds it (what Assemble draws), whatever `bodyId` says; the
+ * report's `configurations` names each such part's row.
+ */
 export interface AssemblyInterferenceOperand {
   componentId: string;
   bodyId: string;
@@ -102,6 +108,18 @@ export interface AssemblyInterferencePair {
 export interface AssemblyInterferenceReport {
   pairs: AssemblyInterferencePair[];
   missing: string[];
+  /**
+   * The parts checked as their own configuration row builds them, not as
+   * the model's active row does, by component id. A part whose row could
+   * not be built is listed too: its pairs are unknown, never clear.
+   */
+  configurations?: Record<string, AssemblyCheckedConfiguration>;
+}
+
+/** The configuration row a part's checked geometry came from. */
+export interface AssemblyCheckedConfiguration {
+  rowId: string;
+  rowName: string;
 }
 
 /** AS04 through motion: a component the sweep may pose, with its body. */
@@ -132,4 +150,6 @@ export interface AssemblySweepPositionResult {
 export interface AssemblySweepWorkerReport {
   positions: AssemblySweepPositionResult[];
   missing: string[];
+  /** As `AssemblyInterferenceReport.configurations`. */
+  configurations?: Record<string, AssemblyCheckedConfiguration>;
 }

@@ -1,0 +1,551 @@
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  activateConfiguration,
+  addAssemblyComponents,
+  addAssemblyJoint,
+  addConfigurationColumn,
+  addConfigurationRow,
+  addPrimitiveFeature,
+  assemblyCheckComponents,
+  assemblyInterferenceOperands,
+  attachDerivedState,
+  createConfigurations,
+  createProjectDocument,
+  listParameters,
+  planAssemblySweep,
+  runAssemblySweep,
+  setConfigurationCell,
+  setParameter,
+  summarizeInterference,
+  SWEEP_REFINEMENTS,
+  updateAssemblyComponent,
+  type AssemblySweepCheck
+} from '@openzcad/document-core';
+import {
+  createExactKernelAdapter,
+  type ExactKernelAdapter
+} from '@openzcad/kernel-adapter/exact';
+import {
+  IDENTITY_PLACEMENT,
+  toUserId,
+  type AssemblyFrame,
+  type AssemblyInterferencePair,
+  type BodyClashVerdict,
+  type BodyId,
+  type FeatureNode,
+  type ProjectDocument
+} from '@openzcad/shared';
+
+/**
+ * AS04 / F06 (#2388): a part whose own Configuration names another row than
+ * the model's active one is checked as that row builds it, which is what
+ * Assemble draws (`assemblyRowDrawnParts`), never as the active row does.
+ * Checking the active row's geometry reported a false clearance for a wider
+ * part, and a false overlap for a narrower one.
+ */
+let adapter: ExactKernelAdapter;
+beforeAll(async () => {
+  adapter = await createExactKernelAdapter();
+}, 120_000);
+afterAll(() => adapter.dispose());
+
+/**
+ * The issue's fixture. A 20 × 10 × 4 plate whose width the configuration
+ * drives (Narrow 20, Wide 45), a fixed 6 × 6 × 2 stop at (30, 2, 1) and an
+ * Indicator lug that Wide suppresses, set well away from both. Narrow leaves
+ * 10 mm between plate and stop; Wide contains the stop, a 72 mm³ overlap.
+ */
+function fixture() {
+  let document = createProjectDocument('Stop', toUserId('user_as04_rows'));
+  document = setParameter(document, { name: 'width', expression: '20' });
+  for (const [name, dimensions] of [
+    ['Plate', { width: 'width', height: 10, depth: 4 }],
+    ['Stop', { width: 6, height: 6, depth: 2 }],
+    ['Indicator lug', { width: 4, height: 4, depth: 4 }]
+  ] as const)
+    document = addPrimitiveFeature(document, {
+      name,
+      bodyName: name,
+      primitiveKind: 'box',
+      dimensions
+    });
+  const width = listParameters(document)[0]!.parameterId;
+  const lug = Object.values(document.nodes).find(
+    (node): node is FeatureNode =>
+      node.kind === 'feature' && node.name === 'Indicator lug'
+  )!;
+  const [plate, stop, lugBody] = document.bodyOrder as [BodyId, BodyId, BodyId];
+  document = createConfigurations(document, {
+    rowId: 'narrow',
+    name: 'Narrow'
+  });
+  document = addConfigurationColumn(document, {
+    column: { kind: 'parameter', parameterId: width }
+  });
+  document = addConfigurationColumn(document, {
+    column: { kind: 'suppression', featureId: lug.featureId }
+  });
+  document = addConfigurationRow(document, { rowId: 'wide', name: 'Wide' });
+  document = setConfigurationCell(document, {
+    rowId: 'wide',
+    column: { kind: 'parameter', parameterId: width },
+    value: '45'
+  });
+  document = setConfigurationCell(document, {
+    rowId: 'wide',
+    column: { kind: 'suppression', featureId: lug.featureId },
+    value: true
+  });
+  document = addAssemblyComponents(document, {
+    components: [
+      { componentId: 'c_plate', name: 'Plate', bodyId: plate, grounded: true },
+      {
+        componentId: 'c_stop',
+        name: 'Stop',
+        bodyId: stop,
+        grounded: true,
+        placement: {
+          ...IDENTITY_PLACEMENT,
+          translation: { x: 30, y: 2, z: 1 }
+        }
+      },
+      {
+        componentId: 'c_lug',
+        name: 'Indicator lug',
+        bodyId: lugBody,
+        grounded: true,
+        placement: {
+          ...IDENTITY_PLACEMENT,
+          translation: { x: 0, y: 60, z: 0 }
+        }
+      }
+    ]
+  });
+  return document;
+}
+
+async function synced(document: ProjectDocument) {
+  return attachDerivedState(document, await adapter.syncDocument(document));
+}
+
+/** The check as the Interference section runs it, on the synced model. */
+async function interference(document: ProjectDocument) {
+  const live = await synced(document);
+  const { operands, missing } = assemblyInterferenceOperands(live);
+  const report = await adapter.assemblyInterference(live, operands);
+  return { ...report, missing: [...new Set([...missing, ...report.missing])] };
+}
+
+function verdictOf(
+  pairs: AssemblyInterferencePair[],
+  a: string,
+  b: string
+): BodyClashVerdict {
+  const pair = pairs.find((p) => p.a === a && p.b === b);
+  if (!pair) throw new Error(`no pair ${a}·${b}`);
+  return pair.verdict;
+}
+
+describe('AS04 interference of parts in another configuration (#2388)', () => {
+  it('follows the model while no part names another row', async () => {
+    const report = await interference(fixture());
+    expect(report.missing).toEqual([]);
+    expect(report.configurations).toBeUndefined();
+    expect(verdictOf(report.pairs, 'c_plate', 'c_stop')).toMatchObject({
+      kind: 'clear',
+      touching: false,
+      distance: 10
+    });
+    expect(summarizeInterference(report)).toMatchObject({
+      interfering: 0,
+      unknown: 0,
+      clear: 3
+    });
+  }, 120_000);
+
+  it('checks a Wide part in a Narrow model as Wide: the stop is inside it', async () => {
+    const document = updateAssemblyComponent(fixture(), {
+      componentId: 'c_plate',
+      configurationId: 'wide'
+    });
+    const before = JSON.stringify(document);
+    const report = await interference(document);
+    const verdict = verdictOf(report.pairs, 'c_plate', 'c_stop');
+    expect(verdict.kind).toBe('interference');
+    if (verdict.kind !== 'interference') return;
+    expect(verdict.volume).toBeCloseTo(72, 6);
+    expect(verdict.complete).toBe(true);
+    // The stop itself, in the assembly's frame.
+    expect(verdict.bounds).toMatchObject({
+      min: { x: 30, y: 2, z: 1 },
+      max: { x: 36, y: 8, z: 3 }
+    });
+    expect(report.configurations).toEqual({
+      c_plate: { rowId: 'wide', rowName: 'Wide' }
+    });
+    expect(report.missing).toEqual([]);
+    expect(summarizeInterference(report)).toMatchObject({
+      interfering: 1,
+      unknown: 0,
+      clear: 2
+    });
+    // The model's own active row is untouched by the check.
+    expect(JSON.stringify(document)).toBe(before);
+    expect(document.configurations?.activeRowId).toBe('narrow');
+  }, 120_000);
+
+  it('checks Narrow parts in a Wide model as Narrow: the gap is back, and the lug is there', async () => {
+    let document = updateAssemblyComponent(fixture(), {
+      componentId: 'c_plate',
+      configurationId: 'narrow'
+    });
+    document = updateAssemblyComponent(document, {
+      componentId: 'c_lug',
+      configurationId: 'narrow'
+    });
+    // Wide active: the model's plate spans the stop and its lug is suppressed.
+    document = activateConfiguration(document, { rowId: 'wide' });
+    const live = await synced(document);
+    // The active row builds no lug, yet its part is still put to the check.
+    expect(
+      assemblyCheckComponents(live).components.map((c) => c.componentId)
+    ).toEqual(['c_plate', 'c_stop', 'c_lug']);
+    const report = await interference(document);
+    expect(report.missing).toEqual([]);
+    expect(verdictOf(report.pairs, 'c_plate', 'c_stop')).toMatchObject({
+      kind: 'clear',
+      touching: false,
+      distance: 10
+    });
+    expect(verdictOf(report.pairs, 'c_plate', 'c_lug').kind).toBe('clear');
+    expect(report.configurations).toEqual({
+      c_plate: { rowId: 'narrow', rowName: 'Narrow' },
+      c_lug: { rowId: 'narrow', rowName: 'Narrow' }
+    });
+    expect(summarizeInterference(report)).toMatchObject({
+      interfering: 0,
+      unknown: 0,
+      clear: 3,
+      missing: 0
+    });
+    // Control: the same model with every part following it does overlap.
+    const following = updateAssemblyComponent(
+      updateAssemblyComponent(document, {
+        componentId: 'c_plate',
+        configurationId: null
+      }),
+      { componentId: 'c_lug', configurationId: null }
+    );
+    const followed = await interference(following);
+    const overlap = verdictOf(followed.pairs, 'c_plate', 'c_stop');
+    expect(overlap.kind).toBe('interference');
+    if (overlap.kind === 'interference')
+      expect(overlap.volume).toBeCloseTo(72, 6);
+    // Suppressed in the active row and following it: nothing to check.
+    expect(followed.missing).toEqual(['c_lug']);
+  }, 120_000);
+
+  it('lists a part whose own row shows no body as having nothing to check', async () => {
+    const document = updateAssemblyComponent(fixture(), {
+      componentId: 'c_lug',
+      configurationId: 'wide'
+    });
+    const report = await interference(document);
+    // Wide suppresses the lug: Assemble draws nothing for it.
+    expect(report.missing).toEqual(['c_lug']);
+    expect(report.pairs.map((p) => `${p.a}·${p.b}`)).toEqual([
+      'c_plate·c_stop'
+    ]);
+    expect(report.configurations).toEqual({
+      c_lug: { rowId: 'wide', rowName: 'Wide' }
+    });
+  }, 120_000);
+
+  it('leaves every pair of a part whose row cannot be built unknown, never clear', async () => {
+    let document = fixture();
+    const width = listParameters(document)[0]!.parameterId;
+    // Wide no longer evaluates: nothing can say what the part looks like.
+    document = setConfigurationCell(document, {
+      rowId: 'wide',
+      column: { kind: 'parameter', parameterId: width },
+      value: '1/0'
+    });
+    document = updateAssemblyComponent(document, {
+      componentId: 'c_plate',
+      configurationId: 'wide'
+    });
+    const report = await interference(document);
+    const unknown = {
+      kind: 'unknown',
+      reason: 'configuration_unavailable',
+      message: 'the Wide configuration of Plate could not be built'
+    };
+    expect(verdictOf(report.pairs, 'c_plate', 'c_stop')).toEqual(unknown);
+    expect(verdictOf(report.pairs, 'c_plate', 'c_lug')).toEqual(unknown);
+    // The pair that does not involve it is still decided.
+    expect(verdictOf(report.pairs, 'c_stop', 'c_lug').kind).toBe('clear');
+    expect(summarizeInterference(report)).toMatchObject({
+      interfering: 0,
+      unknown: 2,
+      clear: 1,
+      missing: 0
+    });
+  }, 120_000);
+
+  it('sweeps a part in another row as that row builds it', async () => {
+    // The stop slides along +X by 0 to 5 mm: it starts 10 mm clear of the
+    // Narrow plate and never reaches it, but is inside the Wide one throughout.
+    const along = (x: number): AssemblyFrame => ({
+      origin: { x, y: 0, z: 0 },
+      zAxis: { x: 1, y: 0, z: 0 },
+      xAxis: { x: 0, y: 1, z: 0 }
+    });
+    const base = fixture();
+    const movingTo = (max: number): ProjectDocument =>
+      addAssemblyJoint(
+        {
+          ...base,
+          assembly: {
+            ...base.assembly!,
+            components: base.assembly!.components.map((c) =>
+              c.id === 'c_stop'
+                ? {
+                    ...c,
+                    grounded: false,
+                    placement: { ...IDENTITY_PLACEMENT }
+                  }
+                : c
+            )
+          }
+        },
+        {
+          joint: {
+            id: 'j_slide',
+            name: 'Slide',
+            kind: 'slider',
+            parent: { componentId: 'c_plate', frame: along(30) },
+            child: { componentId: 'c_stop', frame: along(0) },
+            values: [0],
+            limits: [{ min: 0, max }]
+          }
+        }
+      );
+    const moving = movingTo(5);
+    let requests = 0;
+    const check: AssemblySweepCheck = (
+      document,
+      components,
+      positions,
+      sweep
+    ) => {
+      requests += 1;
+      return adapter.assemblyInterferenceSweep(
+        document,
+        components,
+        positions,
+        sweep
+      );
+    };
+    const sweep = async (document: ProjectDocument) => {
+      const live = await synced(document);
+      const planned = planAssemblySweep(live, {
+        kind: 'joint',
+        jointId: 'j_slide',
+        dof: 0
+      });
+      if (!planned.ok) throw new Error(planned.reason);
+      const report = await runAssemblySweep(live, planned.plan, check);
+      return {
+        report,
+        pair: report.pairs.find((p) => p.a === 'c_plate' && p.b === 'c_stop')!
+      };
+    };
+
+    const narrow = await sweep(moving);
+    expect(narrow.pair.overlaps).toEqual([]);
+    expect(narrow.pair.unknownAt).toEqual([]);
+    expect(narrow.report.configurations).toEqual({});
+
+    const wide = await sweep(
+      updateAssemblyComponent(moving, {
+        componentId: 'c_plate',
+        configurationId: 'wide'
+      })
+    );
+    expect(wide.pair.unknownAt).toEqual([]);
+    expect(wide.pair.overlaps).toHaveLength(1);
+    expect(wide.pair.overlaps[0]).toMatchObject({ from: 0, to: 5 });
+    expect(wide.report.configurations).toEqual({
+      c_plate: { rowId: 'wide', rowName: 'Wide' }
+    });
+
+    // Sliding 20 mm, the stop leaves the Wide plate at 15: the turn is
+    // refined over four more requests, all on one build of the Wide row.
+    const builds = vi.spyOn(
+      adapter as unknown as {
+        withExportBuild(document: ProjectDocument): Promise<unknown>;
+      },
+      'withExportBuild'
+    );
+    requests = 0;
+    const leaving = await sweep(
+      updateAssemblyComponent(movingTo(20), {
+        componentId: 'c_plate',
+        configurationId: 'wide'
+      })
+    );
+    const rowBuilds = builds.mock.calls.filter(
+      ([built]) => built.configurations?.activeRowId === 'wide'
+    ).length;
+    builds.mockRestore();
+    expect(leaving.pair.overlaps).toHaveLength(1);
+    expect(leaving.pair.overlaps[0]!.from).toBe(0);
+    expect(leaving.pair.overlaps[0]!.to).toBeLessThan(15);
+    expect(15 - leaving.pair.overlaps[0]!.to).toBeLessThanOrEqual(
+      leaving.report.resolution + 1e-9
+    );
+    expect(requests).toBe(1 + SWEEP_REFINEMENTS);
+    expect(rowBuilds).toBe(1);
+
+    // A row that cannot be built: unknown at every position, and the
+    // details keep which configuration of which part it was.
+    const width = listParameters(moving)[0]!.parameterId;
+    const unbuilt = await sweep(
+      updateAssemblyComponent(
+        setConfigurationCell(moving, {
+          rowId: 'wide',
+          column: { kind: 'parameter', parameterId: width },
+          value: '1/0'
+        }),
+        { componentId: 'c_plate', configurationId: 'wide' }
+      )
+    );
+    expect(unbuilt.pair.overlaps).toEqual([]);
+    expect(unbuilt.pair.unknownAt).toHaveLength(unbuilt.pair.checked);
+    expect(unbuilt.pair.unknownReasons).toEqual([
+      'the Wide configuration of Plate could not be built'
+    ]);
+  }, 240_000);
+
+  /** The plate checked as its own row, whose width is `width`. */
+  const pinnedTo = (base: ProjectDocument, width: string) =>
+    updateAssemblyComponent(
+      setConfigurationCell(base, {
+        rowId: 'wide',
+        column: {
+          kind: 'parameter',
+          parameterId: listParameters(base)[0]!.parameterId
+        },
+        value: width
+      }),
+      { componentId: 'c_plate', configurationId: 'wide' }
+    );
+
+  /** One sweep request: the plate and the stop where they rest. */
+  async function request(document: ProjectDocument, sweep: string) {
+    const live = await synced(document);
+    const { operands } = assemblyInterferenceOperands(live);
+    const report = await adapter.assemblyInterferenceSweep(
+      live,
+      operands.map(({ componentId, bodyId }) => ({ componentId, bodyId })),
+      [
+        {
+          at: 0,
+          matrices: Object.fromEntries(
+            operands.map((operand) => [operand.componentId, operand.matrix])
+          ),
+          pairs: [['c_plate', 'c_stop']]
+        }
+      ],
+      sweep
+    );
+    return report.positions[0]!.pairs[0]!.verdict;
+  }
+
+  it('never checks a row as it was built before an edit, whatever the sweep is called', async () => {
+    const base = fixture();
+    // The pinned row is 20 wide: 10 mm clear of the stop.
+    const before = pinnedTo(base, '20');
+    expect(await request(before, 'sweep-reused')).toMatchObject({
+      kind: 'clear',
+      distance: 10
+    });
+    // The row becomes 45 wide. Same project, same version, same sweep id.
+    const after = { ...pinnedTo(base, '45'), version: before.version };
+    expect(after.projectId).toBe(before.projectId);
+    expect(await request(after, 'sweep-reused')).toMatchObject({
+      kind: 'interference',
+      volume: 72
+    });
+    // And back: the wider row's solids are not kept for the narrower one.
+    expect(await request(before, 'sweep-reused')).toMatchObject({
+      kind: 'clear',
+      distance: 10
+    });
+  }, 240_000);
+
+  it('keeps row solids only within a byte budget, and none of the last sweep while the next builds', async () => {
+    const internals = adapter as unknown as {
+      sweepRowByteLimit: number;
+      sweepRows: {
+        sweep: string;
+        bytes: number;
+        rows: Map<string, unknown>;
+      } | null;
+      withExportBuild(document: ProjectDocument): Promise<unknown>;
+    };
+    const document = pinnedTo(fixture(), '45');
+    await request(document, 'sweep-a');
+    expect(internals.sweepRows).toMatchObject({ sweep: 'sweep-a' });
+    expect(internals.sweepRows!.rows.size).toBe(1);
+    const kept = internals.sweepRows!.bytes;
+    expect(kept).toBeGreaterThan(0);
+    expect(kept).toBeLessThanOrEqual(internals.sweepRowByteLimit);
+
+    // What the adapter holds each time a build of the Wide row starts.
+    const held: { sweep: string | undefined; rows: number; bytes: number }[] =
+      [];
+    const build = internals.withExportBuild.bind(adapter);
+    const builds = vi
+      .spyOn(internals, 'withExportBuild')
+      .mockImplementation((...args: [ProjectDocument]) => {
+        if (args[0].configurations?.activeRowId === 'wide')
+          held.push({
+            sweep: internals.sweepRows?.sweep,
+            rows: internals.sweepRows?.rows.size ?? 0,
+            bytes: internals.sweepRows?.bytes ?? 0
+          });
+        return build(...args);
+      });
+    const limit = internals.sweepRowByteLimit;
+    try {
+      // The same request of the same sweep: served from what is held.
+      await request(document, 'sweep-a');
+      expect(held).toEqual([]);
+      // Another sweep: the last one's solids are gone before it builds.
+      await request(document, 'sweep-b');
+      expect(held).toEqual([{ sweep: 'sweep-b', rows: 0, bytes: 0 }]);
+      expect(internals.sweepRows).toMatchObject({
+        sweep: 'sweep-b',
+        bytes: kept
+      });
+      // A row larger than the budget is checked, and not kept.
+      internals.sweepRowByteLimit = kept - 1;
+      held.length = 0;
+      expect(await request(document, 'sweep-c')).toMatchObject({
+        kind: 'interference',
+        volume: 72
+      });
+      expect(await request(document, 'sweep-c')).toMatchObject({
+        kind: 'interference',
+        volume: 72
+      });
+      expect(held).toHaveLength(2);
+      expect(internals.sweepRows).toMatchObject({ sweep: 'sweep-c', bytes: 0 });
+      expect(internals.sweepRows!.rows.size).toBe(0);
+    } finally {
+      internals.sweepRowByteLimit = limit;
+      builds.mockRestore();
+    }
+  }, 240_000);
+});

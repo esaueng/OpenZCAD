@@ -2,8 +2,14 @@ import type { Page } from '@playwright/test';
 import {
   addAssemblyComponents,
   addAssemblyJoint,
+  addConfigurationColumn,
+  addConfigurationRow,
   addPrimitiveFeature,
-  createProjectDocument
+  createConfigurations,
+  createProjectDocument,
+  listParameters,
+  setConfigurationCell,
+  setParameter
 } from '@openzcad/document-core';
 import {
   IDENTITY_PLACEMENT,
@@ -83,6 +89,58 @@ function clashingBlades(name: string): ProjectDocument {
   });
 }
 
+/**
+ * #2388's fixture: a 20 × 10 × 4 plate whose width the configuration drives
+ * (Narrow 20, active; Wide 45) and a fixed 6 × 6 × 2 stop at (30, 2, 1).
+ * Narrow leaves 10 mm between them; the Wide plate contains the stop.
+ */
+function configuredPlate(name: string): ProjectDocument {
+  let document = createProjectDocument(name, toUserId('user_e2e'));
+  document = setParameter(document, { name: 'width', expression: '20' });
+  document = addPrimitiveFeature(document, {
+    name: 'Plate',
+    bodyName: 'Plate',
+    primitiveKind: 'box',
+    dimensions: { width: 'width', height: 10, depth: 4 }
+  });
+  document = addPrimitiveFeature(document, {
+    name: 'Stop',
+    bodyName: 'Stop',
+    primitiveKind: 'box',
+    dimensions: { width: 6, height: 6, depth: 2 }
+  });
+  const width = listParameters(document)[0]!.parameterId;
+  const [plate, stop] = document.bodyOrder as [BodyId, BodyId];
+  document = createConfigurations(document, {
+    rowId: 'narrow',
+    name: 'Narrow'
+  });
+  document = addConfigurationColumn(document, {
+    column: { kind: 'parameter', parameterId: width }
+  });
+  document = addConfigurationRow(document, { rowId: 'wide', name: 'Wide' });
+  document = setConfigurationCell(document, {
+    rowId: 'wide',
+    column: { kind: 'parameter', parameterId: width },
+    value: '45'
+  });
+  return addAssemblyComponents(document, {
+    components: [
+      { componentId: 'c_plate', name: 'Plate', bodyId: plate, grounded: true },
+      {
+        componentId: 'c_stop',
+        name: 'Stop',
+        bodyId: stop,
+        grounded: true,
+        placement: {
+          ...IDENTITY_PLACEMENT,
+          translation: { x: 30, y: 2, z: 1 }
+        }
+      }
+    ]
+  });
+}
+
 async function openDocument(page: Page, document: ProjectDocument) {
   await stubApi(page);
   await page.route('**/api/projects', (route) =>
@@ -147,12 +205,14 @@ test(
     const interference = panel.getByRole('region', { name: 'Interference' });
     const status = interference.getByRole('status');
     await expect(status).toHaveText(
-      'Checks every pair of parts as assembled, with the exact kernel.'
+      'Checks every pair of parts at the rest position, with the exact kernel.'
     );
 
     // Exact check of all three pairs in the geometry worker.
     await interference.getByRole('button', { name: 'Check' }).click();
-    await expect(status).toHaveText('1 pair overlap.', { timeout: 60_000 });
+    await expect(status).toHaveText('1 pair overlaps at the rest position.', {
+      timeout: 60_000
+    });
     const overlap = interference.getByRole('button', {
       name: 'Blade A and Blade B: 2880 mm³'
     });
@@ -170,9 +230,9 @@ test(
     );
     await expect(witness).toContainText('Overlap region 60 × 4 × 12 mm.');
     await expect(witness).toContainText('Inside both at (');
-    await expect(
-      overlap.locator('xpath=ancestor::li[1]')
-    ).toHaveClass(/\bis-selected\b/);
+    await expect(overlap.locator('xpath=ancestor::li[1]')).toHaveClass(
+      /\bis-selected\b/
+    );
 
     // M09: the section cut through the blades shows their overlap, drawn on
     // the cut and labelled as display evidence. The pin is not in it.
@@ -217,7 +277,9 @@ test(
       'Out of date: the parts or their positions changed since this check.'
     );
     await interference.getByRole('button', { name: 'Check again' }).click();
-    await expect(status).toHaveText('1 pair overlap.', { timeout: 60_000 });
+    await expect(status).toHaveText('1 pair overlaps at the rest position.', {
+      timeout: 60_000
+    });
     await expect(interference).not.toContainText('Out of date');
     const turned = interference.getByRole('button', {
       name: /^Blade A and Blade B: /
@@ -227,5 +289,53 @@ test(
     const volume = Number(/: ([\d.]+) mm³$/.exec(name)?.[1]);
     expect(volume).toBeGreaterThan(0);
     expect(volume).toBeLessThan(2880);
+  }
+);
+
+test(
+  "checks a part in its own configuration, not the model's active one (AS04, #2388)",
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(150_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openDocument(page, configuredPlate('Configured interference'));
+    await page.getByRole('button', { name: 'Assemble', exact: true }).click();
+    const panel = page.getByRole('complementary', { name: 'Assembly' });
+    const interference = panel.getByRole('region', { name: 'Interference' });
+    const status = interference.getByRole('status');
+
+    // Following the model (Narrow), the plate is 10 mm clear of the stop.
+    await interference.getByRole('button', { name: 'Check' }).click();
+    await expect(status).toHaveText('No parts overlap at the rest position.', {
+      timeout: 60_000
+    });
+    await expect(interference).toContainText('1 pair clear');
+
+    // The plate's own Configuration set to Wide: Assemble draws the wide
+    // plate across the stop, and the check reads that geometry.
+    await panel.getByRole('button', { name: 'Plate', exact: true }).click();
+    await panel
+      .getByLabel('Plate details')
+      .getByRole('combobox', { name: 'Configuration' })
+      .selectOption({ label: 'Wide' });
+    await expect(interference).toContainText('Out of date');
+    // The live region leads with that and no longer reads the Narrow
+    // result's clearance out as if it held.
+    await expect(status).toHaveText(
+      'Out of date. Check again for the parts as they are now.'
+    );
+    await interference.getByRole('button', { name: 'Check again' }).click();
+    await expect(status).toHaveText('1 pair overlaps at the rest position.', {
+      timeout: 60_000
+    });
+    const overlap = interference.getByRole('button', {
+      name: 'Plate (Wide) and Stop: 72 mm³'
+    });
+    await expect(overlap).toBeVisible();
+    await expect(interference).not.toContainText('pair clear');
+    await overlap.click();
+    await expect(
+      interference.locator('.assembly-interference-witness')
+    ).toContainText('72 mm³ shared, measured by an exact intersection.');
   }
 );

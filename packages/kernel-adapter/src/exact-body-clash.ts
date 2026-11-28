@@ -514,12 +514,32 @@ export function exactBodyClash(
 }
 
 /**
+ * An operand of the pairwise check: its solids in the shared frame, or, for
+ * one whose geometry could not be had, the reason. Every pair naming such an
+ * operand is that unknown: it is still a pair, and is never left out as if
+ * nothing were there to clash.
+ */
+export type PairwiseClashOperand<Id> =
+  { id: Id; solids: readonly number[] } | { id: Id; unknown: BodyClashUnknown };
+
+/** The clash verdict for two operands; unknown when either has no solids. */
+export function operandClash<Id>(
+  kernel: RemusKernel,
+  left: PairwiseClashOperand<Id>,
+  right: PairwiseClashOperand<Id>
+): BodyClashVerdict {
+  if ('unknown' in left) return left.unknown;
+  if ('unknown' in right) return right.unknown;
+  return exactBodyClash(kernel, left.solids, right.solids);
+}
+
+/**
  * Every unordered pair of operands, in input order. Each operand's solids
  * must already sit in one shared frame (assembly components posed).
  */
 export function pairwiseBodyClash<Id>(
   kernel: RemusKernel,
-  operands: readonly { id: Id; solids: readonly number[] }[]
+  operands: readonly PairwiseClashOperand<Id>[]
 ): { a: Id; b: Id; verdict: BodyClashVerdict }[] {
   const pairs: { a: Id; b: Id; verdict: BodyClashVerdict }[] = [];
   for (let i = 0; i < operands.length; i += 1) {
@@ -527,11 +547,7 @@ export function pairwiseBodyClash<Id>(
       pairs.push({
         a: operands[i]!.id,
         b: operands[j]!.id,
-        verdict: exactBodyClash(
-          kernel,
-          operands[i]!.solids,
-          operands[j]!.solids
-        )
+        verdict: operandClash(kernel, operands[i]!, operands[j]!)
       });
     }
   }

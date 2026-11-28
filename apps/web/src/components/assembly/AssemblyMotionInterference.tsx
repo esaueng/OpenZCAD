@@ -1,10 +1,13 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import {
+  assemblyCheckComponents,
   assemblySweepOverrides,
+  coverSweepRestPairs,
   planAssemblySweep,
   runAssemblySweep,
   sortSweptPairs,
+  summarizeSweptPairs,
   type AssemblySweepCheck,
   type AssemblySweepReport,
   type AssemblySweepSource,
@@ -15,21 +18,40 @@ import {
   coupledJointLimits,
   jointSweepRange,
   type AssemblyDofUnit,
+  type AssemblyInterferenceReport,
   type ProjectDocument
 } from '@openzcad/shared';
 import { assemblyRuntime } from '../../lib/assembly/assemblyRuntime';
 import { formatAssemblyValue } from '../../lib/assembly/assemblyUi';
-import { describeInterference } from '../../lib/assembly/interferenceUi';
+import {
+  checkedPartName,
+  describeInterference,
+  describeSweepSummary,
+  describeSweepUnknown,
+  SWEEP_HELD_NOTE,
+  SWEEP_OUTDATED_HEADLINE,
+  SWEEP_OUTDATED_STATUS,
+  SWEEP_REST_NOTE
+} from '../../lib/assembly/interferenceUi';
 import { formatNumber } from '../../lib/model';
 
 type SweepState =
   | { kind: 'idle' }
-  | { kind: 'running'; key: string; pairs: number; positions: number }
+  | {
+      kind: 'running';
+      key: string;
+      pairs: number;
+      /** Pairs the motion holds away from rest: checked once each. */
+      held: number;
+      positions: number;
+    }
   | {
       kind: 'done';
       key: string;
       source: AssemblySweepSource;
       unit: AssemblyDofUnit | 's';
+      /** The motion as the picker named it when it was swept. */
+      label: string;
       report: AssemblySweepReport;
     }
   | { kind: 'failed'; key: string; message: string };
@@ -45,18 +67,36 @@ const sourceValue = (source: AssemblySweepSource) =>
 
 /**
  * AS04 interference through motion: the exact pairwise check at positions
- * along one joint's sweep or one motion study, for the pairs that move
- * relative to each other. Every figure says it was sampled: an overlap
+ * along one joint's sweep or one motion study, for the pairs the motion can
+ * move relative to each other, and once for each pair it holds away from
+ * its rest position. Every figure says it was sampled: an overlap
  * shorter than one step can fall between positions, so nothing is called
  * clear outright. "Show" poses the assembly at a pair's worst position, as
  * a transient scrub that is never saved.
+ *
+ * Every pair is accounted for. A pair the motion leaves where it rests is
+ * not checked here: it takes the verdict of the static check above while
+ * that result is current (`rest`), and is otherwise listed as not checked.
+ * The summary line counts what was not decided or not checked as well as
+ * what overlaps, so neither ever reads as "no overlap" (#2183).
+ *
+ * A sweep that returns after the motion picked, the parts or the model's
+ * content changed is shown as out of date, and its summary is not posted to
+ * the workspace status as if current. One that returns after this section
+ * is gone (Assemble was left) posts nothing.
  */
 export function AssemblyMotionInterference({
   document,
+  model,
+  rest,
   check,
   onStatus
 }: {
   document: ProjectDocument;
+  /** What names the model a result is of: its content, not its version. */
+  model: string;
+  /** The static check's result, when it is of the model as it is now. */
+  rest: AssemblyInterferenceReport | null;
   check: AssemblySweepCheck;
   onStatus(message: string): void;
 }) {
@@ -104,10 +144,25 @@ export function AssemblyMotionInterference({
   const selected =
     sources.find((entry) => entry.value === chosen) ?? sources[0] ?? null;
   const names = new Map(set?.components.map((c) => [c.id, c.name]) ?? []);
-  const name = (id: string) => names.get(id) ?? 'Removed part';
-  const key = selected
-    ? `${document.version}:${selected.value}:${JSON.stringify(set)}`
-    : '';
+  // The parts a sweep plans with: which have a live body is derived state,
+  // so it is not in the model's content.
+  const parts = useMemo(
+    () => JSON.stringify(assemblyCheckComponents(document)),
+    [document]
+  );
+  const key = selected ? `${model}:${selected.value}:${parts}` : '';
+  // What a sweep that is still running is compared with when it returns,
+  // and the static result it may take for the pairs left at rest. Read only
+  // while mounted: once the section is gone nothing is current.
+  const current = useRef({ key, rest });
+  current.current = { key, rest };
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   if (!set || sources.length === 0) return null;
 
@@ -130,29 +185,38 @@ export function AssemblyMotionInterference({
       kind: 'running',
       key,
       pairs: plan.pairs.length,
+      held: plan.held.length,
       positions: plan.positions.length
     });
-    runAssemblySweep(document, plan, check).then(
+    // Left behind (the section gone, or another sweep begun), it stops
+    // asking the worker for positions nobody will read.
+    const abandoned = () => !mounted.current || run.current !== token;
+    runAssemblySweep(document, plan, check, abandoned).then(
       (report) => {
-        if (run.current !== token) return;
+        if (!mounted.current || run.current !== token) return;
         setState({
           kind: 'done',
           key,
           source: plan.source,
           unit: plan.unit,
+          label: selected.label,
           report
         });
-        const overlapping = report.pairs.filter(
-          (pair) => pair.overlaps.length > 0
-        ).length;
+        // Of the motion and parts as they were when it started. A current
+        // static result speaks for the pairs the motion leaves at rest.
+        const now = current.current;
         onStatus(
-          overlapping > 0
-            ? `Interference through motion: ${plural(overlapping, 'pair')} of parts overlap along ${selected.label}.`
-            : `Interference through motion: no overlap at ${plural(report.checked, 'position')} checked along ${selected.label}.`
+          now.key === key
+            ? describeSweepSummary(
+                summarizeSweptPairs(coverSweepRestPairs(report, now.rest)),
+                report.checked,
+                selected.label
+              ).status
+            : SWEEP_OUTDATED_STATUS
         );
       },
       (error: unknown) => {
-        if (run.current !== token) return;
+        if (!mounted.current || run.current !== token) return;
         const message =
           error instanceof Error ? error.message : 'The check failed.';
         setState({ kind: 'failed', key, message });
@@ -185,14 +249,35 @@ export function AssemblyMotionInterference({
   };
 
   const stale = state.kind !== 'idle' && state.key !== key;
-  const done = state.kind === 'done' ? state : null;
+  // The pairs the motion leaves at rest take the static check's verdicts
+  // only while both results are of the model as it is now: an out-of-date
+  // sweep is never completed from a newer static result.
+  const done =
+    state.kind === 'done'
+      ? {
+          ...state,
+          report: coverSweepRestPairs(state.report, stale ? null : rest)
+        }
+      : null;
+  // As checked: a part in another configuration row is named with its row.
+  const name = (id: string) =>
+    checkedPartName(
+      names.get(id) ?? 'Removed part',
+      done?.report.configurations[id]
+    );
   const attention = done
     ? sortSweptPairs(done.report.pairs).filter(
         (pair) =>
           pair.overlaps.length > 0 || pair.unknownAt.length > 0 || pair.touches
       )
     : [];
-  const quiet = done ? done.report.pairs.length - attention.length : 0;
+  const quiet = done
+    ? done.report.pairs.filter((pair) => !attention.includes(pair))
+    : [];
+  const quietHeld = quiet.filter((pair) => pair.held).length;
+  const quietRest = quiet.filter((pair) => pair.atRest).length;
+  const quietMoving = quiet.length - quietHeld - quietRest;
+  const unchecked = done ? done.report.unchecked.length : 0;
 
   const pairValue = (pair: AssemblySweptPair, unit: AssemblyDofUnit | 's') => {
     if (pair.overlaps.length > 0)
@@ -227,18 +312,27 @@ export function AssemblyMotionInterference({
         {/* Not a second status role: the section's own status leads. */}
         <p className="assembly-muted" aria-live="polite">
           {state.kind === 'running'
-            ? `Checking ${plural(state.pairs, 'moving pair')} at ${plural(state.positions, 'position')}…`
+            ? `Checking ${[
+                state.pairs > 0
+                  ? `${plural(state.pairs, 'moving pair')} at ${plural(state.positions, 'position')}`
+                  : '',
+                state.held > 0
+                  ? `${plural(state.held, 'pair')} held away from rest`
+                  : ''
+              ]
+                .filter(Boolean)
+                .join(', and ')}…`
             : state.kind === 'failed'
               ? `The check failed: ${state.message}`
-              : done
-                ? attention.some((pair) => pair.overlaps.length > 0)
-                  ? `${plural(
-                      attention.filter((pair) => pair.overlaps.length > 0)
-                        .length,
-                      'pair'
-                    )} overlap along the motion.`
-                  : `No overlap at the ${plural(done.report.checked, 'position')} checked.`
-                : 'Checks the parts that move against each other, at positions along the motion.'}
+              : stale
+                ? SWEEP_OUTDATED_HEADLINE
+                : done
+                  ? describeSweepSummary(
+                      summarizeSweptPairs(done.report),
+                      done.report.checked,
+                      done.label
+                    ).headline
+                  : 'Checks the parts that move against each other, at positions along the motion.'}
         </p>
         <button
           type="button"
@@ -313,14 +407,17 @@ export function AssemblyMotionInterference({
                             }
                           </p>
                         ) : null}
+                        {pair.held ? <p>{SWEEP_HELD_NOTE}</p> : null}
+                        {pair.atRest ? <p>{SWEEP_REST_NOTE}</p> : null}
                         {pair.unknownAt.length > 0 ? (
                           <p>
-                            {`Not checked exactly at ${pair.unknownAt
-                              .slice(0, 6)
-                              .map((at) => format(at, done.unit))
-                              .join(
-                                ', '
-                              )}${pair.unknownAt.length > 6 ? ', …' : ''}; not reported as clear there.`}
+                            {describeSweepUnknown(
+                              pair.unknownAt
+                                .slice(0, 6)
+                                .map((at) => format(at, done.unit)),
+                              pair.unknownAt.length > 6,
+                              pair.unknownReasons
+                            )}
                           </p>
                         ) : null}
                         {pair.overlaps.some(
@@ -356,11 +453,17 @@ export function AssemblyMotionInterference({
           ) : null}
           <p className="assembly-muted">
             {[
-              quiet > 0
-                ? `${plural(quiet, 'moving pair')} clear at every position checked`
+              quietMoving > 0
+                ? `${plural(quietMoving, 'moving pair')} clear at every position checked`
                 : '',
-              done.report.still > 0
-                ? `${plural(done.report.still, 'pair')} keep their places (see the check above)`
+              quietHeld > 0
+                ? `${plural(quietHeld, 'pair')} held away from rest, clear where held`
+                : '',
+              quietRest > 0
+                ? `${plural(quietRest, 'pair')} left at rest, clear in the check above`
+                : '',
+              unchecked > 0
+                ? `${plural(unchecked, 'pair')} left at rest, not checked: run Check above`
                 : '',
               done.report.missing.length > 0
                 ? `${plural(done.report.missing.length, 'part')} with no geometry to check`

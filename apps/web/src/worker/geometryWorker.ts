@@ -371,6 +371,8 @@ export type GeometryWorkerRequest =
       document: ProjectDocument;
       components: AssemblySweepComponent[];
       positions: AssemblySweepPosition[];
+      /** The sweep this request is one of: its row builds are shared. */
+      sweep?: string;
     }
   | {
       /**
@@ -1621,7 +1623,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         const report = await exact.assemblyInterferenceSweep(
           document,
           request.components,
-          request.positions
+          request.positions,
+          request.sweep
         );
         post({
           type: 'assembly-interference-sweep',

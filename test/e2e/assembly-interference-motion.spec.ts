@@ -109,12 +109,25 @@ test(
         .locator('option:checked')
     ).toHaveText('Slide (0.0 mm to 80.0 mm)');
 
-    // As assembled the pin is clear; along the slide it passes through.
+    // At the rest position the pin is clear, and the check says that is
+    // the pose it read (#2154).
+    const status = interference.getByRole('status');
+    await interference
+      .getByRole('button', { name: 'Check', exact: true })
+      .click();
+    await expect(status).toHaveText('No parts overlap at the rest position.', {
+      timeout: 60_000
+    });
+
+    // Along the slide it passes through.
     await interference.getByRole('button', { name: 'Sweep' }).click();
     const row = interference.getByRole('button', {
       name: /^Block and Pin: 30\.\d mm to 49\.\d mm$/
     });
     await expect(row).toBeVisible({ timeout: 90_000 });
+    await expect(interference).toContainText(
+      '1 pair overlaps along the motion.'
+    );
     await expect(interference).toContainText(
       'Sampled: 45 positions, every 2.2 mm'
     );
@@ -132,5 +145,11 @@ test(
     await witness.getByRole('button', { name: 'Show at 40.0 mm' }).click();
     const joints = panel.getByRole('region', { name: 'Joints' });
     await expect(joints).toContainText('40.0 mm');
+    // The view now shows the clash; the static result is still of the rest
+    // position, and says the view is somewhere else rather than reading as
+    // "no parts overlap" over it (#2154).
+    await expect(status).toHaveText(
+      'No parts overlap at the rest position. The view shows another position, which this check does not cover.'
+    );
   }
 );
