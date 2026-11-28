@@ -3,8 +3,9 @@
 ## Status
 
 Proposed (November 2026). Nothing in the Decision section is implemented. The
-fork diagnostic and creation guard under "Interim measures" are implemented
-and need no schema change. `PROJECT_DOCUMENT_SCHEMA_VERSION` is unchanged.
+fork diagnostic, creation guard and reorder guard under "Interim measures" are
+implemented and need no schema change. `PROJECT_DOCUMENT_SCHEMA_VERSION` is
+unchanged.
 
 ## Context
 
@@ -38,7 +39,8 @@ prevents new forks of this kind, but forks still arise from:
 - inserting a feature before an existing consumer of its target (a feature
   added while History is rolled back lands at the marker; the paused consumer
   then forks on resume);
-- reorders that move an in-place edit after a consumer of its target;
+- reorders that moved an in-place edit after a consumer of its target (refused
+  since #2334; see "Interim measures");
 - the Duplicate action on a Pattern, which repeats the pattern on the same
   seed.
 
@@ -159,13 +161,32 @@ Neither changes what geometry is built.
   accepted. `replayCommands` does not run the check, so stored logs replay
   unchanged. Assistant patches commit through `runTransaction` and are
   covered.
+- The same check refuses a fork the step order introduces (#2334): a feature
+  that uses the bodies it always did, ran ahead of a consumer of one of them
+  (or before that consumer existed), and would now run after it. The reported
+  case is a cutter's placement, an in-place Move, moved below the Subtract
+  that consumes the cutter: every id the Move reads is still produced in
+  time, so the order gate passed, the Subtract cut at the unplaced position,
+  and STEP export wrote that solid behind one `history-fork` advisory. Moving
+  the consumer above the placement reaches the same arrangement and is
+  refused the same way. `feature.reorder` asks in its own `validate`, so
+  History's order gate refuses before any rebuild, and the manager's
+  end-of-edit check covers a transaction that reaches the order by several
+  commands. The refusal names the step, the body and the consumer: "Cannot
+  reorder: “Locate Offset vent” would run after “Subtract 1” already replaced
+  “Offset vent”, which branches the history. Keep “Locate Offset vent” before
+  “Subtract 1”." A feature already on either side of a stored fork of that
+  body is not judged by order, so the branches of a stored fork can still be
+  reordered around each other and the move that removes a fork is accepted.
+  A reorder of steps that share no body is untouched.
 - Duplicate refuses a Pattern step, which would repeat the pattern on the
   same seed beside the original.
 
-Known gaps, which the decision above closes: a reorder that moves an in-place
-edit after a consumer is not refused (it is reported), and resuming a rollback
-over a feature inserted before a paused consumer reports the fork rather than
-rebasing the consumer.
+Known gaps, which the decision above closes: resuming a rollback over a
+feature inserted before a paused consumer reports the fork rather than
+rebasing the consumer, and retargeting an EARLIER feature so that it consumes
+a body a later step still edits in place is reported, not refused (the guard
+judges the later feature's own targets and the order, not the consumer's).
 
 ## Consequences
 
@@ -190,8 +211,8 @@ rebasing the consumer.
 
 ## Rollout
 
-1. Done: fork diagnostic, creation guard and the Duplicate refusal (this
-   ADR's interim measures). They need no schema change.
+1. Done: fork diagnostic, creation guard, reorder guard and the Duplicate
+   refusal (this ADR's interim measures). They need no schema change.
 2. Read-only derivation: compute lineage ids at load (not stored) and use them
    to replace the `bodySourceMap` walks in assembly, folders and naming, with
    tests that the results match today's on unforked documents.

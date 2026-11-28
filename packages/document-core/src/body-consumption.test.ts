@@ -9,6 +9,7 @@ import {
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
+  assertNoNewHistoryFork,
   booleanBodies,
   chamferEdges,
   createBodyFeatureIds,
@@ -20,6 +21,7 @@ import {
   historyForks,
   listFeaturesInOrder,
   mirrorBody,
+  moveFeature,
   newHistoryForks,
   setNodeMetadata,
   transformBody
@@ -352,6 +354,141 @@ describe('history fork detection', () => {
       expect(newHistoryForks(paused, resumed)).toEqual([]);
       const later = block('Later', stale.document);
       expect(newHistoryForks(stale.document, later.document)).toEqual([]);
+    });
+
+    /** Stock, a tool, the tool's in-place Move, then stock − tool (#2334). */
+    function placedCut() {
+      const stock = block('Stock');
+      const tool = block('Tool', stock.document);
+      const place = createFeatureOnlyIds();
+      const placed = transformBody(tool.document, {
+        name: 'Place tool',
+        targetBodyId: tool.bodyId,
+        translation: { x: 5, y: 0, z: 0 },
+        ids: place
+      }).document;
+      const cut = createBodyFeatureIds();
+      const document = booleanBodies(placed, {
+        name: 'Subtract 1',
+        operation: 'subtract',
+        targetBodyIds: [stock.bodyId, tool.bodyId],
+        ids: cut
+      }).document;
+      return { document, stock, tool, place, cut };
+    }
+
+    const position = (document: ProjectDocument, featureId: FeatureId) =>
+      listFeaturesInOrder(document).findIndex(
+        (feature) => feature.featureId === featureId
+      );
+
+    it('names an in-place edit a reorder puts after the consumer of its body', () => {
+      const { document, tool, place, cut } = placedCut();
+      expect(historyForks(document)).toEqual([]);
+      const fork = {
+        featureId: place.featureId,
+        bodyId: tool.bodyId,
+        consumerFeatureId: cut.featureId
+      };
+      // The placement moved down, and the consumer moved up: one arrangement.
+      for (const moved of [
+        moveFeature(document, {
+          featureId: place.featureId,
+          toIndex: position(document, cut.featureId)
+        }),
+        moveFeature(document, {
+          featureId: cut.featureId,
+          toIndex: position(document, place.featureId)
+        })
+      ]) {
+        expect(newHistoryForks(document, moved)).toEqual([fork]);
+        expect(() => assertNoNewHistoryFork(document, moved)).toThrow(
+          'Cannot reorder: “Place tool” would run after “Subtract 1” already replaced “Tool”, which branches the history. Keep “Place tool” before “Subtract 1”.'
+        );
+      }
+    });
+
+    it('leaves a reorder of steps that share no body alone', () => {
+      const { document, tool, place } = placedCut();
+      // The tool and its placement ahead of the stock: still before the cut.
+      const toolFirst = moveFeature(document, {
+        featureId: tool.featureId,
+        toIndex: 0
+      });
+      const moved = moveFeature(toolFirst, {
+        featureId: place.featureId,
+        toIndex: 1
+      });
+      expect(listFeaturesInOrder(moved).map((feature) => feature.name)).toEqual(
+        ['Tool', 'Place tool', 'Stock', 'Subtract 1']
+      );
+      expect(newHistoryForks(document, moved)).toEqual([]);
+      expect(() => assertNoNewHistoryFork(document, moved)).not.toThrow();
+    });
+
+    it('lets a stored fork be reordered, and moved back out of the fork', () => {
+      const { document, place, cut } = placedCut();
+      const forked = moveFeature(document, {
+        featureId: place.featureId,
+        toIndex: position(document, cut.featureId)
+      });
+      expect(historyForks(forked)).toHaveLength(1);
+      // An unrelated step moved around the fork does not add one.
+      const later = block('Later', forked);
+      const around = moveFeature(later.document, {
+        featureId: later.featureId,
+        toIndex: 0
+      });
+      expect(historyForks(around)).toHaveLength(1);
+      expect(newHistoryForks(later.document, around)).toEqual([]);
+      // The placement back ahead of its consumer removes the fork.
+      const repaired = moveFeature(forked, {
+        featureId: place.featureId,
+        toIndex: position(forked, cut.featureId)
+      });
+      expect(historyForks(repaired)).toEqual([]);
+      expect(newHistoryForks(forked, repaired)).toEqual([]);
+    });
+
+    it('lets the two branches of a stored fork swap places', () => {
+      // Both fillets already replace the block. Swapping them changes which
+      // one is reported as the later branch, not what is built.
+      const box = block('Block');
+      const first = fillet(box.document, 'Fillet 1', box.bodyId);
+      const stale = fillet(first.document, 'Fillet 2', box.bodyId);
+      const swapped = moveFeature(stale.document, {
+        featureId: stale.featureId,
+        toIndex: position(stale.document, first.featureId)
+      });
+      expect(historyForks(swapped)).toEqual([
+        {
+          featureId: first.featureId,
+          bodyId: box.bodyId,
+          consumerFeatureId: stale.featureId
+        }
+      ]);
+      expect(newHistoryForks(stale.document, swapped)).toEqual([]);
+    });
+
+    it('does not refuse a resume that uncovers a fork a reorder never made', () => {
+      // An edit of the tool added while its consumer is paused. Resuming
+      // changes neither targets nor order.
+      const { document, tool, cut } = placedCut();
+      const paused = metadata(
+        document,
+        cut.featureId,
+        FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY
+      );
+      const extra = offset(paused, 'Offset 1', tool.bodyId);
+      expect(newHistoryForks(paused, extra.document)).toEqual([]);
+      const resumed = setNodeMetadata(extra.document, {
+        nodeId: listFeaturesInOrder(extra.document).find(
+          (feature) => feature.featureId === cut.featureId
+        )!.id,
+        metadata: { [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null }
+      });
+      expect(historyForks(resumed)).toHaveLength(1);
+      expect(newHistoryForks(extra.document, resumed)).toEqual([]);
     });
   });
 });

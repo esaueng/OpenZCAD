@@ -860,6 +860,10 @@ function validateParameterDelete(
  * Without this gate an illegal order does not fail loudly — the exact
  * replay is fail-soft per feature, so the model would quietly lose every
  * downstream body behind one warning.
+ *
+ * The opposite direction is refused too: a step that edits a body in place
+ * (a Move, a direct edit) must not land after the feature that consumes that
+ * body, where it would act on a state the history already replaced.
  */
 function validateFeatureReorder(
   document: ProjectDocument,
@@ -936,6 +940,17 @@ function validateFeatureReorder(
         );
       }
     }
+  });
+
+  // ADR-025 (#2334): every id above is still produced in time when a
+  // placement moves below the boolean that consumes the placed body, so that
+  // order passed, committed, and the boolean cut at the unplaced position.
+  // Refused here, not only at commit, so History's order gate names the body
+  // and its consumer before any rebuild. Only the order is read, so a shallow
+  // copy stands in for the moved document.
+  assertNoNewHistoryFork(document, {
+    ...document,
+    featureOrder: reordered.map((feature) => feature.featureId)
   });
 }
 

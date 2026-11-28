@@ -234,5 +234,6 @@
   "variable-fillet-radius-stations.spec.ts": 12,
   "variable-fillet-ball-corners.spec.ts": 12,
   "history-text-layout.spec.ts": 16,
+  "history-reorder-consumed-cutter.spec.ts": 10,
   "phone-panel-conflicts.spec.ts": 12
 }

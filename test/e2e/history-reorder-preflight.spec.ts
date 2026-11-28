@@ -1,31 +1,16 @@
 import type { Page } from '@playwright/test';
 import {
+  KEYED_HISTORY,
+  keyedCore,
+  projectBackup
+} from '../support/history-reorder';
+import {
   expect,
   expectBodyCount,
   revealModelPanel,
   stubApi,
   test
 } from './openzcad-fixtures';
-
-const DEMO_ORDER = [
-  'Base plate',
-  'Wall plate',
-  'Seat wall on base',
-  'Union L bracket',
-  'Boss',
-  'Place boss on wall',
-  'Union boss',
-  'Boss bore tool',
-  'Aim bore through boss',
-  'Boss bore',
-  'Mount hole L',
-  'Place mount hole L',
-  'Mount hole R',
-  'Place mount hole R',
-  'Mount hole L cut',
-  'Mounting holes',
-  'Wall top edge break'
-];
 
 function historyOrder(page: Page) {
   return page.locator('.feature-row .feature-name').allTextContents();
@@ -38,12 +23,17 @@ function grip(page: Page, name: string) {
 }
 
 /**
- * Moving the wall's placement past the union is a legal order — the union
- * still runs after both plates exist — but the union then joins plates that
- * no longer touch, and the boss union after it cannot rebuild. A History
- * reorder must be refused by name like an edit, by drag and keyboard alike,
- * and leave the order as it was. A reorder that does rebuild still commits
- * and undoes.
+ * Moving the key's placement below the copy taken from the key is a legal
+ * order: the copy only reads the key, so nothing is consumed twice. But the
+ * copy is then taken from the unparked key, misses the block, and the
+ * Intersect after it cannot rebuild. A History reorder must be refused by
+ * name like an edit, by drag and keyboard alike, and leave the order as it
+ * was. A reorder that does rebuild still commits and undoes.
+ *
+ * (The demo bracket's wall placement moved past its Union stood here until
+ * #2334: that order puts a placement after the consumer of the placed body,
+ * and the order gate now refuses it before any rebuild. See
+ * `history-reorder-consumed-cutter.spec.ts`.)
  */
 test('refuses a history reorder that breaks a later feature', async ({
   page
@@ -56,53 +46,64 @@ test('refuses a history reorder that breaks a later feature', async ({
   await stubApi(page, { panelLayout: { right: [['history']] } });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
-  await page.getByRole('button', { name: /Mounting Bracket/ }).click();
-  await expectBodyCount(page, 1);
+  await expect(page).toHaveTitle('OpenZCAD');
+  await page
+    .getByRole('button', { name: 'Import project', exact: true })
+    .click();
+  await page.getByLabel('Import project backup').setInputFiles({
+    name: 'keyed-core.openzcad',
+    mimeType: 'application/json',
+    buffer: projectBackup(keyedCore())
+  });
+  await page
+    .getByRole('button', { name: 'History panel', exact: true })
+    .waitFor({ state: 'visible', timeout: 60_000 });
+  // The parked key and the keyed core.
+  await expectBodyCount(page, 2);
   await revealModelPanel(page);
   const order = () => historyOrder(page);
-  await expect.poll(order, { timeout: 30_000 }).toEqual(DEMO_ORDER);
+  await expect.poll(order, { timeout: 30_000 }).toEqual([...KEYED_HISTORY]);
 
   const details = page.getByRole('region', { name: 'History details' });
   const refusal = details.getByRole('alert');
   const toast = page
     .locator('.toast-message')
-    .getByText(
-      /Reorder Seat wall on base not applied: Union boss would not rebuild\./
-    );
+    .getByText(/Reorder Park key not applied: Keyed core would not rebuild\./);
   const undo = page.getByRole('button', { name: 'Undo', exact: true });
   await expect(undo).toBeDisabled();
 
-  // Drag the placement onto the union's row.
-  await grip(page, 'Seat wall on base').dragTo(
-    page.locator('.feature-row', { hasText: 'Union L bracket' })
+  // Drag the placement onto the copy's row.
+  await grip(page, 'Park key').dragTo(
+    page.locator('.feature-row', {
+      has: page.locator('.feature-name', { hasText: /^Key copy$/ })
+    })
   );
-  await expect(refusal).toContainText('Edit not saved · Union boss', {
+  await expect(refusal).toContainText('Edit not saved · Keyed core', {
     timeout: 60_000
   });
   await expect(toast).toBeVisible();
-  expect(await order()).toEqual(DEMO_ORDER);
+  expect(await order()).toEqual([...KEYED_HISTORY]);
   await expect(undo).toBeDisabled();
   await details.getByRole('button', { name: 'Dismiss failure' }).click();
   await expect(refusal).toHaveCount(0);
 
   // The same move from the keyboard is refused the same way.
-  await grip(page, 'Seat wall on base').press('ArrowDown');
-  await expect(refusal).toContainText('Edit not saved · Union boss', {
+  await grip(page, 'Park key').press('ArrowDown');
+  await expect(refusal).toContainText('Edit not saved · Keyed core', {
     timeout: 60_000
   });
-  expect(await order()).toEqual(DEMO_ORDER);
+  expect(await order()).toEqual([...KEYED_HISTORY]);
   await expect(undo).toBeDisabled();
   await details.getByRole('button', { name: 'Dismiss failure' }).click();
 
-  // An independent cutter moved above the bore rebuilds, so it commits.
-  await grip(page, 'Mount hole L').press('ArrowUp');
-  const moved = [...DEMO_ORDER];
-  moved.splice(9, 2, 'Mount hole L', 'Boss bore');
+  // The key made ahead of the block rebuilds, so it commits.
+  await grip(page, 'Key').press('ArrowUp');
+  const moved = ['Key', 'Block', ...KEYED_HISTORY.slice(2)];
   await expect.poll(order, { timeout: 60_000 }).toEqual(moved);
   await expect(refusal).toHaveCount(0);
-  await expectBodyCount(page, 1);
+  await expectBodyCount(page, 2);
   await undo.click();
-  await expect.poll(order, { timeout: 30_000 }).toEqual(DEMO_ORDER);
+  await expect.poll(order, { timeout: 30_000 }).toEqual([...KEYED_HISTORY]);
   await expect(undo).toBeDisabled();
   expect(errors).toEqual([]);
 });
