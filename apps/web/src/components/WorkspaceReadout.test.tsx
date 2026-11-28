@@ -96,6 +96,51 @@ describe('WorkspaceReadout', () => {
       document.querySelector('.workspace-toast-body')
     ).not.toHaveTextContent('Section view off.');
   });
+  it('lets a refusal wrap and lifts the rows above it by its height', () => {
+    // #2334: the refusal ends on what to do instead, which one line cut off.
+    const refusal =
+      'Cannot reorder: “Locate Offset vent” would run after “Subtract pocket and vent” already replaced “Offset vent”, which branches the history. Keep “Locate Offset vent” before “Subtract pocket and vent”.';
+    const rect = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        return new DOMRect(
+          0,
+          0,
+          0,
+          this.classList.contains('workspace-toast-body') ? 62.4 : 0
+        );
+      });
+    try {
+      const view = (status: string) => (
+        <div className="viewer-area">
+          <WorkspaceReadout
+            {...SUMMARY}
+            status={status}
+            statusImmediate
+            tone="warning"
+            onOpenLog={vi.fn()}
+          />
+        </div>
+      );
+      const { rerender, container } = render(view(refusal));
+      const viewer = container.querySelector<HTMLElement>('.viewer-area')!;
+      const toast = screen.getByRole('contentinfo');
+      expect(toast).toHaveClass('is-refusal');
+      expect(toast).toHaveTextContent(refusal);
+      expect(viewer.style.getPropertyValue('--workspace-toast-live-h')).toBe(
+        '63px'
+      );
+      // An ordinary warning keeps its single line and the lane's fixed row.
+      rerender(view('Rebuild finished with 1 warning.'));
+      expect(toast).not.toHaveClass('is-refusal');
+      expect(viewer.style.getPropertyValue('--workspace-toast-live-h')).toBe(
+        ''
+      );
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
   it('distinguishes committed body counts from an unapplied preview', () => {
     render(
       <WorkspaceReadout

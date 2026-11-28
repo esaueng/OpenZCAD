@@ -189,6 +189,31 @@ test(
     // The issue's gesture again, on settled geometry: Down once.
     await grip(page, PLACEMENT).press('ArrowDown');
     await expect(status).toContainText(REFUSAL);
+    // Read whole: on one line the toast cut the refusal off after the step
+    // names, before "Keep … before …".
+    const line = status.locator('.workspace-toast-body > [role="status"]');
+    await expect(line).toHaveText(REFUSAL);
+    expect(
+      await line.evaluate(
+        (element) =>
+          element.scrollWidth > element.clientWidth + 1 ||
+          element.scrollHeight > element.clientHeight + 1
+      )
+    ).toBe(false);
+    const toast = await status
+      .locator('.workspace-toast-body')
+      .evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return {
+          inside:
+            box.left >= 0 &&
+            box.right <= window.innerWidth &&
+            box.top >= 0 &&
+            box.bottom <= window.innerHeight,
+          wrapped: box.height > 28
+        };
+      });
+    expect(toast).toEqual({ inside: true, wrapped: true });
     expect(await order()).toEqual([...HISTORY]);
     await expect(undo).toBeDisabled();
     // The Subtract's grip, Up once, asks for the same order.
