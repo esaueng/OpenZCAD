@@ -33,27 +33,15 @@
    as a phone's tab bar does, and their row is the page's room for what the
    field finds. On a Pro Max they cut the one result off (the motion
    review). Their height goes to zero, so the stage layer, which reserves
-   it for them, comes down to the keyboard too, and the sheet with it. */
+   it for them, comes down to the keyboard too, and the sheet with it.
+   BottomSheet's is-typing holds through a tap on the page's own controls,
+   so the sheet never moves under that tap. */
 @media (pointer: coarse) {
-  .app-shell[data-shell='compact']:has(
-      .compact-sheet-body[data-page]
-        :is(
-          input:not([type='checkbox'], [type='radio'], [type='range']),
-          textarea,
-          [contenteditable='true']
-        ):focus:not([inputmode='none'])
-    ) {
+  .app-shell[data-shell='compact']:has(.compact-sheet.is-typing) {
     --compact-tabs-h: 0px;
   }
 
-  .app-shell[data-shell='compact']:has(
-      .compact-sheet-body[data-page]
-        :is(
-          input:not([type='checkbox'], [type='radio'], [type='range']),
-          textarea,
-          [contenteditable='true']
-        ):focus:not([inputmode='none'])
-    )
+  .app-shell[data-shell='compact']:has(.compact-sheet.is-typing)
     > .compact-chrome
     > .compact-tabs {
     display: none;

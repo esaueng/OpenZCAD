@@ -119,6 +119,17 @@ function isTextField(element: HTMLElement): boolean {
   );
 }
 
+/** Whether focus is in a field on a sheet page, which the keyboard serves. */
+function typingInActive(): boolean {
+  const active = document.activeElement;
+  return (
+    active instanceof HTMLElement &&
+    active.closest('.compact-sheet-body[data-page]') !== null &&
+    isTextField(active) &&
+    active.inputMode !== 'none'
+  );
+}
+
 /** What opened a page, to give focus back to when the page goes. */
 interface PageOpener {
   element: HTMLElement | null;
@@ -703,6 +714,52 @@ export function BottomSheet({
     return () => sheet.removeEventListener('focusin', onFocus);
   }, [detent, dispatch]);
 
+  // Typing on a page (`is-typing`): the shell gives the tabs' row to the
+  // keyboard while a field there has focus (compact-shell.css). It holds
+  // through a tap on the sheet's own controls (a name's Save, Back) until
+  // that tap is done: Chromium focuses the button as it is pressed, and
+  // the tabs coming back then moved the sheet 58px under the finger, so
+  // the tap missed it. iOS leaves focus in the field.
+  const [typing, setTyping] = useState(false);
+  useEffect(() => {
+    const sheet = sheetRef.current;
+    if (!sheet) return;
+    const onPage = (node: unknown): node is HTMLElement =>
+      node instanceof HTMLElement &&
+      sheet.contains(node) &&
+      node.closest('.compact-sheet-body[data-page]') !== null;
+    let frame = 0;
+    const settle = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setTyping(typingInActive()));
+    };
+    const onIn = (event: FocusEvent) => {
+      if (onPage(event.target) && typingInActive()) setTyping(true);
+    };
+    const onOut = (event: FocusEvent) => {
+      const next = event.relatedTarget;
+      if (!(next instanceof Node && sheet.contains(next))) {
+        setTyping(false);
+        return;
+      }
+      document.addEventListener('click', settle, { once: true });
+      document.addEventListener('keyup', settle, { once: true });
+    };
+    sheet.addEventListener('focusin', onIn);
+    sheet.addEventListener('focusout', onOut);
+    return () => {
+      cancelAnimationFrame(frame);
+      sheet.removeEventListener('focusin', onIn);
+      sheet.removeEventListener('focusout', onOut);
+      document.removeEventListener('click', settle);
+      document.removeEventListener('keyup', settle);
+    };
+  }, []);
+  // A page that goes takes its field with it.
+  useEffect(() => {
+    setTyping(typingInActive());
+  }, [stackKeys]);
+
   const onGrabberKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = (next: SheetDetent) => {
       event.preventDefault();
@@ -828,6 +885,8 @@ export function BottomSheet({
         className={`compact-sheet${dragHeight !== null ? ' is-dragging' : ''}${
           reducedMotion ? ' is-reduced-motion' : ''
         }${fadeTurn ? ' fade-a' : ' fade-b'}${asRow ? ' is-row' : ''}${
+          typing && page !== null ? ' is-typing' : ''
+        }${
           morph === 'raise'
             ? ' is-raising'
             : morph === 'lower'

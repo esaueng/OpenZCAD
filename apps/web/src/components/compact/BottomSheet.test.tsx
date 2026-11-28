@@ -1136,7 +1136,7 @@ describe('BottomSheet at peek on its row', () => {
     expect(root).not.toHaveAttribute('inert');
   });
 
-  it('comes up to half when a field on a page at peek is tapped to type in', () => {
+  it('comes up to half when a field on a page at peek is tapped to type in', async () => {
     // The motion review: All tools' search at peek found Fillet under the
     // sheet's edge.
     function Search() {
@@ -1171,6 +1171,27 @@ describe('BottomSheet at peek on its row', () => {
     expect(sheet().dataset.detent).toBe('peek');
     act(() => screen.getByRole('searchbox', { name: 'Search tools' }).focus());
     expect(sheet().dataset.detent).toBe('half');
+    // Typing: the shell gives the tabs' row to the keyboard. A tap on the
+    // page's own control holds it until the tap is done (CI: Chromium
+    // focused Save as it was pressed, the tabs came back, the sheet moved
+    // 58px and the tap missed it).
+    expect(sheet()).toHaveClass('is-typing');
+    const tile = screen.getByRole('button', { name: 'Tile' });
+    act(() => tile.focus());
+    expect(sheet()).toHaveClass('is-typing');
+    fireEvent.click(tile);
+    await act(
+      () => new Promise<void>((done) => requestAnimationFrame(() => done()))
+    );
+    expect(sheet()).not.toHaveClass('is-typing');
+    act(() => screen.getByRole('searchbox', { name: 'Search tools' }).focus());
+    expect(sheet()).toHaveClass('is-typing');
+    // The head's Back too, until its tap is done.
+    act(() => screen.getByRole('button', { name: 'Back' }).focus());
+    expect(sheet()).toHaveClass('is-typing');
+    act(() => screen.getByRole('searchbox', { name: 'Search tools' }).focus());
+    act(() => (document.activeElement as HTMLElement).blur());
+    expect(sheet()).not.toHaveClass('is-typing');
   });
 
   it('opens a page of fields on its grabber, not the keyboard', () => {
