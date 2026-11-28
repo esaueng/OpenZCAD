@@ -1,14 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  BOOLEAN_SEALED_CAVITY,
+  DRAFT_SEALED_CAVITY,
   FACE_SWEEP_BLOCKED,
   FACE_SWEEP_UNPROVEN,
   GENERIC_REFUSAL,
   MIRROR_SOURCE_UNAVAILABLE,
+  SEALED_CAVITY_UNSUPPORTED,
   SPLIT_PLANE_MISSES,
   SPLIT_PLANE_ON_EDGE,
   SPLIT_CURVED_SECTION,
   SPLIT_PLANE_ON_FACE,
   SPLIT_PLANE_TOUCHES,
+  SPLIT_SEALED_CAVITY,
   TARGET_BODY_UNAVAILABLE,
   editTargetMissingSentence,
   plainRefusal,
@@ -994,5 +998,94 @@ describe('plainRefusalSentence with a name that reads like the refusal', () => {
 
   it('writes no unit without it', () => {
     expect(plainRefusalSentence(raw, undefined, 'in')).not.toMatch(/\d in\b/);
+  });
+});
+
+/**
+ * Issues #2383–#2386: a body with a sealed internal cavity. The kernel text
+ * is the pinned Remus's; the typed records are the ones the adapter writes
+ * (`test/sealed-cavity-operations.test.ts` reads them off the real kernel).
+ */
+describe('a refusal for a sealed internal cavity', () => {
+  const KERNEL_NOTATION =
+    /Remus|Some\(|Id\(|\b[a-z]+_[a-z_]+\b|\b(?:face|edge|vertex|wire|corner|shell) \d|cavity shell|outer shell/;
+  const SPLIT =
+    'split: unsupported configuration: solid has 1 cavity shell(s); split only operates on the outer shell';
+  const DRAFT =
+    'Remus draft refused: draft: unsupported configuration: solid has 2 cavity shell(s); draft only operates on the outer shell';
+  const SHELL =
+    'Remus shell refused: shell: unsupported configuration: solid has 1 cavity shell(s); this engine rebuilds only the outer shell';
+  const BOOLEAN =
+    'Intersect refused: "Housing" and "Clip" could not be intersected exactly because a body has a sealed internal cavity: the same intersect builds once the cavity is ignored. The exact modeling engine cannot carry this sealed cavity through the operation yet.\nKernel refusal exact_only_unattainable (quality_refused): exact-only policy: the exact boolean pipeline could not produce this result and the approximate fallback was declined';
+  const modeling = (code: string) => ({
+    category: 'unsupported',
+    code,
+    reason: 'sealed_cavity'
+  });
+
+  it.each([
+    [SPLIT, modeling('split_refused'), SPLIT_SEALED_CAVITY],
+    [DRAFT, modeling('draft_refused'), DRAFT_SEALED_CAVITY],
+    [SHELL, modeling('shell_refused'), SEALED_CAVITY_UNSUPPORTED]
+  ])('names the cavity for %j', (raw, typed, sentence) => {
+    const plain = plainRefusal(raw, typed);
+    expect(plain).toEqual({
+      message: sentence,
+      detail: raw,
+      category: 'unsupported',
+      code: typed.code
+    });
+    expect(plain.message).toMatch(/sealed internal cavity/);
+    expect(plain.message).not.toMatch(KERNEL_NOTATION);
+  });
+
+  it('reads the same sentences from the kernel text alone, on an untyped path', () => {
+    // A preview refuses without a record; the operation fallback used to
+    // answer a Draft with "Try a smaller angle or fewer faces" (#2386) and
+    // the category answered a Split with "does not support this combination
+    // of shapes" (#2384).
+    expect(plainRefusal(SPLIT).message).toBe(SPLIT_SEALED_CAVITY);
+    expect(plainRefusal(SPLIT, 'unsupported').message).toBe(
+      SPLIT_SEALED_CAVITY
+    );
+    expect(plainRefusal(DRAFT).message).toBe(DRAFT_SEALED_CAVITY);
+    expect(plainRefusal(DRAFT, 'unsupported').message).toBe(
+      DRAFT_SEALED_CAVITY
+    );
+    expect(plainRefusal(SHELL, 'unsupported').message).toBe(
+      SEALED_CAVITY_UNSUPPORTED
+    );
+  });
+
+  it('advises nothing about the angle, the faces or the plane', () => {
+    expect(DRAFT_SEALED_CAVITY).not.toMatch(/angle|fewer faces/i);
+    expect(SPLIT_SEALED_CAVITY).not.toMatch(/plane|combination of shapes/i);
+    expect(BOOLEAN_SEALED_CAVITY).not.toMatch(/reposition/i);
+  });
+
+  it('names the cavity for a boolean the adapter proved it blocks', () => {
+    const typed = {
+      category: 'quality_refused',
+      code: 'exact_only_unattainable',
+      reason: 'sealed_cavity'
+    };
+    const plain = plainRefusal(BOOLEAN, typed);
+    expect(plain.message).toBe(BOOLEAN_SEALED_CAVITY);
+    expect(plain.detail).toBe(BOOLEAN);
+    expect(plain.message).not.toMatch(KERNEL_NOTATION);
+    expect(
+      plainRefusalSentence(`Feature "Trim": ${BOOLEAN}`, typed, 'mm', 'Trim')
+    ).toBe(BOOLEAN_SEALED_CAVITY);
+  });
+
+  it('keeps the category sentence for an exact-only refusal with no cause', () => {
+    expect(
+      plainRefusal(
+        'Intersect refused: these bodies could not be intersected exactly, and an approximate result was declined. Repositioning the overlap sometimes clears it.',
+        { category: 'quality_refused', code: 'exact_only_unattainable' }
+      ).message
+    ).toBe(
+      'The exact kernel could not build this exactly, and an approximate result was declined.'
+    );
   });
 });

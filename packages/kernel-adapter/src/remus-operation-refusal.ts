@@ -11,7 +11,11 @@
  * gives it nowhere else — and anything unrecognised is `internal`, so the
  * refusal is always typed. The sentence is never changed.
  */
-import { KernelRefusal, type KernelRefusalCategory } from './kernel-refusal';
+import {
+  KernelRefusal,
+  SEALED_CAVITY_REASON,
+  type KernelRefusalCategory
+} from './kernel-refusal';
 
 /**
  * `OperationsError` Display forms and the category each projects to, most
@@ -45,10 +49,26 @@ export function operationErrorCategory(message: string): KernelRefusalCategory {
 }
 
 /**
+ * The kernel refusing a body for its cavity shells ({@link
+ * SEALED_CAVITY_REASON}).
+ *
+ * On the pin, Split, Draft, Shell, fillet, chamfer and defeature rebuild
+ * only a solid's outer shell, so each refuses every body that has an inner
+ * one before it looks at anything else: the plane, the angle and the picked
+ * faces play no part. Their Display forms (`split.rs`, `draft.rs`,
+ * `defeature.rs`, `blend_cluster/remove.rs` and `refuse_cavity_shells` in
+ * the operations crate) all open `solid has N cavity shell(s); …`. The
+ * count is the kernel's own read of the target's topology, so the cause is
+ * recorded only where the kernel states it.
+ */
+const CAVITY_SHELL_REFUSAL = /\bsolid has \d+ cavity shell\(s\)/;
+
+/**
  * The typed refusal for a modeling `operation` the kernel refused with
  * `error`, carrying `message` (the sentence the caller has always shown).
  * A direct edit (a face offset) files under `direct-edit`, beside the edits
- * that already have typed twins.
+ * that already have typed twins. A refusal for the target's cavity shells
+ * records {@link SEALED_CAVITY_REASON} unless the caller read a cause itself.
  */
 export function modelingOperationRefusal(
   operation: string,
@@ -64,6 +84,11 @@ export function modelingOperationRefusal(
 ): KernelRefusal {
   const kernelMessage =
     error instanceof Error ? error.message : 'unknown kernel error';
+  const cause =
+    kernelReason ??
+    (CAVITY_SHELL_REFUSAL.test(kernelMessage)
+      ? SEALED_CAVITY_REASON
+      : undefined);
   return new KernelRefusal({
     family,
     category: operationErrorCategory(kernelMessage),
@@ -71,7 +96,7 @@ export function modelingOperationRefusal(
     kernelMessage,
     message,
     reason: message,
-    ...(kernelReason ? { kernelReason } : {}),
+    ...(cause ? { kernelReason: cause } : {}),
     cause: error
   });
 }

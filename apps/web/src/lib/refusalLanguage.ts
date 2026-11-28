@@ -264,6 +264,35 @@ export const SPLIT_EDGE_PLANE_SENTENCES: Readonly<
  */
 export const SPLIT_CURVED_SECTION =
   "Split couldn't build the cut across a curved face at this plane. Move the plane a little, or split the body somewhere else.";
+/**
+ * A body with a sealed internal cavity: a void closed on every side, such as
+ * a pocket cut strictly inside the stock (issues #2383–#2386). The adapter
+ * records `sealed_cavity` on `kernelRefusal.reason` only where that is
+ * established: the kernel names the body's cavity shells, or a refused
+ * boolean builds once the cavity is ignored.
+ *
+ * Split, Draft, Shell and the edge blends refuse every such body before they
+ * look at the plane, angle or faces, so the sentences they used to get
+ * ("try a smaller angle or fewer faces", "does not support this combination
+ * of shapes") sent people to change inputs that play no part. Each sentence
+ * names the cavity. Split and Draft also name the order that builds, which
+ * the regression suite runs on the issues' fixtures
+ * (`test/sealed-cavity-operations.test.ts`). The boolean sentence offers no
+ * move: where the cavity is the operation's own cut there is none to offer.
+ */
+export const SPLIT_SEALED_CAVITY =
+  "This body has a sealed internal cavity, and Split can't cut a body with an enclosed void yet. Split the body first, then cut the cavity.";
+export const DRAFT_SEALED_CAVITY =
+  "This body has a sealed internal cavity, and Draft can't work on a body with an enclosed void yet. Apply the draft first, then cut the cavity.";
+export const SEALED_CAVITY_UNSUPPORTED =
+  "This body has a sealed internal cavity, which this operation can't work on yet.";
+export const BOOLEAN_SEALED_CAVITY =
+  "A body in this operation has a sealed internal cavity, and the exact kernel can't carry it through yet. The same operation builds without the cavity.";
+const SEALED_CAVITY_SENTENCES: Readonly<Record<string, string>> = {
+  split_refused: SPLIT_SEALED_CAVITY,
+  draft_refused: DRAFT_SEALED_CAVITY,
+  exact_only_unattainable: BOOLEAN_SEALED_CAVITY
+};
 const SPLIT_SENTENCES: Readonly<Record<string, string>> = {
   plane_misses_body: SPLIT_PLANE_MISSES,
   plane_on_face: SPLIT_PLANE_ON_FACE,
@@ -277,6 +306,11 @@ const SPLIT_SENTENCES: Readonly<Record<string, string>> = {
  * because untyped paths (move-faces, previews) reach the same sentences.
  */
 function typedSentence(typed: RefusalClassification): string | null {
+  if (typed.reason === 'sealed_cavity') {
+    return (
+      ownEntry(SEALED_CAVITY_SENTENCES, typed.code) ?? SEALED_CAVITY_UNSUPPORTED
+    );
+  }
   if (typed.code === 'split_refused') {
     return ownEntry(SPLIT_SENTENCES, typed.reason) ?? null;
   }
@@ -429,6 +463,23 @@ const TRANSLATIONS: readonly Translation[] = [
     pattern:
       /swept face reaches nonadjacent face|sweep may contact a nonadjacent|crosses a nonadjacent source boundary/i,
     sentence: FACE_SWEEP_BLOCKED
+  },
+  {
+    // The kernel's own words for a body with a sealed internal cavity
+    // ("draft: unsupported configuration: solid has 1 cavity shell(s); draft
+    // only operates on the outer shell"), for the paths that reach here
+    // untyped. Ahead of the operation fallbacks, which advise a smaller
+    // angle or a thinner wall: neither can help a body refused for its void.
+    pattern: /solid has \d+ cavity shell\(s\); split only operates/i,
+    sentence: SPLIT_SEALED_CAVITY
+  },
+  {
+    pattern: /solid has \d+ cavity shell\(s\); draft only operates/i,
+    sentence: DRAFT_SEALED_CAVITY
+  },
+  {
+    pattern: /solid has \d+ cavity shell\(s\)/i,
+    sentence: SEALED_CAVITY_UNSUPPORTED
   },
   {
     // Draft, chamfer and split all re-trim the faces around the one they

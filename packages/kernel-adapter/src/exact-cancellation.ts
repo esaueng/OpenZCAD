@@ -26,6 +26,7 @@ import {
   ExactBooleanRefusal,
   exactBooleanOutcome,
   refuseEmptyIntersection,
+  withSealedCavityCause,
   type ExactBooleanOperation,
   type ExactBooleanOutcome
 } from './exact-boolean-refusal';
@@ -251,7 +252,7 @@ export function exactCutWithCancellation(
     operands
   );
   if (outcome.status === 'refused') {
-    throw outcome.refusal;
+    throw withSealedCavityCause(kernel, outcome.refusal, target, tool);
   }
   return outcome.solid;
 }
@@ -273,7 +274,7 @@ export function exactFuseWithCancellation(
     operands
   );
   if (outcome.status === 'refused') {
-    throw outcome.refusal;
+    throw withSealedCavityCause(kernel, outcome.refusal, a, b);
   }
   return outcome.solid;
 }
@@ -295,7 +296,7 @@ export function exactIntersectWithCancellation(
     operands
   );
   if (outcome.status === 'refused') {
-    throw outcome.refusal;
+    throw withSealedCavityCause(kernel, outcome.refusal, target, tool);
   }
   return refuseEmptyIntersection(kernel, outcome.solid, operands);
 }
