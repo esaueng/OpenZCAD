@@ -683,6 +683,8 @@ function NumericKeypadControl({
     // Losing the anchor (orbited off screen) docks it once, and it stays.
     let positioned = false;
     let docked = false;
+    // Drawn as the phone's sheet; left again when the window widens.
+    let sheet = false;
     let lastAnchor: { x: number; y: number } | null = null;
     const phone = () =>
       asSheetRef.current ||
@@ -724,6 +726,21 @@ function NumericKeypadControl({
         row: rowRef.current?.offsetHeight || root.offsetHeight || 40
       };
     };
+    // Where a control placed in the stage stands when nothing has pushed
+    // the pick's point: its fixed point, its chip, or the stage's middle.
+    const stageAnchor = (host: HTMLElement) => {
+      if (request.fixedClientAnchor) {
+        const rect = host.getBoundingClientRect();
+        return {
+          x: request.fixedClientAnchor.x - rect.left,
+          y: request.fixedClientAnchor.y - rect.top
+        };
+      }
+      const chip = valueChipBox(host, request.commandValueId);
+      return chip
+        ? { x: chip.left, y: chip.top }
+        : { x: host.clientWidth / 2, y: host.clientHeight / 2 };
+    };
     const positionAt = (point: { x: number; y: number } | null) => {
       const host = root.parentElement;
       if (!host) return;
@@ -736,8 +753,19 @@ function NumericKeypadControl({
         root.dataset.placement = 'sheet';
         setPlacement('sheet');
         publishSheetHeight();
+        sheet = true;
         positioned = true;
         return;
+      }
+      if (sheet) {
+        // Wider than a phone now (a widened window, a turned tablet): the
+        // control leaves the sheet and is placed in the stage afresh, by
+        // the pick when it is known, and the bar goes back to the foot.
+        sheet = false;
+        sheetArea?.style.removeProperty('--keypad-sheet-h');
+        positioned = false;
+        docked = false;
+        point ??= lastAnchor ?? stageAnchor(host);
       }
       if (request.heldAt) {
         // Stepped here by Tab: it stands where the last value's did.
@@ -815,7 +843,7 @@ function NumericKeypadControl({
     // Preserve a stable position during typing, but re-clamp when the host
     // or the control changes size (rotation, a dock opening, a refusal line).
     const reposition = () => {
-      if (!lastAnchor && !phone()) return;
+      if (!lastAnchor && !phone() && !sheet) return;
       const wasPositioned = positioned;
       positioned = false;
       positionAt(lastAnchor);

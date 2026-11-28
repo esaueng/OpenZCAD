@@ -1772,10 +1772,11 @@ export interface ModelViewerProps {
    */
   faceSetPickBodyId?: string | null;
   /**
-   * A running command takes faces and no edges (Hole, Shell, Draft): a click
-   * whose stack leads with an edge takes that edge's body's face under the
-   * pointer instead. A face a few dozen pixels across lies wholly inside a
-   * finger's edge band, so a tap on it picked the edge the command ignores.
+   * A running command takes faces and no edges (Hole, Shell): a tap whose
+   * stack leads with an edge takes the first surface under the finger when
+   * it is a face of that edge's body (`faceAheadOfLeadEdge`). A face a few
+   * dozen pixels across lies wholly inside a finger's edge band, so a tap on
+   * it picked the edge the command ignores. Mouse and pen pick as before.
    */
   facePickOverEdges?: boolean;
   /** In-viewport sketch session; null when not sketching. */
@@ -6436,7 +6437,12 @@ export function ModelViewer({
       if (addsToSelection(event)) {
         return facesAheadOfEdges(stack, faceSetPickBodyIdRef.current);
       }
-      return facePickOverEdgesRef.current ? faceAheadOfLeadEdge(stack) : stack;
+      return facePickOverEdgesRef.current
+        ? faceAheadOfLeadEdge(
+            stack,
+            'pointerType' in event ? event.pointerType : undefined
+          )
+        : stack;
     }
 
     /**
@@ -8895,10 +8901,7 @@ export function ModelViewer({
       const solid =
         addsToSelection(event) && faceSetPickBodyIdRef.current
           ? (shiftPickStack(event)[0] ?? null)
-          : (acceptedFacesUnder(event)?.[0] ??
-            (facePickOverEdgesRef.current
-              ? (shiftPickStack(event)[0] ?? null)
-              : pick(event)));
+          : (acceptedFacesUnder(event)?.[0] ?? pick(event));
       if (ghost && ghostPlaneTakesPick(ghost.distance, solid)) {
         if (planePickerRigRef.current?.setHover(ghost.plane)) requestRender();
         applyHover(null);

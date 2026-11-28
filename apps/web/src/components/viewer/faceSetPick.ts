@@ -29,18 +29,30 @@ export function facesAheadOfEdges(
 }
 
 /**
- * A command that takes faces and no edges (Hole, Shell, Draft) has no use
- * for an edge, so a stack led by one goes to that edge's body's face under
- * the pointer. A finger's edge band is some 15 px either side of the line,
- * which covers the whole of a small face drawn at Fit View: a tap on its
- * middle picked the edge, and the command ignored it.
+ * A command that takes faces and no edges (Hole, Shell) has no use for an
+ * edge. A finger's edge band is some 15 px either side of the line, which
+ * covers the whole of a small face drawn at Fit View: a tap on its middle
+ * picked the edge, and the command ignored it. So on a touch, a stack led by
+ * an edge goes to the first surface under the finger, when that surface is
+ * a face of the edge's own body: the face the edge bounds there.
  *
- * Only a face of the edge's own body moves up, the nearest one, which is
- * the face the pointer is over. A pointer just past a body's outline, where
- * no face of that body is under it, keeps the stack as it is, so the band
- * never hands the tap to a face further back.
+ * Nothing further back is ever taken. When the first surface under the
+ * finger is another body's (an insert beside a bracket's lip, or the stage
+ * past a body's outline), the stack stays as it was and the tap does what it
+ * did before: the band says the finger is on that edge's body's boundary,
+ * so another body's face is not plainly what it meant. A mouse or a pen has
+ * half a finger's band and picks as it always has.
  */
-export function faceAheadOfLeadEdge(stack: PickCandidate[]): PickCandidate[] {
+export function faceAheadOfLeadEdge(
+  stack: PickCandidate[],
+  pointerType: string | undefined
+): PickCandidate[] {
   const lead = stack[0]?.selection;
-  return lead?.kind === 'edge' ? facesAheadOfEdges(stack, lead.bodyId) : stack;
+  if (pointerType !== 'touch' || lead?.kind !== 'edge') return stack;
+  const index = stack.findIndex(
+    (candidate) => candidate.selection?.kind !== 'edge'
+  );
+  const surface = index < 0 ? null : stack[index]!.selection;
+  if (surface?.kind !== 'face' || surface.bodyId !== lead.bodyId) return stack;
+  return [stack[index]!, ...stack.slice(0, index), ...stack.slice(index + 1)];
 }

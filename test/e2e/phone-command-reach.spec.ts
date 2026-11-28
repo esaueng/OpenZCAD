@@ -192,6 +192,60 @@ for (const scheme of ['dark', 'light'] as const) {
   });
 }
 
+for (const tool of ['Solid offset', 'Draft'] as const) {
+  test(`${tool}'s open value leaves the phone sheet when the window widens, and takes it back`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await openSeeded(page, boxDocument(`Phone ${tool} keypad resize`));
+    await pressTool(page, new RegExp(`^${tool}`));
+    const bar = page.getByRole('group', { name: `${tool} command` });
+    if (tool === 'Draft') {
+      await expect
+        .poll(() => pickPlanarFace(page, { x: 1, y: 0, z: 0 }), {
+          timeout: 60_000
+        })
+        .not.toBeNull();
+    }
+    const valueId = tool === 'Draft' ? 'angle' : 'distance';
+    const entry = tool === 'Draft' ? '90' : '-1';
+    const sentence = tool === 'Draft' ? /less than 90/ : /more than 0/;
+    await page.getByTestId(`command-handle-${valueId}`).click();
+    const keypad = await typeIntoKeypad(page, entry);
+    await expect(bar.locator('.in-place-command-hint')).toHaveText(sentence, {
+      timeout: 30_000
+    });
+    const sheetHeight = () =>
+      page
+        .locator('.viewer-area')
+        .evaluate((area) =>
+          (area as HTMLElement).style.getPropertyValue('--keypad-sheet-h')
+        );
+    await expect.poll(sheetHeight).toMatch(/^\d+px$/);
+
+    // Past the phone width (a widened window, a turned tablet): the value
+    // stands in the stage again, and the bar goes back to the stage's foot.
+    await page.setViewportSize({ width: 600, height: 844 });
+    await expect(keypad).toBeVisible();
+    await expect(keypad).not.toHaveAttribute('data-placement', 'sheet');
+    await expect.poll(sheetHeight).toBe('');
+    await expect(keypad.locator('input')).toHaveValue(entry);
+    await expect
+      .poll(async () => {
+        const lane = await page.locator('.command-bar-lane').boundingBox();
+        return lane ? 844 - (lane.y + lane.height) : null;
+      })
+      .toBeLessThan(20);
+    await expect(keypad).toBeInViewport({ ratio: 1 });
+
+    // Narrow again: the sheet comes back, the bar standing on it.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(keypad).toHaveAttribute('data-placement', 'sheet');
+    await expect.poll(sheetHeight).toMatch(/^\d+px$/);
+    await expectRefusalReadable(page, bar, keypad, sentence);
+  });
+}
+
 test('a refused Draft angle keeps the bar’s sentence above the open value', async ({
   page
 }) => {
