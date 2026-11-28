@@ -230,6 +230,38 @@ describe('finishStepExport', () => {
       })
     ).toThrow(/not #rrggbb/);
   });
+
+  // #2085: the ids were once spread into `Math.max`. A 10,000-facet mesh
+  // solid writes about 200,000 entities, more than one call takes as
+  // arguments, so the export failed with a stack overflow.
+  it('numbers its own entities after the highest id of a 300,000-entity file', () => {
+    const points = Array.from(
+      { length: 300_000 },
+      (_, index) => `#${index + 100} = CARTESIAN_POINT('', (1., 2., 3.));`
+    );
+    const dense = WRITTEN.replace(
+      "#20 = MANIFOLD_SOLID_BREP('', #19);",
+      `${points.join('\n')}\n#20 = MANIFOLD_SOLID_BREP('', #19);`
+    );
+    const rows = finishStepExport(dense, METADATA).split('\n');
+    const ids = rows.flatMap((row) => {
+      const id = /^#(\d+) = /.exec(row);
+      return id ? [Number(id[1])] : [];
+    });
+    expect(ids.length).toBeGreaterThan(300_000);
+    expect(new Set(ids).size).toBe(ids.length);
+    // The writer's highest id is #300099; the first appended entity, the
+    // product category, follows it, and the rest follow that.
+    const category = rows.indexOf(
+      "#300100 = PRODUCT_RELATED_PRODUCT_CATEGORY('part', $, (#9));"
+    );
+    const last = rows.indexOf("#300099 = CARTESIAN_POINT('', (1., 2., 3.));");
+    expect(last).toBeGreaterThan(-1);
+    expect(category).toBeGreaterThan(last);
+    expect(ids.slice(ids.indexOf(300_100))).toEqual(
+      ids.slice(ids.indexOf(300_100)).map((_, index) => 300_100 + index)
+    );
+  });
 });
 
 describe('finishStepExport assembly (I02)', () => {

@@ -566,9 +566,14 @@ export function finishStepExport(
   }
 
   // Complex entities (`#1 = ( LENGTH_UNIT() … )`) count too: an inch
-  // declaration appends its unit entities with the highest ids.
-  let next =
-    Math.max(...data.map((line) => Number(ENTITY_ID.exec(line)?.[1] ?? 0))) + 1;
+  // declaration appends its unit entities with the highest ids. Counted in a
+  // loop: a dense B-Rep has more entity lines than `Math.max(...ids)` can
+  // take as arguments, which overflowed the call stack (#2085).
+  let next = 1;
+  for (const line of data) {
+    const id = Number(ENTITY_ID.exec(line)?.[1] ?? 0);
+    if (id >= next) next = id + 1;
+  }
   const appended: string[] = [];
   const entity = (text: string) => {
     const id = `#${next++}`;
