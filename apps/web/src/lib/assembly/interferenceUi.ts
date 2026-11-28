@@ -103,3 +103,134 @@ export function describeInterference(
           : 'No shared volume.'
   };
 }
+
+function plural(count: number, one: string, many = `${one}s`) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/** "1 pair overlaps", "3 pairs of parts overlap". */
+function overlapping(count: number, ofParts = false) {
+  const noun = `${count === 1 ? 'pair' : 'pairs'}${ofParts ? ' of parts' : ''}`;
+  return `${count} ${noun} ${count === 1 ? 'overlaps' : 'overlap'}`;
+}
+
+export interface InterferenceSummaryText {
+  /** The section's own line, above the pairs. */
+  headline: string;
+  /** The workspace status message when the check finishes. */
+  status: string;
+}
+
+/**
+ * AS04 one-line summary of the static check. It checks the saved joint
+ * values, the rest position, and says so: a study, a scrub or a sweep's
+ * "Show" can pose the view somewhere else, where the parts may well clash
+ * (#2154). "No parts overlap" is a claim about every pair, so it is made only
+ * when every pair was decided: an undecided pair or a part with no geometry
+ * leaves it "no overlap found, but …".
+ */
+export function describeInterferenceSummary(summary: {
+  interfering: number;
+  unknown: number;
+  missing: number;
+}): InterferenceSummaryText {
+  const unchecked = [
+    summary.unknown > 0
+      ? `${plural(summary.unknown, 'pair')} could not be checked exactly`
+      : '',
+    summary.missing > 0
+      ? `${plural(summary.missing, 'part')} had no geometry to check`
+      : ''
+  ]
+    .filter(Boolean)
+    .join(' and ');
+  if (summary.interfering > 0) {
+    const rest = unchecked ? `; ${unchecked}` : '';
+    return {
+      headline: `${overlapping(summary.interfering)} at the rest position${rest}.`,
+      status: `Interference: ${overlapping(summary.interfering, true)} at the rest position${rest}.`
+    };
+  }
+  if (unchecked)
+    return {
+      headline: `No overlap found at the rest position, but ${unchecked}.`,
+      status: `Interference: no overlap found at the rest position, but ${unchecked}.`
+    };
+  return {
+    headline: 'No parts overlap at the rest position.',
+    status: 'Interference: no parts overlap at the rest position.'
+  };
+}
+
+/** Said beside a static result while the view is posed somewhere else. */
+export const INTERFERENCE_OTHER_POSITION =
+  'The view shows another position, which this check does not cover.';
+
+/**
+ * AS04 one-line summary of a sweep. "No overlap at the positions checked"
+ * is a claim about every moving pair at every one of them, so it is made
+ * only when each was decided: a pair unknown somewhere (at every position,
+ * for a pair the kernel cannot intersect) or a part with no geometry is
+ * counted in the same line, never left to the rows below it (#2183).
+ */
+export function describeSweepSummary(
+  counts: {
+    overlapping: number;
+    unknown: number;
+    unknownEverywhere: number;
+    onlyUnknown: { positions: number; checked: number } | null;
+    missing: number;
+  },
+  /** Positions checked, refinements included. */
+  checked: number,
+  /** The motion, as the picker names it. */
+  motion: string
+): InterferenceSummaryText {
+  const undecided =
+    counts.unknown === 0
+      ? ''
+      : counts.onlyUnknown
+        ? counts.onlyUnknown.positions >= counts.onlyUnknown.checked
+          ? `1 pair could not be checked exactly at any of its ${plural(counts.onlyUnknown.checked, 'position')}`
+          : `1 pair could not be checked exactly at ${counts.onlyUnknown.positions} of its ${plural(counts.onlyUnknown.checked, 'position')}`
+        : `${counts.unknown} pairs could not be checked exactly at ${
+            counts.unknownEverywhere === counts.unknown
+              ? 'any position'
+              : 'some positions'
+          }`;
+  const unchecked = [
+    undecided,
+    counts.missing > 0
+      ? `${plural(counts.missing, 'part')} had no geometry to check`
+      : ''
+  ]
+    .filter(Boolean)
+    .join(' and ');
+  if (counts.overlapping > 0) {
+    const rest = unchecked ? `; ${unchecked}` : '';
+    return {
+      headline: `${overlapping(counts.overlapping)} along the motion${rest}.`,
+      status: `Interference through motion: ${overlapping(counts.overlapping, true)} along ${motion}${rest}.`
+    };
+  }
+  if (unchecked)
+    return {
+      headline: `No overlap found at the ${plural(checked, 'position')} checked, but ${unchecked}.`,
+      status: `Interference through motion: no overlap found at ${plural(checked, 'position')} checked along ${motion}, but ${unchecked}.`
+    };
+  return {
+    headline: `No overlap at the ${plural(checked, 'position')} checked.`,
+    status: `Interference through motion: no overlap at ${plural(checked, 'position')} checked along ${motion}.`
+  };
+}
+
+/**
+ * A part's name in a result, with the configuration row it was checked in
+ * when that is not the model's own: "Plate (Wide)" (#2388).
+ */
+export function checkedPartName(
+  name: string,
+  configuration: { rowName: string } | undefined
+): string {
+  return configuration ? `${name} (${configuration.rowName})` : name;
+}

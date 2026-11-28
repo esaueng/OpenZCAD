@@ -130,12 +130,15 @@ export type {
 import {
   exactBodyClash,
   pairwiseBodyClash,
-  rowMajorMatrix
+  rowMajorMatrix,
+  type PairwiseClashOperand
 } from './exact-body-clash';
 import { analyzeBodySurfaces } from './exact-surface-analysis';
 import type {
+  AssemblyCheckedConfiguration,
   AssemblyInterferenceOperand,
   AssemblyInterferenceReport,
+  BodyClashUnknown,
   AssemblySweepComponent,
   AssemblySweepPosition,
   AssemblySweepWorkerReport,
@@ -1061,6 +1064,11 @@ export interface ExactKernelAdapter {
    * copies are released and the model is untouched. A component whose body
    * has no exact geometry (unknown, consumed or parameter-hidden) is listed
    * in `missing` and joins no pair.
+   *
+   * A part whose own Configuration names another row than the active one is
+   * checked as that row builds it, which is what Assemble draws
+   * (`assemblyRowDrawnParts`); the report's `configurations` names it. Where
+   * that row cannot be built, every pair with the part is unknown.
    */
   assemblyInterference(
     document: ProjectDocument,
@@ -1071,6 +1079,8 @@ export interface ExactKernelAdapter {
    * of a sweep, on one build. Each position poses the components it names by
    * their matrices and checks only its own pairs. A component with no exact
    * geometry is listed in `missing`, and a pair naming one is left out.
+   * Parts in another configuration row are read as `assemblyInterference`
+   * reads them.
    */
   assemblyInterferenceSweep(
     document: ProjectDocument,
@@ -1614,6 +1624,85 @@ function assemblyExportBodyIds(
     );
   }
   return bodyIds.filter((bodyId) => !draw.removed.has(bodyId));
+}
+
+/**
+ * AS04/F06 (#2388): what an interference check reads for a part Assemble
+ * draws from another configuration row than the model's active one
+ * (`assemblyCheckRowParts`). `solids` are that row's exact solids for the
+ * part, serialized so they outlive the row's build; null when the row shows
+ * no body for it (suppressed, consumed or hidden there). `built` is false
+ * when the row could not be applied or built, which leaves the part's
+ * geometry unknown.
+ */
+interface AssemblyCheckRowPart {
+  rowId: string;
+  rowName: string;
+  componentName: string;
+  built: boolean;
+  solids: Uint8Array | null;
+}
+
+/**
+ * AS04: the exact solids an interference check poses for each component, in
+ * the kernel and build of the model's active row. A part `rows` names takes
+ * its row's solids (restored into this kernel and listed in `scratch` for
+ * release); every other part the active build's own. A part with nothing to
+ * check is `missing`; one whose row could not be built is `unknown`, with
+ * the verdict its pairs get.
+ */
+function assemblyCheckSolids(
+  kernel: RemusKernel,
+  build: ExactBuildResult,
+  document: ProjectDocument,
+  components: readonly { componentId: string; bodyId: string }[],
+  rows: ReadonlyMap<string, AssemblyCheckRowPart>,
+  scratch: number[]
+): {
+  solids: Map<string, readonly number[]>;
+  unknown: Map<string, BodyClashUnknown>;
+  missing: string[];
+  configurations: Record<string, AssemblyCheckedConfiguration>;
+} {
+  const hidden = getParameterHiddenBodyIds(document);
+  const solids = new Map<string, readonly number[]>();
+  const unknown = new Map<string, BodyClashUnknown>();
+  const missing: string[] = [];
+  const configurations: Record<string, AssemblyCheckedConfiguration> = {};
+  for (const component of components) {
+    const row = rows.get(component.componentId);
+    if (row) {
+      configurations[component.componentId] = {
+        rowId: row.rowId,
+        rowName: row.rowName
+      };
+      if (!row.built)
+        unknown.set(component.componentId, {
+          kind: 'unknown',
+          reason: 'configuration_unavailable',
+          message: `the ${row.rowName} configuration of ${row.componentName} could not be built`
+        });
+      else if (row.solids === null) missing.push(component.componentId);
+      else {
+        const restored = [...kernel.deserializeSolids(row.solids)];
+        scratch.push(...restored);
+        if (restored.length > 0) solids.set(component.componentId, restored);
+        else missing.push(component.componentId);
+      }
+      continue;
+    }
+    const bodyId = component.bodyId as BodyId;
+    const shape = build.shapes.get(bodyId);
+    if (
+      !shape ||
+      shape.solids.length === 0 ||
+      hidden.has(bodyId) ||
+      build.consumed.has(bodyId)
+    )
+      missing.push(component.componentId);
+    else solids.set(component.componentId, shape.solids);
+  }
+  return { solids, unknown, missing, configurations };
 }
 
 /**
@@ -5831,6 +5920,85 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     return rows;
   }
 
+  /**
+   * AS04/F06 (#2388): the geometry of each of `componentIds` that Assemble
+   * draws from another configuration row than the active one, by component
+   * id; empty when none does, so such a check builds nothing more. Each row
+   * is built exactly on its own, and `assemblyRowDrawnParts` (the one place
+   * that decides what Assemble draws) picks the body its build shows for
+   * each part. The document's own active row is never changed.
+   */
+  private async assemblyCheckRowParts(
+    document: ProjectDocument,
+    componentIds: ReadonlySet<string>
+  ): Promise<Map<string, AssemblyCheckRowPart>> {
+    const out = new Map<string, AssemblyCheckRowPart>();
+    // With no row built, this is every part that names another row.
+    const named = assemblyRowDrawnParts(
+      document,
+      () => undefined,
+      () => true
+    ).filter((part) => componentIds.has(part.componentId));
+    for (const rowId of new Set(named.map((part) => part.rowId))) {
+      const parts = named.filter((part) => part.rowId === rowId);
+      const set = (
+        part: (typeof parts)[number],
+        built: boolean,
+        solids: Uint8Array | null
+      ) =>
+        out.set(part.componentId, {
+          rowId,
+          rowName: part.rowName,
+          componentName: part.componentName,
+          built,
+          solids
+        });
+      let row: ProjectDocument;
+      try {
+        row = documentForConfiguration(document, rowId);
+      } catch {
+        for (const part of parts) set(part, false, null);
+        continue;
+      }
+      try {
+        const drawn = await this.withExportBuild(
+          row,
+          (kernel, build) => {
+            const holds = exportBuiltBody(build);
+            return assemblyRowDrawnParts(
+              document,
+              (id) => (id === rowId ? row : undefined),
+              (built, bodyId) => (built === row ? holds(bodyId) : true)
+            )
+              .filter(
+                (part) =>
+                  part.rowId === rowId && componentIds.has(part.componentId)
+              )
+              .map((part) => {
+                const shape =
+                  part.rowBodyId === null
+                    ? undefined
+                    : build.shapes.get(part.rowBodyId);
+                return {
+                  part,
+                  solids:
+                    shape && shape.solids.length > 0
+                      ? kernel.serializeSolids(Uint32Array.from(shape.solids))
+                      : null
+                };
+              });
+          },
+          []
+        );
+        for (const { part, solids } of drawn) set(part, true, solids);
+      } catch (error) {
+        if (isBuildCancelled(error)) throw error;
+        for (const part of parts) set(part, false, null);
+      }
+    }
+    return out;
+  }
+
   private exportSolidsFor(
     kernel: RemusKernel,
     build: ExactBuildResult,
@@ -6879,32 +7047,38 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     );
   }
 
-  assemblyInterference(
+  async assemblyInterference(
     document: ProjectDocument,
     operands: AssemblyInterferenceOperand[]
   ): Promise<AssemblyInterferenceReport> {
     const matrices = operands.map((operand) => rowMajorMatrix(operand.matrix));
+    const rows = await this.assemblyCheckRowParts(
+      document,
+      new Set(operands.map((operand) => operand.componentId))
+    );
     return this.withExportBuild(
       document,
       (kernel, build) => {
-        const hidden = getParameterHiddenBodyIds(document);
-        const missing: string[] = [];
-        const posed: { id: string; solids: number[] }[] = [];
         const copies: number[] = [];
         try {
+          const resolved = assemblyCheckSolids(
+            kernel,
+            build,
+            document,
+            operands,
+            rows,
+            copies
+          );
+          const posed: PairwiseClashOperand<string>[] = [];
           operands.forEach((operand, index) => {
-            const bodyId = operand.bodyId as BodyId;
-            const shape = build.shapes.get(bodyId);
-            if (
-              !shape ||
-              shape.solids.length === 0 ||
-              hidden.has(bodyId) ||
-              build.consumed.has(bodyId)
-            ) {
-              missing.push(operand.componentId);
+            const unknown = resolved.unknown.get(operand.componentId);
+            if (unknown) {
+              posed.push({ id: operand.componentId, unknown });
               return;
             }
-            const solids = shape.solids.map((solid) => {
+            const source = resolved.solids.get(operand.componentId);
+            if (!source) return;
+            const solids = source.map((solid) => {
               const copy = kernel.copyAndTransformSolid(
                 solid,
                 matrices[index]!
@@ -6914,7 +7088,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             });
             posed.push({ id: operand.componentId, solids });
           });
-          return { pairs: pairwiseBodyClash(kernel, posed), missing };
+          return {
+            pairs: pairwiseBodyClash(kernel, posed),
+            missing: resolved.missing,
+            ...(Object.keys(resolved.configurations).length > 0
+              ? { configurations: resolved.configurations }
+              : {})
+          };
         } finally {
           for (const copy of copies) {
             try {
@@ -6929,7 +7109,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     );
   }
 
-  assemblyInterferenceSweep(
+  async assemblyInterferenceSweep(
     document: ProjectDocument,
     components: AssemblySweepComponent[],
     positions: AssemblySweepPosition[]
@@ -6943,65 +7123,86 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ])
       )
     );
+    const rows = await this.assemblyCheckRowParts(
+      document,
+      new Set(components.map((component) => component.componentId))
+    );
     return this.withExportBuild(
       document,
       (kernel, build) => {
-        const hidden = getParameterHiddenBodyIds(document);
-        const missing: string[] = [];
-        const solidsOf = new Map<string, readonly number[]>();
-        for (const component of components) {
-          const bodyId = component.bodyId as BodyId;
-          const shape = build.shapes.get(bodyId);
-          if (
-            !shape ||
-            shape.solids.length === 0 ||
-            hidden.has(bodyId) ||
-            build.consumed.has(bodyId)
-          )
-            missing.push(component.componentId);
-          else solidsOf.set(component.componentId, shape.solids);
-        }
-        const results = positions.map((position, index) => {
-          const copies: number[] = [];
-          try {
-            const posed = new Map<string, number[]>();
-            const poseOf = (id: string): number[] | null => {
-              const existing = posed.get(id);
-              if (existing) return existing;
-              const solids = solidsOf.get(id);
-              const matrix = posesAt[index]![id];
-              if (!solids || !matrix) return null;
-              const placed = solids.map((solid) => {
-                const copy = kernel.copyAndTransformSolid(solid, matrix);
-                copies.push(copy);
-                return copy;
-              });
-              posed.set(id, placed);
-              return placed;
-            };
-            const pairs: AssemblyInterferenceReport['pairs'] = [];
-            for (const [a, b] of position.pairs) {
-              const solidsA = poseOf(a);
-              const solidsB = poseOf(b);
-              if (!solidsA || !solidsB) continue;
-              pairs.push({
-                a,
-                b,
-                verdict: exactBodyClash(kernel, solidsA, solidsB)
-              });
-            }
-            return { at: position.at, pairs };
-          } finally {
-            for (const copy of copies) {
-              try {
-                kernel.deleteSolid(copy);
-              } catch {
-                // The checkpoint restore after this job releases it anyway.
+        const restored: number[] = [];
+        try {
+          const resolved = assemblyCheckSolids(
+            kernel,
+            build,
+            document,
+            components,
+            rows,
+            restored
+          );
+          const results = positions.map((position, index) => {
+            const copies: number[] = [];
+            try {
+              const posed = new Map<string, number[]>();
+              const poseOf = (id: string): number[] | null => {
+                const existing = posed.get(id);
+                if (existing) return existing;
+                const solids = resolved.solids.get(id);
+                const matrix = posesAt[index]![id];
+                if (!solids || !matrix) return null;
+                const placed = solids.map((solid) => {
+                  const copy = kernel.copyAndTransformSolid(solid, matrix);
+                  copies.push(copy);
+                  return copy;
+                });
+                posed.set(id, placed);
+                return placed;
+              };
+              const pairs: AssemblyInterferenceReport['pairs'] = [];
+              for (const [a, b] of position.pairs) {
+                // A part whose row could not be built decides no pair.
+                const unknown =
+                  resolved.unknown.get(a) ?? resolved.unknown.get(b);
+                if (unknown) {
+                  pairs.push({ a, b, verdict: unknown });
+                  continue;
+                }
+                const solidsA = poseOf(a);
+                const solidsB = poseOf(b);
+                if (!solidsA || !solidsB) continue;
+                pairs.push({
+                  a,
+                  b,
+                  verdict: exactBodyClash(kernel, solidsA, solidsB)
+                });
+              }
+              return { at: position.at, pairs };
+            } finally {
+              for (const copy of copies) {
+                try {
+                  kernel.deleteSolid(copy);
+                } catch {
+                  // The checkpoint restore after this job releases it anyway.
+                }
               }
             }
+          });
+          return {
+            positions: results,
+            missing: resolved.missing,
+            ...(Object.keys(resolved.configurations).length > 0
+              ? { configurations: resolved.configurations }
+              : {})
+          };
+        } finally {
+          for (const solid of restored) {
+            try {
+              kernel.deleteSolid(solid);
+            } catch {
+              // The checkpoint restore after this job releases it anyway.
+            }
           }
-        });
-        return { positions: results, missing };
+        }
       },
       []
     );

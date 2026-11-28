@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { commandFactories } from '@openzcad/command-system';
 import {
   IDENTITY_PLACEMENT,
-  type AssemblyInterferenceReport
+  type AssemblyInterferenceReport,
+  type BodyClashVerdict
 } from '@openzcad/shared';
 import { recordingExecute, scissorsManager } from '../../test/assemblyFixture';
 import {
@@ -65,7 +66,7 @@ describe('Assembly interference section (AS04)', () => {
     const check = vi.fn<CheckInterference>(async () => overlapping);
     const { section, onStatus } = renderPanel(check);
     expect(within(section()).getByRole('status')).toHaveTextContent(
-      'Checks every pair of parts as assembled'
+      'Checks every pair of parts at the rest position'
     );
     await act(async () => {
       fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
@@ -76,10 +77,10 @@ describe('Assembly interference section (AS04)', () => {
     expect(operands.map((o) => o.componentId)).toEqual(['comp_a', 'comp_b']);
     expect(operands[0]!.matrix).toHaveLength(16);
     expect(within(section()).getByRole('status')).toHaveTextContent(
-      '1 pair overlap.'
+      '1 pair overlaps at the rest position.'
     );
     expect(onStatus).toHaveBeenCalledWith(
-      'Interference: 1 pair of parts overlap.'
+      'Interference: 1 pair of parts overlaps at the rest position.'
     );
     const row = within(section()).getByRole('button', {
       name: 'Blade A and Blade B: 125 mm³'
@@ -139,7 +140,7 @@ describe('Assembly interference section (AS04)', () => {
       fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
     });
     expect(within(section()).getByRole('status')).toHaveTextContent(
-      'No overlap found, but 1 pair could not be checked exactly.'
+      'No overlap found at the rest position, but 1 pair could not be checked exactly.'
     );
     expect(section()).toHaveTextContent('1 pair not checked exactly');
     fireEvent.click(
@@ -173,12 +174,80 @@ describe('Assembly interference section (AS04)', () => {
       fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
     });
     expect(within(section()).getByRole('status')).toHaveTextContent(
-      'No overlap found, but 1 part had no geometry to check.'
+      'No overlap found at the rest position, but 1 part had no geometry to check.'
     );
     expect(onStatus).toHaveBeenCalledWith(
-      'Interference: no overlap found, but 1 part had no geometry to check.'
+      'Interference: no overlap found at the rest position, but 1 part had no geometry to check.'
     );
     expect(section()).not.toHaveTextContent('No parts overlap');
+  });
+
+  it('says the result is of the rest position, and that the view shows another (#2154)', async () => {
+    const clear: AssemblyInterferenceReport = {
+      pairs: [
+        {
+          a: 'comp_a',
+          b: 'comp_b',
+          verdict: {
+            kind: 'clear',
+            touching: false,
+            distance: 5,
+            closest: null,
+            atLeast: 5
+          }
+        }
+      ],
+      missing: []
+    };
+    const fixture = scissorsManager({ joint: true });
+    const recorder = recordingExecute(fixture.manager);
+    const onStatus = vi.fn();
+    render(
+      <AssemblyPanel
+        document={fixture.live()}
+        execute={recorder.execute}
+        onStatus={onStatus}
+        checkInterference={async () => clear}
+      />
+    );
+    const section = () => screen.getByRole('region', { name: 'Interference' });
+    // A sweep's "Show", a scrub or a study poses the view, never the model.
+    act(() => {
+      assemblyRuntime.setOverrides(new Map([['joint_pin', [90]]]), [
+        { jointId: 'joint_pin', dof: 0 }
+      ]);
+    });
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
+    });
+    expect(within(section()).getByRole('status')).toHaveTextContent(
+      'No parts overlap at the rest position. The view shows another position, which this check does not cover.'
+    );
+    expect(onStatus).toHaveBeenCalledWith(
+      'Interference: no parts overlap at the rest position.'
+    );
+    // Back at the saved values the result stands on its own.
+    act(() => {
+      assemblyRuntime.setOverrides(new Map(), []);
+    });
+    expect(within(section()).getByRole('status')).toHaveTextContent(
+      /^No parts overlap at the rest position\.$/
+    );
+  });
+
+  it('names the configuration a part was checked in (#2388)', async () => {
+    const { section } = renderPanel(async () => ({
+      ...overlapping,
+      configurations: { comp_a: { rowId: 'wide', rowName: 'Wide' } }
+    }));
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
+    });
+    expect(
+      within(section()).getByRole('button', {
+        name: 'Blade A (Wide) and Blade B: 125 mm³'
+      })
+    ).toHaveTextContent('Blade A (Wide) · Blade B');
   });
 
   it('reports a failed check in place', async () => {
@@ -229,7 +298,7 @@ describe('Interference through motion (AS04)', () => {
     })
   );
 
-  function renderSweep() {
+  function renderSweep(check: AssemblySweepCheck = sweep) {
     const fixture = scissorsManager({ joint: true });
     const recorder = recordingExecute(fixture.manager);
     const onStatus = vi.fn();
@@ -239,7 +308,7 @@ describe('Interference through motion (AS04)', () => {
         execute={recorder.execute}
         onStatus={onStatus}
         checkInterference={async () => ({ pairs: [], missing: [] })}
-        checkInterferenceSweep={sweep}
+        checkInterferenceSweep={check}
       />
     );
     return {
@@ -261,7 +330,7 @@ describe('Interference through motion (AS04)', () => {
     expect(sweep.mock.calls[0]![2]).toHaveLength(37);
     expect(sweep.mock.calls[0]![2][0]!.pairs).toEqual([['comp_a', 'comp_b']]);
     expect(onStatus).toHaveBeenCalledWith(
-      'Interference through motion: 1 pair of parts overlap along Pivot (0.0° to 360.0°).'
+      'Interference through motion: 1 pair of parts overlaps along Pivot (0.0° to 360.0°).'
     );
     const row = within(section()).getByRole('button', {
       name: 'Blade A and Blade B: 85.6° to 184.4°'
@@ -277,5 +346,82 @@ describe('Interference through motion (AS04)', () => {
       );
     });
     expect(getAssemblyRuntime().overrides.get('joint_pin')).toEqual([184.375]);
+  });
+
+  /** Every pair gets `verdict` at every position asked. */
+  const answering =
+    (verdict: BodyClashVerdict): AssemblySweepCheck =>
+    async (_document, _parts, positions) => ({
+      positions: positions.map((position) => ({
+        at: position.at,
+        pairs: position.pairs.map(([a, b]) => ({ a, b, verdict }))
+      })),
+      missing: []
+    });
+
+  it('never says no overlap for a pair unknown at every position (#2183)', async () => {
+    const { section, onStatus } = renderSweep(
+      answering({
+        kind: 'unknown',
+        reason: 'exact_only_unattainable',
+        message: 'the bodies could not be intersected exactly.'
+      })
+    );
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
+    });
+    const summary =
+      'but 1 pair could not be checked exactly at any of its 37 positions.';
+    expect(section()).toHaveTextContent(
+      `No overlap found at the 37 positions checked, ${summary}`
+    );
+    expect(onStatus).toHaveBeenCalledWith(
+      `Interference through motion: no overlap found at 37 positions checked along Pivot (0.0° to 360.0°), ${summary}`
+    );
+    expect(section()).not.toHaveTextContent('No overlap at the');
+    // The row still says which pair, and where.
+    expect(
+      within(section()).getByRole('button', {
+        name: 'Blade A and Blade B: Unknown at 37 positions'
+      })
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the plain all-clear summary when every position was decided', async () => {
+    const { section, onStatus } = renderSweep(
+      answering({
+        kind: 'clear',
+        touching: false,
+        distance: null,
+        closest: null,
+        atLeast: null
+      })
+    );
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
+    });
+    expect(section()).toHaveTextContent(
+      'No overlap at the 37 positions checked.'
+    );
+    expect(onStatus).toHaveBeenCalledWith(
+      'Interference through motion: no overlap at 37 positions checked along Pivot (0.0° to 360.0°).'
+    );
+    expect(section()).toHaveTextContent(
+      '1 moving pair clear at every position checked'
+    );
+  });
+
+  it('does not say no overlap for a position the check never answered', async () => {
+    // A worker that drops every pair: no verdict is not a clear verdict.
+    const { section } = renderSweep(async (_document, _parts, positions) => ({
+      positions: positions.map((position) => ({ at: position.at, pairs: [] })),
+      missing: []
+    }));
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
+    });
+    expect(section()).toHaveTextContent(
+      'No overlap found at the 37 positions checked, but 1 pair could not be checked exactly at any of its 37 positions.'
+    );
   });
 });

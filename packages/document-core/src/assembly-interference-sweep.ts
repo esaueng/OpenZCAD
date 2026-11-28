@@ -6,6 +6,7 @@ import {
   motionStudyValues,
   solveAssembly,
   transformToMatrix4,
+  type AssemblyCheckedConfiguration,
   type AssemblyCouplingEnd,
   type AssemblySet,
   type AssemblySweepPosition,
@@ -14,8 +15,8 @@ import {
   type BodyId,
   type ProjectDocument
 } from '@openzcad/shared';
-import { assemblyComponentBodies } from './assembly';
 import { isLiveAssemblyBody } from './assembly-bom';
+import { assemblyCheckComponents } from './assembly-interference';
 
 /**
  * AS04 interference through motion (no schema change: a read-only query).
@@ -216,15 +217,17 @@ export function planAssemblySweep(
     (_, index) => from + ((to - from) * index) / steps
   );
   positions[steps] = to;
-  const bodies = assemblyComponentBodies(document, isLive);
-  const components: AssemblySweepPlan['components'] = [];
-  const missing: string[] = [];
-  for (const component of set.components) {
-    const bodyId = bodies.get(component.id);
-    if (bodyId) components.push({ componentId: component.id, bodyId });
-    else missing.push(component.id);
-  }
   const poses = positions.map((at) => assemblySweepPoses(set, source, at));
+  const checked = assemblyCheckComponents(document, isLive);
+  const missing = [...checked.missing];
+  // A part the solver gives no pose somewhere along the motion cannot be
+  // checked there: it is listed, never dropped with its pairs unsaid.
+  const components: AssemblySweepPlan['components'] = [];
+  for (const component of checked.components) {
+    if (poses.every((pose) => pose.has(component.componentId)))
+      components.push(component);
+    else missing.push(component.componentId);
+  }
   const pairs: [string, string][] = [];
   let still = 0;
   for (let i = 0; i < components.length; i += 1)
@@ -232,7 +235,6 @@ export function planAssemblySweep(
       const a = components[i]!.componentId;
       const b = components[j]!.componentId;
       const first = poses[0]!;
-      if (!first.has(a) || !first.has(b)) continue;
       const base = relative(first.get(a)!, first.get(b)!);
       const moves = poses.some((pose) => {
         const rel = relative(pose.get(a)!, pose.get(b)!);
@@ -370,8 +372,13 @@ export interface AssemblySweptPair {
    * when none is measured), with its verdict and witnesses.
    */
   worst: { at: number; verdict: BodyClashVerdict } | null;
-  /** Positions the kernel could not decide: never read as clear. */
+  /**
+   * Positions the kernel could not decide, and planned positions the check
+   * returned no verdict for: never read as clear.
+   */
   unknownAt: number[];
+  /** Positions this pair was put to the check at, `unknownAt` included. */
+  checked: number;
   /** The smallest certified gap at a position without overlap, if any. */
   closest: { at: number; distance: number } | null;
   /** Touching (contact without overlap) somewhere along the motion. */
@@ -387,14 +394,30 @@ export interface AssemblySweepReport {
   pairs: AssemblySweptPair[];
   missing: string[];
   still: number;
+  /**
+   * The parts checked as their own configuration row builds them, by
+   * component id (`AssemblyInterferenceReport.configurations`).
+   */
+  configurations: Record<string, AssemblyCheckedConfiguration>;
 }
+
+/**
+ * A planned position the check returned no verdict for. It decided nothing,
+ * so it is unknown there: a pair is never clear by the absence of an answer.
+ */
+const UNANSWERED: BodyClashVerdict = {
+  kind: 'unknown',
+  reason: 'not_checked',
+  message: 'the check returned no result for this position'
+};
 
 /** The plan's positions and refinements, summed up per pair. */
 export function summarizeAssemblySweep(
   plan: AssemblySweepPlan,
   results: readonly AssemblySweepPositionResult[],
   /** Components the worker found no exact geometry for. */
-  workerMissing: readonly string[] = []
+  workerMissing: readonly string[] = [],
+  configurations: Record<string, AssemblyCheckedConfiguration> = {}
 ): AssemblySweepReport {
   const step =
     plan.positions.length > 1
@@ -414,7 +437,11 @@ export function summarizeAssemblySweep(
     // A pair with a part that has no geometry was not checked at all: it is
     // reported through `missing`, never as a pair clear along the motion.
     if (missing.has(a) || missing.has(b)) continue;
-    const list = (byPair.get(pairKey(a, b)) ?? []).sort((p, q) => p.at - q.at);
+    const list = byPair.get(pairKey(a, b)) ?? [];
+    const answered = new Set(list.map(({ at }) => at));
+    for (const at of plan.positions)
+      if (!answered.has(at)) list.push({ at, verdict: UNANSWERED });
+    list.sort((p, q) => p.at - q.at);
     const stretches: AssemblySweptPair['overlaps'] = [];
     let open: AssemblySweptPair['overlaps'][number] | null = null;
     let worst: AssemblySweptPair['worst'] = null;
@@ -467,6 +494,7 @@ export function summarizeAssemblySweep(
       overlaps: stretches,
       worst,
       unknownAt,
+      checked: list.length,
       closest,
       touches
     });
@@ -478,7 +506,57 @@ export function summarizeAssemblySweep(
     checked: atAll.size,
     pairs,
     missing: [...missing],
-    still: plan.still
+    still: plan.still,
+    configurations
+  };
+}
+
+/**
+ * A sweep's counts for its one-line summary. "No overlap" is a claim about
+ * every moving pair at every position checked: a pair undecided somewhere,
+ * or a part with no geometry, leaves it unproven and is counted here so the
+ * summary says so (#2183).
+ */
+export function summarizeSweptPairs(report: AssemblySweepReport): {
+  overlapping: number;
+  /** Pairs with a position that was not decided. */
+  unknown: number;
+  /** Those of `unknown` decided at no position at all. */
+  unknownEverywhere: number;
+  /** The one undecided pair's undecided and checked positions, else null. */
+  onlyUnknown: { positions: number; checked: number } | null;
+  touching: number;
+  /** Pairs decided free of overlap at every position checked. */
+  clear: number;
+  missing: number;
+} {
+  const undecided = report.pairs.filter((pair) => pair.unknownAt.length > 0);
+  return {
+    overlapping: report.pairs.filter((pair) => pair.overlaps.length > 0).length,
+    unknown: undecided.length,
+    unknownEverywhere: undecided.filter(
+      (pair) => pair.unknownAt.length >= pair.checked
+    ).length,
+    onlyUnknown:
+      undecided.length === 1
+        ? {
+            positions: undecided[0]!.unknownAt.length,
+            checked: undecided[0]!.checked
+          }
+        : null,
+    touching: report.pairs.filter(
+      (pair) =>
+        pair.overlaps.length === 0 &&
+        pair.unknownAt.length === 0 &&
+        pair.touches
+    ).length,
+    clear: report.pairs.filter(
+      (pair) =>
+        pair.overlaps.length === 0 &&
+        pair.unknownAt.length === 0 &&
+        !pair.touches
+    ).length,
+    missing: report.missing.length
   };
 }
 
@@ -518,7 +596,11 @@ export type AssemblySweepCheck = (
   document: ProjectDocument,
   components: AssemblySweepPlan['components'],
   positions: AssemblySweepPosition[]
-) => Promise<{ positions: AssemblySweepPositionResult[]; missing: string[] }>;
+) => Promise<{
+  positions: AssemblySweepPositionResult[];
+  missing: string[];
+  configurations?: Record<string, AssemblyCheckedConfiguration>;
+}>;
 
 /**
  * Runs a planned sweep: every pair at the even positions, then
@@ -541,6 +623,7 @@ export async function runAssemblySweep(
   );
   const results = [...first.positions];
   const missing = new Set(first.missing);
+  const configurations = { ...first.configurations };
   for (let round = 0; round < SWEEP_REFINEMENTS; round += 1) {
     const asks = assemblySweepRefinements(results);
     if (asks.length === 0) break;
@@ -551,6 +634,7 @@ export async function runAssemblySweep(
     );
     results.push(...next.positions);
     for (const id of next.missing) missing.add(id);
+    Object.assign(configurations, next.configurations);
   }
-  return summarizeAssemblySweep(plan, results, [...missing]);
+  return summarizeAssemblySweep(plan, results, [...missing], configurations);
 }

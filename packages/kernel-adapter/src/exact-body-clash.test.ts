@@ -244,6 +244,27 @@ describe('exact body clash (M09, shared by AS04)', () => {
       'bc:clear'
     ]);
   });
+
+  it('keeps every pair of an operand with no geometry to hand, as unknown', () => {
+    const kernel = new RemusKernel();
+    const unknown = {
+      kind: 'unknown' as const,
+      reason: 'configuration_unavailable',
+      message: 'the Wide configuration of Plate could not be built'
+    };
+    const pairs = pairwiseBodyClash(kernel, [
+      { id: 'a', solids: [kernel.makeBox(10, 10, 10)] },
+      { id: 'b', unknown },
+      { id: 'c', solids: [moved(kernel, kernel.makeBox(10, 10, 10), 50, 0, 0)] }
+    ]);
+    // Far apart or not, a pair with the undecided part is never clear.
+    expect(pairs).toEqual([
+      { a: 'a', b: 'b', verdict: unknown },
+      expect.objectContaining({ a: 'a', b: 'c' }),
+      { a: 'b', b: 'c', verdict: unknown }
+    ]);
+    expect(pairs[1]!.verdict.kind).toBe('clear');
+  });
 });
 
 describe('clash verdict combination', () => {

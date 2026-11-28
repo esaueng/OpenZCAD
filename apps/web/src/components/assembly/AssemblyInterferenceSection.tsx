@@ -14,7 +14,12 @@ import {
   assemblyRuntime,
   useAssemblyRuntime
 } from '../../lib/assembly/assemblyRuntime';
-import { describeInterference } from '../../lib/assembly/interferenceUi';
+import {
+  checkedPartName,
+  describeInterference,
+  describeInterferenceSummary,
+  INTERFERENCE_OTHER_POSITION
+} from '../../lib/assembly/interferenceUi';
 import { AssemblyMotionInterference } from './AssemblyMotionInterference';
 import type { AssemblySweepCheck } from '@openzcad/document-core';
 
@@ -33,29 +38,6 @@ function plural(count: number, one: string, many = `${one}s`) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-type InterferenceSummary = ReturnType<typeof summarizeInterference>;
-
-/**
- * "No parts overlap" is a claim about every pair. A pair the kernel could
- * not decide, or a part with no geometry to check, leaves it unproven.
- */
-function incomplete(summary: InterferenceSummary): boolean {
-  return summary.unknown > 0 || summary.missing > 0;
-}
-
-function unchecked(summary: InterferenceSummary): string {
-  return [
-    summary.unknown > 0
-      ? `${plural(summary.unknown, 'pair')} could not be checked exactly`
-      : '',
-    summary.missing > 0
-      ? `${plural(summary.missing, 'part')} had no geometry to check`
-      : ''
-  ]
-    .filter(Boolean)
-    .join(' and ');
-}
-
 /**
  * AS04: exact pairwise interference of the assembled parts. Check runs the
  * M09 clash query on every pair of components at their solved pose (never
@@ -63,6 +45,10 @@ function unchecked(summary: InterferenceSummary): string {
  * attention; a pair's witness opens under it and picks both parts on the
  * model. A result is tied to the model and poses it checked, and says so
  * when either has changed since.
+ *
+ * The pose checked is the saved one, the rest position, whatever the view
+ * shows: every summary names it, and says so outright while a study, a
+ * scrub or a sweep's "Show" poses the view somewhere else (#2154).
  */
 export function AssemblyInterferenceSection({
   document,
@@ -80,14 +66,25 @@ export function AssemblyInterferenceSection({
   const [openPair, setOpenPair] = useState<string | null>(null);
   const run = useRef(0);
   const selected = useAssemblyRuntime((s) => s.selectedComponentIds);
+  const shown = useAssemblyRuntime((s) => s.overrides);
+  const placed = useAssemblyRuntime((s) => s.placementOverrides);
   const set = document.assembly;
+  // Whether the view is posed away from the saved values this check reads.
+  const elsewhere =
+    placed.size > 0 ||
+    [...shown].some(([jointId, values]) => {
+      const saved = set?.joints.find((joint) => joint.id === jointId)?.values;
+      return (
+        !saved ||
+        values.some((value, dof) => Math.abs(value - (saved[dof] ?? 0)) > 1e-9)
+      );
+    });
   const { operands, missing } = useMemo(
     () => assemblyInterferenceOperands(document),
     [document]
   );
   const key = `${document.version}:${JSON.stringify(operands)}`;
   const names = new Map(set?.components.map((c) => [c.id, c.name]) ?? []);
-  const name = (id: string) => names.get(id) ?? 'Removed part';
   const enough = operands.length >= 2;
 
   const start = () => {
@@ -103,13 +100,8 @@ export function AssemblyInterferenceSection({
           missing: [...new Set([...missing, ...report.missing])]
         };
         setState({ kind: 'done', key, report: merged });
-        const summary = summarizeInterference(merged);
         onStatus(
-          summary.interfering > 0
-            ? `Interference: ${plural(summary.interfering, 'pair')} of parts overlap.`
-            : incomplete(summary)
-              ? `Interference: no overlap found, but ${unchecked(summary)}.`
-              : 'Interference: no parts overlap.'
+          describeInterferenceSummary(summarizeInterference(merged)).status
         );
       },
       (error: unknown) => {
@@ -125,6 +117,12 @@ export function AssemblyInterferenceSection({
   const stale = state.kind !== 'idle' && state.key !== key;
   const report = state.kind === 'done' ? state.report : null;
   const summary = report ? summarizeInterference(report) : null;
+  // As checked: a part in another configuration row is named with its row.
+  const name = (id: string) =>
+    checkedPartName(
+      names.get(id) ?? 'Removed part',
+      report?.configurations?.[id]
+    );
   const attention = report
     ? sortInterferencePairs(report.pairs).filter(
         (pair) =>
@@ -143,19 +141,17 @@ export function AssemblyInterferenceSection({
               : state.kind === 'failed'
                 ? `The check failed: ${state.message}`
                 : summary
-                  ? summary.interfering > 0
-                    ? `${plural(summary.interfering, 'pair')} overlap.`
-                    : incomplete(summary)
-                      ? `No overlap found, but ${unchecked(summary)}.`
-                      : 'No parts overlap.'
-                  : 'Checks every pair of parts as assembled, with the exact kernel.'}
+                  ? `${describeInterferenceSummary(summary).headline}${
+                      elsewhere ? ` ${INTERFERENCE_OTHER_POSITION}` : ''
+                    }`
+                  : 'Checks every pair of parts at the rest position, with the exact kernel.'}
         </p>
         <button
           type="button"
           className="assembly-link-button"
           disabled={!enough || state.kind === 'running'}
           onClick={start}
-          title="Exact pairwise check of the assembled parts"
+          title="Exact pairwise check of the parts at the rest position"
         >
           {state.kind === 'idle' ? 'Check' : 'Check again'}
         </button>

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
+  assemblyInterferenceOperands,
   assemblySweepOverrides,
   assemblySweepPoses,
   assemblySweepRefinements,
@@ -10,6 +11,8 @@ import {
   runAssemblySweep,
   sortSweptPairs,
   summarizeAssemblySweep,
+  summarizeInterference,
+  summarizeSweptPairs,
   SWEEP_JOINT_STEPS,
   SWEEP_REFINEMENTS,
   type AssemblySweepCheck
@@ -317,7 +320,225 @@ describe('AS04 interference through motion', () => {
       { from: 1, to: 2, fromWithin: 1, toWithin: 2 }
     ]);
     expect(report.pairs[0]!.unknownAt).toEqual([3]);
+    expect(report.pairs[0]!.checked).toBe(5);
+    expect(summarizeSweptPairs(report)).toEqual({
+      overlapping: 1,
+      unknown: 1,
+      unknownEverywhere: 0,
+      onlyUnknown: { positions: 1, checked: 5 },
+      touching: 0,
+      clear: 0,
+      missing: 1
+    });
   });
+
+  it('counts a pair unknown at every sample apart from the clear ones (#2183)', () => {
+    // The issue's sweep: 37 samples, the gear pair unknown at each of them,
+    // the two other moving pairs clear throughout.
+    const positions = Array.from({ length: 37 }, (_, index) => index);
+    const plan = {
+      source: { kind: 'joint' as const, jointId: 'j', dof: 0 },
+      unit: 'mm' as const,
+      from: 0,
+      to: 36,
+      positions,
+      components: [],
+      missing: [],
+      pairs: [
+        ['pinion', 'rack'],
+        ['plate', 'rack'],
+        ['pinion', 'plate']
+      ] as [string, string][],
+      still: 0
+    };
+    const report = summarizeAssemblySweep(
+      plan,
+      positions.map((value) => ({
+        at: value,
+        pairs: [
+          { a: 'pinion', b: 'rack', verdict: unknown },
+          { a: 'plate', b: 'rack', verdict: clear },
+          { a: 'pinion', b: 'plate', verdict: clear }
+        ]
+      }))
+    );
+    expect(report.checked).toBe(37);
+    const gears = report.pairs[0]!;
+    expect(gears.unknownAt).toHaveLength(37);
+    expect(gears.overlaps).toEqual([]);
+    expect(summarizeSweptPairs(report)).toEqual({
+      overlapping: 0,
+      unknown: 1,
+      unknownEverywhere: 1,
+      onlyUnknown: { positions: 37, checked: 37 },
+      touching: 0,
+      clear: 2,
+      missing: 0
+    });
+    // The control: the same sweep with every pair decided is all clear.
+    const control = summarizeAssemblySweep(
+      plan,
+      positions.map((value) => ({
+        at: value,
+        pairs: plan.pairs.map(([a, b]) => ({ a, b, verdict: clear }))
+      }))
+    );
+    expect(summarizeSweptPairs(control)).toMatchObject({
+      overlapping: 0,
+      unknown: 0,
+      onlyUnknown: null,
+      clear: 3
+    });
+  });
+
+  it('reads a planned position with no verdict as unknown, never as clear', () => {
+    const plan = {
+      source: { kind: 'joint' as const, jointId: 'j', dof: 0 },
+      unit: 'mm' as const,
+      from: 0,
+      to: 2,
+      positions: [0, 1, 2],
+      components: [],
+      missing: [],
+      pairs: [['a', 'b']] as [string, string][],
+      still: 0
+    };
+    // Position 1 came back without the pair; position 2 never came back.
+    const report = summarizeAssemblySweep(plan, [
+      at(0, clear),
+      { at: 1, pairs: [] }
+    ]);
+    expect(report.pairs[0]!.unknownAt).toEqual([1, 2]);
+    expect(report.pairs[0]!.checked).toBe(3);
+    expect(summarizeSweptPairs(report)).toMatchObject({ unknown: 1, clear: 0 });
+  });
+
+  it('finds the clash at a study playhead that the rest-pose check is clear of (#2154)', async () => {
+    // Two 20 × 12 × 10 carriers on parallel sliders, 60 mm apart at rest.
+    // One 2 s study drives them +30 and −30 mm: they coincide at 1.00 s.
+    const manager = new CommandManager(createProjectDocument('Pass', owner));
+    for (const name of ['Base', 'Left', 'Right'])
+      manager.execute(
+        commandFactories.addPrimitive({
+          name,
+          primitiveKind: 'box',
+          dimensions:
+            name === 'Base'
+              ? { width: 10, height: 10, depth: 10 }
+              : { width: 20, height: 12, depth: 10 }
+        })
+      );
+    const ids = [...manager.document.bodyOrder] as BodyId[];
+    const start = [
+      { x: 0, y: 0, z: -50 },
+      { x: 0, y: 0, z: 0 },
+      { x: 60, y: 0, z: 0 }
+    ];
+    manager.execute(
+      commandFactories.addAssemblyComponents({
+        components: ids.map((bodyId, index) => ({
+          componentId: ['c_base', 'c_left', 'c_right'][index]!,
+          name: ['Base', 'Left', 'Right'][index]!,
+          bodyId,
+          grounded: index === 0,
+          placement: { ...IDENTITY_PLACEMENT, translation: start[index]! }
+        }))
+      })
+    );
+    for (const [id, child, x] of [
+      ['j_left', 'c_left', 0],
+      ['j_right', 'c_right', 60]
+    ] as const)
+      manager.execute(
+        commandFactories.addAssemblyJoint({
+          joint: {
+            id,
+            name: id,
+            kind: 'slider',
+            // In the base's own frame, 50 mm above it: world z = 0.
+            parent: {
+              componentId: 'c_base',
+              frame: { ...along(x), origin: { x, y: 0, z: 50 } }
+            },
+            child: { componentId: child, frame: along(0) },
+            values: [0],
+            limits: [{ min: -60, max: 60 }]
+          }
+        })
+      );
+    manager.execute(
+      commandFactories.setAssemblyStudy({
+        study: {
+          id: 'st_cross',
+          name: 'Cross',
+          durationS: 2,
+          playback: 'once',
+          tracks: [
+            {
+              jointId: 'j_left',
+              dof: 0,
+              keys: [
+                { t: 0, value: 0, easing: 'linear' },
+                { t: 2, value: 60, easing: 'linear' }
+              ]
+            },
+            {
+              jointId: 'j_right',
+              dof: 0,
+              keys: [
+                { t: 0, value: 0, easing: 'linear' },
+                { t: 2, value: -60, easing: 'linear' }
+              ]
+            }
+          ]
+        }
+      })
+    );
+    const document = await synced(manager.document);
+
+    // The static check reads the saved values: clear, 40 mm apart, and it
+    // stays so whatever position a study or "Show" poses the view at.
+    const { operands } = assemblyInterferenceOperands(document, () => true);
+    const rest = await adapter.assemblyInterference(document, operands);
+    expect(summarizeInterference(rest)).toMatchObject({
+      interfering: 0,
+      unknown: 0,
+      clear: 3
+    });
+    expect(
+      rest.pairs.find((p) => p.a === 'c_left' && p.b === 'c_right')!.verdict
+    ).toMatchObject({ kind: 'clear', distance: 40 });
+
+    // The sweep of the study finds the whole-volume clash at its playhead.
+    const planned = planAssemblySweep(
+      document,
+      { kind: 'study', studyId: 'st_cross' },
+      () => true
+    );
+    if (!planned.ok) throw new Error(planned.reason);
+    const report = await runAssemblySweep(document, planned.plan, check);
+    const carriers = report.pairs.find(
+      (pair) => pair.a === 'c_left' && pair.b === 'c_right'
+    )!;
+    expect(carriers.overlaps).toHaveLength(1);
+    expect(carriers.worst!.at).toBeCloseTo(1, 9);
+    const worst = carriers.worst!.verdict;
+    expect(worst.kind).toBe('interference');
+    if (worst.kind === 'interference')
+      expect(worst.volume).toBeCloseTo(2400, 6);
+    // "Show at 1 s" poses both joints there, as overrides the model never
+    // stores: the document the static check reads is unchanged.
+    const shown = assemblySweepOverrides(
+      document.assembly!,
+      planned.plan.source,
+      carriers.worst!.at
+    ).overrides;
+    expect([shown.get('j_left'), shown.get('j_right')]).toEqual([[30], [-30]]);
+    expect(document.assembly!.joints.map((joint) => joint.values)).toEqual([
+      [0],
+      [0]
+    ]);
+  }, 240_000);
 
   it('sweeps a coupled joint only as far as its mate allows, as Animate does', async () => {
     const document = (await rig(null)).document;

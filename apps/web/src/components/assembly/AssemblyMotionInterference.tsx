@@ -5,6 +5,7 @@ import {
   planAssemblySweep,
   runAssemblySweep,
   sortSweptPairs,
+  summarizeSweptPairs,
   type AssemblySweepCheck,
   type AssemblySweepReport,
   type AssemblySweepSource,
@@ -19,7 +20,11 @@ import {
 } from '@openzcad/shared';
 import { assemblyRuntime } from '../../lib/assembly/assemblyRuntime';
 import { formatAssemblyValue } from '../../lib/assembly/assemblyUi';
-import { describeInterference } from '../../lib/assembly/interferenceUi';
+import {
+  checkedPartName,
+  describeInterference,
+  describeSweepSummary
+} from '../../lib/assembly/interferenceUi';
 import { formatNumber } from '../../lib/model';
 
 type SweepState =
@@ -30,6 +35,8 @@ type SweepState =
       key: string;
       source: AssemblySweepSource;
       unit: AssemblyDofUnit | 's';
+      /** The motion as the picker named it when it was swept. */
+      label: string;
       report: AssemblySweepReport;
     }
   | { kind: 'failed'; key: string; message: string };
@@ -50,6 +57,9 @@ const sourceValue = (source: AssemblySweepSource) =>
  * shorter than one step can fall between positions, so nothing is called
  * clear outright. "Show" poses the assembly at a pair's worst position, as
  * a transient scrub that is never saved.
+ *
+ * The summary line counts what was not decided as well as what overlaps: a
+ * pair unknown at every position never reads as "no overlap" (#2183).
  */
 export function AssemblyMotionInterference({
   document,
@@ -104,7 +114,6 @@ export function AssemblyMotionInterference({
   const selected =
     sources.find((entry) => entry.value === chosen) ?? sources[0] ?? null;
   const names = new Map(set?.components.map((c) => [c.id, c.name]) ?? []);
-  const name = (id: string) => names.get(id) ?? 'Removed part';
   const key = selected
     ? `${document.version}:${selected.value}:${JSON.stringify(set)}`
     : '';
@@ -140,15 +149,15 @@ export function AssemblyMotionInterference({
           key,
           source: plan.source,
           unit: plan.unit,
+          label: selected.label,
           report
         });
-        const overlapping = report.pairs.filter(
-          (pair) => pair.overlaps.length > 0
-        ).length;
         onStatus(
-          overlapping > 0
-            ? `Interference through motion: ${plural(overlapping, 'pair')} of parts overlap along ${selected.label}.`
-            : `Interference through motion: no overlap at ${plural(report.checked, 'position')} checked along ${selected.label}.`
+          describeSweepSummary(
+            summarizeSweptPairs(report),
+            report.checked,
+            selected.label
+          ).status
         );
       },
       (error: unknown) => {
@@ -186,6 +195,12 @@ export function AssemblyMotionInterference({
 
   const stale = state.kind !== 'idle' && state.key !== key;
   const done = state.kind === 'done' ? state : null;
+  // As checked: a part in another configuration row is named with its row.
+  const name = (id: string) =>
+    checkedPartName(
+      names.get(id) ?? 'Removed part',
+      done?.report.configurations[id]
+    );
   const attention = done
     ? sortSweptPairs(done.report.pairs).filter(
         (pair) =>
@@ -231,13 +246,11 @@ export function AssemblyMotionInterference({
             : state.kind === 'failed'
               ? `The check failed: ${state.message}`
               : done
-                ? attention.some((pair) => pair.overlaps.length > 0)
-                  ? `${plural(
-                      attention.filter((pair) => pair.overlaps.length > 0)
-                        .length,
-                      'pair'
-                    )} overlap along the motion.`
-                  : `No overlap at the ${plural(done.report.checked, 'position')} checked.`
+                ? describeSweepSummary(
+                    summarizeSweptPairs(done.report),
+                    done.report.checked,
+                    done.label
+                  ).headline
                 : 'Checks the parts that move against each other, at positions along the motion.'}
         </p>
         <button

@@ -513,7 +513,7 @@ test.describe('Assemble in the compact sheet', () => {
         });
         await tapInSheet(interference.getByRole('button', { name: 'Check' }));
         await expect(interference.getByRole('status')).toHaveText(
-          /No parts overlap|overlap\.|No overlap found/,
+          /No parts overlap|overlaps? at the rest position|No overlap found/,
           { timeout: 60_000 }
         );
         const bom = sheet(page).getByRole('region', {
