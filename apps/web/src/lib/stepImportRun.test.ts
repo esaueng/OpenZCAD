@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   createProjectDocument,
@@ -6,7 +6,19 @@ import {
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import { createInFlightImportChecksums } from './importArchival';
-import { localStepImportSourceStore, runStepImport } from './stepImportRun';
+import {
+  importSuccessMessage,
+  localStepImportSourceStore,
+  runCadFileImport,
+  runStepImport
+} from './stepImportRun';
+
+// The IGES translator runs in a browser worker; here it restates the file as
+// the STEP below, which is all the import downstream of it ever sees.
+vi.mock('./igesImport', () => ({
+  igesAsStepFile: async (file: File) =>
+    new File([STEP_TEXT], file.name, { type: 'model/step' })
+}));
 
 // A CAD exporter's generic top-level product name, as in the reported part.
 const STEP_TEXT = [
@@ -200,6 +212,98 @@ describe('runStepImport project guard', () => {
     expect(listNodesByKind(other.document, 'feature')).toEqual([]);
     expect(statuses.at(-1)).toContain(
       'the project changed before it could land'
+    );
+  });
+});
+
+describe('IGES import naming (#2103, #2380)', () => {
+  it('names the IGES format, and archives its STEP translation as STEP', async () => {
+    const manager = new CommandManager(
+      createProjectDocument('Plate', toUserId('user_iges_naming'))
+    );
+    const archived: { fileName: string; contentType: string }[] = [];
+    const messages: string[] = [];
+    await runCadFileImport({
+      file: new File(['IGES bytes'], 'plate.igs', { type: 'model/iges' }),
+      contentType: 'model/iges',
+      commandFactory: commandFactories.importStep,
+      store: {
+        ...localStepImportSourceStore,
+        ensureLocalProjectStorage: async () => 'unavailable'
+      },
+      archive: async (input) => {
+        archived.push({
+          fileName: input.fileName,
+          contentType: input.contentType
+        });
+        expect(await input.body.text()).toMatch(/^ISO-10303-21;/);
+        return 'artifact_plate';
+      },
+      validatedFeature: {
+        reserve: () => ({ release() {} }),
+        run: async (_command, options) => {
+          manager.execute(await options.finalize!());
+          messages.push(
+            typeof options.successMessage === 'function'
+              ? options.successMessage()
+              : options.successMessage
+          );
+          return 'committed';
+        }
+      },
+      status: { setStatus() {}, setFeatureFormError() {} },
+      refuse: (message) => {
+        throw new Error(message);
+      },
+      marks: {
+        inFlight: createInFlightImportChecksums(),
+        abandoned: new Set()
+      },
+      currentDocument: () => manager.document,
+      editDisabledReason: () => null,
+      newId: () => crypto.randomUUID()
+    });
+    // The feature keeps the file the user chose; the archive is named for
+    // the bytes it holds.
+    const [feature] = listNodesByKind(manager.document, 'feature');
+    expect(
+      feature?.data.featureKind === 'imported-step' && feature.data.sourceName
+    ).toBe('plate.igs');
+    expect(archived).toEqual([
+      { fileName: 'plate.igs.step', contentType: 'model/step' }
+    ]);
+    expect(messages).toEqual([
+      'Imported editable IGES solid from plate.igs: exact body rebuilt, STEP translation archived. The original IGES file is not stored; its STEP translation is what saves, backs up and rebuilds.'
+    ]);
+  });
+
+  it('words single and multi-body imports by format, and leaves STEP as it was', () => {
+    expect(
+      importSuccessMessage({
+        fileName: 'Frame.step',
+        archived: true,
+        bodies: 1
+      })
+    ).toBe(
+      'Imported editable STEP solid from Frame.step: exact body rebuilt, source archived.'
+    );
+    expect(
+      importSuccessMessage({
+        fileName: 'Frame.step',
+        archived: false,
+        bodies: 2
+      })
+    ).toBe(
+      'Imported 2 editable STEP bodies from Frame.step: exact bodies rebuilt (cloud archive unavailable; source saved locally).'
+    );
+    expect(
+      importSuccessMessage({
+        fileName: 'Mixed.IGES',
+        archived: false,
+        bodies: 3
+      })
+    ).toBe(
+      'Imported 3 editable IGES bodies from Mixed.IGES: exact bodies rebuilt (cloud archive unavailable; STEP translation saved locally). The original IGES file is not stored; its STEP translation is what saves, backs up and rebuilds.'
     );
   });
 });

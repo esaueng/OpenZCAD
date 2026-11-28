@@ -1,5 +1,9 @@
 import { saveFile } from './saveFile';
-import { documentAssetsWithHistory } from '@openzcad/shared';
+import {
+  documentAssetsWithHistory,
+  documentNodesWithHistory,
+  importedStepSourceFormat
+} from '@openzcad/shared';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import { withoutDerivedProjection } from '@openzcad/document-core';
 import { importArtifactIds } from '@openzcad/persistence';
@@ -31,6 +35,7 @@ import {
   checksum,
   packBackupFile,
   parseProjectBackup,
+  type BackupSource,
   type ProjectBackup
 } from './projectBackup';
 
@@ -212,10 +217,20 @@ export async function createProjectBackup(
     let binary = '';
     for (let offset = 0; offset < bytes.length; offset += 32768)
       binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
-    const packed = {
+    const packed: BackupSource = {
       sha256: ref.checksumSha256,
       logicalBytes: bytes.length,
-      base64: btoa(binary)
+      base64: btoa(binary),
+      contentType: source.contentType,
+      // The bytes are STEP whatever the import's name says; an IGES
+      // import's original file is not stored, so the backup says it holds
+      // the translation instead (#2380).
+      ...(source.kind === 'step-import' &&
+      importedStepSourceFormat(source.name) === 'iges'
+        ? {
+            translatedFrom: { format: 'iges' as const, sourceName: source.name }
+          }
+        : {})
     };
     reserve(new Blob([JSON.stringify(packed)]).size);
     backup.sources!.push(packed);
@@ -360,6 +375,29 @@ export async function createProjectBackup(
   if (new Blob([text]).size > maxBytes) throw capacityError();
   await parseProjectBackup(text);
   return text;
+}
+
+/**
+ * What a backup of this project does not hold, said when it is exported. An
+ * IGES import keeps only the exact STEP it was restated as, so neither the
+ * device nor a backup has the original IGES file (#2380). Empty when every
+ * import's backup holds the bytes that were imported.
+ */
+export function backupRetentionNote(document: ProjectDocument): string {
+  const names = new Set<string>();
+  for (const node of documentNodesWithHistory(document)) {
+    if (
+      node.kind === 'feature' &&
+      node.data.featureKind === 'imported-step' &&
+      importedStepSourceFormat(node.data.sourceName) === 'iges'
+    )
+      names.add(node.data.sourceName);
+  }
+  if (names.size === 0) return '';
+  const [first] = names;
+  return names.size === 1
+    ? ` ${first} is included as its exact STEP translation; the original IGES file is not stored.`
+    : ` ${names.size} IGES imports are included as their exact STEP translations; the original IGES files are not stored.`;
 }
 
 /**

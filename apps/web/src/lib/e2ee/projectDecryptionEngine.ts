@@ -42,7 +42,11 @@ import {
   type RevisionSummary
 } from '@openzcad/shared';
 import { ApiError } from '../api';
-import { importSourceArchive, meshPayloadArchive } from '../importArchival';
+import {
+  importSourceArchive,
+  meshPayloadArchive,
+  stepSourceArchive
+} from '../importArchival';
 import type { BlobReferenceRegistry } from './blobReferences';
 import type { EncryptedContentBlobs } from './encryptedContentBlobs';
 import { EXPORT_ARTIFACT_KINDS } from './encryptedProjectInfo';
@@ -217,11 +221,7 @@ export function documentBlobFiles(
     };
     const sourceName = data.sourceName ?? 'import';
     if (data.featureKind === 'imported-step') {
-      add(data.artifactId, () => ({
-        kind: 'step-import',
-        fileName: sourceName,
-        contentType: 'model/step'
-      }));
+      add(data.artifactId, () => stepSourceArchive(sourceName));
     } else if (data.featureKind === 'imported-mesh') {
       add(data.artifactId, () => meshPayloadArchive(sourceName));
     }
@@ -479,7 +479,8 @@ export function createProjectDecryptionEngine(
     const staged = new Set(journal.revisions.map((r) => r.revisionId));
     const artifactIds = new Map<string, string>();
     for (const artifact of journal.artifacts) {
-      if (artifact.blobId) artifactIds.set(artifact.blobId, artifact.artifactId);
+      if (artifact.blobId)
+        artifactIds.set(artifact.blobId, artifact.artifactId);
     }
 
     const blobKind = (id: string) =>

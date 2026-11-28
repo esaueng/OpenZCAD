@@ -13,10 +13,6 @@ import type { GeometryWorkerApi } from '../hooks/useGeometryWorker';
 import type { IgesConversionResult } from '../worker/igesImportWorker';
 import type { MeshExportJob } from './meshExportPackage';
 
-export function isIgesFileName(name: string): boolean {
-  return /\.(?:igs|iges)$/i.test(name);
-}
-
 /** The IGES file as the STEP file the import reads, keeping its name. */
 export function igesAsStepFile(
   file: File,

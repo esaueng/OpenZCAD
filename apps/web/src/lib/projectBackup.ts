@@ -34,12 +34,31 @@ export interface BackupFile {
   base64: string;
   sha256: string;
 }
+/** One content-addressed source blob: an import's rebuild data or a picture. */
+export interface BackupSource {
+  sha256: string;
+  base64: string;
+  logicalBytes: number;
+  /**
+   * What the bytes are, for whoever reads the backup. Informational: a
+   * restore resolves sources by checksum alone, and older backups omit it.
+   */
+  contentType?: string;
+  /**
+   * Set when the bytes are the exact STEP an IGES import was restated as.
+   * The original IGES file is not stored anywhere, so it is not in the
+   * backup either; this says so rather than leaving STEP bytes behind an
+   * IGES file name (#2380). Informational, like {@link contentType}.
+   */
+  translatedFrom?: { format: 'iges'; sourceName: string };
+}
+
 export interface ProjectBackup {
   format: 'openzcad-project';
   version: 1;
   document: ProjectDocument;
   files: BackupFile[];
-  sources?: { sha256: string; base64: string; logicalBytes: number }[];
+  sources?: BackupSource[];
   saveStates?: {
     checkpointId: string;
     document: ProjectDocument;
@@ -299,7 +318,12 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
     (!Array.isArray(parsed.sources) || parsed.sources.length > 1_000)
   )
     throw new Error('Invalid source collection.');
-  for (const value of (parsed.sources ?? []) as unknown[]) {
+  // A damaged entry is named only once the documents are validated: what
+  // the user can act on is the import that reads it, not its position (#2098).
+  const damagedSources: { sha256: string; index: number }[] = [];
+  for (const [index, value] of (
+    (parsed.sources ?? []) as unknown[]
+  ).entries()) {
     const source = record(value);
     if (
       typeof source.sha256 !== 'string' ||
@@ -312,7 +336,7 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
       bytes.length !== source.logicalBytes ||
       (await checksum(bytes)) !== source.sha256
     )
-      throw new Error('Damaged source blob.');
+      damagedSources.push({ sha256: source.sha256, index });
     sourceIds.add(source.sha256);
   }
   const documents = [parsed.document];
@@ -349,6 +373,15 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
     checkpoints.add(checkpoint.checkpointId);
     documents.push(state.document);
   }
+  const damaged = damagedSources[0];
+  if (damaged)
+    throw new Error(
+      damagedSourceMessage(
+        damaged,
+        (parsed.sources as unknown[]).length,
+        documents
+      )
+    );
   for (const document of documents) {
     for (const node of documentNodesWithHistory(document)) {
       if (node.kind !== 'feature') continue;
@@ -402,6 +435,49 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
       throw new Error('Invalid measurements.');
   }
   return parsed as unknown as ProjectBackup;
+}
+
+const REEXPORT_HINT =
+  'Export a new backup from the original project if you still have it.';
+
+/**
+ * Names a damaged source by what reads it, as a missing source already is:
+ * "Damaged source blob" alone was the same for every import in the backup,
+ * so it could not say which one to recover (#2098). The documents have been
+ * validated by now; the checksum is the one the entry claims, which is the
+ * one its users reference.
+ */
+function damagedSourceMessage(
+  damaged: { sha256: string; index: number },
+  total: number,
+  documents: readonly ProjectDocument[]
+): string {
+  for (const document of documents) {
+    for (const node of documentNodesWithHistory(document)) {
+      if (node.kind !== 'feature') continue;
+      const ref = importedSourceReferenceOf(node.data);
+      if (
+        isImportedSourceReference(ref) &&
+        ref.checksumSha256 === damaged.sha256
+      )
+        return `Damaged ${
+          node.data.featureKind === 'imported-mesh'
+            ? 'mesh data'
+            : 'STEP source'
+        }: ${node.name}. ${REEXPORT_HINT}`;
+    }
+  }
+  for (const document of documents) {
+    for (const image of referenceImagesWithHistory(document)) {
+      if (image.source?.checksumSha256 === damaged.sha256)
+        return `Damaged image: ${image.name}. ${REEXPORT_HINT}`;
+    }
+    for (const asset of documentAssetsWithHistory(document)) {
+      if (asset.checksum === damaged.sha256)
+        return `Damaged source data: ${asset.name}. ${REEXPORT_HINT}`;
+    }
+  }
+  return `Damaged source blob ${damaged.index + 1} of ${total} (SHA-256 ${damaged.sha256.slice(0, 12)}…), which no import, image or asset in the backup names. ${REEXPORT_HINT}`;
 }
 
 export function importProjectCopy(

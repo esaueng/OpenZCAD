@@ -1,4 +1,9 @@
-import { CAD_IMPORT_ACCEPT, fileAccept } from '../lib/appleTouch';
+import {
+  CAD_IMPORT_ACCEPT,
+  CAD_IMPORT_FORMAT_LINE,
+  cadImportTitle,
+  fileAccept
+} from '../lib/appleTouch';
 import { ProjectImportButton } from './ProjectImportButton';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
@@ -1293,7 +1298,7 @@ export function TopBar({
               <button
                 type="button"
                 className="topbar-menu-item"
-                title="Import STEP, a mesh file (STL, 3MF, OBJ, GLB, PLY), a DXF drawing as a sketch, or a paired Shapr3D project and STEP"
+                title={cadImportTitle({ shaprPair: true })}
                 // The format list stays in its title: in the name it made
                 // this item answer to "STEP" beside Export STEP.
                 aria-label="Import CAD files…"
@@ -1301,7 +1306,7 @@ export function TopBar({
               >
                 <Upload size={13} aria-hidden="true" />
                 <span>Import CAD files…</span>
-                <small>STEP · STL · 3MF · OBJ · GLB · PLY · DXF</small>
+                <small>{CAD_IMPORT_FORMAT_LINE}</small>
               </button>
               <input
                 ref={importInputRef}
