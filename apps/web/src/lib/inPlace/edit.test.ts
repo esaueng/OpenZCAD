@@ -31,6 +31,7 @@ import {
   inPlaceEditMovedBodies,
   inPlaceEditFacePick,
   inPlaceEditObjects,
+  inPlaceEditOwnRefusal,
   inPlaceEditOperandRefusal,
   inPlaceEditRestDocument,
   inPlaceEditSeed,
@@ -2120,6 +2121,41 @@ describe('an untouched edit writes the feature back as stored', () => {
       edgeHashes: [21, 22],
       distance: 1.5
     };
+
+    // A revision that keeps the geometry (an Objects folder, a display-unit
+    // change rebinding sketch geometry) copies the derived container but
+    // carries the rebuild's warning list, and so its typed records, over.
+    it('reads the typed refusal across a copy of the same rebuild', () => {
+      const id = 'feature_chamfer' as FeatureId;
+      const rebuilt = {
+        warnings: ['Feature "Chamfer": The target body is unavailable.']
+      } as unknown as ProjectDocument['derived'];
+      const attribution = {
+        derived: rebuilt,
+        featureWarnings: [
+          {
+            featureId: id,
+            featureName: 'Chamfer',
+            kind: 'refusal' as const,
+            message: 'Feature "Chamfer": The target body is unavailable.',
+            kernelRefusal: missing
+          }
+        ]
+      };
+      expect(inPlaceEditOwnRefusal(id, rebuilt, attribution)).toEqual(missing);
+      expect(inPlaceEditOwnRefusal(id, { ...rebuilt }, attribution)).toEqual(
+        missing
+      );
+      // Another rebuild's records are not read as this one's.
+      expect(
+        inPlaceEditOwnRefusal(
+          id,
+          { ...rebuilt, warnings: [...rebuilt.warnings] },
+          attribution
+        )
+      ).toBeNull();
+      expect(inPlaceEditOwnRefusal(id, rebuilt, null)).toBeNull();
+    });
 
     it('chamfer: opens with its typed refusal and no pick to make', () => {
       const armed = inPlaceEditSeed(feature(chamfer, BODY), gone)!;

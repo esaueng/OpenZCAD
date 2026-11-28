@@ -287,6 +287,39 @@ function zeroVector(vector: ParametricVector3): boolean {
   );
 }
 
+/**
+ * The edited feature's own typed refusal in `derived`, read from the typed
+ * records this session recorded for a rebuild (`attribution`, kept beside
+ * the document because a committed rebuild stores only warning strings).
+ * The rebuild is recognised by its warning list as well as its container:
+ * a revision that keeps the geometry (an Objects folder, a display-unit
+ * change rebinding sketch geometry) copies `derived` but carries the list,
+ * and its records, over.
+ */
+export function inPlaceEditOwnRefusal(
+  featureId: FeatureId,
+  derived: ProjectDocument['derived'],
+  attribution: {
+    derived: ProjectDocument['derived'];
+    featureWarnings: readonly FeatureWarning[];
+  } | null
+): FeatureWarning['kernelRefusal'] | null {
+  if (
+    !attribution ||
+    (attribution.derived !== derived &&
+      attribution.derived.warnings !== derived.warnings)
+  )
+    return null;
+  return (
+    attribution.featureWarnings.find(
+      (warning) =>
+        warning.featureId === featureId &&
+        (warning.kind === 'build-failed' || warning.kind === 'refusal') &&
+        warning.kernelRefusal !== undefined
+    )?.kernelRefusal ?? null
+  );
+}
+
 /** The command and its seed for a stored feature; null when none edits it. */
 export function inPlaceEditSeed(
   feature: FeatureNode,

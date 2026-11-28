@@ -2267,6 +2267,7 @@ import {
   inPlaceEditObjects,
   inPlaceEditOperandRefusal,
   inPlaceEditRestDocument,
+  inPlaceEditOwnRefusal,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
@@ -14441,16 +14442,11 @@ export function App() {
       bodyVertices: (bodyId) => representations[bodyId]?.mesh.vertices ?? null,
       // The feature's own typed refusal in the rebuild `current` carries:
       // a missing target body leaves its edit nothing to pick.
-      ownRefusal:
-        (featureAttribution?.derived === current.derived
-          ? featureAttribution.featureWarnings
-          : []
-        ).find(
-          (warning) =>
-            warning.featureId === feature.featureId &&
-            (warning.kind === 'build-failed' || warning.kind === 'refusal') &&
-            warning.kernelRefusal !== undefined
-        )?.kernelRefusal ?? null
+      ownRefusal: inPlaceEditOwnRefusal(
+        feature.featureId,
+        current.derived,
+        featureAttribution
+      )
     });
   }
 
