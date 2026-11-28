@@ -28,6 +28,26 @@
     env(safe-area-inset-bottom);
 }
 
+/* Typing into a sheet page on a touch screen (All tools' search, a
+   name): the on-screen keyboard stands where the tabs were, so they go,
+   as a phone's tab bar does, and their row is the page's room for what the
+   field finds. On a Pro Max they cut the one result off (the motion
+   review). Their height goes to zero, so the stage layer, which reserves
+   it for them, comes down to the keyboard too, and the sheet with it.
+   BottomSheet's is-typing holds through a tap on the page's own controls,
+   so the sheet never moves under that tap. */
+@media (pointer: coarse) {
+  .app-shell[data-shell='compact']:has(.compact-sheet.is-typing) {
+    --compact-tabs-h: 0px;
+  }
+
+  .app-shell[data-shell='compact']:has(.compact-sheet.is-typing)
+    > .compact-chrome
+    > .compact-tabs {
+    display: none;
+  }
+}
+
 .app-shell[data-shell='compact'] > .workspace {
   grid-row: 2;
 }
@@ -207,6 +227,13 @@
   background: var(--color-surface);
   border-top: var(--border-thin);
   z-index: calc(var(--z-panel-float) + 2);
+  transition: opacity 200ms ease-out;
+}
+
+/* Under a full-height sheet the tabs take no taps (the sheet's inert
+   background): they say so, rather than look ready and do nothing. */
+.compact-tabs[inert] {
+  opacity: 0.4;
 }
 
 .compact-tabs.is-empty {
@@ -584,6 +611,229 @@
 
 .compact-sheet-body[hidden] {
   display: none;
+}
+
+/* ── The sheet's motion between its row and its pages ── */
+
+/* A page pushed comes in from the trailing edge, one popped back to from
+   the leading edge (BottomSheet's data-nav), as a navigation stack does.
+   A page a drag already drew (data-nav="drag") stands as it is. */
+.compact-sheet[data-nav='push'] > .compact-sheet-body[data-page] {
+  animation: compact-page-in-push 240ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+.compact-sheet[data-nav='pop'] > .compact-sheet-body {
+  animation: compact-page-in-pop 240ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+@keyframes compact-page-in-push {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes compact-page-in-pop {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* All tools opened from its button: the grid comes in tile by tile, in
+   reading order (AllToolsSheet's --i), the first sixteen staggered. */
+.compact-sheet[data-nav='push'] .compact-tool-grid > li {
+  animation: compact-tile-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  animation-delay: calc(min(var(--i, 0), 16) * 12ms);
+}
+
+@keyframes compact-tile-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Build's row pulled up (BottomSheet's is-raising): All tools stands under
+   it as it will once let go, its head and then its tiles coming in as the
+   sheet follows the finger (--sheet-raise: 0 at the row, 1 at half
+   height). The row gives way first (gone at 0.2), so its words and the
+   page's never stand over each other. */
+.compact-sheet.is-raising > .compact-sheet-head {
+  opacity: calc(1 - var(--sheet-raise) * 5);
+}
+
+.compact-sheet.is-raising > .compact-sheet-body {
+  opacity: calc(1 - var(--sheet-raise) * 5);
+  transform: translateY(calc(var(--sheet-raise) * -8px));
+}
+
+.compact-sheet-raise {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: env(safe-area-inset-right);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.compact-sheet-raise-head {
+  display: grid;
+  grid-template-columns: var(--compact-target) minmax(0, 1fr) var(
+      --compact-target
+    );
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-1) 0;
+  opacity: calc(var(--sheet-raise) * 5 - 1);
+}
+
+.compact-sheet-raise-icon {
+  width: var(--compact-target);
+  height: var(--compact-target);
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text);
+}
+
+.compact-sheet-raise-title {
+  min-width: 0;
+  min-height: var(--compact-target);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.compact-sheet-raise-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2) var(--sp-3);
+}
+
+.compact-sheet-raise .compact-search {
+  opacity: calc(var(--sheet-raise) * 5 - 1.1);
+}
+
+.compact-sheet-raise .compact-tool-group-title {
+  opacity: calc(var(--sheet-raise) * 4 - 1);
+}
+
+.compact-sheet-raise .compact-tool-grid > li {
+  --t: clamp(
+    0,
+    calc((var(--sheet-raise) - 0.22 - min(var(--i, 0), 24) * 0.025) * 5),
+    1
+  );
+  animation: none;
+  opacity: var(--t);
+  transform: translateY(calc((1 - var(--t)) * 16px))
+    scale(calc(0.94 + var(--t) * 0.06));
+}
+
+/* A page pulled down over a sheet that holds only its tray
+   (BottomSheet's is-lowering): the row it goes back to shows through, at
+   the top where it will stand, once the page has given way (between
+   0.45 and 0.25 of the way to half, then the row by 0.05). */
+.compact-sheet.is-lowering > .compact-sheet-head,
+.compact-sheet.is-lowering > .compact-sheet-body[data-page] {
+  opacity: calc(var(--sheet-raise) * 5 - 1.25);
+}
+
+.compact-sheet.is-lowering > .compact-sheet-body[hidden]:not([data-page]) {
+  position: absolute;
+  top: 12px;
+  left: 0;
+  right: env(safe-area-inset-right);
+  z-index: 3;
+  display: flex;
+  padding-top: 0;
+  padding-bottom: var(--sp-2);
+  overflow: hidden;
+  pointer-events: none;
+  opacity: calc(1.25 - var(--sheet-raise) * 5);
+}
+
+/* A page follows a swipe from its leading edge (BottomSheet's swipe back),
+   begun on the page or its head, and springs back when let go short of
+   going back. The page scrolls up and down; sideways is the swipe's. */
+.compact-sheet:not(.is-row) > .compact-sheet-head {
+  touch-action: pan-y;
+}
+
+.compact-sheet-body[data-page] {
+  touch-action: pan-y;
+  transition:
+    transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 200ms ease-out;
+}
+
+.compact-sheet-body[data-page].is-swiping {
+  transition: none;
+}
+
+/* Reduced motion: a swipe let go short comes back at once, and a mode's
+   tray fades in. */
+.compact-sheet.is-reduced-motion .compact-sheet-body[data-page] {
+  transition: none;
+}
+
+.compact-sheet.is-reduced-motion .compact-tray-slot.is-entering {
+  animation-name: compact-motion-fade;
+}
+
+/* Reduced motion: pages and tiles fade in place, without the slide. */
+.compact-sheet.is-reduced-motion[data-nav] > .compact-sheet-body,
+.compact-sheet.is-reduced-motion[data-nav] .compact-tool-grid > li {
+  animation-name: compact-motion-fade;
+  animation-delay: 0ms;
+}
+
+.compact-sheet.is-reduced-motion .compact-sheet-raise .compact-tool-grid > li,
+.compact-sheet.is-reduced-motion.is-raising > .compact-sheet-body {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compact-sheet-body[data-page] {
+    transition: none;
+  }
+
+  .compact-sheet[data-nav] > .compact-sheet-body,
+  .compact-sheet[data-nav] .compact-tool-grid > li {
+    animation-name: compact-motion-fade;
+    animation-delay: 0ms;
+  }
+
+  .compact-sheet-raise .compact-tool-grid > li,
+  .compact-sheet.is-raising > .compact-sheet-body {
+    transform: none;
+  }
+}
+
+@keyframes compact-motion-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* The workspace's cards and panels, which float as islands on the regular
@@ -1591,6 +1841,29 @@
   z-index: 2;
   min-width: 0;
   background: var(--color-surface);
+}
+
+/* A mode chosen from the tabs: its tray rises into the row rather than
+   swapping in one cut (CompactWorkspace replays it on each change). */
+.compact-tray-slot.is-entering {
+  animation: compact-tray-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+@keyframes compact-tray-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compact-tray-slot.is-entering {
+    animation-name: compact-motion-fade;
+  }
 }
 
 .compact-tray.is-mode {
