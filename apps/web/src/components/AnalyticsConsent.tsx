@@ -1,5 +1,6 @@
 import { cloudFunctionsAreEnabled, cloudRequestSignal } from '../lib/cloudMode';
 import { isDesktopApp } from '../lib/desktopBridge';
+import { isIosShell } from '../lib/nativeShell';
 import { useEffect, useState } from 'react';
 import { SettingRow, Status, Toggle } from './settingsControls';
 import {
@@ -97,7 +98,7 @@ function AnalyticsDisclosure() {
 // One row per title whichever app renders it: the desktop app explains the
 // web-only choice in the same row rather than a second "Usage analytics".
 export function AnalyticsConsent() {
-  const desktop = isDesktopApp();
+  const desktop = isDesktopApp() || isIosShell();
   const [enabled, setEnabled] = useState(hasAnalyticsConsent);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -111,7 +112,11 @@ export function AnalyticsConsent() {
         title="Usage analytics"
         hint={
           desktop ? (
-            'Available in the web browser. This desktop app does not send usage events.'
+            isIosShell() ? (
+              'Available in the web browser. This app does not send usage events.'
+            ) : (
+              'Available in the web browser. This desktop app does not send usage events.'
+            )
           ) : error ? (
             <span role="status">{error}</span>
           ) : (

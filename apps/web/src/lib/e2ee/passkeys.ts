@@ -1,5 +1,6 @@
 import { passkeyPrfInput, toHex, type Bytes } from '@openzcad/crypto';
 import { isDesktopApp } from '../desktopBridge';
+import { isIosShell } from '../nativeShell';
 import {
   getKeySessionRevision,
   isCurrentKeySession,
@@ -90,6 +91,9 @@ export interface PasskeyPrf {
 export function passkeysAvailable(): boolean {
   return (
     !isDesktopApp() &&
+    // The iPhone and iPad app never calls `navigator.credentials` on its
+    // private origin; its passkeys arrive with the native bridge (ADR-026).
+    !isIosShell() &&
     globalThis.isSecureContext === true &&
     typeof PublicKeyCredential !== 'undefined' &&
     typeof navigator.credentials?.create === 'function' &&

@@ -659,6 +659,7 @@ import {
   type CadBinaryExportFormat,
   type DesktopMenuCommand
 } from './lib/desktopBridge';
+import { isIosShell, nativeSignIn, NativeShellError } from './lib/nativeShell';
 import type { MeshExportPackage } from './lib/meshExportPackage';
 import {
   cloudFunctionsAreEnabled,
@@ -17482,6 +17483,7 @@ export function App() {
   }
 
   async function handleStartDesktopLogin() {
+    if (isIosShell()) return handleStartShellLogin();
     setSettingsBusy(true);
     setSettingsMessage('Opening secure sign-in in your browser…');
     let authorized = false;
@@ -17508,6 +17510,29 @@ export function App() {
       if (!authorized) {
         await cancelDesktopSignIn().catch(() => undefined);
       }
+      setSettingsBusy(false);
+    }
+  }
+
+  /**
+   * The iPhone and iPad app's sign-in (ADR-026): Swift shows the code, opens
+   * the approval page in a private sheet and redeems the attempt. The page
+   * then reads its session through the native proxy, as any reload would.
+   */
+  async function handleStartShellLogin() {
+    setSettingsBusy(true);
+    setSettingsMessage('Opening secure sign-in…');
+    try {
+      await nativeSignIn();
+      await activateCloudSession(await api.session());
+    } catch (error) {
+      setSettingsMessage(
+        error instanceof NativeShellError && error.name === 'NotAllowedError'
+          ? 'Sign-in was cancelled.'
+          : errorMessage(error, 'Sign-in failed.')
+      );
+      throw error;
+    } finally {
       setSettingsBusy(false);
     }
   }
