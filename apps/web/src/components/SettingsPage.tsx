@@ -2683,7 +2683,7 @@ export function SettingsPage({
                               desktopAuthorizationApproved ? null : (
                                 <span className="settings-button-row">
                                   <label className="settings-field-inline">
-                                    <span>Desktop code</span>
+                                    <span>App code</span>
                                     <input
                                       type="text"
                                       value={desktopAuthorizationCode}
@@ -2719,8 +2719,8 @@ export function SettingsPage({
                             }
                           >
                             {desktopAuthorizationApproved
-                              ? 'OpenZCAD for macOS is connected. You can return to the app.'
-                              : 'Enter the 8-character code shown in your OpenZCAD for macOS window before connecting this cloud profile.'}
+                              ? 'The OpenZCAD app is connected. You can return to it.'
+                              : 'Enter the 8-character code shown in the OpenZCAD app before connecting this cloud profile.'}
                           </Notice>
                         ) : null}
                       </>

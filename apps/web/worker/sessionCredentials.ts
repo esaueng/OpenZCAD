@@ -1,5 +1,20 @@
 export const SESSION_COOKIE_NAME = '__Host-openzcad_session';
 
+/**
+ * Native apps admitted to the PKCE device authorization (`/api/auth/desktop/*`)
+ * and to the bearer tokens it issues: the macOS app and, under ADR-026, the
+ * iPhone and iPad app. Every layer that checks a native client reads this one
+ * list (the request parser, the access-token validator, the refresh path and
+ * the E2EE write guard), so a client admitted at one is admitted at all.
+ */
+export const NATIVE_CLIENT_IDS = ['openzcad-macos', 'openzcad-ios'] as const;
+
+export type NativeClientId = (typeof NATIVE_CLIENT_IDS)[number];
+
+export function isNativeClientId(value: unknown): value is NativeClientId {
+  return (NATIVE_CLIENT_IDS as readonly unknown[]).includes(value);
+}
+
 export async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     'SHA-256',

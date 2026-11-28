@@ -2,7 +2,10 @@ import {
   MAX_ACCOUNT_PROJECTS,
   MAX_ACCOUNT_STORAGE_BYTES
 } from '@openzcad/shared';
-import { sessionWriteCredential } from './sessionCredentials';
+import {
+  NATIVE_CLIENT_IDS,
+  sessionWriteCredential
+} from './sessionCredentials';
 
 export interface E2eeWriteAuthorization {
   readonly sql: string;
@@ -101,6 +104,11 @@ export async function e2eeWriteAuthorization(
     : null;
 }
 
+// Constant literals from NATIVE_CLIENT_IDS, never request input.
+const NATIVE_CLIENT_SQL_LIST = NATIVE_CLIENT_IDS.map((id) => `'${id}'`).join(
+  ', '
+);
+
 function writeAuthorization(
   table: 'auth_sessions' | 'desktop_access_tokens',
   tokenHash: string,
@@ -117,7 +125,7 @@ function writeAuthorization(
     sql: `NOT EXISTS (SELECT 1 FROM account_erasure_requests WHERE user_id = ?)
       AND EXISTS (SELECT 1 FROM ${table}
         WHERE token_hash = ? AND user_id = ? AND expires_at >= ?
-        ${table === 'desktop_access_tokens' ? "AND revoked_at IS NULL AND client_id = 'openzcad-macos'" : ''})`,
+        ${table === 'desktop_access_tokens' ? `AND revoked_at IS NULL AND client_id IN (${NATIVE_CLIENT_SQL_LIST})` : ''})`,
     binds: [userId, tokenHash, userId, admittedAt],
     dispose
   };
