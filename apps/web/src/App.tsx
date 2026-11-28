@@ -2343,6 +2343,7 @@ import {
   rollbackMarkerMove,
   rowResume,
   rowResumeAlreadyFailing,
+  withFeatureAttribution,
   validateHistoryResume,
   type RollbackMarkerMove,
   type RowResume
@@ -36704,17 +36705,18 @@ export function App() {
     // Every feature's name: a warning without a typed record is blamed on
     // a feature only when its name is that feature's alone.
     const roster = listFeaturesInOrder(document).map((entry) => entry.name);
-    // No roster for the baseline: the committed rebuild keeps only warning
-    // strings, so a failure counts as already there for every feature its
-    // lead could name. A stricter baseline would refuse the resume for a
-    // failure the model already had once the candidate names it by its
-    // typed record.
+    // The baseline reads the typed records of the committed rebuild, so a
+    // failure is known by its feature id, as the candidate's is; a shared
+    // name then neither hides a new failure nor raises an old one.
     const alreadyFailing = rowResumeAlreadyFailing(
       resume,
-      ready ? document.derived : null,
+      ready
+        ? withFeatureAttribution(document.derived, featureAttribution)
+        : null,
       rollbackFailingRef.current?.projectId === document.projectId
         ? rollbackFailingRef.current.featureIds
-        : undefined
+        : undefined,
+      roster
     );
     let refusal: HistoryResumeRefusal | null = null;
     let candidate: ProjectDocument['derived'] | null = null;
@@ -36891,11 +36893,16 @@ export function App() {
     const roster = listFeaturesInOrder(document).map((entry) => entry.name);
     if (move.paused.length > 0) {
       // Remember what the model already could not build before the pause,
-      // judged on the rebuild of this very version only. No roster: a
-      // shared name counts as failing for each feature it could name, so
-      // the resume is not refused for a failure that was already there.
+      // judged on the rebuild of this very version only, by its typed
+      // records when this session has them (see `resumeRow`).
       const failing = geometry.isReadyFor(document)
-        ? new Set(failingFeatureIds(move.paused, document.derived))
+        ? new Set(
+            failingFeatureIds(
+              move.paused,
+              withFeatureAttribution(document.derived, featureAttribution),
+              roster
+            )
+          )
         : new Set<FeatureId>();
       const known =
         rollbackFailingRef.current?.projectId === document.projectId

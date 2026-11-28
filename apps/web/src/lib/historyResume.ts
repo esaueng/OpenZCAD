@@ -129,6 +129,28 @@ export function rowResume(
 }
 
 /**
+ * `derived` with the typed records this session recorded for it
+ * (`attribution`, kept beside the document because a committed rebuild
+ * stores only warning strings), or `derived` as it is when they belong to
+ * another rebuild. A Resume baseline reads it, so a failure is known by its
+ * feature id as the candidate's is, and a name two features share neither
+ * hides a new failure nor reports an old one again.
+ */
+export function withFeatureAttribution(
+  derived: ProjectDocument['derived'],
+  attribution: {
+    derived: ProjectDocument['derived'];
+    featureWarnings: readonly NonNullable<
+      ProjectDocument['derived']['featureWarnings']
+    >[number][];
+  } | null
+): ProjectDocument['derived'] {
+  return attribution?.derived === derived
+    ? { ...derived, featureWarnings: [...attribution.featureWarnings] }
+    : derived;
+}
+
+/**
  * The checked features a row resume is not blamed for: later features that
  * already fail in `derived`, the rebuild of the document before the resume
  * (null when that rebuild is not in yet, so none is known), and the row
@@ -137,12 +159,14 @@ export function rowResume(
 export function rowResumeAlreadyFailing(
   resume: RowResume,
   derived: ProjectDocument['derived'] | null,
-  rollbackFailing: ReadonlySet<FeatureId> = new Set()
+  rollbackFailing: ReadonlySet<FeatureId> = new Set(),
+  roster?: readonly string[]
 ): Set<FeatureId> {
-  // No roster: this is the baseline, so an untyped warning counts for every
-  // feature its lead could name rather than for none of them.
+  // Give `derived` its typed records where they exist: a warning string
+  // whose name two features share is pinned on neither (`roster`), so a
+  // baseline without them can only over-report a failure as new.
   const failing = new Set(
-    derived ? failingFeatureIds(resume.checked.slice(1), derived) : []
+    derived ? failingFeatureIds(resume.checked.slice(1), derived, roster) : []
   );
   if (
     isFeatureRollbackSuppressed(resume.feature) &&
