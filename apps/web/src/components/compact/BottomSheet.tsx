@@ -27,6 +27,23 @@ import {
   SHEET_OVERLAY_ATTRIBUTE
 } from './compactSlots';
 
+/** Room left around a field scrolled into view in the sheet, in CSS px. */
+const REVEAL_MARGIN = 12;
+
+/** Scrolls `scroller` just enough to show `element` whole, if it can. */
+export function revealInside(scroller: HTMLElement, element: HTMLElement) {
+  const box = scroller.getBoundingClientRect();
+  const rect = element.getBoundingClientRect();
+  if (rect.bottom > box.bottom - REVEAL_MARGIN) {
+    scroller.scrollTop += Math.min(
+      rect.bottom - box.bottom + REVEAL_MARGIN,
+      rect.top - box.top - REVEAL_MARGIN
+    );
+  } else if (rect.top < box.top + REVEAL_MARGIN) {
+    scroller.scrollTop -= box.top + REVEAL_MARGIN - rect.top;
+  }
+}
+
 /** Holds the sheet's state; `hasRoot` is whether the workspace fills it. */
 export function useSheet(hasRoot: boolean) {
   const hasRootRef = useRef(hasRoot);
@@ -230,6 +247,44 @@ export function BottomSheet({
       }
     };
   }, [detent]);
+
+  // The field being typed into stays in view when the page shortens under
+  // it. The iOS shell ends the page at the keyboard's top rather than let
+  // WebKit scroll the whole page up (which slid the header and Undo under
+  // the status bar), so the sheet shrinks as the keyboard rises and a field
+  // low in it would go under the mode tabs. Checked after the resize and
+  // again once the height's transition ends, when the sheet has its final
+  // size. Scrolled by hand inside the sheet: `scrollIntoView` would also
+  // scroll the page.
+  const revealFocused = useCallback(() => {
+    const sheet = sheetRef.current;
+    const active = document.activeElement;
+    if (!sheet || !(active instanceof HTMLElement)) return;
+    if (!sheet.contains(active)) return;
+    const body = active.closest<HTMLElement>('.compact-sheet-body');
+    if (body) revealInside(body, active);
+  }, []);
+  useEffect(() => {
+    let frame = 0;
+    const onResize = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(revealFocused);
+    };
+    // The sheet's own size too: WKWebView resized for the keyboard did not
+    // reliably report it as a window resize.
+    const sheet = sheetRef.current;
+    const observer =
+      sheet && typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(onResize)
+        : null;
+    if (sheet) observer?.observe(sheet);
+    window.addEventListener('resize', onResize);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener('resize', onResize);
+    };
+  }, [revealFocused]);
 
   // Where focus last was, so a page knows what opened it even when that
   // control (a row on the page below) is gone by the time it is drawn.
@@ -525,6 +580,14 @@ export function BottomSheet({
         hidden={detent === 'closed'}
         style={style}
         onKeyDown={onKeyDown}
+        onTransitionEnd={(event) => {
+          if (
+            event.target === event.currentTarget &&
+            event.propertyName === 'height'
+          ) {
+            revealFocused();
+          }
+        }}
         {...(detent === 'full' ? { role: 'dialog', 'aria-modal': true } : {})}
       >
         {/* The sheet's own controls and pages keep their Enter; the

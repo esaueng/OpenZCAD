@@ -34,6 +34,32 @@ final class WorkspaceIdiomTests: XCTestCase {
         XCTAssertEqual(WorkspaceIdiom.pageZoom(bodyPointSize: 40, shortSide: 300), 1)
     }
 
+    @MainActor
+    func testViewportScriptScalesThePageAndPutsItBack() async throws {
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 420, height: 900))
+        let navigation = LoadProbe()
+        web.navigationDelegate = navigation
+        navigation.loaded = expectation(description: "page loaded")
+        web.loadHTMLString(
+            #"<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"></head><body></body></html>"#,
+            baseURL: nil)
+        await fulfillment(of: [navigation.loaded!], timeout: 10)
+        func viewport(after zoom: CGFloat) async throws -> String? {
+            _ = try await web.callAsyncJavaScript(
+                WorkspaceIdiom.viewportScript(zoom: zoom), arguments: [:], in: nil, contentWorld: .page)
+            return try await web.callAsyncJavaScript(
+                "return document.querySelector('meta[name=viewport]').content;",
+                arguments: [:], in: nil, contentWorld: .page) as? String
+        }
+        // Zoomed: a scale and no width, so the page reflows narrower.
+        let zoomed = try await viewport(after: 1.31)
+        XCTAssertEqual(zoomed, "initial-scale=1.31, user-scalable=yes, viewport-fit=cover")
+        let again = try await viewport(after: 1.31)
+        XCTAssertEqual(again, zoomed)
+        let restored = try await viewport(after: 1)
+        XCTAssertEqual(restored, "width=device-width, initial-scale=1, user-scalable=yes, viewport-fit=cover")
+    }
+
     func testWorkspaceFollowsTheHostDevice() {
         let phone = UIDevice.current.userInterfaceIdiom == .phone
         let controller = WorkspaceViewController()
