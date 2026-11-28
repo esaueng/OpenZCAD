@@ -145,6 +145,33 @@ async function holdModel(page: Page, x: number, y: number) {
   return actions;
 }
 
+/**
+ * A hold on a face of the model, near `around`: the first of a few nearby
+ * points whose menu is a face's. A hold resolves an edge within a
+ * fingertip of the point, and where the model's edges fall on screen moves
+ * with its framing (a shorter sheet frames it taller), so a fixed point
+ * can land on an edge. Each menu that is not a face's is cancelled.
+ */
+async function holdFace(page: Page, around: { x: number; y: number }) {
+  for (const [dx, dy] of [
+    [0, 0],
+    [0, 32],
+    [0, -32],
+    [32, 0],
+    [-32, 0],
+    [0, 64],
+    [0, -64]
+  ] as const) {
+    const point = { x: around.x + dx, y: around.y + dy };
+    const actions = await holdModel(page, point.x, point.y);
+    const look = actions.getByRole('menuitem', { name: 'Look at face' });
+    if ((await look.count()) > 0) return { actions, point };
+    await actions.getByRole('menuitem', { name: 'Cancel' }).tap();
+    await expect(actions).toHaveCount(0);
+  }
+  throw new Error(`No hold near ${JSON.stringify(around)} lands on a face`);
+}
+
 async function holdRow(page: Page, row: Locator) {
   await row.scrollIntoViewIfNeeded();
   const box = (await row.locator('.compact-row-main').boundingBox())!;
@@ -660,7 +687,9 @@ test.describe('the compact workspace panels', () => {
     reached('selection-whole-body');
 
     // A hold on the model: the selection's menu.
-    let actions = await holdModel(page, center.x, center.y);
+    const held = await holdFace(page, center);
+    center = held.point;
+    let actions = held.actions;
     await actions.getByRole('menuitem', { name: 'Look at face' }).tap();
     await expect(actions).toHaveCount(0);
     reached('view-normal-to-face');

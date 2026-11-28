@@ -501,29 +501,68 @@
 
 /* Peek on the workspace's own row (BottomSheet's asRow): the sheet is
    that row under a 12px grip. The head keeps only its grabber, the height
-   slider, as a full-width strip a drag or a key still moves; the row's own
-   surface drags the sheet too. */
+   slider: a 44px band behind the row's top, so a finger's worth of it is
+   there to drag and focus. The row lets every press between its controls
+   through to it; the sheet's own surface drags below that. */
 .compact-sheet.is-row {
-  /* Vertical drags on the row's surface move the sheet; a row of tools
-     wider than the sheet still scrolls sideways. */
+  /* Vertical drags move the sheet; a row of tools wider than the sheet
+     still scrolls sideways. */
   touch-action: pan-x;
 }
 
 .compact-sheet.is-row > .compact-sheet-head {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
   display: block;
-  height: 12px;
-  padding: 0 var(--sp-2);
+  height: var(--compact-target);
+  padding: 0;
 }
 
 .compact-sheet.is-row .compact-sheet-grabber {
-  min-height: 12px;
-  height: 12px;
-  border-radius: 6px;
+  height: var(--compact-target);
+  justify-content: flex-start;
+  padding-top: 4px;
+  border-radius: var(--compact-sheet-radius) var(--compact-sheet-radius) 0 0;
 }
 
 .compact-sheet.is-row > .compact-sheet-body {
-  padding-top: 0;
+  position: relative;
+  z-index: 2;
+  padding-top: 12px;
   padding-bottom: var(--sp-2);
+  pointer-events: none;
+}
+
+.compact-sheet.is-row
+  > .compact-sheet-body
+  :is(.compact-tray-slot, .compact-command-row) {
+  pointer-events: none;
+  background: transparent;
+}
+
+.compact-sheet.is-row
+  > .compact-sheet-body
+  :is(
+    button,
+    a[href],
+    input,
+    select,
+    textarea,
+    label,
+    summary,
+    [role='button'],
+    [role='tab'],
+    [role='slider'],
+    [role='switch'],
+    [role='checkbox'],
+    [role='radio'],
+    [role='menuitem'],
+    [tabindex]:not([tabindex='-1'])
+  ) {
+  pointer-events: auto;
 }
 
 .compact-sheet-grip {

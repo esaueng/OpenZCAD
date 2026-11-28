@@ -196,8 +196,12 @@ export function BottomSheet({
     startY: number;
     startHeight: number;
     moved: boolean;
-    /** Started on the sheet's own surface rather than its grabber. */
-    fromSurface?: boolean;
+    /**
+     * A tap (no drag) is nothing: started on the row's surface, or on the
+     * grabber at peek, where it fills the gaps between the row's controls
+     * and a tap there would raise the sheet into blank space.
+     */
+    tapIsNothing?: boolean;
   } | null>(null);
   const [dragHeight, setDragHeight] = useState<number | null>(null);
   // Alternates on every change of height, so the reduced-motion fade
@@ -416,7 +420,8 @@ export function BottomSheet({
   // The workspace's own content at peek is one row (a tray, or a running
   // tool's row): the sheet is that row and a grip. Its Close would do
   // nothing there (the content keeps it at peek) and its Back has no page,
-  // so the head is only the grabber, drawn as a grip over the row's top.
+  // so the head is only the grabber: a 44px band behind the row, drawn as
+  // a grip above it, that takes every press between the row's controls.
   const asRow = detent === 'peek' && page === null && hasRoot;
   const hostHeight = () =>
     sheetRef.current?.parentElement?.getBoundingClientRect().height ?? 0;
@@ -435,7 +440,8 @@ export function BottomSheet({
       pointerId: event.pointerId,
       startY: event.clientY,
       startHeight: sheetRef.current.getBoundingClientRect().height,
-      moved: false
+      moved: false,
+      tapIsNothing: asRow
     };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
@@ -460,7 +466,7 @@ export function BottomSheet({
         type: 'set-detent',
         detent: nearestDetent(height, hostHeight(), canClose, isSideSheet())
       });
-    } else if (!drag.fromSurface) {
+    } else if (!drag.tapIsNothing) {
       // A tap toggles between peek and half; from full it comes down.
       dispatch({
         type: 'set-detent',
@@ -484,7 +490,7 @@ export function BottomSheet({
       startY: event.clientY,
       startHeight: sheetRef.current.getBoundingClientRect().height,
       moved: false,
-      fromSurface: true
+      tapIsNothing: true
     };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
