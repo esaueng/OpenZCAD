@@ -3,8 +3,9 @@
 ## Status
 
 Proposed (November 2026). Nothing in the Decision section is implemented. The
-fork diagnostic and creation guard under "Interim measures" are implemented
-and need no schema change. `PROJECT_DOCUMENT_SCHEMA_VERSION` is unchanged.
+fork diagnostic, creation guard and reorder guard under "Interim measures" are
+implemented and need no schema change. `PROJECT_DOCUMENT_SCHEMA_VERSION` is
+unchanged.
 
 ## Context
 
@@ -38,7 +39,8 @@ prevents new forks of this kind, but forks still arise from:
 - inserting a feature before an existing consumer of its target (a feature
   added while History is rolled back lands at the marker; the paused consumer
   then forks on resume);
-- reorders that move an in-place edit after a consumer of its target;
+- reorders that moved an in-place edit after a consumer of its target (refused
+  since #2334; see "Interim measures");
 - the Duplicate action on a Pattern, which repeats the pattern on the same
   seed.
 
@@ -138,7 +140,10 @@ Neither changes what geometry is built.
 - `historyForks(document)` (document-core) lists every active feature that
   consumes or edits in place a body that an earlier active feature already
   consumed, using the same per-kind table. A manually suppressed consumer
-  still counts, because its pass-through replaces the body. A rolled-back one
+  still counts, because its pass-through replaces the body, unless an earlier
+  feature already consumed that body: the build then passes nothing through
+  (ADR-017 fails closed), so the suppressed step consumes nothing and may be
+  reordered freely after that consumer. A rolled-back one
   does not count, and a suppressed or rolled-back later feature is never
   reported. A failed step consumes like a built one, so its result id is the
   chain tip. Two consumers whose results a later boolean combines again (the
@@ -159,13 +164,44 @@ Neither changes what geometry is built.
   accepted. `replayCommands` does not run the check, so stored logs replay
   unchanged. Assistant patches commit through `runTransaction` and are
   covered.
+- The same check refuses a fork the step order introduces (#2334): a feature
+  that uses the bodies it always did, ran ahead of a consumer of one of them
+  (or before that consumer existed), and would now run after it. The reported
+  case is a cutter's placement, an in-place Move, moved below the Subtract
+  that consumes the cutter: every id the Move reads is still produced in
+  time, so the order gate passed, the Subtract cut at the unplaced position,
+  and STEP export wrote that solid behind one `history-fork` advisory. Moving
+  the consumer above the placement reaches the same arrangement and is
+  refused the same way. The order is judged where an edit ENDS, by the
+  manager's end-of-edit check: `feature.reorder`'s own `validate` does not
+  ask, because it sees one command against the order the commands before it
+  left, and a transaction (an assistant patch, a composed gesture) may pass
+  through a forking order on its way to one that forks nothing. History's
+  single move is the whole edit, so its order gate asks
+  `assertFeatureReorderCommits`, which adds the fork check to the command's
+  gate and refuses before any rebuild. The refusal names the step, the body
+  and the consumer: "Cannot reorder: “Locate Offset vent” would run after
+  “Subtract 1” already replaced “Offset vent”, which branches the history.
+  Keep “Locate Offset vent” before “Subtract 1”."
+- For this guard a fork is one step and one consumer, compared as that pair
+  against every earlier consumer of the body, not only the first one the
+  diagnostic reports. A stored fork therefore exempts exactly the pairs it
+  already holds: a step may stay after a consumer it already ran after, two
+  consumers of one body may swap places, and the move that takes a step back
+  ahead of its consumer is accepted. It exempts nothing else. With two stocks
+  cut by one cutter and the cutter's placement between the cuts, the
+  placement already forks against the first cut; moving the second cut above
+  the first, or the placement below the second, would still move that cut to
+  the unplaced position, and both are refused. A reorder of steps that share
+  no body is untouched.
 - Duplicate refuses a Pattern step, which would repeat the pattern on the
   same seed beside the original.
 
-Known gaps, which the decision above closes: a reorder that moves an in-place
-edit after a consumer is not refused (it is reported), and resuming a rollback
-over a feature inserted before a paused consumer reports the fork rather than
-rebasing the consumer.
+Known gaps, which the decision above closes: resuming a rollback over a
+feature inserted before a paused consumer reports the fork rather than
+rebasing the consumer, and retargeting an EARLIER feature so that it consumes
+a body a later step still edits in place is reported, not refused (the guard
+judges the later feature's own targets and the order, not the consumer's).
 
 ## Consequences
 
@@ -190,8 +226,8 @@ rebasing the consumer.
 
 ## Rollout
 
-1. Done: fork diagnostic, creation guard and the Duplicate refusal (this
-   ADR's interim measures). They need no schema change.
+1. Done: fork diagnostic, creation guard, reorder guard and the Duplicate
+   refusal (this ADR's interim measures). They need no schema change.
 2. Read-only derivation: compute lineage ids at load (not stored) and use them
    to replace the `bodySourceMap` walks in assembly, folders and naming, with
    tests that the results match today's on unforked documents.

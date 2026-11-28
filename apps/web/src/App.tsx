@@ -220,6 +220,7 @@ import {
 } from 'lucide-react';
 import {
   CommandManager,
+  assertFeatureReorderCommits,
   commandFactories,
   composeCommands,
   prepareLegacySketchConversion,
@@ -36322,9 +36323,10 @@ export function App() {
 
   /**
    * Moves a History step, keyboard and drag alike. The order gate refuses a
-   * producer moved after its consumer at once; a legal order that leaves a
-   * later feature unbuildable is refused by name after an exact rebuild of
-   * the moved span, as a feature edit is, and the order stays as it was.
+   * producer moved after its consumer, and a step moved after the consumer
+   * of the body it edits (#2334), at once; a legal order that leaves a later
+   * feature unbuildable is refused by name after an exact rebuild of the
+   * moved span, as a feature edit is, and the order stays as it was.
    */
   function handleReorderFeature(featureId: FeatureId, toIndex: number) {
     const name =
@@ -36334,7 +36336,10 @@ export function App() {
     const command = commandFactories.moveFeature({ featureId, toIndex }, label);
     const base = doc;
     const plan = planReorder(base, featureId, toIndex, {
-      orderGate: (document) => command.validate(document),
+      // The move is the whole edit, so the order it ends on is judged here
+      // too; `command.validate` alone leaves that to the commit.
+      orderGate: (document) =>
+        assertFeatureReorderCommits(document, command.payload),
       canEdit: () => ensureCanEdit(`reorder ${name ?? 'this feature'}`),
       geometryReady: (document) => geometry.isReadyFor(document)
     });

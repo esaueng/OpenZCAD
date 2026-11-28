@@ -199,7 +199,9 @@ export interface HistoryFork {
  * reported against it. A manually suppressed feature consumes only what its
  * pass-through consumes (the build then shows its input under its result id,
  * so a later feature on that input still forks), and is never reported
- * itself: it builds nothing of its own. A rollback-paused feature neither
+ * itself: it builds nothing of its own. Once an earlier feature consumed
+ * that input the build has nothing to pass through, so the suppressed step
+ * consumes nothing either. A rollback-paused feature neither
  * consumes nor is reported. A failed feature consumes exactly as a built
  * one: it passes its input through under its result id (ADR-017).
  *
@@ -210,7 +212,21 @@ export interface HistoryFork {
  * consumed body has no result of its own to rejoin, so it always is.
  */
 export function historyForks(document: ProjectDocument): HistoryFork[] {
-  const consumedBy = new Map<BodyId, FeatureNode>();
+  return forksAgainst(document, 'first');
+}
+
+/**
+ * {@link historyForks}, against the `first` consumer of each body, which is
+ * what a document reports, or against `every` earlier consumer, which is what
+ * an edit is judged by (see {@link introducedHistoryForks}): a body two
+ * features already consumed has a later state for each, and a step that
+ * reaches the second one's far side builds on a state that one replaced too.
+ */
+function forksAgainst(
+  document: ProjectDocument,
+  consumers: 'first' | 'every'
+): HistoryFork[] {
+  const consumedBy = new Map<BodyId, FeatureNode[]>();
   const children = new Map<BodyId, BodyId[]>();
   const candidates: {
     fork: HistoryFork;
@@ -220,15 +236,22 @@ export function historyForks(document: ProjectDocument): HistoryFork[] {
     const reported = !isFeatureManuallySuppressed(feature);
     const results = resultBodies(feature);
     for (const { bodyId, use } of bodyUses(feature)) {
+      const earlier = consumedBy.get(bodyId) ?? [];
+      // A suppressed step hands its input through only while that body is
+      // still live. After an earlier consumer the build passes nothing
+      // (kernel-adapter `passBodyThrough` fails closed), so the step takes
+      // nothing and leads nowhere, wherever it stands after that consumer.
+      if (!reported && earlier.length > 0) continue;
       if (use === 'consume') {
         children.set(bodyId, [
           ...(children.get(bodyId) ?? []),
           ...results.filter((result) => result !== bodyId)
         ]);
       }
-      const consumer = consumedBy.get(bodyId);
-      if (consumer !== undefined) {
-        if (reported)
+      if (reported) {
+        for (const consumer of consumers === 'first'
+          ? earlier.slice(0, 1)
+          : earlier)
           candidates.push({
             fork: {
               featureId: feature.featureId,
@@ -239,9 +262,8 @@ export function historyForks(document: ProjectDocument): HistoryFork[] {
               ? { branches: [resultBodies(consumer), results] }
               : {})
           });
-      } else if (use === 'consume') {
-        consumedBy.set(bodyId, feature);
       }
+      if (use === 'consume') consumedBy.set(bodyId, [...earlier, feature]);
     }
   }
   const descendants = (roots: readonly BodyId[]): Set<BodyId> => {
@@ -304,57 +326,145 @@ export function historyForkMessage(
   return `Builds on an earlier state of “${bodyLabel(document, fork.bodyId)}” that “${featureName(document, fork.consumerFeatureId)}” already replaced; this branches the history.`;
 }
 
+/** A fork an edit introduces, and how: see {@link introducedHistoryForks}. */
+interface IntroducedHistoryFork {
+  fork: HistoryFork;
+  /**
+   * `target`: the later feature is new or uses different bodies. `order`:
+   * it uses the bodies it always did, and the step order put a consumer of
+   * one ahead of it.
+   */
+  cause: 'target' | 'order';
+}
+
 /**
- * Forks an edit would introduce on a feature it adds or retargets: each fork
- * of `next` whose later feature is new, or uses different bodies than in
- * `previous`, and that `previous` did not already have.
+ * The forks of `next` that `previous` did not have and the edit between
+ * them caused, each with its cause.
  *
- * Every other fork is left alone. A stored history that already forked keeps
- * loading, replaying and accepting unrelated edits; resuming or unsuppressing
- * a step neither adds nor retargets one, so it is never refused here; and a
- * feature added while History is rolled back is judged where it lands, at the
- * marker, ahead of the paused consumer.
+ * - `target`: the later feature is new, or uses different bodies than in
+ *   `previous`.
+ * - `order`: the later feature uses the bodies it did, but in `previous` it
+ *   ran ahead of the consumer (or the consumer was not there yet), and now
+ *   runs after it. A placement moved below the boolean that consumes the
+ *   placed body is the reported case (#2334): the boolean then cut at the
+ *   unplaced position while the order committed. Moving the consumer above
+ *   the placement reaches the same arrangement and is judged the same.
+ *
+ * A fork is one step and one consumer, and is compared as that pair, against
+ * EVERY earlier consumer of the body, not only the first one a document
+ * reports. A stored history that already forked keeps loading, replaying and
+ * accepting unrelated edits, and the pairs it already holds may be moved
+ * around: a step stays after a consumer it already ran after, two consumers
+ * of one body may swap places (each still takes the body as it finds it, and
+ * only which one is reported changes), and the move that takes a step back
+ * ahead of its consumer is accepted. But a stored fork exempts nothing else.
+ * With two stocks cut by one cutter and the cutter's placement between the
+ * cuts, the placement already forks against the first cut; moving the second
+ * cut above the first, or the placement below the second, still puts the
+ * placement after a consumer it ran ahead of, and that cut would move to the
+ * unplaced position. Both are refused.
+ *
+ * A suppressed step that has nothing left to pass through (see
+ * {@link historyForks}) is no consumer at all: it may move anywhere after
+ * the body's first consumer, and steps may move past it, with the same
+ * build either way. Above that consumer its pass-through takes the body, so
+ * that move is judged like any other consumer's.
+ *
+ * Resuming or unsuppressing a step neither retargets nor reorders one, so it
+ * is never refused here: a fork the resume uncovers is reported by
+ * {@link historyForks}, and from then on the step is a consumer other steps
+ * are judged against. A feature added while History is rolled back is
+ * judged where it lands, at the marker, ahead of the paused consumer.
+ */
+function introducedHistoryForks(
+  previous: ProjectDocument,
+  next: ProjectDocument
+): IntroducedHistoryFork[] {
+  const position = new Map<FeatureId, number>();
+  const uses = new Map<FeatureId, string>();
+  listFeaturesInOrder(previous).forEach((feature, index) => {
+    position.set(feature.featureId, index);
+    uses.set(feature.featureId, JSON.stringify(activeBodyUses(feature)));
+  });
+  const current = listFeaturesInOrder(next);
+  const changed = new Set(
+    current
+      .filter(
+        (feature) =>
+          uses.get(feature.featureId) !==
+          JSON.stringify(activeBodyUses(feature))
+      )
+      .map((feature) => feature.featureId)
+  );
+  // The features both documents have, in `next`'s order: out of step with
+  // `previous` only when the edit reordered them.
+  const kept = current
+    .map((feature) => position.get(feature.featureId))
+    .filter((index): index is number => index !== undefined);
+  const reordered = kept.some((index, at) => at > 0 && kept[at - 1]! > index);
+  if (changed.size === 0 && !reordered) return [];
+  const key = (later: FeatureId, bodyId: BodyId, consumer: FeatureId) =>
+    `${later} ${bodyId} ${consumer}`;
+  const before = forksAgainst(previous, 'every');
+  const existing = new Set(
+    before.map((fork) =>
+      key(fork.featureId, fork.bodyId, fork.consumerFeatureId)
+    )
+  );
+  // The same two steps the other way round: two consumers swapping places.
+  const swapped = new Set(
+    before.map((fork) =>
+      key(fork.consumerFeatureId, fork.bodyId, fork.featureId)
+    )
+  );
+  return forksAgainst(next, 'every').flatMap(
+    (fork): IntroducedHistoryFork[] => {
+      const pair = key(fork.featureId, fork.bodyId, fork.consumerFeatureId);
+      if (existing.has(pair)) return [];
+      if (changed.has(fork.featureId)) return [{ fork, cause: 'target' }];
+      if (swapped.has(pair)) return [];
+      // Unchanged uses mean the feature was in `previous`.
+      const was = position.get(fork.featureId)!;
+      const consumerWas = position.get(fork.consumerFeatureId);
+      return consumerWas === undefined || consumerWas > was
+        ? [{ fork, cause: 'order' }]
+        : [];
+    }
+  );
+}
+
+/**
+ * Forks an edit would introduce: on a feature it adds or retargets, or by
+ * ordering a consumer of a body ahead of a step that still uses that body
+ * (see {@link introducedHistoryForks}). Each names the consumer the step
+ * would newly run after, which in a history that already forks need not be
+ * the body's first consumer, the one {@link historyForks} reports.
  */
 export function newHistoryForks(
   previous: ProjectDocument,
   next: ProjectDocument
 ): HistoryFork[] {
-  const before = new Map(
-    listFeaturesInOrder(previous).map((feature) => [
-      feature.featureId,
-      JSON.stringify(activeBodyUses(feature))
-    ])
-  );
-  const changed = new Set(
-    listFeaturesInOrder(next)
-      .filter(
-        (feature) =>
-          before.get(feature.featureId) !==
-          JSON.stringify(activeBodyUses(feature))
-      )
-      .map((feature) => feature.featureId)
-  );
-  if (changed.size === 0) return [];
-  const key = (fork: HistoryFork) =>
-    `${fork.featureId} ${fork.bodyId} ${fork.consumerFeatureId}`;
-  const existing = new Set(historyForks(previous).map(key));
-  return historyForks(next).filter(
-    (fork) => changed.has(fork.featureId) && !existing.has(key(fork))
-  );
+  return introducedHistoryForks(previous, next).map((entry) => entry.fork);
 }
 
 /**
  * Refuses an edit that adds a fork (see {@link newHistoryForks}), naming the
- * feature, the body and the step that already replaced it.
+ * feature, the body and the step that already replaced it. A fork the step
+ * order introduces is refused as a reorder, with the order that avoids it.
  */
 export function assertNoNewHistoryFork(
   previous: ProjectDocument,
   next: ProjectDocument
 ): void {
-  const fork = newHistoryForks(previous, next)[0];
-  if (!fork) return;
+  const introduced = introducedHistoryForks(previous, next)[0];
+  if (!introduced) return;
+  const { fork, cause } = introduced;
+  const feature = featureName(next, fork.featureId);
+  const body = bodyLabel(next, fork.bodyId);
   const consumer = featureName(next, fork.consumerFeatureId);
   throw new Error(
-    `“${featureName(next, fork.featureId)}” would build on an earlier state of “${bodyLabel(next, fork.bodyId)}” that “${consumer}” already replaced, which branches the history. Use the body as it is now, or roll History back to before “${consumer}” to add the step there.`
+    cause === 'order'
+      ? `Cannot reorder: “${feature}” would run after “${consumer}” already replaced “${body}”, which branches the history. Keep “${feature}” before “${consumer}”.`
+      : `“${feature}” would build on an earlier state of “${body}” that “${consumer}” already replaced, which branches the history. Use the body as it is now, or roll History back to before “${consumer}” to add the step there.`
   );
 }
