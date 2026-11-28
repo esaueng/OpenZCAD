@@ -606,7 +606,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // unknown command on replay and rebuild every later edit in the old unit,
 // so it must refuse the document. Builds on v153.
 // v155 records how an Offset Face edit resolves a history-free rim.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 155 as const;
+// v157 adds `followReferences` on a `pmi.update` (#2375): renaming a model
+// datum feature carries its new letter to every frame that names it, in the
+// same command. An older client would replay only the datum and leave those
+// frames naming a datum the model no longer declares, so it must refuse the
+// document. Additive: earlier documents open unchanged. Builds on v155; v156
+// is claimed by #2425.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 157 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {

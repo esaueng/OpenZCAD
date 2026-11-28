@@ -27,6 +27,7 @@ import {
 } from './exact-idle-lineage-view';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import {
+  modelPmiName,
   solveAssembly,
   transformStampBodyIds,
   transformToMatrix4
@@ -348,6 +349,7 @@ import {
 } from './export-units';
 import {
   finishStepExport,
+  stepPmiPartsOf,
   stepTimestamp,
   stepWriterOptions,
   type StepBodiesExport,
@@ -356,7 +358,11 @@ import {
   type StepExportOptions
 } from './step-export-metadata';
 import { repeatStepExport } from './repeat-step-export';
-import type { StepPmiEntry } from './step-pmi';
+import {
+  planStepPmi,
+  type StepPmiEntry,
+  type StepPmiOmission
+} from './step-pmi';
 export {
   type StepBodiesExport,
   type StepBodySkipReason,
@@ -905,6 +911,16 @@ export interface ExactKernelAdapter {
     bodyIds: BodyId[],
     options?: StepExportOptions
   ): Promise<string>;
+  /**
+   * The same file as {@link exportStep}, with what it leaves out said:
+   * each model PMI entry an AP242 file omits (#2258), as
+   * "<entry> — <reason>".
+   */
+  exportStepReport(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options?: StepExportOptions
+  ): Promise<StepExportReport>;
   /**
    * I06: the bodies' solids as exact IGES 5.3 manifold solid B-rep objects
    * (type 186), in `options.units` (millimetres when unset), which the
@@ -1666,13 +1682,21 @@ function exportAssembly(
     : null;
 }
 
+/** A STEP file and the model PMI it leaves out (#2258). */
+export interface StepExportReport {
+  text: string;
+  /** One "<entry> — <reason>" per omitted PMI entry; empty when none. */
+  warnings: string[];
+}
+
 /**
  * D07: the model's PMI as the STEP writer will place it: each entry's face
  * resolved on its body's built solid (lineage, then hash; fail-closed) and
  * located by its index in that solid's faces, which is the order the writer
- * walks its shell. An entry is left out when its body is not written, has
- * more than one solid, or its face no longer resolves (the workspace shows
- * it broken); a frame's tolerance is restated in the export's unit.
+ * walks its shell. An entry on a body the file does not write is not
+ * eligible; one whose body has more than one solid, or whose face no longer
+ * resolves (the workspace shows it broken), is left out and reported. A
+ * frame's tolerance is restated in the export's unit.
  */
 function stepPmiEntries(
   kernel: RemusKernel,
@@ -1680,9 +1704,10 @@ function stepPmiEntries(
   document: ProjectDocument,
   bodies: readonly { bodyId: BodyId; solids: number[] }[],
   units: UnitSystem
-): StepPmiEntry[] {
+): { entries: StepPmiEntry[]; omitted: StepPmiOmission[] } {
   const annotations = document.pmi?.annotations ?? [];
-  if (annotations.length === 0) return [];
+  const omitted: StepPmiOmission[] = [];
+  if (annotations.length === 0) return { entries: [], omitted };
   const firstSolid = new Map<BodyId, number>();
   let count = 0;
   for (const { bodyId, solids } of bodies) {
@@ -1691,12 +1716,20 @@ function stepPmiEntries(
   }
   const scale = exportLengthScale(document.units, units);
   const entries: StepPmiEntry[] = [];
+  const written = new Set(bodies.map((body) => body.bodyId));
   for (const annotation of annotations) {
     const bodyId = annotation.face.bodyId;
+    if (!written.has(bodyId)) continue;
+    const name = modelPmiName(annotation);
     const solidIndex = firstSolid.get(bodyId);
     const shape = build.shapes.get(bodyId);
-    if (solidIndex === undefined || !shape || shape.solids.length !== 1)
+    if (solidIndex === undefined || !shape || shape.solids.length !== 1) {
+      omitted.push({
+        name,
+        reason: 'its body writes more than one solid'
+      });
       continue;
+    }
     const solid = shape.solids[0]!;
     let handle: number;
     try {
@@ -1707,20 +1740,31 @@ function stepPmiEntries(
           : {})
       }).face;
     } catch {
+      omitted.push({
+        name,
+        reason: 'its face no longer resolves on the model'
+      });
       continue;
     }
     const faceIndex = [...kernel.getSolidFaces(solid)].indexOf(handle);
-    if (faceIndex < 0) continue;
+    if (faceIndex < 0) {
+      omitted.push({
+        name,
+        reason: 'its face no longer resolves on the model'
+      });
+      continue;
+    }
     const face = {
       solid: solidIndex,
       face: faceIndex,
       surface: String(kernel.getSurfaceType(handle))
     };
     if (annotation.kind === 'datum-feature')
-      entries.push({ kind: 'datum', letter: annotation.letter, face });
+      entries.push({ kind: 'datum', letter: annotation.letter, face, name });
     else
       entries.push({
         kind: 'frame',
+        name,
         characteristic: annotation.characteristic,
         amount: Number((annotation.amount * scale).toPrecision(12)),
         diameterZone: annotation.diameterZone === true,
@@ -1729,7 +1773,7 @@ function stepPmiEntries(
         face
       });
   }
-  return entries;
+  return { entries, omitted };
 }
 
 /**
@@ -1744,11 +1788,11 @@ function writeStepBodies(
   options: StepExportOptions,
   /** The build the bodies came from, where the model's PMI faces resolve. */
   build?: ExactBuildResult
-): string {
-  const pmi =
+): StepExportReport {
+  const resolved =
     build && options.protocol === 'ap242'
       ? stepPmiEntries(kernel, build, document, bodies, options.units ?? 'mm')
-      : [];
+      : { entries: [], omitted: [] };
   const metadata: StepExportMetadata = {
     productName: document.name,
     fileName: options.fileName ?? `${document.name}.step`,
@@ -1763,7 +1807,23 @@ function writeStepBodies(
     build
   );
   if (assembly) metadata.assembly = assembly;
-  if (pmi.length > 0) metadata.pmi = pmi;
+  // #2258: what the file can carry, against the product scope it is
+  // written with, and everything else said rather than silently dropped.
+  const { partOf, names } = stepPmiPartsOf(metadata);
+  const planned = planStepPmi(
+    resolved.entries,
+    partOf,
+    names,
+    new Set(
+      (document.pmi?.annotations ?? []).flatMap((entry) =>
+        entry.kind === 'datum-feature' ? [entry.letter] : []
+      )
+    )
+  );
+  if (planned.entries.length > 0) metadata.pmi = planned.entries;
+  const warnings = [...resolved.omitted, ...planned.omitted].map(
+    (omission) => `${omission.name} — ${omission.reason}`
+  );
   // Never fuse: a boolean union changes the geometry (overlaps merge,
   // coincident faces weld). Every root of the arena document becomes its
   // own MANIFOLD_SOLID_BREP inside one shape representation, so the
@@ -1772,7 +1832,7 @@ function writeStepBodies(
   const solids = kernel.serializeSolids(
     new Uint32Array(bodies.flatMap((body) => body.solids))
   );
-  return repeatStepExport(
+  const text = repeatStepExport(
     kernel,
     document.projectId,
     units,
@@ -1789,6 +1849,7 @@ function writeStepBodies(
         metadata
       )
   );
+  return { text, warnings };
 }
 
 export type {
@@ -5996,6 +6057,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     options: StepExportOptions = {}
   ): Promise<string> {
+    return (await this.exportStepReport(document, bodyIds, options)).text;
+  }
+
+  async exportStepReport(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options: StepExportOptions = {}
+  ): Promise<StepExportReport> {
     const rows = await this.assemblyExportRows(document, bodyIds);
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
@@ -6085,7 +6154,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         units
       );
       return {
-        text: writeStepBodies(kernel, io, document, bodies, options, build),
+        text: writeStepBodies(kernel, io, document, bodies, options, build)
+          .text,
         bodies: bodies.map(({ bodyId, solids }) => ({
           bodyId,
           solidCount: solids.length

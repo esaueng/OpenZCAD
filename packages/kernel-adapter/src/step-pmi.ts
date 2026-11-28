@@ -22,9 +22,10 @@
  *   `TOLERANCE_ZONE` of form 'cylindrical or circular'.
  */
 
-import type {
-  DrawingGeometricCharacteristic,
-  DrawingMaterialCondition
+import {
+  modelPmiSurfaceError,
+  type DrawingGeometricCharacteristic,
+  type DrawingMaterialCondition
 } from '@openzcad/shared';
 import { formatStepReal } from './step-export-metadata';
 
@@ -39,9 +40,11 @@ export interface StepPmiFace {
 }
 
 export type StepPmiEntry =
-  | { kind: 'datum'; letter: string; face: StepPmiFace }
+  | { kind: 'datum'; letter: string; face: StepPmiFace; name?: string }
   | {
       kind: 'frame';
+      /** What the workspace calls the entry, for export feedback. */
+      name?: string;
       characteristic: DrawingGeometricCharacteristic;
       /** The zone's size in the file's length unit. */
       amount: number;
@@ -50,6 +53,74 @@ export type StepPmiEntry =
       datums: { letter: string; material?: DrawingMaterialCondition }[];
       face: StepPmiFace;
     };
+
+/** A model PMI entry the file leaves out, and why (#2258). */
+export interface StepPmiOmission {
+  /** What the workspace calls it: "Position | 0.1 | A | C | B". */
+  name: string;
+  /** Why, as a clause with no full stop: "its secondary datum C is …". */
+  reason: string;
+}
+
+const SLOTS = ['primary', 'secondary', 'tertiary'];
+
+/**
+ * #2258/#2321: the entries an AP242 file can carry as semantic PMI, and
+ * every other one with its reason, so an export never drops PMI without
+ * saying so. A frame is left out when its characteristic cannot control its
+ * face's surface (cylindricity on a plane), or when a datum it names is not
+ * declared on the model, not written to this file, or on another part
+ * (`partOf`: each solid's part, by writer order; `partNames` names them).
+ * `declared` holds the datum letters the model declares.
+ */
+export function planStepPmi(
+  entries: readonly StepPmiEntry[],
+  partOf: readonly number[],
+  partNames: readonly string[],
+  declared: ReadonlySet<string>
+): { entries: StepPmiEntry[]; omitted: StepPmiOmission[] } {
+  const datumPart = new Map<string, number>();
+  for (const entry of entries)
+    if (entry.kind === 'datum')
+      datumPart.set(entry.letter, partOf[entry.face.solid] ?? -1);
+  const kept: StepPmiEntry[] = [];
+  const omitted: StepPmiOmission[] = [];
+  for (const entry of entries) {
+    if (entry.kind === 'datum') {
+      kept.push(entry);
+      continue;
+    }
+    const name = entry.name ?? entry.characteristic;
+    const surface = modelPmiSurfaceError(
+      entry.characteristic,
+      entry.face.surface
+    );
+    if (surface) {
+      omitted.push({ name, reason: surface.replace(/\.$/, '') });
+      continue;
+    }
+    const part = partOf[entry.face.solid] ?? -1;
+    const problem = entry.datums
+      .map((reference, slot) => {
+        const which = `its ${SLOTS[slot] ?? ''} datum ${reference.letter}`;
+        if (!declared.has(reference.letter))
+          return `${which} is not declared on the model`;
+        const at = datumPart.get(reference.letter);
+        if (at === undefined)
+          return `${which} is on a face or body this file does not write`;
+        if (at !== part)
+          return `${which} is on ${partNames[at] ?? 'another body'}, which this file writes as a separate part`;
+        return null;
+      })
+      .find((reason) => reason !== null);
+    if (problem) {
+      omitted.push({ name, reason: problem });
+      continue;
+    }
+    kept.push(entry);
+  }
+  return { entries: kept, omitted };
+}
 
 /** The tolerance entity each characteristic is written as. */
 const TOLERANCE_ENTITY: Readonly<
@@ -139,8 +210,9 @@ export interface StepPmiContext {
 /**
  * Appends `entries` as AP242 semantic PMI. Throws when a face cannot be
  * found exactly as the kernel describes it. A frame naming a datum no entry
- * declares is left out (the workspace shows it broken); the count of
- * entries written is returned.
+ * on its part declares, or on a surface its characteristic cannot control,
+ * is left out ({@link planStepPmi} reports those before the file is
+ * written); the count of entries written is returned.
  */
 export function appendStepPmi(
   context: StepPmiContext,
@@ -214,7 +286,10 @@ export function appendStepPmi(
     if (entry.kind !== 'frame') continue;
     const part = partOf(entry.face);
     if (
-      entry.datums.some((reference) => !datums.has(key(part, reference.letter)))
+      entry.datums.some(
+        (reference) => !datums.has(key(part, reference.letter))
+      ) ||
+      modelPmiSurfaceError(entry.characteristic, entry.face.surface) !== null
     )
       continue;
     const face = faceEntity(entry.face);

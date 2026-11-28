@@ -1,9 +1,11 @@
 import {
   createModelPmiId,
-  DRAWING_CHARACTERISTIC_LABELS,
   drawingFaceRefError,
   type GeometryBodyRepresentation,
   DRAWING_DATUM_REQUIRED_CHARACTERISTICS,
+  formatModelPmiAmount,
+  modelPmiName,
+  modelPmiSurfaceError,
   type BodyId,
   type DrawingFaceRef,
   type FaceTopology,
@@ -44,17 +46,27 @@ export type ModelPmiResolution =
   | { ok: true; face: FaceTopology }
   | {
       ok: false;
-      reason: 'body-missing' | 'not-found' | 'ambiguous' | 'datum-undefined';
+      /**
+       * A face reason (body-missing, not-found, ambiguous) is repaired by
+       * re-picking the face; `datum-undefined` (#2260) by declaring the
+       * datum or choosing another in its slot; `surface-incompatible`
+       * (#2321) by another face or characteristic.
+       */
+      reason:
+        | 'body-missing'
+        | 'not-found'
+        | 'ambiguous'
+        | 'datum-undefined'
+        | 'surface-incompatible';
       message: string;
     };
 
-type Bodies = Readonly<Record<string, GeometryBodyRepresentation | undefined>>;
+export { modelPmiName };
 
-/** Fixed decimals with trailing zeros trimmed; never "-0". */
-function formatAmount(value: number): string {
-  const trimmed = value.toFixed(6).replace(/\.?0+$/, '');
-  return trimmed === '-0' ? '0' : trimmed;
-}
+/** What the frame editor calls each datum slot, by precedence. */
+export const PMI_DATUM_SLOTS = ['Primary', 'Secondary', 'Tertiary'] as const;
+
+type Bodies = Readonly<Record<string, GeometryBodyRepresentation | undefined>>;
 
 /** The first datum letter not taken: A, B, … (no I, O, Q), then AA, …. */
 function nextDatumLetter(used: Iterable<string>): string {
@@ -92,21 +104,53 @@ export function resolveModelPmi(
       });
       continue;
     }
-    if (
-      annotation.kind === 'feature-control-frame' &&
-      (annotation.datums ?? []).some((datum) => !letters.has(datum.letter))
-    ) {
-      out.set(annotation.pmiId, {
-        ok: false,
-        reason: 'datum-undefined',
-        message:
-          'This frame names a datum no datum feature on the model declares.'
-      });
-      continue;
+    if (annotation.kind === 'feature-control-frame') {
+      const surface = modelPmiSurfaceError(
+        annotation.characteristic,
+        found.entry.geometry?.surfaceType
+      );
+      if (surface) {
+        out.set(annotation.pmiId, {
+          ok: false,
+          reason: 'surface-incompatible',
+          message: surface
+        });
+        continue;
+      }
+      const undeclared = (annotation.datums ?? []).flatMap((datum, slot) =>
+        letters.has(datum.letter) ? [] : [{ letter: datum.letter, slot }]
+      );
+      if (undeclared.length > 0) {
+        out.set(annotation.pmiId, {
+          ok: false,
+          reason: 'datum-undefined',
+          message: undeclaredDatumMessage(undeclared)
+        });
+        continue;
+      }
     }
     out.set(annotation.pmiId, { ok: true, face: found.entry });
   }
   return out;
+}
+
+/**
+ * #2260: which reference no datum feature declares, by slot, and how to
+ * repair it (not by re-picking the face, which is fine).
+ */
+function undeclaredDatumMessage(
+  undeclared: readonly { letter: string; slot: number }[]
+): string {
+  const named = undeclared.map(
+    ({ letter, slot }) =>
+      `${(PMI_DATUM_SLOTS[slot] ?? 'Datum').toLowerCase()} datum ${letter}`
+  );
+  const list =
+    named.length === 1
+      ? named[0]!
+      : `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]!}`;
+  const letters = undeclared.map(({ letter }) => letter).join(', ');
+  return `This frame's ${list} ${named.length === 1 ? 'is' : 'are'} not declared on the model. Add a datum feature ${letters} to a face, or choose a declared datum in ${named.length === 1 ? 'that slot' : 'those slots'}.`;
 }
 
 /** A frame's cells, its amount written in the document's units. */
@@ -115,24 +159,11 @@ export function modelFrameCells(
 ): FrameCells {
   return {
     characteristic: annotation.characteristic,
-    tolerance: formatAmount(annotation.amount),
+    tolerance: formatModelPmiAmount(annotation.amount),
     diameterZone: annotation.diameterZone === true,
     ...(annotation.material ? { material: annotation.material } : {}),
     datums: (annotation.datums ?? []).map((datum) => ({ ...datum }))
   };
-}
-
-/** What lists and the viewport call an entry. */
-export function modelPmiName(annotation: ModelPmiAnnotation): string {
-  if (annotation.kind === 'datum-feature') return `Datum ${annotation.letter}`;
-  const cells = modelFrameCells(annotation);
-  const modifier = (material?: string) =>
-    material === 'mmc' ? ' (M)' : material === 'lmc' ? ' (L)' : '';
-  return [
-    DRAWING_CHARACTERISTIC_LABELS[annotation.characteristic],
-    `${cells.diameterZone ? 'Ø' : ''}${cells.tolerance}${modifier(cells.material)}`,
-    ...cells.datums.map((datum) => `${datum.letter}${modifier(datum.material)}`)
-  ].join(' | ');
 }
 
 /** A new frame's tolerance: about 0.1 mm, a round number in each unit. */
@@ -176,15 +207,19 @@ export function pmiFaceRef(
 }
 
 /**
- * A new datum feature (the next free letter) or frame (flatness, which
- * needs no datum) on `face`, its leader landing on `anchor`.
+ * A new datum feature (the next free letter) or frame on `face`, its leader
+ * landing on `anchor`. A frame starts as a form tolerance, which needs no
+ * datum, that applies to the face's surface (`modelPmiSurfaceError`):
+ * cylindricity on a cylinder, circularity on another surface of
+ * revolution, flatness otherwise.
  */
 export function draftModelPmi(
   kind: ModelPmiAnnotation['kind'],
   face: DrawingFaceRef,
   anchor: Vector3,
   pmi: ModelPmiSet | undefined,
-  units: UnitSystem
+  units: UnitSystem,
+  surfaceType?: string
 ): ModelPmiAnnotation {
   const base = {
     pmiId: createModelPmiId(),
@@ -204,7 +239,14 @@ export function draftModelPmi(
   return {
     ...base,
     kind,
-    characteristic: 'flatness',
+    characteristic:
+      surfaceType === 'cylinder'
+        ? 'cylindricity'
+        : surfaceType === 'cone' ||
+            surfaceType === 'sphere' ||
+            surfaceType === 'torus'
+          ? 'circularity'
+          : 'flatness',
     amount: DEFAULT_AMOUNT[units]
   };
 }

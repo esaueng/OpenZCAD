@@ -79,6 +79,43 @@ export interface StepExportMetadata {
   pmi?: readonly StepPmiEntry[];
 }
 
+/**
+ * Whether the file is a product tree (I02 Objects folders, AS04 placed
+ * parts), each written body its own part, rather than one product.
+ */
+function writesStepAssembly(metadata: StepExportMetadata): boolean {
+  return Boolean(
+    metadata.assembly &&
+    (metadata.assembly.folders.length > 0 ||
+      metadata.assembly.bodies.some((body) => body.placement))
+  );
+}
+
+/**
+ * D07: the product each solid of `metadata` is written in, by writer order
+ * (an index into `names`): the one product of a plain file, or each body's
+ * own part in a product tree. Where a frame's datum must be to be in its
+ * reference frame.
+ */
+export function stepPmiPartsOf(metadata: StepExportMetadata): {
+  partOf: number[];
+  names: string[];
+} {
+  if (!writesStepAssembly(metadata))
+    return {
+      partOf: metadata.solids.map(() => 0),
+      names: [metadata.productName]
+    };
+  const partOf: number[] = [];
+  const names: string[] = [];
+  for (const body of metadata.assembly!.bodies) {
+    for (let solid = 0; solid < body.solidCount; solid += 1)
+      partOf.push(names.length);
+    names.push(body.name);
+  }
+  return { partOf, names };
+}
+
 /** Objects folders as a STEP product tree (I02). */
 export interface StepExportAssembly {
   /** Folders, parents before children; `parent` indexes this list. */
@@ -602,11 +639,7 @@ export function finishStepExport(
     `MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('', (${styled.join(', ')}), #${representation[4]})`
   );
   // AS04: placed assembly parts are written as structure too.
-  const assembled = Boolean(
-    metadata.assembly &&
-    (metadata.assembly.folders.length > 0 ||
-      metadata.assembly.bodies.some((body) => body.placement))
-  );
+  const assembled = writesStepAssembly(metadata);
   // D07: semantic PMI on the shape of the product each solid belongs to:
   // the one product, or (with Objects folders) each body's own part.
   let parts: StepPmiPart[] | null = null;

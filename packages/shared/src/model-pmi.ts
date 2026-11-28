@@ -1,5 +1,6 @@
 import type { Brand, Vector3 } from './index';
 import {
+  DRAWING_CHARACTERISTIC_LABELS,
   drawingFaceRefError,
   toleranceFieldsError,
   type DrawingDatumReference,
@@ -150,4 +151,97 @@ export function assertModelPmiSet(value: unknown): void {
   if (value === undefined) return;
   const error = modelPmiSetError(value);
   if (error) throw new Error(error);
+}
+
+/**
+ * #2321: the analytic surfaces a form tolerance can control. Flatness is a
+ * zone between two parallel planes, cylindricity one between two coaxial
+ * cylinders, circularity one between concentric circles in each section of
+ * a surface of revolution, and straightness one about the straight line
+ * elements a surface has. A characteristic not listed applies to any face.
+ * A face whose surface class is not one of these analytic types (a B-spline
+ * face, say) is not refused: its class does not say what it is.
+ */
+export const MODEL_PMI_CHARACTERISTIC_SURFACES: Readonly<
+  Partial<Record<DrawingGeometricCharacteristic, readonly string[]>>
+> = {
+  flatness: ['plane'],
+  cylindricity: ['cylinder'],
+  circularity: ['cylinder', 'cone', 'sphere', 'torus'],
+  straightness: ['plane', 'cylinder', 'cone']
+};
+
+const ANALYTIC_SURFACES: Readonly<Record<string, string>> = {
+  plane: 'planar',
+  cylinder: 'cylindrical',
+  cone: 'conical',
+  sphere: 'spherical',
+  torus: 'toroidal'
+};
+
+/**
+ * Why `characteristic` cannot control a face on `surfaceType` (the
+ * kernel's surface class: 'plane', 'cylinder', …), or null when it can.
+ */
+export function modelPmiSurfaceError(
+  characteristic: DrawingGeometricCharacteristic,
+  surfaceType: string | undefined
+): string | null {
+  const allowed = MODEL_PMI_CHARACTERISTIC_SURFACES[characteristic];
+  if (!allowed || surfaceType === undefined) return null;
+  const actual = ANALYTIC_SURFACES[surfaceType];
+  if (actual === undefined || allowed.includes(surfaceType)) return null;
+  const kinds = allowed.map((surface) => ANALYTIC_SURFACES[surface]!);
+  const list =
+    kinds.length === 1
+      ? kinds[0]!
+      : `${kinds.slice(0, -1).join(', ')} or ${kinds[kinds.length - 1]!}`;
+  return `${DRAWING_CHARACTERISTIC_LABELS[characteristic]} applies to a ${list} face, and this face is ${actual}.`;
+}
+
+/** Fixed decimals with trailing zeros trimmed; never "-0". */
+export function formatModelPmiAmount(value: number): string {
+  const trimmed = value.toFixed(6).replace(/\.?0+$/, '');
+  return trimmed === '-0' ? '0' : trimmed;
+}
+
+/**
+ * What lists, the viewport and export feedback call an entry:
+ * "Datum A", "Position | Ø0.1 (M) | A | C | B".
+ */
+export function modelPmiName(annotation: ModelPmiAnnotation): string {
+  if (annotation.kind === 'datum-feature') return `Datum ${annotation.letter}`;
+  const modifier = (material?: string) =>
+    material === 'mmc' ? ' (M)' : material === 'lmc' ? ' (L)' : '';
+  return [
+    DRAWING_CHARACTERISTIC_LABELS[annotation.characteristic],
+    `${annotation.diameterZone ? 'Ø' : ''}${formatModelPmiAmount(annotation.amount)}${modifier(annotation.material)}`,
+    ...(annotation.datums ?? []).map(
+      (datum) => `${datum.letter}${modifier(datum.material)}`
+    )
+  ].join(' | ');
+}
+
+/**
+ * #2375: `annotations` with every frame's reference to datum `from` naming
+ * `to` instead, each slot keeping its precedence and material modifier.
+ * A datum's letter is how a frame names it, so renaming the datum feature
+ * without this leaves every frame that named it undeclared.
+ */
+export function renameModelDatumReferences(
+  annotations: readonly ModelPmiAnnotation[],
+  from: string,
+  to: string
+): ModelPmiAnnotation[] {
+  return annotations.map((entry) =>
+    entry.kind === 'feature-control-frame' &&
+    entry.datums?.some((datum) => datum.letter === from)
+      ? {
+          ...entry,
+          datums: entry.datums.map((datum) =>
+            datum.letter === from ? { ...datum, letter: to } : datum
+          )
+        }
+      : entry
+  );
 }

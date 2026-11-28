@@ -9,6 +9,7 @@ import {
   DRAWING_GEOMETRIC_CHARACTERISTICS,
   DRAWING_MATERIAL_CHARACTERISTICS,
   MAX_DRAWING_DATUM_REFERENCES,
+  modelPmiSurfaceError,
   type DrawingGeometricCharacteristic,
   type DrawingMaterialCondition,
   type GeometryBodyRepresentation,
@@ -24,7 +25,9 @@ import {
   faceAnchor,
   modelPmiName,
   pmiFaceRef,
-  resolveModelPmi
+  PMI_DATUM_SLOTS,
+  resolveModelPmi,
+  type ModelPmiResolution
 } from '../../lib/pmi/modelPmi';
 import type { AnyCommand } from '@openzcad/command-system';
 import {
@@ -35,7 +38,7 @@ import {
 } from '../../lib/pmi/pmiSelection';
 
 const DATUM_LETTERS = [...'ABCDEFGHJKLMNPRSTUVWXYZ'];
-const PRECEDENCE = ['Primary', 'Secondary', 'Tertiary'] as const;
+const PRECEDENCE = PMI_DATUM_SLOTS;
 
 type Frame = Extract<ModelPmiAnnotation, { kind: 'feature-control-frame' }>;
 
@@ -61,7 +64,11 @@ interface PmiRowActions {
   editable: boolean;
   onSelect(pmiId: string | null): void;
   onAdd(kind: ModelPmiAnnotation['kind']): void;
-  onUpdate(annotation: ModelPmiAnnotation, label: string): void;
+  onUpdate(
+    annotation: ModelPmiAnnotation,
+    label: string,
+    options?: { followReferences?: true }
+  ): void;
   onDelete(pmiId: string): void;
   /** Re-points an entry at the selected face, keeping the rest. */
   onRepick(pmiId: string): void;
@@ -90,7 +97,7 @@ function pickedFace(
     );
     return null;
   }
-  return { face, anchor };
+  return { face, anchor, surfaceType: topology?.geometry?.surfaceType };
 }
 
 function rowActions(
@@ -113,7 +120,8 @@ function rowActions(
         pick.face,
         pick.anchor,
         document.pmi,
-        document.units
+        document.units,
+        pick.surfaceType
       );
       if (workspace.execute(commandFactories.addModelPmi({ annotation }))) {
         setSelectedPmiId(annotation.pmiId);
@@ -124,8 +132,10 @@ function rowActions(
         );
       }
     },
-    onUpdate(annotation, label) {
-      workspace.execute(commandFactories.updateModelPmi({ annotation }, label));
+    onUpdate(annotation, label, options) {
+      workspace.execute(
+        commandFactories.updateModelPmi({ annotation, ...options }, label)
+      );
     },
     onDelete(pmiId) {
       if (
@@ -142,6 +152,18 @@ function rowActions(
         (entry) => entry.pmiId === pmiId
       );
       if (!pick || !previous) return;
+      // #2321: a frame never moves to a face its characteristic cannot
+      // control (cylindricity to a flat cap).
+      const surface =
+        previous.kind === 'feature-control-frame'
+          ? modelPmiSurfaceError(previous.characteristic, pick.surfaceType)
+          : null;
+      if (surface) {
+        workspace.status(
+          `${surface} Pick a face it applies to, or change the characteristic first.`
+        );
+        return;
+      }
       workspace.execute(
         commandFactories.updateModelPmi(
           {
@@ -250,7 +272,7 @@ export function PmiRows(props: {
               <PmiEditor
                 annotation={annotation}
                 letters={letters}
-                broken={broken ? resolution.message : null}
+                resolution={resolution}
                 actions={actions}
               />
             ) : null}
@@ -261,19 +283,33 @@ export function PmiRows(props: {
   );
 }
 
+/** How to repair a broken entry: each cause has its own remedy (#2260). */
+function brokenGuidance(
+  resolution: Extract<ModelPmiResolution, { ok: false }>
+): string {
+  switch (resolution.reason) {
+    case 'datum-undefined':
+      return `${resolution.message} Or delete the frame.`;
+    case 'surface-incompatible':
+      return `${resolution.message} Select a face it applies to and move it there, choose another characteristic, or delete it.`;
+    default:
+      return `${resolution.message} Select its face and re-pick, or delete it.`;
+  }
+}
+
 function PmiEditor(props: {
   annotation: ModelPmiAnnotation;
   letters: string[];
-  broken: string | null;
+  resolution: ModelPmiResolution | undefined;
   actions: PmiRowActions;
 }) {
-  const { annotation, actions } = props;
+  const { annotation, actions, resolution } = props;
   const disabled = !actions.editable;
   return (
     <div className="pmi-editor">
-      {props.broken ? (
+      {resolution && !resolution.ok ? (
         <p className="pmi-broken" role="alert">
-          Broken: {props.broken} Select its face and re-pick, or delete it.
+          Broken: {brokenGuidance(resolution)}
         </p>
       ) : null}
       {annotation.kind === 'datum-feature' ? (
@@ -283,9 +319,11 @@ function PmiEditor(props: {
             value={annotation.letter}
             disabled={disabled}
             onChange={(event) =>
+              // #2375: the frames naming this datum follow its new letter.
               actions.onUpdate(
                 { ...annotation, letter: event.target.value },
-                'Change datum letter'
+                'Change datum letter',
+                { followReferences: true }
               )
             }
           >
@@ -305,6 +343,9 @@ function PmiEditor(props: {
       ) : (
         <FrameFields
           frame={annotation}
+          surfaceType={
+            resolution?.ok ? resolution.face.geometry?.surfaceType : undefined
+          }
           letters={props.letters}
           units={actions.units}
           disabled={disabled}
@@ -332,6 +373,8 @@ function PmiEditor(props: {
 
 function FrameFields(props: {
   frame: Frame;
+  /** The resolved face's surface class, which some characteristics need. */
+  surfaceType: string | undefined;
   letters: string[];
   units: string;
   disabled: boolean;
@@ -401,8 +444,14 @@ function FrameFields(props: {
               key={characteristic}
               value={characteristic}
               disabled={
-                declared.length === 0 &&
-                DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(characteristic)
+                (declared.length === 0 &&
+                  DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(
+                    characteristic
+                  )) ||
+                // #2321: not one that cannot control this face.
+                (characteristic !== frame.characteristic &&
+                  modelPmiSurfaceError(characteristic, props.surfaceType) !==
+                    null)
               }
             >
               {DRAWING_CHARACTERISTIC_LABELS[characteristic]}

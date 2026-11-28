@@ -23,7 +23,8 @@ async function download(page: Page, click: () => Promise<void>) {
  * D07 slice D: the model's PMI written to File › STEP as AP242 semantic PMI.
  * Datum A on a box's bottom and a parallelism frame to A on its top, made
  * in Objects, come out as a datum feature, its datum and a parallelism
- * tolerance with its datum system, each on its own face.
+ * tolerance with its datum system, each on its own face. A frame the file
+ * cannot carry (its datum deleted) is left out and named (#2258).
  */
 test(
   'writes the model’s datum and frame to an AP242 STEP',
@@ -101,6 +102,25 @@ test(
     );
     expect(step).toContain('LENGTH_MEASURE(0.1)');
     expect(step.match(/GEOMETRIC_ITEM_SPECIFIC_USAGE\(/g)).toHaveLength(2);
+    await expect(page.getByRole('contentinfo')).not.toContainText(
+      'AP242 left out'
+    );
+
+    // #2258: with datum A deleted the frame is broken; the file keeps the
+    // part but leaves the frame out, and the export says which and why.
+    await objects.getByRole('button', { name: 'Delete Datum A' }).click();
+    await expect(
+      objects.getByRole('button', { name: 'Parallelism | 0.1 | A (broken)' })
+    ).toBeVisible();
+    await fileMenu.locator('summary').click();
+    const without = await download(page, () =>
+      fileMenu.getByRole('button', { name: /Export STEP/ }).click()
+    );
+    expect(without).toContain('MANIFOLD_SOLID_BREP');
+    expect(without).not.toMatch(/PARALLELISM_TOLERANCE/);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'AP242 left out 1 PMI entry: Parallelism | 0.1 | A — its primary datum A is not declared on the model.'
+    );
 
     expect(errors).toEqual([]);
   }

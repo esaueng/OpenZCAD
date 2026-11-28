@@ -1814,38 +1814,37 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('ready', request, { stale: false }));
         return;
       }
-      const text =
+      // #2258: a STEP says which model PMI an AP242 file left out.
+      const step =
         request.format === 'step'
-          ? await exact.exportStep(document, exportBodyIds, {
+          ? await exact.exportStepReport(document, exportBodyIds, {
               ...(request.units ? { units: request.units } : {}),
               ...(request.fileName ? { fileName: request.fileName } : {}),
               ...(request.stepProtocol
                 ? { protocol: request.stepProtocol }
                 : {})
             })
-          : request.format === 'iges'
-            ? await exact.exportIges(document, exportBodyIds, {
-                ...(request.units ? { units: request.units } : {}),
-                ...(request.fileName ? { fileName: request.fileName } : {})
-              })
-            : await exact.exportStl(
-                document,
-                exportBodyIds,
-                request.deflection,
-                {
-                  ...(request.units ? { units: request.units } : {}),
-                  ...(request.angularTolerance !== undefined
-                    ? { angularTolerance: request.angularTolerance }
-                    : {})
-                }
-              );
+          : null;
+      const text = step
+        ? step.text
+        : request.format === 'iges'
+          ? await exact.exportIges(document, exportBodyIds, {
+              ...(request.units ? { units: request.units } : {}),
+              ...(request.fileName ? { fileName: request.fileName } : {})
+            })
+          : await exact.exportStl(document, exportBodyIds, request.deflection, {
+              ...(request.units ? { units: request.units } : {}),
+              ...(request.angularTolerance !== undefined
+                ? { angularTolerance: request.angularTolerance }
+                : {})
+            });
       const result: GeometryExportResult = {
         type: 'export',
         ok: true,
         requestId: request.requestId,
         format: request.format,
         text,
-        warnings: []
+        warnings: step ? step.warnings : []
       };
       post(result);
       post(stateFor('ready', request, { stale: false }));

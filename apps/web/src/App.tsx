@@ -2358,6 +2358,10 @@ import {
   type ToastAction,
   type ToastModel
 } from './lib/toasts';
+import {
+  stepPmiOmissionClause,
+  stepPmiOmissionNote
+} from './lib/pmi/stepPmiDisclosure';
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
 import {
   keptOffsetValue,
@@ -22833,7 +22837,15 @@ export function App() {
     produce(options: {
       signal: AbortSignal;
       onState(state: GeometryWorkerState): void;
-    }): Promise<{ save(): Promise<boolean>; warnings: number }>;
+    }): Promise<{
+      save(): Promise<boolean>;
+      warnings: number;
+      /**
+       * #2258: the model PMI the file left out, one "<entry> — <reason>"
+       * each: said after the outcome, and the card waits to be read.
+       */
+      omittedPmi?: readonly string[];
+    }>;
     /** The status once the file is saved, when not the export's own. */
     completed?(bodies: string): string;
     /**
@@ -22893,16 +22905,23 @@ export function App() {
         ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
         : '';
       const bodies = `${countLabel(exportBodyIds.length, 'body', 'bodies')}${hiddenNote}`;
+      const omittedPmi = produced.omittedPmi ?? [];
+      const pmiNote = stepPmiOmissionNote(omittedPmi);
       const outcome =
         produced.warnings > 0
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
           : input.completed
             ? input.completed(bodies)
             : `Exported ${bodies} to ${input.fileName}.`;
+      const said = pmiNote ? `${outcome} ${pmiNote}` : outcome;
       setStatus(
-        exportWithheldMessage ? `${outcome} ${exportWithheldMessage}` : outcome
+        exportWithheldMessage ? `${said} ${exportWithheldMessage}` : said
       );
-      sink.finish({ tone: 'ok', message: bodies, landed: true });
+      sink.finish({
+        tone: pmiNote ? 'warning' : 'ok',
+        message: stepPmiOmissionClause(bodies, omittedPmi),
+        landed: true
+      });
     } catch (error) {
       if (signal.aborted) {
         cancelled();
@@ -23133,9 +23152,11 @@ export function App() {
         if (!('text' in result)) {
           throw new Error('The STEP export returned no text.');
         }
+        // The STEP's only warnings are the model PMI it left out (#2258).
         return {
           save: () => saveCadTextFile(fileName, 'step', result.text),
-          warnings: result.warnings.length
+          warnings: 0,
+          omittedPmi: result.warnings
         };
       }
     });
