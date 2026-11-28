@@ -916,9 +916,14 @@ describe('removing a device', () => {
     expect(ready(await loadEncryption(tablet.ctx)).unlocked).toBe(true);
   });
 
-  it.each(['browser', 'desktop'] as const)(
+  it.each(['browser', 'desktop', 'ios'] as const)(
     'ends the account’s other sessions once a removal lands, keeping the remover’s (%s)',
-    async (backend) => {
+    async (variant) => {
+      // The iPhone and iPad app holds the same bearer credential under its
+      // own client id (ADR-026), so the E2EE write guard must admit it too.
+      const backend = variant === 'browser' ? 'browser' : 'desktop';
+      const removerClient =
+        variant === 'ios' ? 'openzcad-ios' : 'openzcad-macos';
       const srv = server();
       const hash = async (token: string) =>
         Buffer.from(
@@ -930,27 +935,24 @@ describe('removing a device', () => {
         srv.db
           .prepare('INSERT INTO auth_sessions VALUES (?, ?, ?, ?)')
           .run(tokenHash, USER, 0, 9_999_999_999);
-      const desktop = (tokenHash: string, session: string) => {
+      const desktop = (
+        tokenHash: string,
+        session: string,
+        client = 'openzcad-macos'
+      ) => {
         srv.db
           .prepare(
             'INSERT INTO desktop_access_tokens VALUES (?, ?, ?, ?, ?, ?, NULL)'
           )
-          .run(tokenHash, session, USER, 'openzcad-macos', 0, 9_999_999_999);
+          .run(tokenHash, session, USER, client, 0, 9_999_999_999);
         srv.db
           .prepare(
             'INSERT INTO desktop_refresh_tokens VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)'
           )
-          .run(
-            `refresh-${session}`,
-            session,
-            USER,
-            'openzcad-macos',
-            0,
-            9_999_999_999
-          );
+          .run(`refresh-${session}`, session, USER, client, 0, 9_999_999_999);
       };
       if (backend === 'browser') browser(await hash(token));
-      else desktop(await hash(token), 'remover-session');
+      else desktop(await hash(token), 'remover-session', removerClient);
       // Another browser's session and another desktop's, any of which may
       // be the device about to be removed.
       browser(await hash('o'.repeat(43)));

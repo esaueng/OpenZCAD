@@ -14,6 +14,8 @@ import { isDesktopAuthReady } from './readiness';
 
 import {
   SESSION_COOKIE_NAME,
+  isNativeClientId,
+  type NativeClientId,
   readCookie,
   readBearerToken,
   sha256
@@ -55,7 +57,6 @@ const DEFAULT_SESSION_DAYS = 30;
 // sign-in that created it. It is never shorter than the lifetime itself.
 const SESSION_ABSOLUTE_CAP_DAYS = 90;
 const TURNSTILE_ACTION = 'email-code';
-const DESKTOP_CLIENT_ID = 'openzcad-macos';
 const DESKTOP_AUTH_ATTEMPT_TTL_SECONDS = 10 * 60;
 const DESKTOP_AUTH_USER_CODE_LENGTH = 8;
 const DESKTOP_ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
@@ -1227,8 +1228,8 @@ export async function verifyEmailLogin(
   };
 }
 
-function parseDesktopClientId(value: unknown): typeof DESKTOP_CLIENT_ID {
-  if (value !== DESKTOP_CLIENT_ID) {
+function parseDesktopClientId(value: unknown): NativeClientId {
+  if (!isNativeClientId(value)) {
     throw new AuthFlowError(
       400,
       'DESKTOP_AUTH_CLIENT_INVALID',
@@ -1280,7 +1281,7 @@ function normalizeDesktopUserCode(value: unknown): string {
     throw new AuthFlowError(
       400,
       'DESKTOP_AUTH_INVALID_CODE',
-      'Enter the code shown in OpenZCAD for macOS.'
+      'Enter the code shown in the OpenZCAD app.'
     );
   }
   const normalized = value.replace(/[\s-]/g, '').toUpperCase();
@@ -1288,7 +1289,7 @@ function normalizeDesktopUserCode(value: unknown): string {
     throw new AuthFlowError(
       400,
       'DESKTOP_AUTH_INVALID_CODE',
-      'Enter the 8-character code shown in OpenZCAD for macOS.'
+      'Enter the 8-character code shown in the OpenZCAD app.'
     );
   }
   return normalized;
@@ -1759,7 +1760,7 @@ async function authenticateDesktopBearer(
   if (
     !row ||
     !row.email ||
-    row.client_id !== DESKTOP_CLIENT_ID ||
+    !isNativeClientId(row.client_id) ||
     row.expires_at < timestamp ||
     row.revoked_at !== null
   ) {

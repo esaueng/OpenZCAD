@@ -865,6 +865,335 @@ describe('BottomSheet at peek on its row', () => {
     expect(sheet().dataset.detent).toBe('half');
   });
 
+  it('draws the page a pulled-up row opens as it comes up, and a pull down goes back to the row', () => {
+    // The owner: pulled up, Build's row should show All tools coming in
+    // under the finger, and pulled back down, its quick row again.
+    const onPageLower = vi.fn();
+    function Morph() {
+      const { state, dispatch } = useSheet(true);
+      useEffect(() => {
+        dispatch({ type: 'set-detent', detent: 'peek' });
+      }, [dispatch]);
+      return (
+        <BottomSheet
+          label="Workspace sheet"
+          state={state}
+          dispatch={dispatch}
+          hasRoot
+          renderPage={renderPage}
+          onRowRaise={(detent) => {
+            dispatch({ type: 'push', page: page('tools'), detent });
+            return true;
+          }}
+          rowRaisePreview={{ title: 'Tools', content: <p>Preview tile</p> }}
+          onPageLower={
+            state.stack.length > 0
+              ? () => {
+                  onPageLower();
+                  dispatch({ type: 'close' });
+                }
+              : undefined
+          }
+        >
+          <p>Row surface</p>
+        </BottomSheet>
+      );
+    }
+    render(<Morph />);
+    const surface = screen.getByText('Row surface');
+    const box = vi
+      .spyOn(sheet(), 'getBoundingClientRect')
+      .mockReturnValue(rect(64));
+    vi.spyOn(sheet().parentElement!, 'getBoundingClientRect').mockReturnValue(
+      rect(800)
+    );
+    expect(sheet().querySelector('.compact-sheet-raise')).toBeNull();
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 1, clientY: 700 });
+    fireEvent.pointerMove(surface, { pointerId: 1, clientY: 560 });
+    // 204px of an 800px stage: (204 - 64) / (400 - 64) of the way to half.
+    expect(sheet()).toHaveClass('is-raising');
+    expect(sheet().style.getPropertyValue('--sheet-raise')).toBe('0.417');
+    const preview = sheet().querySelector('.compact-sheet-raise')!;
+    expect(preview).toHaveAttribute('aria-hidden', 'true');
+    expect(preview).toHaveTextContent('Tools');
+    expect(preview).toHaveTextContent('Preview tile');
+    fireEvent.pointerMove(surface, { pointerId: 1, clientY: 340 });
+    fireEvent.pointerUp(surface, { pointerId: 1, clientY: 340 });
+    // Let go, the page it showed stands without an entrance of its own.
+    expect(sheet().dataset.detent).toBe('half');
+    expect(screen.getByRole('heading', { name: 'Tools' })).toBeInTheDocument();
+    expect(sheet()).not.toHaveClass('is-raising');
+    expect(sheet().querySelector('.compact-sheet-raise')).toBeNull();
+    expect(sheet().dataset.nav).toBe('drag');
+
+    // Pulled back down: the row shows through as the page goes, and at
+    // peek the page is put away.
+    box.mockReturnValue(rect(400));
+    const grabber = screen.getByRole('slider', { name: 'Sheet height' });
+    fireEvent.pointerDown(grabber, { button: 0, pointerId: 2, clientY: 400 });
+    fireEvent.pointerMove(grabber, { pointerId: 2, clientY: 600 });
+    expect(sheet()).toHaveClass('is-lowering');
+    expect(sheet().style.getPropertyValue('--sheet-raise')).toBe('0.405');
+    fireEvent.pointerUp(grabber, { pointerId: 2, clientY: 700 });
+    expect(onPageLower).toHaveBeenCalledTimes(1);
+    expect(sheet().dataset.detent).toBe('peek');
+    expect(sheet()).toHaveClass('is-row');
+    expect(screen.queryByRole('heading', { name: 'Tools' })).toBeNull();
+    expect(sheet().dataset.nav).toBe('drag');
+
+    // By the slider's keys: up opens the page, down to peek puts it away,
+    // each with its entrance.
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Sheet height' }), {
+      key: 'ArrowUp'
+    });
+    expect(screen.getByRole('heading', { name: 'Tools' })).toBeInTheDocument();
+    expect(sheet().dataset.nav).toBe('push');
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Sheet height' }), {
+      key: 'ArrowDown'
+    });
+    expect(onPageLower).toHaveBeenCalledTimes(2);
+    expect(sheet().dataset.detent).toBe('peek');
+    expect(sheet().dataset.nav).toBe('pop');
+  });
+
+  it('holds a row with nothing under it at peek, stretching under a drag', () => {
+    // The motion review: View's, Tweak's and Draw's trays rose over blank
+    // space.
+    function Held() {
+      const { state, dispatch } = useSheet(true);
+      useEffect(() => {
+        dispatch({ type: 'set-detent', detent: 'peek' });
+      }, [dispatch]);
+      return (
+        <BottomSheet
+          label="Workspace sheet"
+          state={state}
+          dispatch={dispatch}
+          hasRoot
+          renderPage={renderPage}
+          holdFittingRow
+        >
+          <p>Row surface</p>
+        </BottomSheet>
+      );
+    }
+    render(<Held />);
+    const root = sheet().querySelector<HTMLElement>(
+      '.compact-sheet-body:not([data-page])'
+    )!;
+    const fits = (scroll: number) => {
+      Object.defineProperty(root, 'scrollHeight', {
+        configurable: true,
+        value: scroll
+      });
+      Object.defineProperty(root, 'clientHeight', {
+        configurable: true,
+        value: 52
+      });
+    };
+    fits(52);
+    vi.spyOn(sheet(), 'getBoundingClientRect').mockReturnValue(rect(64));
+    vi.spyOn(sheet().parentElement!, 'getBoundingClientRect').mockReturnValue(
+      rect(800)
+    );
+    const surface = screen.getByText('Row surface');
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 1, clientY: 700 });
+    fireEvent.pointerMove(surface, { pointerId: 1, clientY: 340 });
+    // A short stretch, never the 424px the finger went.
+    const stretched = parseFloat(sheet().style.height);
+    expect(stretched).toBeGreaterThan(64);
+    expect(stretched).toBeLessThanOrEqual(104);
+    fireEvent.pointerUp(surface, { pointerId: 1, clientY: 340 });
+    expect(sheet().dataset.detent).toBe('peek');
+    const slider = screen.getByRole('slider', { name: 'Sheet height' });
+    fireEvent.keyDown(slider, { key: 'ArrowUp' });
+    fireEvent.keyDown(slider, { key: 'End' });
+    expect(sheet().dataset.detent).toBe('peek');
+    // Content running past the row still rises to show it.
+    fits(200);
+    fireEvent.keyDown(slider, { key: 'ArrowUp' });
+    expect(sheet().dataset.detent).toBe('half');
+  });
+
+  it('goes back on a swipe from the page’s leading edge, and springs back short of it', () => {
+    render(
+      <Harness
+        hasRoot
+        initial={[
+          { type: 'push', page: page('more') },
+          { type: 'push', page: page('project') }
+        ]}
+      >
+        <p>Root</p>
+      </Harness>
+    );
+    vi.spyOn(sheet(), 'getBoundingClientRect').mockReturnValue(rect(400));
+    const body = () =>
+      sheet().querySelector<HTMLElement>('.compact-sheet-body[data-page]')!;
+    expect(body().dataset.page).toBe('project');
+    // Away from the edge: the page's own, not a swipe.
+    fireEvent.pointerDown(body(), {
+      button: 0,
+      pointerId: 1,
+      clientX: 120,
+      clientY: 200
+    });
+    fireEvent.pointerMove(body(), { pointerId: 1, clientX: 260, clientY: 200 });
+    expect(body().style.transform).toBe('');
+    fireEvent.pointerUp(body(), { pointerId: 1, clientX: 260, clientY: 200 });
+    // From the edge, up and down: the page's scroll.
+    fireEvent.pointerDown(body(), {
+      button: 0,
+      pointerId: 2,
+      clientX: 8,
+      clientY: 200
+    });
+    fireEvent.pointerMove(body(), { pointerId: 2, clientX: 12, clientY: 260 });
+    fireEvent.pointerMove(body(), { pointerId: 2, clientX: 120, clientY: 260 });
+    expect(body().style.transform).toBe('');
+    fireEvent.pointerUp(body(), { pointerId: 2, clientX: 120, clientY: 260 });
+    // From the edge, sideways but short: it follows, then springs back.
+    fireEvent.pointerDown(body(), {
+      button: 0,
+      pointerId: 3,
+      clientX: 8,
+      clientY: 200
+    });
+    fireEvent.pointerMove(body(), { pointerId: 3, clientX: 48, clientY: 204 });
+    expect(body()).toHaveClass('is-swiping');
+    expect(body().style.transform).toBe('translateX(40px)');
+    fireEvent.pointerUp(body(), { pointerId: 3, clientX: 48, clientY: 204 });
+    expect(body().dataset.page).toBe('project');
+    expect(body().style.transform).toBe('');
+    // Far enough: back one page.
+    fireEvent.pointerDown(body(), {
+      button: 0,
+      pointerId: 4,
+      clientX: 8,
+      clientY: 200
+    });
+    fireEvent.pointerMove(body(), { pointerId: 4, clientX: 140, clientY: 210 });
+    fireEvent.pointerUp(body(), { pointerId: 4, clientX: 140, clientY: 210 });
+    expect(body().dataset.page).toBe('more');
+    expect(sheet().dataset.nav).toBe('pop');
+    // From the edge beside the title too (the re-review): the head's Back
+    // stands there, and a swipe begun on it still goes back.
+    const back = screen.getByRole('button', { name: 'Back' });
+    fireEvent.pointerDown(back, {
+      button: 0,
+      pointerId: 5,
+      clientX: 8,
+      clientY: 20
+    });
+    fireEvent.pointerMove(back, { pointerId: 5, clientX: 140, clientY: 24 });
+    expect(body().style.transform).toBe('translateX(132px)');
+    fireEvent.pointerUp(back, { pointerId: 5, clientX: 140, clientY: 24 });
+    expect(sheet().querySelector('.compact-sheet-body[data-page]')).toBeNull();
+  });
+
+  it('leaves a row’s own swipe to it, and keeps the row under a page out of focus', () => {
+    // The code review: History's rollback swipe, begun at the edge, popped
+    // the panel; and the tray drawn through a page pulled down took Tab.
+    function Rows() {
+      const { state, dispatch } = useSheet(true);
+      useEffect(() => {
+        dispatch({ type: 'push', page: page('history') });
+      }, [dispatch]);
+      return (
+        <BottomSheet
+          label="Workspace sheet"
+          state={state}
+          dispatch={dispatch}
+          hasRoot
+          renderPage={() => ({
+            title: 'History',
+            content: <div className="compact-row">Step 1</div>
+          })}
+        >
+          <button type="button">Tray verb</button>
+        </BottomSheet>
+      );
+    }
+    render(<Rows />);
+    vi.spyOn(sheet(), 'getBoundingClientRect').mockReturnValue(rect(400));
+    const root = sheet().querySelector<HTMLElement>(
+      '.compact-sheet-body:not([data-page])'
+    )!;
+    expect(root).toHaveAttribute('inert');
+    const row = screen.getByText('Step 1');
+    fireEvent.pointerDown(row, {
+      button: 0,
+      pointerId: 1,
+      clientX: 8,
+      clientY: 200
+    });
+    fireEvent.pointerMove(row, { pointerId: 1, clientX: 140, clientY: 204 });
+    fireEvent.pointerUp(row, { pointerId: 1, clientX: 140, clientY: 204 });
+    expect(
+      sheet().querySelector('.compact-sheet-body[data-page]')
+    ).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(root).not.toHaveAttribute('inert');
+  });
+
+  it('comes up to half when a field on a page at peek is tapped to type in', async () => {
+    // The motion review: All tools' search at peek found Fillet under the
+    // sheet's edge.
+    function Search() {
+      const { state, dispatch } = useSheet(true);
+      useEffect(() => {
+        dispatch({ type: 'push', page: page('tools') });
+        dispatch({ type: 'set-detent', detent: 'peek' });
+      }, [dispatch]);
+      return (
+        <BottomSheet
+          label="Workspace sheet"
+          state={state}
+          dispatch={dispatch}
+          hasRoot
+          renderPage={(key) => ({
+            title: key,
+            content: (
+              <>
+                <button type="button">Tile</button>
+                <input type="search" aria-label="Search tools" />
+              </>
+            )
+          })}
+        >
+          <input type="text" aria-label="Row field" />
+        </BottomSheet>
+      );
+    }
+    render(<Search />);
+    expect(sheet().dataset.detent).toBe('peek');
+    act(() => screen.getByRole('button', { name: 'Tile' }).focus());
+    expect(sheet().dataset.detent).toBe('peek');
+    act(() => screen.getByRole('searchbox', { name: 'Search tools' }).focus());
+    expect(sheet().dataset.detent).toBe('half');
+    // Typing: the shell gives the tabs' row to the keyboard. A tap on the
+    // page's own control holds it until the tap is done (CI: Chromium
+    // focused Save as it was pressed, the tabs came back, the sheet moved
+    // 58px and the tap missed it).
+    expect(sheet()).toHaveClass('is-typing');
+    const tile = screen.getByRole('button', { name: 'Tile' });
+    act(() => tile.focus());
+    expect(sheet()).toHaveClass('is-typing');
+    fireEvent.click(tile);
+    await act(
+      () => new Promise<void>((done) => requestAnimationFrame(() => done()))
+    );
+    expect(sheet()).not.toHaveClass('is-typing');
+    act(() => screen.getByRole('searchbox', { name: 'Search tools' }).focus());
+    expect(sheet()).toHaveClass('is-typing');
+    // The head's Back too, until its tap is done.
+    act(() => screen.getByRole('button', { name: 'Back' }).focus());
+    expect(sheet()).toHaveClass('is-typing');
+    act(() => screen.getByRole('searchbox', { name: 'Search tools' }).focus());
+    act(() => (document.activeElement as HTMLElement).blur());
+    expect(sheet()).not.toHaveClass('is-typing');
+  });
+
   it('opens a page of fields on its grabber, not the keyboard', () => {
     // The space review: Draw's Properties focused the sheet name, and the
     // keyboard left the drawing a sliver beside it.

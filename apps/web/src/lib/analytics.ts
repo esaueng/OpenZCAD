@@ -4,6 +4,7 @@ import {
   cloudRequestSignal
 } from './cloudMode';
 import { isDesktopApp } from './desktopBridge';
+import { isIosShell } from './nativeShell';
 import { DEPLOYMENT_REALM } from './deploymentRealm';
 
 import type { REFUSAL_SURFACES } from './glimpseContract';
@@ -63,7 +64,9 @@ function canSendBrowserAnalytics(): boolean {
   } catch {
     return false;
   }
-  if (isDesktopApp() || !cloudFunctionsAreEnabled()) return false;
+  // The native apps send no usage events.
+  if (isDesktopApp() || isIosShell() || !cloudFunctionsAreEnabled())
+    return false;
   if (
     typeof navigator !== 'undefined' &&
     (navigator.doNotTrack === '1' ||

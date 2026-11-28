@@ -58,7 +58,8 @@ export interface ValidatedFeatureCommitOptions {
     derived: ProjectDocument['derived'] | null
   ): boolean;
   onBusy(busy: boolean): void;
-  onStatus(message: string): void;
+  /** `tone`, when given, is the outcome's own (StatusEntry.tone). */
+  onStatus(message: string, options?: { tone?: StatusTone }): void;
   /**
    * A refusal, verbatim, for the surface the user is actually looking at.
    *
@@ -76,6 +77,15 @@ export interface ValidatedFeatureCommitOptions {
   onFailure?(message: string | null): void;
   onRejection?(error: FeatureBuildError): void;
 }
+
+/** The tone of a status line, as `StatusEntry.tone`. */
+export type StatusTone = 'ready' | 'warning';
+
+/**
+ * A committed run's tone: a success, unless its message reports something
+ * left out on the way. Resolved with the message, after `finalize`.
+ */
+export type ValidatedSuccessTone = StatusTone | (() => StatusTone);
 
 export interface ValidatedFeatureTarget {
   featureName: string;
@@ -118,6 +128,8 @@ export interface ValidatedFeatureRunOptions extends ValidatedFeatureTarget {
    * `finalize`, so the message can report what finalize actually achieved.
    */
   successMessage: string | (() => string);
+  /** The success status's tone; `ready` unless given. */
+  successTone?: ValidatedSuccessTone;
   /**
    * Status while the rebuild runs. The default names an "operation", which
    * reads wrong for work that takes long enough to be worth narrating.
@@ -220,6 +232,8 @@ export interface ValidatedFeatureTransactionRunOptions {
   onFailure?(message: string): void;
   validatingMessage?: string;
   successMessage: string;
+  /** As {@link ValidatedFeatureRunOptions.successTone}. */
+  successTone?: ValidatedSuccessTone;
   onSuccess?(): void;
   /** As {@link ValidatedFeatureRunOptions.cancelled}. */
   cancelled?(): boolean;
@@ -312,6 +326,7 @@ export function useValidatedFeatureCommit(
     targets: readonly ValidatedFeatureTarget[];
     validateDerived?(derived: ProjectDocument['derived']): void;
     successMessage: string | (() => string);
+    successTone?: ValidatedSuccessTone;
     validatingMessage?: string;
     revalidateOnDocumentMove?: boolean;
     onSuccess?(): void;
@@ -534,10 +549,18 @@ export function useValidatedFeatureCommit(
       }
 
       input.onSuccess?.();
+      // The outcome is known here, so it carries its tone: read from the
+      // text, "Duplicated Error Check." stood as a warning.
       host.onStatus(
         typeof input.successMessage === 'function'
           ? input.successMessage()
-          : input.successMessage
+          : input.successMessage,
+        {
+          tone:
+            typeof input.successTone === 'function'
+              ? input.successTone()
+              : (input.successTone ?? 'ready')
+        }
       );
       return 'committed';
     } catch (error) {
@@ -586,6 +609,9 @@ export function useValidatedFeatureCommit(
       return validateAndCommit({
         targets: runOptions.targets ?? [runOptions],
         successMessage: runOptions.successMessage,
+        ...(runOptions.successTone
+          ? { successTone: runOptions.successTone }
+          : {}),
         validatingMessage: runOptions.validatingMessage,
         revalidateOnDocumentMove: runOptions.revalidateOnDocumentMove,
         onSuccess: runOptions.onSuccess,
@@ -621,6 +647,9 @@ export function useValidatedFeatureCommit(
         onFailure: runOptions.onFailure,
         validatingMessage: runOptions.validatingMessage,
         successMessage: runOptions.successMessage,
+        ...(runOptions.successTone
+          ? { successTone: runOptions.successTone }
+          : {}),
         onSuccess: runOptions.onSuccess,
         ...(runOptions.cancelled ? { cancelled: runOptions.cancelled } : {}),
         preview: (current) =>
