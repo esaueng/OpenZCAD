@@ -27320,35 +27320,49 @@ export function App() {
    * edge projecting to the repaired object's kind of curve — the rules its
    * commit applies (`lib/sketch/projectionPickEdges`).
    */
+  const referenceSession =
+    interaction.mode === 'sketch' && interaction.session.tool === 'project'
+      ? interaction.session
+      : null;
+  const referenceSketchId = referenceSession?.sketchId ?? null;
+  const referenceMode = referenceSession
+    ? (referenceSession.projectMode ?? 'linked')
+    : null;
   const sketchReferenceAccepts = useMemo(() => {
-    if (sketchModeState?.tool !== 'project' || !doc || !sketchBasis) {
+    if (!referenceMode || !doc || !sketchBasis) {
       return undefined;
     }
-    const representations = doc.derived.bodyRepresentations;
-    const edgesOf = (selection: TopologySelection) =>
-      ownEntry(representations, selection.bodyId)?.topology?.edges ?? [];
-    const repaired = projectionRepair
-      ? ownEntry(doc.nodes, projectionRepair.objectId)
-      : undefined;
+    const sketch = referenceSketchId
+      ? (findSketch(doc, referenceSketchId as SketchId) ?? null)
+      : null;
+    const basis = sketchBasis;
     if (projectionRepair) {
+      const repaired = ownEntry(doc.nodes, projectionRepair.objectId);
       const objectKind =
         repaired?.kind === 'sketch-object' ? repaired.data.objectKind : null;
       return (selection: TopologySelection) =>
         objectKind !== null &&
         projectionRepickAccepts({
-          edges: edgesOf(selection),
+          document: doc,
+          sketch,
           selection,
-          basis: sketchBasis,
-          objectKind
+          basis,
+          repairing: projectionRepair.objectId,
+          objectKind,
+          lineagePending: true
         });
     }
+    const mode = referenceMode;
     return (selection: TopologySelection) =>
       projectionPickProjects({
-        edges: edgesOf(selection),
+        document: doc,
+        sketch,
         selection,
-        basis: sketchBasis
+        basis,
+        mode,
+        lineagePending: true
       });
-  }, [sketchModeState?.tool, doc, sketchBasis, projectionRepair]);
+  }, [referenceMode, referenceSketchId, doc, sketchBasis, projectionRepair]);
 
   const sketchModeForViewer = useMemo(
     () =>

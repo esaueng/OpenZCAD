@@ -153,6 +153,14 @@ test(
     await expect(status).toContainText('Projected 1 linked edge.', {
       timeout: 30_000
     });
+    // The sketch now follows that edge, so linked Project would refuse it
+    // and it no longer lights; the face, with three edges left, still does.
+    await page.mouse.move(faceCenter!.x, faceCenter!.y);
+    await expect.poll(() => hoverTarget(canvas)).toMatch(/^face:./);
+    await page.mouse.move(edgePoint.x, edgePoint.y);
+    await expect.poll(() => hoverTarget(canvas)).toBeNull();
+    await page.waitForTimeout(200);
+    expect(await hoverTarget(canvas)).toBeNull();
     await rail.getByRole('button', { name: 'Select', exact: true }).click();
     const [projectedMid] = await screenPoints(canvas, [{ x: 10, y: 0 }]);
     await page.mouse.click(projectedMid!.x, projectedMid!.y);
