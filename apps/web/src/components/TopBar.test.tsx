@@ -12,7 +12,10 @@ import { TopBar, preloadEncryptionIndicator } from './TopBar';
 import { controlOwnsEnter } from '../lib/exactEntryShortcut';
 import type { EncryptionIndicatorProps } from './EncryptionIndicator';
 import { WORKSPACE_MODE_OPTIONS } from '../lib/topBarPresentation';
-import { IDENTITY_DISCONTINUED_PROBLEM } from '../lib/e2ee/encryptionStatus';
+import {
+  AUTHORITY_WITHDRAWN_PROBLEM,
+  IDENTITY_DISCONTINUED_PROBLEM
+} from '../lib/e2ee/encryptionStatus';
 import { CAD_IMPORT_ACCEPT } from '../lib/appleTouch';
 
 function renderTopBar(
@@ -1006,6 +1009,29 @@ describe('TopBar encryption indicator', () => {
     );
     expect(screen.getByText(IDENTITY_DISCONTINUED_PROBLEM)).toBeVisible();
     expect(screen.queryByText(/click Repair needed to retry/)).toBeNull();
+  });
+
+  // Issue #1704: a record the account dropped does not come back on a
+  // retry; the problem names where the owner restores it.
+  it('sends a withdrawn verification record to its recovery, not a retry', () => {
+    renderTopBar({
+      saveState: 'repair',
+      encryption: indicator(
+        { state: 'problem', problem: AUTHORITY_WITHDRAWN_PROBLEM },
+        { needsRepair: true }
+      )
+    });
+    fireEvent.click(
+      screen.getByLabelText('End-to-end encrypted · verification failed')
+    );
+    expect(screen.getByText(AUTHORITY_WITHDRAWN_PROBLEM)).toBeVisible();
+    expect(AUTHORITY_WITHDRAWN_PROBLEM).toMatch(
+      /Settings › Encryption › Advanced encryption settings › Encrypted project recovery/
+    );
+    expect(screen.queryByText(/click Repair needed to retry/)).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Encryption settings' })
+    ).toBeVisible();
   });
 
   it('says nothing is verified before this page opens or saves a version', () => {

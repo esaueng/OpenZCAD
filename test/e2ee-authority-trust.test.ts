@@ -94,9 +94,11 @@ it('refuses withdrawal and same-sequence forks even with a valid account MAC and
   let next: E2eeProjectAuthorityRecord | null = null;
   reader.answer = async (path, _init, response) =>
     path.endsWith('/authority') ? Response.json({ authority: next }) : response;
-  await expect(loadProjectAuthority(reader.groups, projectId)).rejects.toThrow(
-    /withdrew/
-  );
+  // Still a refusal; the owner's own project names its confirmed
+  // restoration (issue #1704, `e2ee-authority-restore.test.ts`).
+  await expect(
+    loadProjectAuthority(reader.groups, projectId)
+  ).rejects.toMatchObject({ code: 'authority-withdrawn' });
   next = await reseal(record, { signerDeviceId: 'owner_desktop' });
   await expect(loadProjectAuthority(reader.groups, projectId)).rejects.toThrow(
     /rollback or fork/

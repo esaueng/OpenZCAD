@@ -115,6 +115,133 @@ describe('account-authenticated project authority storage', () => {
     ).toBe(2);
   });
 
+  // Issue #1704: the owner's confirmed restoration continues the sequence
+  // its device pinned, so it cannot pass the compare-and-swap. The Worker
+  // stores it only while the account holds no record for the project.
+  it('stores a restoration only while the record is missing, and never in place of one', async () => {
+    const { srv, laptop, projectId } = await setup();
+    const save = laptop.groups.api.saveAuthority!;
+    const third = await authority(projectId, 3);
+    // Without the flag the compare-and-swap is unchanged.
+    await expect(save(projectId, third)).rejects.toMatchObject({
+      status: 409,
+      code: 'E2EE_AUTHORITY_CONFLICT'
+    });
+    for (const restoreMissing of [false, 1, 'true'])
+      await expect(
+        save(projectId, { ...third, restoreMissing } as never)
+      ).rejects.toMatchObject({ status: 400, code: 'E2EE_AUTHORITY_INVALID' });
+    // A restoration is still a record this account's certified device signed.
+    await expect(
+      save(projectId, {
+        ...third,
+        signature: 'A'.repeat(87),
+        restoreMissing: true
+      })
+    ).rejects.toMatchObject({ status: 400, code: 'E2EE_AUTHORITY_INVALID' });
+    expect(
+      (await laptop.groups.api.authority!(projectId)).authority
+    ).toBeNull();
+
+    const restored = await save(projectId, { ...third, restoreMissing: true });
+    expect(restored.authority?.sequence).toBe(3);
+    // A lost response is retried to the same answer.
+    expect(await save(projectId, { ...third, restoreMissing: true })).toEqual(
+      restored
+    );
+    // It replaces nothing: not a newer sequence, an older one, or a fork.
+    for (const [sequence, signer] of [
+      [4, 'owner_laptop'],
+      [2, 'owner_laptop'],
+      [3, 'owner_desktop']
+    ] as const)
+      await expect(
+        save(projectId, {
+          ...(await authority(projectId, sequence, signer)),
+          restoreMissing: true
+        })
+      ).rejects.toMatchObject({ status: 409, code: 'E2EE_AUTHORITY_CONFLICT' });
+    expect((await laptop.groups.api.authority!(projectId)).authority).toEqual(
+      restored.authority
+    );
+    // The ordinary compare-and-swap continues from the restored sequence.
+    await save(projectId, await authority(projectId, 4, 'owner_desktop'));
+    expect(
+      srv.db
+        .prepare(
+          'SELECT sequence FROM e2ee_project_authority WHERE project_id = ?'
+        )
+        .all(projectId)
+    ).toEqual([{ sequence: 4 }]);
+  });
+
+  it('accepts a restoration from the project’s owner only', async () => {
+    const { srv, projectId } = await setup();
+    srv.db
+      .prepare(
+        `INSERT INTO project_members
+           (project_id, user_id, role, added_by_user_id, created_at, updated_at)
+         VALUES (?, ?, 'editor', ?, 1, 1)`
+      )
+      .run(projectId, OTHER, OWNER);
+    const member = device(srv, other, 'other_laptop');
+    const key = other.devices.get('other_laptop')!.signing.privateKey;
+    const manifest = await signMlsAuthorityManifest(key, {
+      projectId,
+      ownerUserId: OWNER,
+      ownerIdentityKeyHash: toHex(owner.list.identityKeyHash),
+      roots: [{ generation: 0, keyEpochBase: 0, groupInfo: 'AA' }],
+      checkpoint: null,
+      signerDeviceId: 'other_laptop'
+    });
+    const book = async (
+      sequence: number
+    ): Promise<E2eeSaveProjectAuthorityRequest> => {
+      const signed = await signMlsAuthorityTrust(other.accountKey, key, {
+        userId: OTHER,
+        projectId,
+        sequence,
+        accountKeyGeneration: 1,
+        accountKeySequence: 0,
+        signerDeviceId: 'other_laptop',
+        manifest: {
+          statement: toBase64Url(manifest.statement),
+          signature: toBase64Url(manifest.signature)
+        },
+        latestKeyEpoch: 0,
+        latestGroupInfo: 'AA'
+      });
+      return {
+        sequence,
+        expectedSequence: sequence - 1,
+        accountKeyGeneration: 1,
+        accountKeySequence: 0,
+        signerDeviceId: 'other_laptop',
+        record: toBase64Url(signed.record),
+        recordMac: toBase64Url(signed.recordMac),
+        signature: toBase64Url(signed.signature)
+      };
+    };
+    for (const sequence of [1, 2])
+      await expect(
+        member.groups.api.saveAuthority!(projectId, {
+          ...(await book(sequence)),
+          restoreMissing: true
+        })
+      ).rejects.toMatchObject({
+        status: 403,
+        code: 'E2EE_AUTHORITY_RESTORE_REFUSED'
+      });
+    expect(
+      (await member.groups.api.authority!(projectId)).authority
+    ).toBeNull();
+    // A member's own record still goes through the compare-and-swap.
+    expect(
+      (await member.groups.api.saveAuthority!(projectId, await book(1)))
+        .authority?.sequence
+    ).toBe(1);
+  });
+
   it('rejects forged signatures, transplanted metadata and uncertified signers', async () => {
     const { laptop, projectId } = await setup();
     const first = await authority(projectId);

@@ -8,6 +8,7 @@ import {
   type CommandDiagnostic
 } from './interaction/machine';
 import { plainRefusal, type RefusalClassification } from './refusalLanguage';
+import { blendSizesWithUnit, withoutFeatureLead } from './inPlace/sizeRefusal';
 
 /**
  * A refusal in the two pieces the card shows: the sentence a person reads,
@@ -49,7 +50,7 @@ export function warningForFeature(
     return null;
   }
   return (
-    match.replace(/^Feature "[^"]+":\s*/, '').trim() ||
+    match.slice(prefix.length).trim() ||
     'This operation does not produce valid geometry.'
   );
 }
@@ -68,6 +69,12 @@ export interface ValidatedFeatureVerdictInput {
   featureWarnings?: readonly FeatureWarning[];
   bodyPresent: boolean;
   documentMoved: boolean;
+  /**
+   * The document's length unit as shown (`displayLengthName`), written
+   * after each size a refused fillet or chamfer quotes, as the command bar,
+   * History's failing step and Resume write it. Absent, sizes stay bare.
+   */
+  unit?: string | null;
 }
 
 /**
@@ -100,6 +107,21 @@ export function refusingWarning(
     refusingWarningDetail(featureName, warnings, featureWarnings, featureId)
       ?.reason ?? null
   );
+}
+
+/**
+ * The adapter's sentence without its `Feature "<name>": ` lead, removed as
+ * the known name and nothing else. The name is the user's and may hold
+ * quotes or `": ` (`Rough": Chamfer could not be created … distance 2.`),
+ * so a lead that is not exactly the name's stays on: later formatting then
+ * sees a lead and writes no units into it (`withoutFeatureLead`).
+ */
+export function withoutFeatureName(
+  message: string,
+  featureName: string
+): string {
+  const lead = `Feature "${featureName}": `;
+  return message.startsWith(lead) ? message.slice(lead.length) : message;
 }
 
 /**
@@ -136,7 +158,7 @@ export function refusingWarningDetail(
   if (failure) {
     return {
       reason:
-        failure.message.replace(/^Feature "[^"]+":\s*/, '').trim() ||
+        withoutFeatureName(failure.message, failure.featureName).trim() ||
         'This operation does not produce valid geometry.',
       ...(failure.kernelRefusal
         ? {
@@ -168,10 +190,21 @@ export function validatedFeatureRejection(
     input.featureId
   );
   if (warning) {
-    const split = splitRefusal(
-      warning.reason,
+    // The reason is the adapter's own text only when its lead was removed
+    // as the feature's name, exactly (`withoutFeatureName`); only then do
+    // its sizes take the unit.
+    const lead = withoutFeatureLead(warning.reason);
+    const worded = splitRefusal(
+      lead.text,
       warning.kernelRefusal ?? warning.category
     );
+    const split =
+      input.unit && lead.adapterText
+        ? {
+            ...worded,
+            message: blendSizesWithUnit(worded.message, input.unit)
+          }
+        : worded;
     return {
       ...split,
       // A later feature lost a saved pick to this edit. The adapter's

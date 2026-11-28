@@ -101,3 +101,33 @@ export function flatPatternChangedWarning(
   const count = changedBy.length;
   return `${count} later ${count === 1 ? 'feature changes' : 'features change'} this body; the flat pattern shows the sheet before ${count === 1 ? 'it' : 'them'}.`;
 }
+
+/**
+ * #2122: the label for later Scale features, whose factors the pattern
+ * already includes: "Scaled ×1.25 by Scale 1; every length here is the
+ * scaled part's."
+ */
+export function flatPatternScaledNote(
+  scaledBy: SheetMetalFlatPattern['scaledBy']
+): string | null {
+  if (scaledBy.length === 0) return null;
+  const factor = scaledBy.reduce((product, entry) => product * entry.factor, 1);
+  const names = scaledBy.map((entry) => entry.name);
+  const by =
+    names.length === 1
+      ? names[0]!
+      : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]!}`;
+  return `Scaled ×${formatFlatPatternNumber(factor)} by ${by}; every length here is the scaled part’s.`;
+}
+
+const UNIT_NAMES: Record<UnitSystem, string> = {
+  mm: 'millimeters',
+  cm: 'centimeters',
+  m: 'meters',
+  inch: 'inches'
+};
+
+/** #2305: the files' scale and unit, with the unit written out. */
+export function flatPatternFilesHint(units: UnitSystem): string {
+  return `Nominal shop values (K-factor and allowances are rules of thumb, not a certification). Files are at 1:1 scale in ${UNIT_NAMES[units]}.`;
+}

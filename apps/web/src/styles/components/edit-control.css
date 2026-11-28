@@ -353,6 +353,20 @@
   max-width: none;
 }
 
+/* The sheet covers the stage's foot, where a running command's bar says why
+   its value was refused ("Draft takes more than -90 and less than 90."): on
+   a phone the field's own line showed and the bar's sentence under it did
+   not, as both do on a desktop. The bar stands on the sheet instead, by the
+   height the sheet publishes (NumericKeypad); the search bar under it,
+   which no one types in while the value is open, stays behind the sheet. */
+.viewer-area:has(.numeric-keypad[data-placement='sheet'])
+  .command-bar-lane:has(.in-place-command) {
+  bottom: max(
+    var(--island-gap),
+    calc(var(--keypad-sheet-h, 0px) - var(--command-bar-h))
+  );
+}
+
 .keypad-section-recovery {
   display: flex;
   align-items: center;

@@ -6,6 +6,7 @@ import {
   DEVIATION_SAMPLE_TRIANGLES,
   explicitAngularTolerance,
   exportLengthScale,
+  highestStepEntityId,
   measureMeshDeviation
 } from './export-units';
 
@@ -57,6 +58,25 @@ describe('declareStepLengthUnit', () => {
     );
     // The uncertainty and every other reference to #1 now mean inches.
     expect(inch).toContain('LENGTH_MEASURE(1.E-07), #1,');
+  });
+
+  // #2085: the ids were once spread into `Math.max`, and a dense B-Rep
+  // declares more entities than one call takes as arguments.
+  it('numbers the inch entities after the highest id of a 300,000-entity file', () => {
+    const points = Array.from(
+      { length: 300_000 },
+      (_, index) => `#${index + 41} = CARTESIAN_POINT('', (1., 2., 3.));`
+    );
+    const dense = STEP.replace('ENDSEC;', `${points.join('\n')}\nENDSEC;`);
+    expect(highestStepEntityId(dense)).toBe(300_040);
+    expect(highestStepEntityId('DATA;\nENDSEC;')).toBe(0);
+    const inch = declareStepLengthUnit(dense, 'inch');
+    expect(inch).toContain(
+      "#1 = ( CONVERSION_BASED_UNIT('INCH',#300041) LENGTH_UNIT() NAMED_UNIT(#300043) );"
+    );
+    expect(inch).toContain(
+      '#300042 = ( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) );'
+    );
   });
 
   it('refuses a writer whose unit it does not recognise, rather than mislabel', () => {

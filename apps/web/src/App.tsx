@@ -220,6 +220,7 @@ import {
 } from 'lucide-react';
 import {
   CommandManager,
+  assertFeatureReorderCommits,
   commandFactories,
   composeCommands,
   prepareLegacySketchConversion,
@@ -2168,6 +2169,7 @@ import {
   inPlaceBodyMode,
   inPlaceFaceMode,
   inPlaceFacePickSurfaces,
+  inPlaceFacesOverEdges,
   takesFeatureFaces,
   toggledPatternSkip,
   patternCopyChip,
@@ -21252,7 +21254,17 @@ export function App() {
       setPreviewDoc(null);
       const reason = errorMessage(error, 'Patch preview failed.');
       setStatus(reason);
-      return { ok: false, reason };
+      return {
+        ok: false,
+        reason,
+        // `PreflightWarningError` (read by shape: the preflight module loads
+        // lazily) names the feature its refusal's lead names.
+        ...(error instanceof Error &&
+        'featureName' in error &&
+        typeof error.featureName === 'string'
+          ? { featureName: error.featureName }
+          : {})
+      };
     }
   }
 
@@ -36312,9 +36324,10 @@ export function App() {
 
   /**
    * Moves a History step, keyboard and drag alike. The order gate refuses a
-   * producer moved after its consumer at once; a legal order that leaves a
-   * later feature unbuildable is refused by name after an exact rebuild of
-   * the moved span, as a feature edit is, and the order stays as it was.
+   * producer moved after its consumer, and a step moved after the consumer
+   * of the body it edits (#2334), at once; a legal order that leaves a later
+   * feature unbuildable is refused by name after an exact rebuild of the
+   * moved span, as a feature edit is, and the order stays as it was.
    */
   function handleReorderFeature(featureId: FeatureId, toIndex: number) {
     const name =
@@ -36324,7 +36337,10 @@ export function App() {
     const command = commandFactories.moveFeature({ featureId, toIndex }, label);
     const base = doc;
     const plan = planReorder(base, featureId, toIndex, {
-      orderGate: (document) => command.validate(document),
+      // The move is the whole edit, so the order it ends on is judged here
+      // too; `command.validate` alone leaves that to the commit.
+      orderGate: (document) =>
+        assertFeatureReorderCommits(document, command.payload),
       canEdit: () => ensureCanEdit(`reorder ${name ?? 'this feature'}`),
       geometryReady: (document) => geometry.isReadyFor(document)
     });
@@ -42934,6 +42950,10 @@ export function App() {
                 ? inPlaceFacePickSurfaces(inPlaceSpec, inPlace.options)
                 : null
             }
+            facePickOverEdges={
+              inPlace.active &&
+              inPlaceFacesOverEdges(inPlaceSpec, inPlace.options)
+            }
             faceSetPickBodyId={
               tool === null && interaction.mode !== 'sketch'
                 ? heldFaceSetBody(heldFaces)
@@ -44190,6 +44210,7 @@ export function App() {
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
                   refusalClassification={inPlace.refusalClassification}
+                  refusalFeatureName={inPlace.refusalFeatureName}
                   // U11: a kernel refusal says the input it is about; the
                   // last request that built stays on screen meanwhile.
                   refusalInput={inPlace.refusalInput}
@@ -45051,6 +45072,7 @@ export function App() {
               action={pendingResume.label}
               {...(pendingResume.row ? { row: pendingResume.row } : {})}
               failures={pendingResume.failures}
+              unitLabel={doc ? displayLengthName(doc.units) : null}
               onKeep={() => {
                 setPendingResume(null);
                 setStatus(

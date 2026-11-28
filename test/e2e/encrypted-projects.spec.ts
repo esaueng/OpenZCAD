@@ -56,6 +56,33 @@ const encryptionIndicator = (page: Page) =>
 const count = (server: E2eeServer, sql: string) =>
   (server.db.prepare(sql).get() as { n: number }).n;
 
+/** The plaintext project routes, answering as for an encrypting account. */
+async function gatePlaintextRoutes(page: Page, server: E2eeServer) {
+  await page.route('**/api/projects', async (route) => {
+    if (route.request().method() !== 'GET') {
+      return route.fulfill({
+        status: 409,
+        json: {
+          error: 'Plaintext projects are refused for this account.',
+          code: 'ENCRYPTED_PROJECTS_REQUIRED'
+        }
+      });
+    }
+    return route.fulfill({ json: await listing(server) });
+  });
+  // Every plaintext route of a format-2 project answers as the Worker's
+  // format gate does (slice 4-1).
+  await page.route(/\/api\/projects\/proj_[^/]+(\/.*)?$/, (route) =>
+    route.fulfill({
+      status: 409,
+      json: {
+        error: 'This project is end-to-end encrypted.',
+        code: 'PROJECT_FORMAT_UNSUPPORTED'
+      }
+    })
+  );
+}
+
 /**
  * ADR-024 Phase 4, slice 4-5: an account that encrypts new projects creates,
  * edits, autosaves, reloads and saves a named version of an end-to-end
@@ -90,29 +117,7 @@ test(
         plaintextWrites.push(`${request.method()} ${path}`);
       }
     });
-    await page.route('**/api/projects', async (route) => {
-      if (route.request().method() !== 'GET') {
-        return route.fulfill({
-          status: 409,
-          json: {
-            error: 'Plaintext projects are refused for this account.',
-            code: 'ENCRYPTED_PROJECTS_REQUIRED'
-          }
-        });
-      }
-      return route.fulfill({ json: await listing(server) });
-    });
-    // Every plaintext route of a format-2 project answers as the Worker's
-    // format gate does (slice 4-1).
-    await page.route(/\/api\/projects\/proj_[^/]+(\/.*)?$/, (route) =>
-      route.fulfill({
-        status: 409,
-        json: {
-          error: 'This project is end-to-end encrypted.',
-          code: 'PROJECT_FORMAT_UNSUPPORTED'
-        }
-      })
-    );
+    await gatePlaintextRoutes(page, server);
 
     await page.goto('/');
     await seedE2eeDevice(page, server);
@@ -280,6 +285,150 @@ test(
     expect(errors).toEqual([]);
   }
 );
+
+/**
+ * Issue #1704: the account stops returning the authority record this browser
+ * verified. The project stays refused, with the work kept on this device,
+ * until the owner restores the record from this browser's own copy in
+ * Settings; then it verifies and syncs again.
+ */
+test('refuses a withdrawn verification record until the owner restores it', async ({
+  page,
+  context
+}) => {
+  test.setTimeout(180_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await stubApi(page);
+  const server = createE2eeServer({ projectsEnabled: true });
+  await installE2eeServer(context, server);
+  await gatePlaintextRoutes(page, server);
+  await page.goto('/');
+  await seedE2eeDevice(page, server);
+  let settings = await openEncryptionSettings(page);
+  const toggle = settings.getByRole('checkbox', {
+    name: 'Encrypt new projects'
+  });
+  await expect(toggle).toBeEnabled();
+  await toggle.click();
+  await expect(toggle).toBeChecked();
+  await page.keyboard.press('Escape');
+  await expect(settings).toHaveCount(0);
+  await page.getByLabel('Project name').fill('Secret bracket');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await expect(page.locator('.workspace-reveal')).toHaveClass(/is-ready/, {
+    timeout: SYNC_BUDGET_MS
+  });
+  await createPrimitiveInPlace(page, 'box');
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await expect(encryptionIndicator(page)).toHaveAttribute(
+    'data-encryption-state',
+    'verified'
+  );
+  const authorityRows = () =>
+    count(server, 'SELECT COUNT(*) AS n FROM e2ee_project_authority');
+  const versions = () =>
+    count(server, 'SELECT COUNT(*) AS n FROM e2ee_project_versions');
+  expect(authorityRows()).toBe(1);
+
+  // The account loses the record; this browser keeps the one it verified.
+  server.db.prepare('DELETE FROM e2ee_project_authority').run();
+  const versionsBefore = versions();
+  await page.reload();
+  await expect(encryptionIndicator(page)).toHaveAttribute(
+    'data-encryption-state',
+    'problem',
+    { timeout: SYNC_BUDGET_MS }
+  );
+  // The work is still here, and nothing was sent or restored on its own.
+  await expect(
+    page.getByRole('button', { name: 'Rename project Secret bracket' })
+  ).toBeVisible();
+  await encryptionIndicator(page).locator('summary').click();
+  await expect(
+    encryptionIndicator(page).getByText(
+      /no longer returns this project’s verification record/
+    )
+  ).toBeVisible();
+  await expect(
+    encryptionIndicator(page).getByText(/click Repair needed to retry/)
+  ).toHaveCount(0);
+  expect(authorityRows()).toBe(0);
+  expect(versions()).toBe(versionsBefore);
+
+  // The problem names where the owner restores it.
+  await encryptionIndicator(page)
+    .getByRole('button', { name: 'Encryption settings' })
+    .click();
+  settings = page.getByRole('dialog', { name: 'Settings' });
+  await settings
+    .getByText('Advanced encryption settings', { exact: true })
+    .click();
+  await settings
+    .getByRole('button', { name: 'Show encrypted projects' })
+    .click();
+  // Its encrypted name no longer verifies, so the row shows the title this
+  // browser holds and the project's id: the action and the confirmation say
+  // exactly which record the owner authorizes.
+  const { id: projectId } = server.db
+    .prepare('SELECT id FROM projects WHERE storage_format = 2')
+    .get() as { id: string };
+  const named = `Secret bracket (project ID ${projectId})`;
+  await expect(
+    settings.getByText(`Project ID ${projectId}`, { exact: true })
+  ).toBeVisible();
+  await settings
+    .getByRole('button', {
+      name: `Restore the verification record of ${named}`,
+      exact: true
+    })
+    .click();
+  await expect(
+    settings.getByText(
+      `Restoring saves the verification record of ${named} to your account again`
+    )
+  ).toBeVisible();
+  const restore = settings.getByRole('button', {
+    name: 'Restore verification record'
+  });
+  // Nothing happens before the plain-words confirmation.
+  await expect(restore).toBeDisabled();
+  expect(authorityRows()).toBe(0);
+  await settings
+    .getByRole('checkbox', {
+      name: 'This is my project. Restore its verification record from this device.'
+    })
+    .check();
+  await restore.click();
+  await expect(
+    settings.getByText(
+      `The verification record of ${named} is back in your account. Open the project again to sync it.`,
+      { exact: true }
+    )
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  expect(
+    server.db.prepare('SELECT sequence FROM e2ee_project_authority').all()
+  ).toHaveLength(1);
+  await expect(
+    settings.getByRole('button', {
+      name: /^Restore the verification record of /
+    })
+  ).toHaveCount(0);
+
+  // Reopened, the project verifies against the account and syncs again.
+  await page.reload();
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await expect(encryptionIndicator(page)).toHaveAttribute(
+    'data-encryption-state',
+    'verified',
+    { timeout: SYNC_BUDGET_MS }
+  );
+  expect(errors).toEqual([]);
+});
 
 /** A plaintext project's top bar is unchanged: no encryption indicator. */
 test('shows no encryption indicator on a plaintext project', async ({

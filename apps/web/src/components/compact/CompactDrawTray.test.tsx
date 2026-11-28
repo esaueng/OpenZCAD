@@ -180,6 +180,31 @@ describe('CompactDrawTray (U12 slice 9)', () => {
     }
   });
 
+  it('opens Properties without focusing its text field', async () => {
+    // The space review: the sheet name took focus, and the keyboard left
+    // the drawing a sliver beside it.
+    render(
+      shell({
+        sheets: sheets(),
+        sheet: content({
+          properties: (
+            <label>
+              Sheet name
+              <input defaultValue="Sheet 1" />
+            </label>
+          )
+        }),
+        run: null
+      })
+    );
+    fireEvent.click(
+      within(await tray()).getByRole('button', { name: 'Properties' })
+    );
+    const field = await within(panel()).findByLabelText('Sheet name');
+    await waitFor(() => expect(detent()).toBe('half'));
+    expect(field).not.toHaveFocus();
+  });
+
   it('closes its page when a tool starts, and gives the tool its row', async () => {
     const sheet = content();
     const { rerender } = render(shell({ sheets: sheets(), sheet, run: null }));

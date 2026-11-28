@@ -19,22 +19,35 @@ import {
   type RemovalParticipant
 } from './deviceRemoval';
 import { mlsProjectSessions } from './mls/projectSessions';
+import { E2eeError } from '@openzcad/crypto';
 import {
   GROUP_RESET_CONFIRMATION,
+  ProjectGroupError,
   createProjectGroupsApi,
+  epochAuthority,
   projectGroupAccount,
   resetProjectGroup,
   type ProjectGroupContext,
   type ProjectGroupState
 } from './projectGroups';
-import { versionPins } from './versionPins';
+import {
+  AUTHORITY_RESTORE_CONFIRMATION,
+  ProjectAuthorityError,
+  projectAuthorityRecovery,
+  restoreProjectAuthority
+} from './projectAuthority';
+import { versionPins, type VersionPinStore } from './versionPins';
+import {
+  createEncryptedDocumentsApi,
+  type EncryptedDocumentsApi
+} from './encryptedDocumentsApi';
 import { contactsContext } from './contacts';
 import { contactMemberLists } from './memberLists';
 import { createE2eeShareLinksApi } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
 import { getKeySessionRevision, isCurrentKeySession } from './keySession';
 
-export { GROUP_RESET_CONFIRMATION };
+export { AUTHORITY_RESTORE_CONFIRMATION, GROUP_RESET_CONFIRMATION };
 
 function pageGroups(
   e2ee: E2eeContext,
@@ -199,19 +212,244 @@ export async function renewShareDelegationAfterRemoval(
 }
 
 export interface RecoverableProject {
+  /**
+   * Shown beside the name wherever a restoration is offered or confirmed:
+   * two projects whose encrypted names this device cannot verify share one
+   * placeholder name, and the id is what tells them apart.
+   */
   readonly projectId: string;
+  /**
+   * The project's verified name. While the account's encrypted name does
+   * not verify (as for every project whose record was withdrawn), the title
+   * this device itself holds, see {@link trustedProjectName}.
+   */
   readonly name: string;
+  /**
+   * Set when this device knows no title for a project whose encrypted name
+   * did not verify: `name` is {@link UNVERIFIED_PROJECT_NAME}, never what
+   * the account listed, and the project is told apart by its id.
+   */
+  readonly unnamed?: true;
+  /**
+   * Set when the account no longer returns the authority record this device
+   * verified for the project (issue #1704): `restorable` when this device's
+   * pins name this account, under its current identity, as the owner;
+   * `identity-discontinued` when the account's keys were set up afresh.
+   */
+  readonly authority?: 'restorable' | 'identity-discontinued';
 }
 
-/** The account's encrypted projects, with their names where they open. */
-export async function encryptedProjectsForRecovery(): Promise<
-  RecoverableProject[]
-> {
+interface DeviceTitle {
+  readonly name: string;
+  readonly updatedAt: string;
+}
+
+/** Shown, beside its project ID, for a project this device has no title for. */
+export const UNVERIFIED_PROJECT_NAME = 'Encrypted project';
+
+/**
+ * The name to show for an encrypted project whose encrypted name did not
+ * verify: the title of this device's own copy of the project, or the title
+ * this device last verified on the shelf, whichever is newer, as the start
+ * screen chooses. Null when this device knows no title. The name the
+ * account lists for such a project is unverified and is never shown: the
+ * caller shows {@link UNVERIFIED_PROJECT_NAME} and the project's id.
+ */
+export function trustedProjectName(
+  device: DeviceTitle | undefined,
+  lastVerified: DeviceTitle | undefined
+): string | null {
+  if (lastVerified && (!device || device.updatedAt <= lastVerified.updatedAt))
+    return lastVerified.name;
+  return device?.name ?? null;
+}
+
+/**
+ * The account's encrypted projects, with their names where they open. Given
+ * the account, each project this device holds a verified record of is also
+ * asked for its record, so a withdrawn one can be offered its restoration.
+ * A project that cannot be asked is listed without one.
+ */
+export async function encryptedProjectsForRecovery(
+  e2ee?: E2eeContext,
+  account?: AccountView
+): Promise<RecoverableProject[]> {
   const { api } = await import('../api');
-  const { projects } = await api.listProjects();
-  return projects
-    .filter((project) => project.storageFormat === 2)
-    .map((project) => ({ projectId: project.projectId, name: project.name }));
+  const { projects, pendingEncryptedProjectIds: unnamed } =
+    await api.listProjects();
+  const groups = e2ee && account ? pageGroups(e2ee, account) : null;
+  const encrypted = projects.filter((project) => project.storageFormat === 2);
+  // A withdrawn record leaves the project's encrypted name unverified, so
+  // every such project arrives under the same placeholder. Name those from
+  // what this device holds instead.
+  const device = new Map<string, DeviceTitle>();
+  let lastVerified: ReadonlyMap<string, DeviceTitle> = new Map();
+  if (encrypted.some((project) => unnamed?.has(project.projectId))) {
+    const [{ listLocalProjects }, { cachedShelfNames }] = await Promise.all([
+      import('../localProjectStore'),
+      import('../projectShelfNames')
+    ]);
+    for (const project of await listLocalProjects().catch(() => []))
+      device.set(project.projectId, project);
+    lastVerified = cachedShelfNames(account?.userId ?? e2ee?.userId ?? null);
+  }
+  const listed: RecoverableProject[] = [];
+  // A few at a time: only projects this device pinned cost a request.
+  for (let start = 0; start < encrypted.length; start += 6) {
+    listed.push(
+      ...(await Promise.all(
+        encrypted.slice(start, start + 6).map(async (project) => {
+          const recovery = groups
+            ? await projectAuthorityRecovery(groups, project.projectId).catch(
+                () => 'none' as const
+              )
+            : 'none';
+          const title = unnamed?.has(project.projectId)
+            ? trustedProjectName(
+                device.get(project.projectId),
+                lastVerified.get(project.projectId)
+              )
+            : project.name;
+          return {
+            projectId: project.projectId,
+            name: title ?? UNVERIFIED_PROJECT_NAME,
+            ...(title === null ? { unnamed: true as const } : {}),
+            ...(recovery === 'restorable' ||
+            recovery === 'identity-discontinued'
+              ? { authority: recovery }
+              : {})
+          };
+        })
+      ))
+    );
+  }
+  return listed;
+}
+
+/** What the check after a restoration found, and how far it reached. */
+export interface AuthorityRestoreOutcome {
+  /** Whether everything that was checked verified. */
+  readonly verified: boolean;
+  /**
+   * Whether the check ran through the account's current saved version, as
+   * opening the project does. False when that version could not be read:
+   * only the restored record's own key epoch was checked, and `verified`
+   * says nothing about a saved version made after it.
+   */
+  readonly savedVersionChecked: boolean;
+  readonly problem?: string;
+}
+
+/** This device's version pins, read but never moved. */
+const unmovedPins = (pins: Pick<VersionPinStore, 'read'>): VersionPinStore => ({
+  read: (userId, projectId) => pins.read(userId, projectId),
+  advance: async () => true,
+  advanceInfo: async () => true,
+  advanceEnvelope: async () => true
+});
+
+/**
+ * Check a restored project as opening it does, by running the open path
+ * itself: the account's saved head and the whole signed log from this
+ * device's pinned version up to it, page after page, every version's
+ * author checked against the membership of the key epoch its own signed
+ * header names, and the head decrypted. Nothing the account merely says
+ * about those versions (their key epochs, where the log ends) decides
+ * anything, so the project is reported verified only when opening it
+ * would succeed.
+ *
+ * The head may be at a later key epoch than the record this device restored
+ * (another device rotated the keys and saved after this one last verified);
+ * opening needs that epoch's history too.
+ *
+ * Verifies only. It reads this device's version pins and moves none: the
+ * page that opens the project accepts the head itself. The document it
+ * decrypts is dropped.
+ */
+export async function verifyRestoredAuthority(
+  deps: {
+    readonly groups: ProjectGroupContext;
+    readonly documents: EncryptedDocumentsApi;
+    readonly pins: Pick<VersionPinStore, 'read'>;
+  },
+  projectId: string,
+  restoredKeyEpoch: number
+): Promise<AuthorityRestoreOutcome> {
+  const { groups } = deps;
+  const problem = (error: unknown) =>
+    error instanceof Error ? error.message : String(error);
+  try {
+    await epochAuthority(groups, projectId, restoredKeyEpoch);
+  } catch (error) {
+    return {
+      verified: false,
+      savedVersionChecked: false,
+      problem: problem(error)
+    };
+  }
+  const [
+    { createEncryptedProjectStore, EncryptedProjectIntegrityError },
+    { createBlobReferenceRegistry }
+  ] = await Promise.all([
+    import('./encryptedProjectStore'),
+    import('./blobReferences')
+  ]);
+  const references = createBlobReferenceRegistry();
+  try {
+    await createEncryptedProjectStore({
+      groups,
+      api: deps.documents,
+      pins: unmovedPins(deps.pins),
+      blobReferences: references
+    }).loadProject(projectId);
+    return { verified: true, savedVersionChecked: true };
+  } catch (error) {
+    // A refusal by the checks themselves is the answer. Anything else (the
+    // account unreachable, the session ended) left the saved version
+    // unchecked, which is reported as such and never as verified.
+    return error instanceof EncryptedProjectIntegrityError ||
+      error instanceof ProjectGroupError ||
+      error instanceof ProjectAuthorityError ||
+      error instanceof E2eeError
+      ? {
+          verified: false,
+          savedVersionChecked: true,
+          problem: problem(error)
+        }
+      : { verified: true, savedVersionChecked: false };
+  } finally {
+    references.clear();
+  }
+}
+
+/**
+ * Restore one project's authority record from this device's verified copy
+ * (issue #1704) after the owner confirmed `AUTHORITY_RESTORE_CONFIRMATION`,
+ * then check the project's membership history against it, as opening the
+ * project does ({@link verifyRestoredAuthority}). A restored record whose
+ * history does not verify leaves the project refused as before.
+ */
+export async function restoreEncryptedProjectAuthority(
+  e2ee: E2eeContext,
+  account: AccountView,
+  projectId: string,
+  confirmation: string
+): Promise<AuthorityRestoreOutcome> {
+  const groups = pageGroups(e2ee, account);
+  const restored = await restoreProjectAuthority(
+    groups,
+    projectId,
+    confirmation
+  );
+  return verifyRestoredAuthority(
+    {
+      groups,
+      documents: createEncryptedDocumentsApi(desktopFetch),
+      pins: versionPins()
+    },
+    projectId,
+    restored.value.latestKeyEpoch
+  );
 }
 
 /**

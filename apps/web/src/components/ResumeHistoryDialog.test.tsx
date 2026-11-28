@@ -1,7 +1,10 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ResumeHistoryDialog } from './ResumeHistoryDialog';
-import { MIRROR_SOURCE_UNAVAILABLE } from '../lib/refusalLanguage';
+import {
+  MIRROR_SOURCE_UNAVAILABLE,
+  TARGET_BODY_UNAVAILABLE
+} from '../lib/refusalLanguage';
 
 describe('ResumeHistoryDialog', () => {
   it('names each failing feature with its reason and focuses Keep rolled back', () => {
@@ -154,6 +157,63 @@ describe('ResumeHistoryDialog', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('alertdialog')).toHaveTextContent(
       'Undo pauses it again.'
+    );
+  });
+
+  // Resume read a chamfer's sizes bare ("0.5", "0.095"), where the command
+  // bar puts the document's unit after them (preview re-check of #2278).
+  it.each([
+    ['mm', 'mm'],
+    ['an inch', 'in']
+  ])("puts %s document's unit after a refused chamfer's sizes", (_, unit) => {
+    render(
+      <ResumeHistoryDialog
+        action="Resume Chamfer 1"
+        row={{ name: 'Chamfer 1', state: 'suppressed' }}
+        failures={[
+          {
+            name: 'Chamfer 1',
+            reason:
+              'Chamfer could not be created on 1 selected edge with distance 0.5. Try a smaller distance: distance 0.095 builds here.',
+            kernelRefusal: {
+              category: 'quality_refused',
+              code: 'edge_modifier_refused'
+            }
+          }
+        ]}
+        unitLabel={unit}
+        onKeep={vi.fn()}
+        onResume={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('listitem').textContent).toBe(
+      `Chamfer 1: Chamfer could not be created on 1 selected edge with distance 0.5 ${unit}. Try a smaller distance: distance 0.095 ${unit} builds here.`
+    );
+  });
+
+  // K10: a missing target body is typed for every feature now, not only
+  // Mirror, and the dialog words it from the code.
+  it('words a missing target body from its code', () => {
+    render(
+      <ResumeHistoryDialog
+        action="Resume Shell 1"
+        row={{ name: 'Shell 1', state: 'suppressed' }}
+        failures={[
+          {
+            name: 'Shell 1',
+            reason: 'Shell target is unavailable.',
+            kernelRefusal: {
+              category: 'invalid_input',
+              code: 'target_body_unavailable'
+            }
+          }
+        ]}
+        onKeep={vi.fn()}
+        onResume={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('listitem').textContent).toBe(
+      `Shell 1: ${TARGET_BODY_UNAVAILABLE}`
     );
   });
 });

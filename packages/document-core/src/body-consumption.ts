@@ -174,6 +174,232 @@ export function featureConsumedBodyIds(feature: FeatureNode): BodyId[] {
 }
 
 /**
+ * One piece of a body's material where the later history left it (see
+ * {@link bodyPiecesAfter}).
+ */
+export interface BodyPiece {
+  /** The id the piece ended under. */
+  bodyId: BodyId;
+  /**
+   * False once a feature took the piece out of the model without putting it
+   * in its result: a subtract's tool, or an operand of a boolean that is
+   * switched off. `bodyId` is then the id it was last live under.
+   */
+  live: boolean;
+  /**
+   * The in-place transforms (a Move, a Scale) that built on this piece, in
+   * history order.
+   */
+  transforms: FeatureNode[];
+  /**
+   * The first feature that combined this piece with other material (see
+   * {@link bodyPiecesAfter}), or null while the piece's body holds only the
+   * origin's own material. From there on the ids say which body the piece is
+   * in, not where in that body, or whether any of it is left: a later Split,
+   * cut or intersect can keep only the other material under the id this
+   * piece is followed by.
+   */
+  merge: BodyPieceMerge | null;
+}
+
+/** Where a {@link BodyPiece} stopped being a body of its own material. */
+export interface BodyPieceMerge {
+  feature: FeatureNode;
+  /**
+   * How many of the piece's `transforms` came before the merge; the rest
+   * moved or scaled the merged body.
+   */
+  transformsBefore: number;
+}
+
+/** One piece while {@link bodyPiecesAfter} follows it. */
+type TrackedPiece = Pick<BodyPiece, 'transforms' | 'merge'>;
+
+/**
+ * Whether an active feature that is not a boolean joins material from
+ * outside its target body to it: a sketch profile's (an add extrude, a rib,
+ * an embossed wrap) or a copy's (a pattern of the body, or of an add extrude
+ * on it). A custom feature's script may run any step, so it counts.
+ */
+function addsOtherMaterial(
+  data: FeatureData,
+  features: readonly FeatureNode[]
+): boolean {
+  switch (data.featureKind) {
+    case 'extrude':
+      return data.operation === 'add' && data.targetBodyId !== undefined;
+    case 'rib':
+    case 'custom-feature':
+      return true;
+    case 'wrap':
+      return data.mode === 'emboss';
+    case 'pattern': {
+      const sources = data.sourceFeatureIds ?? [];
+      if (sources.length === 0) return true;
+      return sources.some((featureId) => {
+        const source = features.find((entry) => entry.featureId === featureId);
+        // A source the history no longer has is not known to only cut.
+        return (
+          !source ||
+          (source.data.featureKind === 'extrude' &&
+            source.data.operation === 'add')
+        );
+      });
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * What only a build knows about a later feature, for {@link bodyPiecesAfter}.
+ */
+export interface BodyPieceOutcomes {
+  /**
+   * The build ran this feature and it failed. A failed feature hands its
+   * input through exactly as a manually suppressed one does (ADR-017,
+   * November 2026) and changes nothing else.
+   */
+  failed(feature: FeatureNode): boolean;
+  /**
+   * A boolean switched off (`activeWhen` resolves to zero): its result is
+   * its first operand unchanged, and its other consumed operands are gone.
+   */
+  inactive(feature: FeatureNode): boolean;
+}
+
+/**
+ * Where the body `origin` made is by the end of the history: every piece of
+ * its material, under the id it now has, with the in-place transforms
+ * applied to it on the way. Follows the ids as the build assigns them, from
+ * the same per-kind table ({@link replacedInputBodyId},
+ * {@link featureConsumedBodyIds}) the build's pass-through and the fork check
+ * read:
+ *
+ * - A feature that replaces the body (a hole, a cut, a boolean's first
+ *   operand) carries the piece to its result id. Manually suppressed or
+ *   failed, it still does: the build passes the input through under that id.
+ *   A rollback-paused feature does nothing.
+ * - A feature that keeps the body (a boolean's kept operand, a Split with
+ *   "Keep original", a mirror, a copy) leaves the piece under its own id. The
+ *   result holds a copy of the material, which is not followed, as a mirrored
+ *   or transformed copy is not.
+ * - A Split that consumes the body yields two pieces, one per half.
+ * - A union or an intersect carries every operand it consumes into its
+ *   result, so one body can hold several pieces. A subtract's consumed tool
+ *   ends: its material is no longer in the model.
+ * - An in-place transform is recorded on each piece under its target; a
+ *   direct edit changes the body under the same id and is not recorded.
+ * - A feature that combines the body with other material marks every piece
+ *   it carries ({@link BodyPiece.merge}): a boolean with a body that is not
+ *   wholly this origin's own (a union of the two halves a Split made of it is
+ *   not one), an add extrude, a rib, an embossed wrap, a pattern that repeats
+ *   the body or an add extrude, and a custom feature, whose script may do any
+ *   of these. Suppressed, failed or switched off, it combines nothing.
+ *   Features that reshape the body's own faces (a hole, a cut, a fillet, a
+ *   shell) do not mark it.
+ *
+ * A step that builds on a body an earlier one already replaced (a history
+ * fork) works on a stale copy and is not followed either.
+ */
+export function bodyPiecesAfter(
+  document: ProjectDocument,
+  origin: FeatureNode,
+  outcomes: BodyPieceOutcomes
+): BodyPiece[] {
+  if (!origin.bodyId) return [];
+  const features = listFeaturesInOrder(document);
+  const live = new Map<BodyId, TrackedPiece[]>([
+    [origin.bodyId, [{ transforms: [], merge: null }]]
+  ]);
+  const ended: BodyPiece[] = [];
+  const take = (bodyId: BodyId): TrackedPiece[] | undefined => {
+    const pieces = live.get(bodyId);
+    live.delete(bodyId);
+    return pieces;
+  };
+  const give = (bodyId: BodyId, pieces: TrackedPiece[]) =>
+    live.set(bodyId, [...(live.get(bodyId) ?? []), ...pieces]);
+  /** The body holds this origin's material and nothing else. */
+  const ownMaterialOnly = (bodyId: BodyId) =>
+    live.get(bodyId)?.every((piece) => piece.merge === null) ?? false;
+  let reached = false;
+  for (const feature of features) {
+    if (feature.featureId === origin.featureId) {
+      reached = true;
+      continue;
+    }
+    if (!reached || isFeatureRollbackSuppressed(feature)) continue;
+    const data = feature.data;
+    const replaced = featureReplacedInputBody(feature);
+    if (isFeatureManuallySuppressed(feature) || outcomes.failed(feature)) {
+      // Pass-through: the input stands, unchanged, under the result id.
+      const pieces = replaced === null ? undefined : take(replaced);
+      if (pieces && feature.bodyId) give(feature.bodyId, pieces);
+      continue;
+    }
+    if (isInPlaceTransform(data)) {
+      for (const piece of live.get(data.targetBodyId) ?? []) {
+        piece.transforms.push(feature);
+      }
+      continue;
+    }
+    const inactive =
+      data.featureKind === 'boolean' && outcomes.inactive(feature);
+    // Read before the operands are taken: a boolean merges when any of its
+    // operands, kept or consumed, is not wholly this origin's material.
+    const merges =
+      data.featureKind === 'boolean'
+        ? !inactive &&
+          data.targetBodyIds.some((bodyId) => !ownMaterialOnly(bodyId))
+        : addsOtherMaterial(data, features);
+    for (const bodyId of featureConsumedBodyIds(feature)) {
+      const pieces = take(bodyId);
+      if (!pieces) continue;
+      if (bodyId === replaced && feature.bodyId) {
+        give(feature.bodyId, pieces);
+      } else if (data.featureKind === 'split' && feature.bodyId) {
+        give(feature.bodyId, pieces);
+        give(
+          data.secondBodyId,
+          pieces.map((piece) => ({
+            ...piece,
+            transforms: [...piece.transforms]
+          }))
+        );
+      } else if (
+        data.featureKind === 'boolean' &&
+        data.operation !== 'subtract' &&
+        feature.bodyId &&
+        !inactive
+      ) {
+        give(feature.bodyId, pieces);
+      } else {
+        ended.push(
+          ...pieces.map((piece) => ({ ...piece, bodyId, live: false }))
+        );
+      }
+    }
+    // The pieces now under the result id (its own, for a feature that edits
+    // in place) are the ones the feature combined with the other material.
+    if (merges && feature.bodyId) {
+      for (const piece of live.get(feature.bodyId) ?? []) {
+        piece.merge ??= {
+          feature,
+          transformsBefore: piece.transforms.length
+        };
+      }
+    }
+  }
+  return [
+    ...ended,
+    ...[...live].flatMap(([bodyId, pieces]) =>
+      pieces.map((piece) => ({ ...piece, bodyId, live: true }))
+    )
+  ];
+}
+
+/**
  * One branch in the feature history: `featureId` builds on, or edits in
  * place, `bodyId` after the earlier feature `consumerFeatureId` already
  * replaced it. Both run, so both results are on screen: the history has
@@ -199,7 +425,9 @@ export interface HistoryFork {
  * reported against it. A manually suppressed feature consumes only what its
  * pass-through consumes (the build then shows its input under its result id,
  * so a later feature on that input still forks), and is never reported
- * itself: it builds nothing of its own. A rollback-paused feature neither
+ * itself: it builds nothing of its own. Once an earlier feature consumed
+ * that input the build has nothing to pass through, so the suppressed step
+ * consumes nothing either. A rollback-paused feature neither
  * consumes nor is reported. A failed feature consumes exactly as a built
  * one: it passes its input through under its result id (ADR-017).
  *
@@ -210,7 +438,21 @@ export interface HistoryFork {
  * consumed body has no result of its own to rejoin, so it always is.
  */
 export function historyForks(document: ProjectDocument): HistoryFork[] {
-  const consumedBy = new Map<BodyId, FeatureNode>();
+  return forksAgainst(document, 'first');
+}
+
+/**
+ * {@link historyForks}, against the `first` consumer of each body, which is
+ * what a document reports, or against `every` earlier consumer, which is what
+ * an edit is judged by (see {@link introducedHistoryForks}): a body two
+ * features already consumed has a later state for each, and a step that
+ * reaches the second one's far side builds on a state that one replaced too.
+ */
+function forksAgainst(
+  document: ProjectDocument,
+  consumers: 'first' | 'every'
+): HistoryFork[] {
+  const consumedBy = new Map<BodyId, FeatureNode[]>();
   const children = new Map<BodyId, BodyId[]>();
   const candidates: {
     fork: HistoryFork;
@@ -220,15 +462,22 @@ export function historyForks(document: ProjectDocument): HistoryFork[] {
     const reported = !isFeatureManuallySuppressed(feature);
     const results = resultBodies(feature);
     for (const { bodyId, use } of bodyUses(feature)) {
+      const earlier = consumedBy.get(bodyId) ?? [];
+      // A suppressed step hands its input through only while that body is
+      // still live. After an earlier consumer the build passes nothing
+      // (kernel-adapter `passBodyThrough` fails closed), so the step takes
+      // nothing and leads nowhere, wherever it stands after that consumer.
+      if (!reported && earlier.length > 0) continue;
       if (use === 'consume') {
         children.set(bodyId, [
           ...(children.get(bodyId) ?? []),
           ...results.filter((result) => result !== bodyId)
         ]);
       }
-      const consumer = consumedBy.get(bodyId);
-      if (consumer !== undefined) {
-        if (reported)
+      if (reported) {
+        for (const consumer of consumers === 'first'
+          ? earlier.slice(0, 1)
+          : earlier)
           candidates.push({
             fork: {
               featureId: feature.featureId,
@@ -239,9 +488,8 @@ export function historyForks(document: ProjectDocument): HistoryFork[] {
               ? { branches: [resultBodies(consumer), results] }
               : {})
           });
-      } else if (use === 'consume') {
-        consumedBy.set(bodyId, feature);
       }
+      if (use === 'consume') consumedBy.set(bodyId, [...earlier, feature]);
     }
   }
   const descendants = (roots: readonly BodyId[]): Set<BodyId> => {
@@ -304,57 +552,145 @@ export function historyForkMessage(
   return `Builds on an earlier state of “${bodyLabel(document, fork.bodyId)}” that “${featureName(document, fork.consumerFeatureId)}” already replaced; this branches the history.`;
 }
 
+/** A fork an edit introduces, and how: see {@link introducedHistoryForks}. */
+interface IntroducedHistoryFork {
+  fork: HistoryFork;
+  /**
+   * `target`: the later feature is new or uses different bodies. `order`:
+   * it uses the bodies it always did, and the step order put a consumer of
+   * one ahead of it.
+   */
+  cause: 'target' | 'order';
+}
+
 /**
- * Forks an edit would introduce on a feature it adds or retargets: each fork
- * of `next` whose later feature is new, or uses different bodies than in
- * `previous`, and that `previous` did not already have.
+ * The forks of `next` that `previous` did not have and the edit between
+ * them caused, each with its cause.
  *
- * Every other fork is left alone. A stored history that already forked keeps
- * loading, replaying and accepting unrelated edits; resuming or unsuppressing
- * a step neither adds nor retargets one, so it is never refused here; and a
- * feature added while History is rolled back is judged where it lands, at the
- * marker, ahead of the paused consumer.
+ * - `target`: the later feature is new, or uses different bodies than in
+ *   `previous`.
+ * - `order`: the later feature uses the bodies it did, but in `previous` it
+ *   ran ahead of the consumer (or the consumer was not there yet), and now
+ *   runs after it. A placement moved below the boolean that consumes the
+ *   placed body is the reported case (#2334): the boolean then cut at the
+ *   unplaced position while the order committed. Moving the consumer above
+ *   the placement reaches the same arrangement and is judged the same.
+ *
+ * A fork is one step and one consumer, and is compared as that pair, against
+ * EVERY earlier consumer of the body, not only the first one a document
+ * reports. A stored history that already forked keeps loading, replaying and
+ * accepting unrelated edits, and the pairs it already holds may be moved
+ * around: a step stays after a consumer it already ran after, two consumers
+ * of one body may swap places (each still takes the body as it finds it, and
+ * only which one is reported changes), and the move that takes a step back
+ * ahead of its consumer is accepted. But a stored fork exempts nothing else.
+ * With two stocks cut by one cutter and the cutter's placement between the
+ * cuts, the placement already forks against the first cut; moving the second
+ * cut above the first, or the placement below the second, still puts the
+ * placement after a consumer it ran ahead of, and that cut would move to the
+ * unplaced position. Both are refused.
+ *
+ * A suppressed step that has nothing left to pass through (see
+ * {@link historyForks}) is no consumer at all: it may move anywhere after
+ * the body's first consumer, and steps may move past it, with the same
+ * build either way. Above that consumer its pass-through takes the body, so
+ * that move is judged like any other consumer's.
+ *
+ * Resuming or unsuppressing a step neither retargets nor reorders one, so it
+ * is never refused here: a fork the resume uncovers is reported by
+ * {@link historyForks}, and from then on the step is a consumer other steps
+ * are judged against. A feature added while History is rolled back is
+ * judged where it lands, at the marker, ahead of the paused consumer.
+ */
+function introducedHistoryForks(
+  previous: ProjectDocument,
+  next: ProjectDocument
+): IntroducedHistoryFork[] {
+  const position = new Map<FeatureId, number>();
+  const uses = new Map<FeatureId, string>();
+  listFeaturesInOrder(previous).forEach((feature, index) => {
+    position.set(feature.featureId, index);
+    uses.set(feature.featureId, JSON.stringify(activeBodyUses(feature)));
+  });
+  const current = listFeaturesInOrder(next);
+  const changed = new Set(
+    current
+      .filter(
+        (feature) =>
+          uses.get(feature.featureId) !==
+          JSON.stringify(activeBodyUses(feature))
+      )
+      .map((feature) => feature.featureId)
+  );
+  // The features both documents have, in `next`'s order: out of step with
+  // `previous` only when the edit reordered them.
+  const kept = current
+    .map((feature) => position.get(feature.featureId))
+    .filter((index): index is number => index !== undefined);
+  const reordered = kept.some((index, at) => at > 0 && kept[at - 1]! > index);
+  if (changed.size === 0 && !reordered) return [];
+  const key = (later: FeatureId, bodyId: BodyId, consumer: FeatureId) =>
+    `${later} ${bodyId} ${consumer}`;
+  const before = forksAgainst(previous, 'every');
+  const existing = new Set(
+    before.map((fork) =>
+      key(fork.featureId, fork.bodyId, fork.consumerFeatureId)
+    )
+  );
+  // The same two steps the other way round: two consumers swapping places.
+  const swapped = new Set(
+    before.map((fork) =>
+      key(fork.consumerFeatureId, fork.bodyId, fork.featureId)
+    )
+  );
+  return forksAgainst(next, 'every').flatMap(
+    (fork): IntroducedHistoryFork[] => {
+      const pair = key(fork.featureId, fork.bodyId, fork.consumerFeatureId);
+      if (existing.has(pair)) return [];
+      if (changed.has(fork.featureId)) return [{ fork, cause: 'target' }];
+      if (swapped.has(pair)) return [];
+      // Unchanged uses mean the feature was in `previous`.
+      const was = position.get(fork.featureId)!;
+      const consumerWas = position.get(fork.consumerFeatureId);
+      return consumerWas === undefined || consumerWas > was
+        ? [{ fork, cause: 'order' }]
+        : [];
+    }
+  );
+}
+
+/**
+ * Forks an edit would introduce: on a feature it adds or retargets, or by
+ * ordering a consumer of a body ahead of a step that still uses that body
+ * (see {@link introducedHistoryForks}). Each names the consumer the step
+ * would newly run after, which in a history that already forks need not be
+ * the body's first consumer, the one {@link historyForks} reports.
  */
 export function newHistoryForks(
   previous: ProjectDocument,
   next: ProjectDocument
 ): HistoryFork[] {
-  const before = new Map(
-    listFeaturesInOrder(previous).map((feature) => [
-      feature.featureId,
-      JSON.stringify(activeBodyUses(feature))
-    ])
-  );
-  const changed = new Set(
-    listFeaturesInOrder(next)
-      .filter(
-        (feature) =>
-          before.get(feature.featureId) !==
-          JSON.stringify(activeBodyUses(feature))
-      )
-      .map((feature) => feature.featureId)
-  );
-  if (changed.size === 0) return [];
-  const key = (fork: HistoryFork) =>
-    `${fork.featureId} ${fork.bodyId} ${fork.consumerFeatureId}`;
-  const existing = new Set(historyForks(previous).map(key));
-  return historyForks(next).filter(
-    (fork) => changed.has(fork.featureId) && !existing.has(key(fork))
-  );
+  return introducedHistoryForks(previous, next).map((entry) => entry.fork);
 }
 
 /**
  * Refuses an edit that adds a fork (see {@link newHistoryForks}), naming the
- * feature, the body and the step that already replaced it.
+ * feature, the body and the step that already replaced it. A fork the step
+ * order introduces is refused as a reorder, with the order that avoids it.
  */
 export function assertNoNewHistoryFork(
   previous: ProjectDocument,
   next: ProjectDocument
 ): void {
-  const fork = newHistoryForks(previous, next)[0];
-  if (!fork) return;
+  const introduced = introducedHistoryForks(previous, next)[0];
+  if (!introduced) return;
+  const { fork, cause } = introduced;
+  const feature = featureName(next, fork.featureId);
+  const body = bodyLabel(next, fork.bodyId);
   const consumer = featureName(next, fork.consumerFeatureId);
   throw new Error(
-    `“${featureName(next, fork.featureId)}” would build on an earlier state of “${bodyLabel(next, fork.bodyId)}” that “${consumer}” already replaced, which branches the history. Use the body as it is now, or roll History back to before “${consumer}” to add the step there.`
+    cause === 'order'
+      ? `Cannot reorder: “${feature}” would run after “${consumer}” already replaced “${body}”, which branches the history. Keep “${feature}” before “${consumer}”.`
+      : `“${feature}” would build on an earlier state of “${body}” that “${consumer}” already replaced, which branches the history. Use the body as it is now, or roll History back to before “${consumer}” to add the step there.`
   );
 }

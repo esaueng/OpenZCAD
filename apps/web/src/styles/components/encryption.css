@@ -51,6 +51,20 @@
   justify-content: flex-start;
 }
 
+/* Which project a recovery row means, on its own line above the hint. */
+.encryption-project-id {
+  display: block;
+}
+
+.encryption-project-id code,
+.encryption-restore-id {
+  /* One click selects the whole ID, to compare with Project properties. */
+  user-select: all;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
 /* A QR code must stay dark on light in either theme to scan. */
 .encryption-qr {
   width: 168px;

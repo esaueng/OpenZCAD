@@ -381,8 +381,9 @@ describe('validated feature commit', () => {
     expect(commit).not.toHaveBeenCalled();
     expect(manager.document).toEqual(before);
     expect(manager.canUndo).toBe(false);
+    // In the document's unit, as the bar and History word it.
     expect(onStatus).toHaveBeenLastCalledWith(
-      'Fillet could not be created on 2 selected edges with radius 1.'
+      'Fillet could not be created on 2 selected edges with radius 1 mm.'
     );
   });
 });

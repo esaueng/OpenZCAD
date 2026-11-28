@@ -1536,7 +1536,10 @@
    is, in the chrome's theme: it stayed dark in the light theme (I18). */
 .topology-pick-list {
   position: absolute;
-  z-index: calc(var(--z-viewer-overlay) + 4);
+  /* A menu, opened from the context menu: over the stage's panels and a
+     running command's bar too. Under them, a phone's Objects panel and the
+     bar at the stage's foot covered its rows. */
+  z-index: var(--z-context-menu);
   width: min(320px, calc(100% - 16px));
   max-height: min(340px, calc(100% - 16px));
   padding: 4px;

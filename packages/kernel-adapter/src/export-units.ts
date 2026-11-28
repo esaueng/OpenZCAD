@@ -63,6 +63,21 @@ const STEP_MILLIMETRE_UNIT =
   /^(#\d+)\s*=\s*\(\s*LENGTH_UNIT\(\s*\)\s*NAMED_UNIT\(\s*\*\s*\)\s*SI_UNIT\(\s*\.MILLI\.\s*,\s*\.METRE\.\s*\)\s*\)\s*;[^\S\r\n]*$/gm;
 
 /**
+ * The highest entity id `step` declares, or 0 when it declares none. A loop
+ * rather than `Math.max(...ids)`: a dense B-Rep writes more entities than an
+ * argument list can carry, and spreading them overflowed the call stack
+ * (#2085: a 10,000-facet mesh solid is about 200,000 entities).
+ */
+export function highestStepEntityId(step: string): number {
+  let highest = 0;
+  for (const match of step.matchAll(/^#(\d+)\s*=/gm)) {
+    const id = Number(match[1]);
+    if (id > highest) highest = id;
+  }
+  return highest;
+}
+
+/**
  * Rewrites the STEP writer's millimetre length unit to `units`. The caller
  * has already scaled the geometry; this makes the header agree. Inches are a
  * `CONVERSION_BASED_UNIT` of 25.4 mm, the form every AP203/AP214 reader
@@ -85,9 +100,7 @@ export function declareStepLengthUnit(step: string, units: UnitSystem): string {
       `${id} = ( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(${prefix},.METRE.) );`
     );
   }
-  const next =
-    Math.max(...[...step.matchAll(/^#(\d+)\s*=/gm)].map((m) => Number(m[1]))) +
-    1;
+  const next = highestStepEntityId(step) + 1;
   const measure = `#${next}`;
   const millimetre = `#${next + 1}`;
   const exponents = `#${next + 2}`;

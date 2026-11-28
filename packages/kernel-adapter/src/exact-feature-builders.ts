@@ -174,7 +174,11 @@ import {
   amendFeatureWarning,
   raiseFeatureWarning
 } from './exact-feature-warnings';
-import { AdapterRefusal, adapterRefusalRecord } from './adapter-refusal';
+import {
+  AdapterRefusal,
+  adapterRefusalRecord,
+  targetBodyUnavailable
+} from './adapter-refusal';
 import type { BlendRefusal } from './exact-blend-refusal';
 import {
   resolveEdgeModifierEdges,
@@ -481,7 +485,7 @@ function buildDirectEditFeature(
   const { kernel, document, scope, result } = ctx;
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
-    throw new Error('Direct-edit target is unavailable.');
+    throw targetBodyUnavailable('Direct-edit target is unavailable.');
   }
   const deferOutputLineage =
     ctx.deferredDirectEditFeatureId === feature.featureId &&
@@ -771,7 +775,9 @@ function throughAllSweepFeature(
   }
   const target = result.shapes.get(targetBodyId);
   if (!target) {
-    throw new Error(`Through-all target ${targetName} is unavailable.`);
+    throw targetBodyUnavailable(
+      `Through-all target ${targetName} is unavailable.`
+    );
   }
   const basis = result.sketchBases.get(data.sketchId);
   if (!basis) {
@@ -846,7 +852,9 @@ function toNextFeature(
   }
   const target = result.shapes.get(targetBodyId);
   if (!target) {
-    throw new Error(`Up-to-next target ${targetName} is unavailable.`);
+    throw targetBodyUnavailable(
+      `Up-to-next target ${targetName} is unavailable.`
+    );
   }
   const basis = result.sketchBases.get(data.sketchId);
   if (!basis) {
@@ -1159,7 +1167,7 @@ function buildExtrudeFeature(
     }
     const target = result.shapes.get(targetBodyId);
     if (!target) {
-      throw new Error(
+      throw targetBodyUnavailable(
         `Stored ${operation} target ${bodyName(document, targetBodyId)} is unavailable.`
       );
     }
@@ -1525,7 +1533,7 @@ function resolveTransformFeature(
   const { document, scope, result } = ctx;
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
-    throw new Error('Transform target is unavailable.');
+    throw targetBodyUnavailable('Transform target is unavailable.');
   }
   const translation = data.transform.translation;
   const rotation = data.transform.rotationDeg;
@@ -2368,7 +2376,7 @@ export function holeToolSpecFor(
   const { kernel, scope, result } = ctx;
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
-    throw new Error('Hole target is unavailable.');
+    throw targetBodyUnavailable('Hole target is unavailable.');
   }
   // Face resolution works on a single solid; fuse a multi-solid
   // body first, exactly as an edge modifier would.
@@ -2585,7 +2593,7 @@ function buildSplitFeature(
   validateKeepOriginals(data);
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
-    throw new Error('Split target is unavailable.');
+    throw targetBodyUnavailable('Split target is unavailable.');
   }
   const { planePoint, planeNormal } = resolveOperationPlane(
     ctx,
@@ -2671,7 +2679,7 @@ function buildShellFeature(
   }
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
-    throw new Error('Shell target is unavailable.');
+    throw targetBodyUnavailable('Shell target is unavailable.');
   }
   const openingFaces = resolveFeatureFaces(
     kernel,
@@ -2727,8 +2735,12 @@ function buildRibFeature(
   result.builtRibs?.delete(feature.featureId);
   if (!feature.bodyId) throw new Error('Rib has no result body.');
   const target = result.shapes.get(data.targetBodyId);
-  if (!target || target.solids.length !== 1) {
-    throw new Error('Rib target body is unavailable.');
+  if (!target) {
+    throw targetBodyUnavailable('Rib target body is unavailable.');
+  }
+  if (target.solids.length !== 1) {
+    // The body is built, but as several solids: not an absent target.
+    throw new Error('Rib needs a target body made of one solid.');
   }
   const basis = result.sketchBases.get(data.profile.sketchId);
   if (!basis) {
@@ -2787,8 +2799,12 @@ function buildWrapFeature(
   result.wrapFrames?.delete(feature.featureId);
   if (!feature.bodyId) throw new Error('Wrap has no result body.');
   const target = result.shapes.get(data.targetBodyId);
-  if (!target || target.solids.length !== 1) {
-    throw new Error('Wrap target body is unavailable.');
+  if (!target) {
+    throw targetBodyUnavailable('Wrap target body is unavailable.');
+  }
+  if (target.solids.length !== 1) {
+    // The body is built, but as several solids: not an absent target.
+    throw new Error('Wrap needs a target body made of one solid.');
   }
   const basis = result.sketchBases.get(data.sketchId);
   if (!basis) {
@@ -2867,7 +2883,7 @@ function buildSolidOffsetFeature(
   }
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
-    throw new Error('Solid-offset target is unavailable.');
+    throw targetBodyUnavailable('Solid-offset target is unavailable.');
   }
   const distance = resolveParamValue(
     data.distance,
@@ -2901,7 +2917,7 @@ function buildDraftFeature(
   }
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
-    throw new Error('Draft target is unavailable.');
+    throw targetBodyUnavailable('Draft target is unavailable.');
   }
   const faces = resolveFeatureFaces(
     kernel,
@@ -2968,7 +2984,7 @@ function buildThickenFeature(
   }
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
-    throw new Error('Thicken source body is unavailable.');
+    throw targetBodyUnavailable('Thicken source body is unavailable.');
   }
   const [face] = resolveFeatureFaces(
     kernel,
@@ -3017,7 +3033,7 @@ function buildBooleanFeature(
   const operands = data.targetBodyIds.map((bodyId) => {
     const shape = result.shapes.get(bodyId);
     if (!shape) {
-      throw new Error(
+      throw targetBodyUnavailable(
         `Boolean target ${bodyName(document, bodyId)} is unavailable.`
       );
     }
@@ -3716,7 +3732,7 @@ function buildEdgeModifierFeature(
   }
   const storedTarget = result.shapes.get(data.targetBodyId);
   if (!storedTarget) {
-    throw new Error('Edge modifier target is unavailable.');
+    throw targetBodyUnavailable('Edge modifier target is unavailable.');
   }
   const target = collapseShape(kernel, storedTarget);
   const {
@@ -4692,7 +4708,7 @@ function buildPatternFeature(
   }
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
-    throw new Error('Pattern target is unavailable.');
+    throw targetBodyUnavailable('Pattern target is unavailable.');
   }
   // Entry refuses a fractional count, but an expression can still evaluate
   // to one later (`n / 2` after `n` changes). The build keeps rounding, as

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import {
+  displayLengthName,
   isFeatureManuallySuppressed,
   isFeatureRollbackSuppressed,
   isFeatureSuppressed,
@@ -15,7 +16,7 @@ import {
   refusingWarningDetail,
   type FeatureBuildError
 } from '../lib/featureValidation';
-import { plainRefusal } from '../lib/refusalLanguage';
+import { plainRefusalSentence } from '../lib/refusalLanguage';
 
 interface Props {
   document: ProjectDocument;
@@ -80,9 +81,13 @@ export function FeatureHistoryPanel({
           selected.featureId
         )
       : null;
+  // With the document's unit after a blend's sizes, as the bar shows them.
   const warning = refusing
-    ? plainRefusal(refusing.reason, refusing.kernelRefusal ?? refusing.category)
-        .message
+    ? plainRefusalSentence(
+        refusing.reason,
+        refusing.kernelRefusal ?? refusing.category,
+        displayLengthName(document.units)
+      )
     : null;
   const link = (feature: FeatureNode) => (
     <li key={feature.featureId}>

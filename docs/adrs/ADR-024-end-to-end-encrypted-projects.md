@@ -1292,6 +1292,22 @@ Decided 2026-10-19, on the evidence of the library spike
   A live writer with independent roots can also replace a retired writer's
   record using its authenticated MLS state.
 
+  A withdrawn record stays refused: a device that pinned a record and is
+  given none never treats the project as unanchored. The project's owner can
+  put the record back from a certified device's own pin, after a plain-words
+  confirmation (issue #1704). The restored record restates the pinned roots,
+  key epoch and GroupInfo one sequence later, sealed under the current
+  account key. It is written only when the pin names this account under its
+  current identity as owner and the pinned record still opens under the
+  account's keys. The server stores it only while the account holds no
+  record for the project; a record that exists is advanced only by the
+  compare-and-swap. Other devices accept it as any newer record, against
+  their own pins. No pin is dropped, and an identity that was set up afresh
+  (rather than rotated) cannot restore: its keys prove nothing about the
+  pinned owner. The device reads the record back and pins it only when it is
+  the record it wrote or a verified successor; a read-back it refuses leaves
+  every pin as it was.
+
   Encrypted archives use provisional admission: a Welcome join can export
   only the key needed to decrypt its archive until verification completes.
   An external rejoin without the old archive submits a provisional Commit;

@@ -1,0 +1,14 @@
+{
+  "revolve-sweep": { "kind": "cut" },
+  "revolve-trimmed-nurbs": {
+    "kind": "refused",
+    "family": "boolean",
+    "code": "exact_only_unattainable"
+  },
+  "sweep-sweep": { "kind": "cut" },
+  "sweep-loft": {
+    "kind": "refused",
+    "family": "boolean",
+    "code": "exact_only_unattainable"
+  }
+}

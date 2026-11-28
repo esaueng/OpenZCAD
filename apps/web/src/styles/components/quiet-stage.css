@@ -3769,6 +3769,20 @@ button.command-rail.is-suggested {
     );
   }
 
+  /* A running command's bar stands at the stage's foot, some 160px tall on
+     a phone (its name, Options, Cancel and Done, its step): the panel ended
+     40px over the search bar, under the bar, which took the taps meant for
+     the Objects rows Edit Subtract brings back to pick. The panel ends
+     above the bar, by the height the bar publishes (WorkspaceReadout). */
+  .viewer-area:has(.in-place-command) .stage-right:has(> .panel-lane-float) {
+    --panel-lane-bottom: max(
+      calc(
+        var(--lane-base) + var(--in-place-command-h, 38px) + var(--island-gap)
+      ),
+      calc(var(--stage-foot-claim) + var(--island-gap))
+    );
+  }
+
   /* A command card in that lane may take the stage up to the top islands,
      not the panel's 40dvh, and shrinks into it, its list scrolling. Held
      at its full height inside the shorter lane, Build's measurement
@@ -3837,6 +3851,7 @@ button.command-rail.is-suggested {
      test/stage-metric-isolation.test.ts keeps this list complete. */
   --activity-pill-live-h: initial;
   --in-place-command-h: initial;
+  --keypad-sheet-h: initial;
   --lane-base: initial;
   --lane-status: initial;
   --motion-timeline-claim: initial;

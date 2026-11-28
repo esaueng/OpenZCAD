@@ -97,6 +97,27 @@ export function whenSheetSettles(
 const FOCUSABLE =
   'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+/** A field the on-screen keyboard rises for. */
+function isTextEntry(element: HTMLElement): boolean {
+  if (element instanceof HTMLTextAreaElement || element.isContentEditable) {
+    return true;
+  }
+  return (
+    element instanceof HTMLInputElement &&
+    ![
+      'button',
+      'checkbox',
+      'radio',
+      'range',
+      'color',
+      'file',
+      'submit',
+      'reset',
+      'image'
+    ].includes(element.type)
+  );
+}
+
 /**
  * The open page's content, drawn into the sheet's page (a portal), so it
  * keeps the tray's state and the workspace's handlers. Focus follows the
@@ -128,8 +149,12 @@ export function TrayPage({
       Boolean(active.closest('.compact-sheet-head')) ||
       !active.isConnected;
     if (sheet && onSheetChrome) {
-      host
-        .querySelector<HTMLElement>(FOCUSABLE)
+      // Its first control, though never a text field, as the sheet's own
+      // pages: Draw's Properties focused the sheet name, and the keyboard
+      // left the drawing a sliver beside it (the space review). A page of
+      // fields alone leaves focus on the sheet's grabber.
+      [...host.querySelectorAll<HTMLElement>(FOCUSABLE)]
+        .find((element) => !isTextEntry(element))
         ?.focus({ preventScroll: true });
     }
   }, [host]);

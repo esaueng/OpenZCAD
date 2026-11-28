@@ -20,8 +20,9 @@ import type { InPlacePanelSectionView } from '../lib/inPlace/panel';
 import { booleanOperandRole, type BodyPick } from '../lib/inPlace/tools';
 import { spokenValueName } from '../lib/inPlace/chipNames';
 import {
-  blendRefusalText,
+  blendSizesWithUnit,
   smallerSizeIn,
+  withoutFeatureLead,
   type SmallerSize
 } from '../lib/inPlace/sizeRefusal';
 import { previewExpression } from '../lib/model';
@@ -133,6 +134,13 @@ export interface InPlaceCommandBarProps {
   /** The document's length unit, after each size a refusal quotes. */
   unitLabel?: string | null;
   /**
+   * The feature whose `Feature "<name>": ` lead the refusal opens with,
+   * when the rebuild attributed it. Units go into the sizes only once the
+   * lead is removed as this name: a name can hold `": ` and read like the
+   * refusal itself.
+   */
+  refusalFeatureName?: string | null;
+  /**
    * A refusal that names a size that builds ("radius 6.25 builds here")
    * offers it as one press: "Use 6.25 mm".
    */
@@ -237,6 +245,7 @@ export function InPlaceCommandBar({
   refusalInput = null,
   refusalPick = null,
   unitLabel = null,
+  refusalFeatureName = null,
   onTrySize,
   recovery,
   options = [],
@@ -345,18 +354,24 @@ export function InPlaceCommandBar({
   // kernel's own words ("Remus draft refused: … corner 139 …"). Only a plain
   // sentence leads; the kernel's words move behind Technical details
   // (QA 2026-11-14 finding #18).
-  const plain = refusal
-    ? plainRefusal(
-        blendRefusalText(
-          refusal.replace(/^-?(?:\d+\.?\d*|\.\d+);\s*/, ''),
-          null
-        ),
-        refusalClassification ?? undefined
+  const lead = refusal
+    ? withoutFeatureLead(
+        refusal.replace(/^-?(?:\d+\.?\d*|\.\d+);\s*/, ''),
+        refusalFeatureName
       )
     : null;
+  const plain = lead
+    ? plainRefusal(lead.text, refusalClassification ?? undefined)
+    : null;
+  // Units only into the adapter's own words: a lead not removed as the
+  // attributed name may have left a name that reads like the refusal.
   const sentence =
     refusalSummary ??
-    (plain ? blendRefusalText(plain.message, unitLabel) : null);
+    (plain
+      ? unitLabel && lead?.adapterText
+        ? blendSizesWithUnit(plain.message, unitLabel)
+        : plain.message
+      : null);
   // Named after translation: a kernel sentence is rewritten whole, which
   // would drop a prefix written ahead of it.
   const named = refusalInput ?? refusalPick?.name ?? null;

@@ -357,6 +357,64 @@ describe('AppShell in the compact workspace', () => {
     ).toHaveFocus();
   });
 
+  it("opens All tools when Build's tray is pulled up, at that height", async () => {
+    // The owner's choice: Build's tray raised alone was a row over blank
+    // space; pulled up, it shows All tools.
+    const { container } = render(
+      shell(
+        chrome({
+          build: {
+            context: commandContextFor({
+              edgeCount: 0,
+              faceSelected: false,
+              bodyCount: 0,
+              regionCount: 0
+            }),
+            pick: null,
+            availability: {
+              sketchCount: 0,
+              liveBodyCount: 0,
+              exactGeometryReady: true,
+              hasEdgeSelected: false
+            },
+            activeTool: null,
+            recentTools: [],
+            pinnedTools: ['box'],
+            onLaunchTool: vi.fn()
+          }
+        })
+      )
+    );
+    const sheet = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>('.compact-sheet');
+      expect(element).toHaveAttribute('data-detent', 'peek');
+      return element!;
+    });
+    const grabber = within(sheet).getByRole('slider', { name: 'Sheet height' });
+    grabber.focus();
+    fireEvent.keyDown(grabber, { key: 'ArrowUp' });
+    expect(sheet).toHaveAttribute('data-detent', 'half');
+    expect(within(sheet).getByRole('heading', { name: 'All tools' }));
+    // Opened by the slider's keys, the slider keeps the focus: its next
+    // key still moves the sheet, and no held Enter lands on a tool.
+    const slider = within(sheet).getByRole('slider', { name: 'Sheet height' });
+    expect(slider).toHaveFocus();
+    fireEvent.keyDown(slider, { key: 'End' });
+    expect(sheet).toHaveAttribute('data-detent', 'full');
+    // Back: the tray at its peek, not a row over blank space at half.
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Back' }));
+    await waitFor(() => expect(sheet).toHaveAttribute('data-detent', 'peek'));
+    expect(within(sheet).queryByRole('heading', { name: 'All tools' })).toBe(
+      null
+    );
+    fireEvent.keyDown(
+      within(sheet).getByRole('slider', { name: 'Sheet height' }),
+      { key: 'End' }
+    );
+    expect(sheet).toHaveAttribute('data-detent', 'full');
+    expect(within(sheet).getByRole('heading', { name: 'All tools' }));
+  });
+
   it("stands Build's tray at peek and opens All tools as a page", async () => {
     const onLaunchTool = vi.fn();
     const { container } = render(
@@ -716,9 +774,7 @@ describe('AppShell in the compact workspace', () => {
     const detent = () =>
       document.querySelector('.compact-sheet')!.getAttribute('data-detent');
     const { rerender } = render(shell(props, { viewer: stage(false) }));
-    await waitFor(() =>
-      screen.getByRole('group', { name: 'Fillet command' })
-    );
+    await waitFor(() => screen.getByRole('group', { name: 'Fillet command' }));
     // A running tool's row alone rests at peek, the model in view.
     await waitFor(() => expect(detent()).toBe('peek'));
     rerender(shell(props, { viewer: stage(true) }));

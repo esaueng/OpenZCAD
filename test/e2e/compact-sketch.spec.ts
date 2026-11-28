@@ -4,7 +4,8 @@ import {
   expectCompactWorkspace,
   expectReachable,
   preferCompact,
-  smallTargets
+  smallTargets,
+  waitForSheetToSettle
 } from './compactHelpers';
 import { expect, MODEL_ONLY, stubApi, test } from './openzcad-fixtures';
 
@@ -101,6 +102,10 @@ async function entityCount(page: Page) {
  * canvas: not under the sheet, a chip or the header.
  */
 async function tapPlane(page: Page, points: [number, number][]) {
+  // A page that just closed leaves the sheet sliding back to its row: a
+  // point read mid-slide was under it (the flake: the tap landed on the
+  // sheet, not the canvas).
+  await waitForSheetToSettle(page);
   const { screen } = await sketchState(page, points);
   for (const point of screen) {
     const onCanvas = await page.evaluate(

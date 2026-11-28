@@ -55,7 +55,7 @@ import { trackGpuLost } from '../lib/diagnosticSignal';
 import { InteractionShaderWarmup } from './viewer/interactionShaderWarmup';
 import { usePreparedBodies } from './viewer/usePreparedBodies';
 import { SelectionRecede } from './viewer/selectionRecede';
-import { facesAheadOfEdges } from './viewer/faceSetPick';
+import { faceAheadOfLeadEdge, facesAheadOfEdges } from './viewer/faceSetPick';
 import { releasePreparedBodyGeometry } from '../../../../packages/viewport/src/render/preparedBody';
 import { reportPresentedGeometry } from '../lib/startupReadiness';
 import { useWorkspaceFrameReady } from './WorkspaceLoading';
@@ -1771,6 +1771,14 @@ export interface ModelViewerProps {
    * pointer ahead of its boundary edge (`facesAheadOfEdges`).
    */
   faceSetPickBodyId?: string | null;
+  /**
+   * A running command takes faces and no edges (Hole, Shell): a tap whose
+   * stack leads with an edge takes the first surface under the finger when
+   * it is a face of that edge's body (`faceAheadOfLeadEdge`). A face a few
+   * dozen pixels across lies wholly inside a finger's edge band, so a tap on
+   * it picked the edge the command ignores. Mouse and pen pick as before.
+   */
+  facePickOverEdges?: boolean;
   /** In-viewport sketch session; null when not sketching. */
   sketchMode: SketchModeState | null;
   /** Corner targets and the transient draft for an active Sketch Fillet. */
@@ -2893,6 +2901,7 @@ export function ModelViewer({
   facePickOnly = false,
   facePickSurfaces = null,
   faceSetPickBodyId = null,
+  facePickOverEdges = false,
   sketchMode,
   sketchFillet,
   sketchTextAnchorRef,
@@ -3006,6 +3015,8 @@ export function ModelViewer({
   facePickSurfacesRef.current = facePickSurfaces;
   const faceSetPickBodyIdRef = useRef(faceSetPickBodyId);
   faceSetPickBodyIdRef.current = faceSetPickBodyId;
+  const facePickOverEdgesRef = useRef(facePickOverEdges);
+  facePickOverEdgesRef.current = facePickOverEdges;
   const topologyPicksHeldRef = useRef(topologyPicksHeld);
   topologyPicksHeldRef.current = topologyPicksHeld;
   const onSelectEdgeChainRef = useRef(onSelectEdgeChain);
@@ -6417,12 +6428,20 @@ export function ModelViewer({
 
     /**
      * Everything under the pointer, with a held face set's face ahead of its
-     * edge when this pick adds to the set; otherwise `pickAll` as it is.
+     * edge when this pick adds to the set, or the face under a leading edge
+     * while the command takes faces and no edges; otherwise `pickAll` as it
+     * is.
      */
     function shiftPickStack(event: PointerEvent | MouseEvent) {
       const stack = picker.pickAll(event);
-      return addsToSelection(event)
-        ? facesAheadOfEdges(stack, faceSetPickBodyIdRef.current)
+      if (addsToSelection(event)) {
+        return facesAheadOfEdges(stack, faceSetPickBodyIdRef.current);
+      }
+      return facePickOverEdgesRef.current
+        ? faceAheadOfLeadEdge(
+            stack,
+            'pointerType' in event ? event.pointerType : undefined
+          )
         : stack;
     }
 

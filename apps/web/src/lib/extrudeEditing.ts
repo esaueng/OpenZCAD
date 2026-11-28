@@ -1,5 +1,6 @@
 import { commandFactories } from '@openzcad/command-system';
 import {
+  displayLengthName,
   ownEntry,
   isFeatureSuppressed,
   type BodyId,
@@ -332,7 +333,8 @@ export function extrudePreviewError(
       bodyPresent: Boolean(
         ownEntry(derived.bodyRepresentations, target.resultBodyId)
       ),
-      documentMoved: false
+      documentMoved: false,
+      unit: displayLengthName(document.units)
     });
     if (rejection) return `${target.featureName}: ${rejection.message}`;
   }

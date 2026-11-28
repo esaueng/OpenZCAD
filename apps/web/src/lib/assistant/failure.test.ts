@@ -6,6 +6,7 @@ import {
   smallerFilletRetry
 } from './failure';
 import type { AssistantEntry } from './conversation';
+import { withoutFeatureLead } from '../inPlace/sizeRefusal';
 
 const PREFLIGHT =
   'This verified recipe did not pass exact geometry preflight. Nothing was changed.\n\n' +
@@ -19,9 +20,16 @@ describe('failureParts', () => {
     expect(parts.headline).toBe(
       'Fillet could not be created on 126 selected edges with radius 2.'
     );
-    // With the document's unit after the size, when it is given.
-    expect(failureParts(PREFLIGHT, 'mm').headline).toBe(
+    // With the document's unit after the size, once the panel has removed
+    // the lead as the attributed feature's name (`withoutFeatureLead`).
+    const attributed = PREFLIGHT.replace('Feature "All-edge fillet 2": ', '');
+    expect(failureParts(attributed, 'mm').headline).toBe(
       'Fillet could not be created on 126 selected edges with radius 2 mm.'
+    );
+    // A lead nobody removed as a known name gets no unit: a name can read
+    // like the refusal (re-check of #2405).
+    expect(failureParts(PREFLIGHT, 'mm').headline).toBe(
+      'Fillet could not be created on 126 selected edges with radius 2.'
     );
     expect(parts.detail).toContain('Edges that end on an existing fillet');
     // "Nothing was changed" is still said.
@@ -124,5 +132,29 @@ describe('latestReplySummary', () => {
         { kind: 'message', id: 'i', text: 'Done.', tone: 'info', at }
       ])
     ).toEqual({ tone: 'reply', text: 'New reply' });
+  });
+});
+
+// Re-check of #2405: a feature named `Rough": Chamfer could not be created
+// … with distance 2.` read as the refusal, and the assistant's preflight
+// formatter put the unit after the name's 2.
+describe('a preflight refusal whose feature name reads like the refusal', () => {
+  const name =
+    'Rough": Chamfer could not be created on 1 selected edge with distance 2.';
+  const reason = `Feature "${name}": Chamfer could not be created on 1 selected edge with distance 1.5. Try a smaller distance: distance 0.985 builds here.`;
+  const gate =
+    'The proposed change did not pass exact geometry preflight. Nothing was changed.\n\n';
+
+  it('writes the unit after the refused size once the lead is removed as the name', () => {
+    // As the panel builds the failure from the preview's attributed name.
+    const text = gate + withoutFeatureLead(reason, name).text;
+    expect(failureParts(text, 'in').headline).toBe(
+      'Chamfer could not be created on 1 selected edge with distance 1.5 in.'
+    );
+  });
+
+  it('writes no unit without the name', () => {
+    const { headline, detail } = failureParts(gate + reason, 'in');
+    expect(`${headline} ${detail}`).not.toMatch(/\d in\b/);
   });
 });

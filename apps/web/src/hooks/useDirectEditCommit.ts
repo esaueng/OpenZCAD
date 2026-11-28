@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { refusalOfWorkerError } from '../lib/workerRefusal';
-import { ownEntry } from '@openzcad/shared';
+import { displayLengthName, ownEntry } from '@openzcad/shared';
 import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import type { AnyCommand, CommandManager } from '@openzcad/command-system';
 import { createdFeatureId, directEditRejection } from '../lib/directEdit';
@@ -255,7 +255,8 @@ export function useDirectEditCommit(
               bodyPresent: Boolean(
                 ownEntry(derived.bodyRepresentations, target.resultBodyId)
               ),
-              documentMoved
+              documentMoved,
+              unit: displayLengthName(current.units)
             });
             if (rejection) {
               break;

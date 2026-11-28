@@ -26,6 +26,7 @@ import {
   resolveParamValue
 } from '@openzcad/document-core';
 
+import { targetBodyUnavailable } from './adapter-refusal';
 import { collapseShape } from './exact-boolean-helpers';
 import type { FaceWitnessV1 } from '@openzcad/shared';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
@@ -791,7 +792,7 @@ function buildGearTeethOnBody(
   const targetBodyId = data.targetBodyId!;
   const target = result.shapes.get(targetBodyId);
   if (!target) {
-    throw new Error('Gear target is unavailable.');
+    throw targetBodyUnavailable('Gear target is unavailable.');
   }
   if (typeof data.faceHash !== 'number') {
     throw new Error('Gear teeth on a body need its cylindrical face.');

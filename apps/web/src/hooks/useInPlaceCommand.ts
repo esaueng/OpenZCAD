@@ -403,6 +403,13 @@ export interface InPlaceCommand {
    */
   refusalClassification: FeatureWarning['kernelRefusal'] | null;
   /**
+   * The name of the feature whose `Feature "<name>": ` lead {@link refusal}
+   * opens with, when the rebuild attributed it: the bar removes the lead as
+   * this name, exactly, before it writes units into the sizes. Null when no
+   * attribution names it.
+   */
+  refusalFeatureName: string | null;
+  /**
    * U11: the input (or inputs) the kernel's refusal is about, named ahead of
    * it in the bar: what changed since the last request that built, which
    * stays on screen. Null for an entry refusal, which names its own value.
@@ -626,6 +633,11 @@ export function useInPlaceCommand(
   const [typedRefusal, setTypedRefusal] = useState<{
     message: string;
     record: NonNullable<FeatureWarning['kernelRefusal']>;
+  } | null>(null);
+  /** The attributed feature a refusal's lead names, with that refusal. */
+  const [refusalLead, setRefusalLead] = useState<{
+    message: string;
+    featureName: string;
   } | null>(null);
   /**
    * U11: the inputs the refused request changed from the last one that
@@ -1342,6 +1354,11 @@ export function useInPlaceCommand(
               ? { message: fresh, record: freshRecord }
               : null
           );
+          setRefusalLead(
+            fresh && attributed && fresh === attributed.message
+              ? { message: fresh, featureName: attributed.featureName }
+              : null
+          );
           const message =
             fresh ??
             unresolved ??
@@ -1426,6 +1443,7 @@ export function useInPlaceCommand(
     shownKey.current = null;
     setRefusal(null);
     setTypedRefusal(null);
+    setRefusalLead(null);
     setRefusalInputs([]);
     setKeptValues(null);
     setPreviewAdvisory(null);
@@ -2790,6 +2808,13 @@ export function useInPlaceCommand(
       refusal !== null &&
       typedRefusal?.message === refusal
         ? typedRefusal.record
+        : null,
+    refusalFeatureName:
+      !entryRefusal &&
+      !planeEdgeRefusal &&
+      refusal !== null &&
+      refusalLead?.message === refusal
+        ? refusalLead.featureName
         : null,
     refusalInput: entryRefusal
       ? null

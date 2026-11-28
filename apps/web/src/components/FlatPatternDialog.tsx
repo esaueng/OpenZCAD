@@ -15,7 +15,9 @@ import {
   bendTableCsv,
   bendTableHeadings,
   bendTableRows,
-  flatPatternChangedWarning
+  flatPatternChangedWarning,
+  flatPatternFilesHint,
+  flatPatternScaledNote
 } from '../lib/sheetMetalFlatPattern';
 
 export interface FlatPatternDialogProps {
@@ -157,7 +159,14 @@ export function FlatPatternDialog({
     }
   }, [pattern, units, feature]);
   const length = unitLabel('length', units);
-  const warning = pattern ? flatPatternChangedWarning(pattern.changedBy) : null;
+  const warning = pattern
+    ? [
+        flatPatternScaledNote(pattern.scaledBy),
+        flatPatternChangedWarning(pattern.changedBy)
+      ]
+        .filter(Boolean)
+        .join(' ') || null
+    : null;
   const stem = `${exportFileStem(projectName)}-${exportFileStem(feature?.name ?? 'sheet-metal')}-flat`;
   const drawn = view?.kind === 'drawn' ? view : null;
 
@@ -299,10 +308,7 @@ export function FlatPatternDialog({
                 </table>
               </div>
             )}
-            <p className="export-dialog-hint">
-              Nominal shop values (K-factor and allowances are rules of thumb,
-              not a certification). Files are at 1:1 in {length}.
-            </p>
+            <p className="export-dialog-hint">{flatPatternFilesHint(units)}</p>
           </>
         )}
         <div className="export-dialog-status" role="status">
