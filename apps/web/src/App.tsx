@@ -44192,6 +44192,7 @@ export function App() {
                 document={doc}
                 bodies={doc.derived.bodyRepresentations}
                 geometryPending={!geometry.isReadyFor(doc)}
+                failedBodies={failedHistoryBodies}
                 rebuildProgress={
                   geometry.state.phase === 'rebuilding' &&
                   geometry.state.progress?.stage === 'feature'

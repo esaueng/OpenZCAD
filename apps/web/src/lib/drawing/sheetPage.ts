@@ -686,6 +686,147 @@ function clipStroke(stroke: SheetStroke, rect: PaperRect): SheetStroke[] {
   return runs;
 }
 
+/** Hidden-line ends closer than this on the paper are one point (mm). */
+const HIDDEN_JOIN_MM = 1e-3;
+
+/**
+ * #2073: a view's hidden lines on the paper as the fewest continuous runs:
+ * every repeated segment once, and runs that meet end to end, with nothing
+ * else meeting them there, joined into one polyline (closed where it comes
+ * back to its start). Hidden-line removal hands a curved edge over in many
+ * short pieces, often more than once (the edge, the face silhouette along
+ * it); each drawn alone restarts the dash pattern, so pieces shorter than a
+ * dash print solid and a hidden port reads as a visible opening. Joined, the
+ * pattern runs on along the curve, as a plotter would draw it. Pure and
+ * order-preserving, so the same lines always give the same runs.
+ */
+export function joinHiddenRuns(
+  lines: readonly (readonly number[])[]
+): { points: number[]; closed: boolean }[] {
+  const q = HIDDEN_JOIN_MM;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  const cells = new Map<string, number[]>();
+  const vertex = (x: number, y: number): number => {
+    const cx = Math.round(x / q);
+    const cy = Math.round(y / q);
+    for (let dx = -1; dx <= 1; dx += 1)
+      for (let dy = -1; dy <= 1; dy += 1)
+        for (const id of cells.get(`${cx + dx},${cy + dy}`) ?? [])
+          if (Math.abs(xs[id]! - x) <= q && Math.abs(ys[id]! - y) <= q)
+            return id;
+    const id = xs.length;
+    xs.push(x);
+    ys.push(y);
+    const key = `${cx},${cy}`;
+    const cell = cells.get(key);
+    if (cell) cell.push(id);
+    else cells.set(key, [id]);
+    return id;
+  };
+  const from: number[] = [];
+  const to: number[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    let last = -1;
+    for (let i = 0; i + 1 < line.length; i += 2) {
+      const id = vertex(line[i]!, line[i + 1]!);
+      if (last >= 0 && id !== last) {
+        const key = last < id ? `${last}:${id}` : `${id}:${last}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          from.push(last);
+          to.push(id);
+        }
+      }
+      last = id;
+    }
+  }
+  const incident = new Map<number, number[]>();
+  for (let s = 0; s < from.length; s += 1)
+    for (const v of [from[s]!, to[s]!]) {
+      const list = incident.get(v);
+      if (list) list.push(s);
+      else incident.set(v, [s]);
+    }
+  const used = new Uint8Array(from.length);
+  const other = (s: number, v: number) => (from[s] === v ? to[s]! : from[s]!);
+  const walk = (start: number, first: number) => {
+    const ids = [start];
+    let at = start;
+    let segment = first;
+    for (;;) {
+      used[segment] = 1;
+      at = other(segment, at);
+      ids.push(at);
+      const next = incident.get(at)!;
+      // Only a plain joint carries on; a branch or an end stops the run.
+      if (next.length !== 2 || at === start) break;
+      const onward = next[0] === segment ? next[1]! : next[0]!;
+      if (used[onward]) break;
+      segment = onward;
+    }
+    const closed = ids.length > 3 && ids[0] === ids.at(-1);
+    if (closed) ids.pop();
+    return {
+      points: ids.flatMap((id) => [xs[id]!, ys[id]!]),
+      closed
+    };
+  };
+  const runs: { points: number[]; closed: boolean }[] = [];
+  // Open runs from their ends (and branch points) first, then the loops
+  // left over, each from its first segment in input order.
+  for (let s = 0; s < from.length; s += 1) {
+    if (used[s]) continue;
+    for (const v of [from[s]!, to[s]!]) {
+      if (used[s] || incident.get(v)!.length === 2) continue;
+      runs.push(walk(v, s));
+    }
+  }
+  for (let s = 0; s < from.length; s += 1)
+    if (!used[s]) runs.push(walk(from[s]!, s));
+  return runs;
+}
+
+/**
+ * #2166: whether a mark prints whole: every point of its strokes, and the
+ * box of each of its texts (as wide as the writers set it, cap height
+ * tall), on the paper. The page drops or cuts what lies past the edge, so a
+ * mark that fails this would leave the export without some of it — a
+ * dimension's value, or its line — while the sheet still lists it.
+ */
+export function sheetMarksOnPaper(
+  strokes: readonly SheetStroke[],
+  texts: readonly SheetText[],
+  paper: { width: number; height: number }
+): boolean {
+  const e = PLACEMENT_TOLERANCE_MM;
+  const on = (x: number, y: number) =>
+    x >= -e && y >= -e && x <= paper.width + e && y <= paper.height + e;
+  for (const stroke of strokes)
+    for (let i = 0; i + 1 < stroke.points.length; i += 2)
+      if (!on(stroke.points[i]!, stroke.points[i + 1]!)) return false;
+  for (const text of texts) {
+    if (!text.text) continue;
+    const width = textWidthMm(text.text, text.sizeMm, text.bold);
+    const shift =
+      text.align === 'middle' ? width / 2 : text.align === 'end' ? width : 0;
+    const radians = ((text.angleDeg ?? 0) * Math.PI) / 180;
+    const [cos, sin] = [Math.cos(radians), Math.sin(radians)];
+    const x0 = text.x - cos * shift;
+    const y0 = text.y - sin * shift;
+    for (const [along, up] of [
+      [0, 0],
+      [width, 0],
+      [0, text.sizeMm],
+      [width, text.sizeMm]
+    ] as const)
+      if (!on(x0 + cos * along - sin * up, y0 + sin * along + cos * up))
+        return false;
+  }
+  return true;
+}
+
 /**
  * The page for a sheet whose views are all projected. Views missing from
  * `views` (stale, refused or still projecting) are simply not drawn; the
@@ -734,14 +875,25 @@ export function composeSheetPage(
     for (const [kind, lines] of [
       ['hidden', projection.hidden],
       ['visible', projection.visible]
-    ] as const)
+    ] as const) {
+      const pieces: number[][] = [];
       for (const line of lines) {
         const page: [number, number][] = [];
         for (let i = 0; i + 1 < line.length; i += 2)
           page.push(toPage(line[i]!, line[i + 1]!));
         for (const piece of clip ? clipPolylineToCircle(page, clip) : [page])
-          strokes.push({ kind, points: piece.flat() });
+          pieces.push(piece.flat());
       }
+      // #2073: hidden pieces joined, so the dash runs on along a curve.
+      if (kind === 'hidden')
+        for (const run of joinHiddenRuns(pieces))
+          strokes.push({
+            kind,
+            points: run.points,
+            ...(run.closed ? { closed: true } : {})
+          });
+      else for (const points of pieces) strokes.push({ kind, points });
+    }
     // M01: cosmetic threads, drawn by convention over the view's lines.
     const threads = context.cosmeticThreads?.(view);
     for (const stroke of threads
@@ -827,6 +979,15 @@ export function sectionCaption(label: string): string {
   // WinAnsi's en dash would print as a hyphen anyway (`sheetSafeText`).
   return `SECTION ${label}-${label}`;
 }
+
+/**
+ * #2110: the note beside the caption of a section cut from the bodies'
+ * tessellation rather than exactly. The drawing's recipient has no
+ * properties panel, so the printed sheet says so itself.
+ */
+export const SECTION_APPROXIMATE_NOTE =
+  'APPROXIMATE: CUT FROM THE TESSELLATION, NOT DIMENSIONABLE';
+const SECTION_NOTE_MM = 2.5;
 
 /**
  * 45° hatching over a section view's cut faces, on the paper. Lines sit at
@@ -1137,19 +1298,28 @@ export function composeSectionMarks(
         drawingViewAlignment(sourceView.orientation, view.orientation) ===
           'column' &&
         view.centerMm.y < sourceView.centerMm.y;
+      const captionY = below
+        ? box.y - SECTION_CAPTION_GAP_MM
+        : box.y + box.height + SECTION_CAPTION_GAP_MM - SECTION_LABEL_MM * 0.7;
       texts.push({
         x: view.centerMm.x,
-        y: below
-          ? box.y - SECTION_CAPTION_GAP_MM
-          : box.y +
-            box.height +
-            SECTION_CAPTION_GAP_MM -
-            SECTION_LABEL_MM * 0.7,
+        y: captionY,
         sizeMm: SECTION_LABEL_MM * 0.7,
         text: sectionCaption(label),
         bold: true,
         align: 'middle'
       });
+      // #2110: on the caption's far side from the view, so it reads with it.
+      if (own.projection.sectionApproximate)
+        texts.push({
+          x: view.centerMm.x,
+          y: below
+            ? captionY - SECTION_NOTE_MM - 1.5
+            : captionY + SECTION_LABEL_MM * 0.7 + 1.5,
+          sizeMm: SECTION_NOTE_MM,
+          text: SECTION_APPROXIMATE_NOTE,
+          align: 'middle'
+        });
     }
   }
   return { strokes, texts };

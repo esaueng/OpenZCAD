@@ -3382,6 +3382,39 @@ describe('DrawingWorkspace section views (D03)', () => {
     expect(requestSection).toHaveBeenCalledTimes(1);
   });
 
+  it('describes the cut from its drawing: refused, never “exact” (#2107)', async () => {
+    resetRetainedProjections();
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    renderSheet(withSection(fingerprint), () =>
+      Promise.reject(
+        new Error('The section line does not cut any body in this view.')
+      )
+    );
+    fireEvent.click(screen.getByRole('option', { name: /^Section A-A/ }));
+    expect(
+      await screen.findByText(
+        'This section is not drawn: The section line does not cut any body in this view. Nothing is cut or hatched until it is.'
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/exact boolean/)).toBeNull();
+    expect(screen.queryByText(/Cut faces are hatched/)).toBeNull();
+  });
+
+  it('calls a drawn exact cut exact, and hatched (#2107 control)', async () => {
+    resetRetainedProjections();
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    renderSheet(withSection(fingerprint), () =>
+      Promise.resolve({ [bodyId]: halfCube() })
+    );
+    fireEvent.click(screen.getByRole('option', { name: /^Section A-A/ }));
+    expect(await screen.findByText(/exact boolean/)).toBeTruthy();
+    expect(screen.getByText(/Cut faces are hatched/)).toBeTruthy();
+  });
+
   it('creates a section from a line dragged across a view, placed by a click', async () => {
     resetRetainedProjections();
     const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
@@ -5071,5 +5104,141 @@ describe('DrawingWorkspace in the compact workspace (U12 slice 9)', () => {
       expect.stringMatching(/\bclick/i),
       expect.anything()
     );
+  });
+});
+
+describe('DrawingWorkspace export integrity', () => {
+  const fingerprint = () =>
+    drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!;
+  const withSheets = (sheets: DrawingSheet[]): ProjectDocument => ({
+    ...createProjectDocument('Bracket', toUserId('test')),
+    bodyOrder: [bodyId],
+    drawings: { sheets }
+  });
+  const shared = () => ({
+    bodies: { [bodyId]: cube() },
+    geometryPending: false,
+    defaultBodyIds: [bodyId],
+    requestTessellation: displayTessellation({ [bodyId]: cube() }),
+    editDisabledReason: null,
+    onCommand: vi.fn((_command: AnyCommand) => true),
+    onStatus: vi.fn()
+  });
+  const drawn = async () => {
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+  };
+  const failedCut = new Map([[bodyId, { featureName: 'Cut 3' }]]);
+
+  it('never marks current or exports a sheet whose cut failed to rebuild (#2382)', async () => {
+    resetRetainedProjections();
+    const document = withSheets([starter(fingerprint())]);
+    const props = shared();
+    const { rerender } = render(
+      <DrawingWorkspace
+        document={document}
+        {...props}
+        failedBodies={failedCut}
+      />
+    );
+    await drawn();
+    const svg = screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Export SVG'
+    });
+    const reason =
+      '“Cut 3” failed to rebuild, so Cube is not the design and this sheet would not show it. Fix or suppress the failed feature in History, then export.';
+    expect(svg.disabled).toBe(true);
+    expect(svg.title).toBe(reason);
+    expect(screen.queryByText('Drawing up to date')).toBeNull();
+    expect(screen.getByText(reason)).toBeTruthy();
+
+    // The control: the same sheet once the cut builds.
+    rerender(<DrawingWorkspace document={document} {...props} />);
+    await waitFor(() => expect(svg.disabled).toBe(false));
+    expect(screen.getByText('Drawing up to date')).toBeTruthy();
+    // A failure on a body this sheet does not draw holds nothing.
+    rerender(
+      <DrawingWorkspace
+        document={document}
+        {...props}
+        failedBodies={
+          new Map([['body_other' as BodyId, { featureName: 'Cut 9' }]])
+        }
+      />
+    );
+    expect(svg.disabled).toBe(false);
+    expect(screen.getByText('Drawing up to date')).toBeTruthy();
+  });
+
+  it('offers no Update that would draw a failed cut’s input (#2382)', async () => {
+    resetRetainedProjections();
+    // Drawn from an earlier model than this one, which failed.
+    const sheet = starter('v1:earlier');
+    render(
+      <DrawingWorkspace
+        document={withSheets([sheet])}
+        {...shared()}
+        failedBodies={failedCut}
+      />
+    );
+    expect(screen.queryByRole('button', { name: /Update/ })).toBeNull();
+    expect(
+      screen.getByText(/then Update the sheet to export it\.$/)
+    ).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' })
+        .disabled
+    ).toBe(true);
+  });
+
+  it('refuses to export a dimension that runs off the paper, naming it (#2166)', async () => {
+    resetRetainedProjections();
+    const sheet = starter(fingerprint());
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    const dimension = (y: number): DrawingAnnotation => ({
+      annotationId: 'dann_w' as DrawingAnnotationId,
+      kind: 'linear',
+      viewId: front.viewId,
+      direction: 'horizontal',
+      // The cube's bottom front edge: a 10 mm dimension.
+      from: { edge: { bodyId, hash: 210 }, anchor: 'first' },
+      to: { edge: { bodyId, hash: 210 }, anchor: 'second' },
+      placementMm: { x: 0, y }
+    });
+    const props = shared();
+    const { rerender } = render(
+      <DrawingWorkspace
+        document={withSheets([{ ...sheet, annotations: [dimension(400)] }])}
+        {...props}
+      />
+    );
+    await drawn();
+    const pdf = screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Export PDF'
+    });
+    // The view itself is on the paper: only its dimension left it.
+    const list = screen.getByRole('listbox', { name: 'Views on this sheet' });
+    expect(
+      within(list).queryByRole('option', { name: /off the page/ })
+    ).toBeNull();
+    await waitFor(() =>
+      expect(pdf.title).toBe(
+        'The annotation “Horizontal dimension 10” runs off the paper and would not print whole. Move it, or its view, onto the page to export.'
+      )
+    );
+    expect(pdf.disabled).toBe(true);
+    expect(screen.getByRole('status').textContent).toBe(pdf.title);
+
+    rerender(
+      <DrawingWorkspace
+        document={withSheets([{ ...sheet, annotations: [dimension(-15)] }])}
+        {...props}
+      />
+    );
+    await waitFor(() => expect(pdf.disabled).toBe(false));
   });
 });

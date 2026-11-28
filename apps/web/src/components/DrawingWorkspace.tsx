@@ -361,6 +361,10 @@ import {
   type DrawingAssistantSource
 } from '../lib/drawing/assistantContext';
 import { drawingBodyReplacements } from '../lib/drawing/bodySuccessors';
+import {
+  sheetFailedBodies,
+  sheetSourceFailureMessage
+} from '../lib/drawing/sourceFailure';
 
 /**
  * D01 drawing workspace: the sheet canvas and its properties.
@@ -392,6 +396,13 @@ export interface DrawingWorkspaceProps {
    * Sheet edits keep the ready geometry, so they never set this.
    */
   geometryPending: boolean;
+  /**
+   * #2382: bodies standing in for a feature that failed to rebuild, by id
+   * (`failedHistoryExportBodies`): each is the failed feature's unfinished
+   * input, not the design. A sheet that draws one is never marked current,
+   * updated or exported from it. Absent: nothing failed.
+   */
+  failedBodies?: ReadonlyMap<BodyId, { featureName: string }>;
   /**
    * The rebuild's progress while `geometryPending`, when the geometry worker
    * reports one: the feature it is on, counted from 1.
@@ -4709,6 +4720,36 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       storedFence
     ]
   );
+  /**
+   * #2382: the bodies this sheet draws, or would draw once updated, that
+   * stand in for a feature that failed to rebuild. Read once the model is
+   * built, for a sheet on the active build: such a sheet is never current,
+   * never updated, and never exported from that geometry.
+   */
+  const { failedBodies } = props;
+  const sourceFailure = useMemo(() => {
+    if (
+      !sheet ||
+      !status ||
+      (status.kind !== 'ready' &&
+        status.kind !== 'stale' &&
+        status.kind !== 'replaced')
+    )
+      return [];
+    const ids = sheetBodyIds(
+      activeRowSheet(sheet, viewConfigurationRows(sheet, document))
+    );
+    const targets =
+      status.kind === 'replaced'
+        ? new Map(status.replacements.map(({ from, to }) => [from, to]))
+        : null;
+    return sheetFailedBodies(
+      targets ? ids.map((id) => targets.get(id) ?? id) : ids,
+      failedBodies,
+      (id) => bodies[id]?.name ?? 'A body'
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheet, status, failedBodies, bodies, document.configurations]);
   const liveProjections = useViewProjections(
     sheet
       ? {
@@ -5044,6 +5085,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   useEffect(() => {
     if (!shownSheet || status?.kind !== 'ready') return;
     if (drawnViews.length !== shownSheet.views.length) return;
+    // #2382: a drawing of a failed feature's input is not one to fall back on.
+    if (sourceFailure.length > 0) return;
     const previous = keptDrawings.get(shownSheet.sheetId) ?? [];
     const same = previous.find(
       (entry) => entry.fingerprint === status.fingerprint
@@ -5110,7 +5153,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     document.projectId,
     configurationKey,
     liveRowBodies,
-    liveRowHoles
+    liveRowHoles,
+    sourceFailure
   ]);
   // While the model rebuilds the sheet shows its last drawing faded instead
   // of empty outlines; it is only ever seen, never picked from, annotated or
@@ -5841,6 +5885,16 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
 
   const exportSheet = async (format: 'pdf' | 'svg' | 'dxf') => {
     if (!sheet || !sheetReady) return;
+    // #2382: never the drawing of a failed feature's input; a kept drawing
+    // of the earlier, sound model still exports, as outdated.
+    const failure =
+      keptDrawing === null
+        ? sheetSourceFailureMessage(sourceFailure, status?.kind !== 'ready')
+        : null;
+    if (failure) {
+      props.onStatus(failure);
+      return;
+    }
     const viewStates = sheet.views.map((view) => {
       const state = projections.get(view.viewId);
       return state?.state === 'ready'
@@ -5855,12 +5909,18 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       props.onStatus('Re-pick or delete the broken annotations, then export.');
       return;
     }
-    const offPaper = offPaperReason();
+    const drawn = viewStates.filter((entry) => entry !== null);
+    const annotationLayer = composeSheetAnnotations(
+      sheet,
+      drawn,
+      resolutions,
+      document.units
+    );
+    const offPaper = offPaperReason(annotationLayer.offPaper);
     if (offPaper) {
       props.onStatus(offPaper);
       return;
     }
-    const drawn = viewStates.filter((entry) => entry !== null);
     const page = composeSheetPage(
       sheet,
       drawn,
@@ -5871,7 +5931,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         date: autoDate,
         cosmeticThreads: viewThreads
       },
-      composeSheetAnnotations(sheet, drawn, resolutions, document.units)
+      annotationLayer
     );
     const fileName = drawingExportFileName(document.name, sheet.name, format);
     try {
@@ -6080,6 +6140,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           cosmeticThreads: viewThreads
         }),
         boxes: new Map<DrawingAnnotationId, AnnotationBox>(),
+        offPaper: [] as DrawingAnnotationId[],
         ghost: true
       };
     const annotations = composeSheetAnnotations(
@@ -6102,6 +6163,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         annotations
       ),
       boxes: annotations.boxes,
+      offPaper: annotations.offPaper,
       ghost: false
     };
   }, [
@@ -6211,10 +6273,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   }, [shownSheet, viewExtents, document.units]);
 
   /**
-   * Why the sheet cannot export as laid out: a view runs off the paper, so
-   * part of the drawing would silently not print.
+   * Why the sheet cannot export as laid out: a view, or an annotation laid
+   * out from `annotationIds` (#2166: a dimension on a view near the edge),
+   * runs off the paper, so part of the drawing would silently not print.
    */
-  function offPaperReason(): string | null {
+  function offPaperReason(
+    annotationIds: readonly DrawingAnnotationId[] = []
+  ): string | null {
     if (!sheet) return null;
     const names = sheet.views
       .filter((view) => {
@@ -6222,8 +6287,26 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         return issue === 'off-page' || issue === 'partly-off-page';
       })
       .map((view) => viewLabel(view));
-    if (names.length === 0) return null;
-    return `${listNames(names)} ${names.length === 1 ? 'runs' : 'run'} off the paper. Fit views to sheet, or move ${names.length === 1 ? 'it' : 'them'} onto the page, to export.`;
+    const marks = annotationIds.flatMap((annotationId) => {
+      const annotation = sheet.annotations?.find(
+        (entry) => entry.annotationId === annotationId
+      );
+      return annotation
+        ? [
+            `“${annotationName(annotation, resolutions.get(annotationId), true)}”`
+          ]
+        : [];
+    });
+    const parts: string[] = [];
+    if (names.length > 0)
+      parts.push(
+        `${listNames(names)} ${names.length === 1 ? 'runs' : 'run'} off the paper. Fit views to sheet, or move ${names.length === 1 ? 'it' : 'them'} onto the page, to export.`
+      );
+    if (marks.length > 0)
+      parts.push(
+        `${marks.length === 1 ? `The annotation ${marks[0]} runs` : `${marks.length} annotations (${marks.join(', ')}) run`} off the paper and would not print whole. Move ${marks.length === 1 ? 'it, or its view,' : 'them, or their views,'} onto the page to export.`
+      );
+    return parts.length > 0 ? parts.join(' ') : null;
   }
 
   /**
@@ -7431,7 +7514,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
 
   const paper = drawingPaperMm(sheet.paper);
   const message = statusMessage(status);
-  const offPaper = offPaperReason();
+  const offPaper = offPaperReason(composed?.offPaper);
+  // #2382: the model this sheet draws failed to rebuild. Without a kept
+  // drawing of the earlier model, nothing on screen is the design.
+  const sourceFailureReason = sheetSourceFailureMessage(
+    sourceFailure,
+    status.kind !== 'ready'
+  );
+  const failureBlocks = sourceFailureReason !== null && keptDrawing === null;
   // A view that cannot be drawn (a section the kernel cannot cut, a model
   // that cannot be meshed) says so by name: it will not finish drawing.
   const refusedView = sheet.views.find(
@@ -7442,19 +7532,21 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     refusedView && refusedState?.state === 'error'
       ? `${viewLabel(refusedView)} cannot be drawn: ${refusedState.message}`
       : null;
-  const exportReason = !sheetReady
-    ? message
-    : refusalReason
-      ? refusalReason
-      : sheet.views.some(
-            (view) => projections.get(view.viewId)?.state !== 'ready'
-          )
-        ? outdated
-          ? 'Update the sheet to draw every view, then export.'
-          : 'Drawing the views…'
-        : brokenCount > 0
-          ? `${brokenCount === 1 ? 'An annotation has' : `${brokenCount} annotations have`} lost what ${brokenCount === 1 ? 'it measures' : 'they measure'}. Re-pick or delete ${brokenCount === 1 ? 'it' : 'them'} to export.`
-          : offPaper;
+  const exportReason = failureBlocks
+    ? sourceFailureReason
+    : !sheetReady
+      ? message
+      : refusalReason
+        ? refusalReason
+        : sheet.views.some(
+              (view) => projections.get(view.viewId)?.state !== 'ready'
+            )
+          ? outdated
+            ? 'Update the sheet to draw every view, then export.'
+            : 'Drawing the views…'
+          : brokenCount > 0
+            ? `${brokenCount === 1 ? 'An annotation has' : `${brokenCount} annotations have`} lost what ${brokenCount === 1 ? 'it measures' : 'they measure'}. Re-pick or delete ${brokenCount === 1 ? 'it' : 'them'} to export.`
+            : offPaper;
   // Not blocking: on the paper, but over the border or the title block.
   const layoutWarning = (() => {
     const names = sheet.views
@@ -7667,14 +7759,18 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // Not blocking export by itself, so never a live status: the sheet's
   // status chip and the export refusal stay the only ones.
   const syncLabel =
-    status.kind !== 'ready'
+    status.kind !== 'ready' || sourceFailureReason !== null
       ? null
       : exportReason === 'Drawing the views…'
         ? 'Drawing the views…'
         : 'Drawing up to date';
-  const canUpdate = status.kind === 'stale' || status.kind === 'replaced';
+  // #2382: an Update would mark the drawing of a failed feature's input
+  // current, so none is offered until the feature builds.
+  const canUpdate =
+    (status.kind === 'stale' || status.kind === 'replaced') &&
+    sourceFailureReason === null;
   const onUpdateSheet = () => {
-    if (status.kind !== 'stale' && status.kind !== 'replaced') return;
+    if (!canUpdate) return;
     updateSheet({
       source: { fingerprint: status.fingerprint },
       ...(status.kind === 'replaced'
@@ -7689,13 +7785,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   /** An export now writes the drawing of an earlier model: say so. */
   const outdatedExportWarning =
     outdated && exportReason === null
-      ? `${message ?? ''} Export now writes this sheet as drawn, before the latest model change.`.trim()
+      ? `${sourceFailureReason ?? message ?? ''} Export now writes this sheet as drawn, before the latest model change.`.trim()
       : null;
   const exportBlocked =
-    (!message || keptDrawing !== null) &&
-    (brokenCount > 0 ||
-      (exportReason !== null &&
-        (exportReason === offPaper || exportReason === refusalReason)));
+    failureBlocks ||
+    ((!message || keptDrawing !== null) &&
+      (brokenCount > 0 ||
+        (exportReason !== null &&
+          (exportReason === offPaper || exportReason === refusalReason))));
   const selection: 'annotation' | 'view' | null = selectedAnnotation
     ? 'annotation'
     : selectedView
@@ -7843,10 +7940,21 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   view along its line {section.label}-{section.label}
                   {free
                     ? ', at an angle: it is placed freely.'
-                    : ': it stays aligned with it.'}{' '}
-                  Cut faces are hatched.
+                    : ': it stays aligned with it.'}
+                  {drawn?.state === 'ready' ? ' Cut faces are hatched.' : ''}
                 </p>
-                {approximate ? (
+                {/* #2107: what the cut is, from the section's own drawing:
+                    nothing is said to be exact before, or without, one. */}
+                {drawn?.state === 'error' ? (
+                  <p className="drawing-hint" role="note">
+                    This section is not drawn: {drawn.message} Nothing is cut or
+                    hatched until it is.
+                  </p>
+                ) : drawn?.state !== 'ready' ? (
+                  <p className="drawing-hint">
+                    The cut is still being computed.
+                  </p>
+                ) : approximate ? (
                   <p className="drawing-hint" role="note">
                     Approximate: cut from the tessellation, to the display
                     tolerance. {approximate} Its cut edges cannot be
