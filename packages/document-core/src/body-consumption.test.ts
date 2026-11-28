@@ -576,6 +576,131 @@ describe('history fork detection', () => {
       expect(newHistoryForks(document, placedFirst)).toEqual([]);
     });
 
+    /**
+     * {@link sharedTool} with a suppressed cut OF the tool last: "Trim tool"
+     * would replace the tool, by a spare block made ahead of everything. Cut
+     * A already consumed the tool, so the suppressed step has nothing left to
+     * pass through (ADR-017 fails closed): it builds and consumes nothing.
+     */
+    function suppressedTrim() {
+      const shared = sharedTool();
+      const spare = block('Spare', shared.document);
+      const trim = createBodyFeatureIds();
+      const document = metadata(
+        booleanBodies(
+          moveFeature(spare.document, {
+            featureId: spare.featureId,
+            toIndex: 0
+          }),
+          {
+            name: 'Trim tool',
+            operation: 'subtract',
+            targetBodyIds: [shared.tool.bodyId, spare.bodyId],
+            ids: trim
+          }
+        ).document,
+        trim.featureId,
+        FEATURE_SUPPRESSED_METADATA_KEY
+      );
+      return { ...shared, document, trim };
+    }
+
+    const names = (document: ProjectDocument) =>
+      listFeaturesInOrder(document).map((feature) => feature.name);
+
+    it('does not count a suppressed step that has nothing left to pass through', () => {
+      const { document, tool, cutA, place, cutB, trim } = suppressedTrim();
+      expect(names(document).slice(-4)).toEqual([
+        'Cut A',
+        'Place tool',
+        'Cut B',
+        'Trim tool'
+      ]);
+      const reported = historyForks(document);
+      // The suppressed cut above Cut B, and above the placement: the build
+      // skips it at either place exactly as it did last.
+      const aboveCutB = moveFeature(document, {
+        featureId: trim.featureId,
+        toIndex: position(document, cutB.featureId)
+      });
+      expect(names(aboveCutB).slice(-3)).toEqual([
+        'Place tool',
+        'Trim tool',
+        'Cut B'
+      ]);
+      const abovePlacement = moveFeature(document, {
+        featureId: trim.featureId,
+        toIndex: position(document, place.featureId)
+      });
+      for (const moved of [aboveCutB, abovePlacement]) {
+        expect(historyForks(moved)).toEqual(reported);
+        expect(newHistoryForks(document, moved)).toEqual([]);
+        expect(() => assertNoNewHistoryFork(document, moved)).not.toThrow();
+      }
+      // And back down again.
+      expect(newHistoryForks(aboveCutB, document)).toEqual([]);
+
+      // Above Cut A it is the tool's first consumer: its pass-through now
+      // takes the tool, and shows it under its own id beside both cuts.
+      const first = moveFeature(document, {
+        featureId: trim.featureId,
+        toIndex: position(document, cutA.featureId)
+      });
+      expect(newHistoryForks(document, first)).toContainEqual({
+        featureId: cutA.featureId,
+        bodyId: tool.bodyId,
+        consumerFeatureId: trim.featureId
+      });
+      expect(() => assertNoNewHistoryFork(document, first)).toThrow(
+        'Cannot reorder: “Cut A” would run after “Trim tool” already replaced “Tool”, which branches the history. Keep “Cut A” before “Trim tool”.'
+      );
+    });
+
+    it('reports the suppressed step once it is resumed, wherever it was moved', () => {
+      const { document, tool, cutA, place, cutB, trim } = suppressedTrim();
+      const moved = moveFeature(document, {
+        featureId: trim.featureId,
+        toIndex: position(document, cutB.featureId)
+      });
+      const resume = (suppressed: ProjectDocument) =>
+        setNodeMetadata(suppressed, {
+          nodeId: listFeaturesInOrder(suppressed).find(
+            (feature) => feature.featureId === trim.featureId
+          )!.id,
+          metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: null }
+        });
+      // Resuming is reported, never refused, in the moved order as in the
+      // stored one: the cut of the tool forks against Cut A in both.
+      for (const suppressed of [document, moved]) {
+        const resumed = resume(suppressed);
+        expect(newHistoryForks(suppressed, resumed)).toEqual([]);
+        expect(historyForks(resumed)).toContainEqual({
+          featureId: trim.featureId,
+          bodyId: tool.bodyId,
+          consumerFeatureId: cutA.featureId
+        });
+      }
+      // Once it runs it is a consumer like any other: the placement may not
+      // be moved after it.
+      const resumed = resume(document);
+      const placementLast = moveFeature(resumed, {
+        featureId: place.featureId,
+        toIndex: position(resumed, trim.featureId)
+      });
+      expect(() => assertNoNewHistoryFork(resumed, placementLast)).toThrow(
+        'Cannot reorder: “Place tool” would run after “Cut B” already replaced “Tool”, which branches the history. Keep “Place tool” before “Cut B”.'
+      );
+      const trimBeforePlacement = moveFeature(resumed, {
+        featureId: trim.featureId,
+        toIndex: position(resumed, place.featureId)
+      });
+      expect(() =>
+        assertNoNewHistoryFork(resumed, trimBeforePlacement)
+      ).toThrow(
+        'Cannot reorder: “Place tool” would run after “Trim tool” already replaced “Tool”, which branches the history. Keep “Place tool” before “Trim tool”.'
+      );
+    });
+
     it('does not refuse a resume that uncovers a fork a reorder never made', () => {
       // An edit of the tool added while its consumer is paused. Resuming
       // changes neither targets nor order.

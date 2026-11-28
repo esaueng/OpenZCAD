@@ -27,8 +27,10 @@ import {
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
   type BodyId,
+  type EntityId,
   type FeatureId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -178,6 +180,8 @@ export interface SharedVentFork {
   /** A stored document that already forks; see {@link sharedVentFork}. */
   document: ProjectDocument;
   features: Record<(typeof SHARED_HISTORY)[number], FeatureId>;
+  /** The shared cutter's body. */
+  vent: BodyId;
 }
 
 /**
@@ -244,6 +248,7 @@ export function sharedVentFork(): SharedVentFork {
   );
   return {
     document,
+    vent: vent.bodyId,
     features: {
       'Stock A': stockA.featureId,
       'Stock B': stockB.featureId,
@@ -252,6 +257,81 @@ export function sharedVentFork(): SharedVentFork {
       [CUT_A]: cutA.featureId,
       [SHARED_PLACEMENT]: place.featureId,
       [CUT_B]: cutB.featureId
+    }
+  };
+}
+
+export const TRIM_TOOL = 'Trim tool';
+export const SUPPRESSED_CUT = 'Suppressed cut';
+
+/** The history of {@link suppressedVentCut} as stored. */
+export const SUPPRESSED_HISTORY = [
+  TRIM_TOOL,
+  ...SHARED_HISTORY,
+  SUPPRESSED_CUT
+] as const;
+
+export interface SuppressedVentCut {
+  document: ProjectDocument;
+  features: Record<(typeof SUPPRESSED_HISTORY)[number], FeatureId>;
+  /** The node History's Suppress toggle writes to. */
+  suppressedCutNode: EntityId;
+  /** The body the suppressed cut would make. */
+  suppressedCutBody: BodyId;
+}
+
+/**
+ * {@link sharedVentFork} with a suppressed Subtract OF the shared cutter
+ * last: `Cut A → Place shared vent → Cut B → Suppressed cut`. "Cut A" already
+ * consumed the cutter, so the suppressed cut has nothing to pass through: it
+ * builds nothing and consumes nothing, wherever it stands after "Cut A". Its
+ * tool is made ahead of everything, so every id it reads is produced in time
+ * at any position.
+ */
+export function suppressedVentCut(): SuppressedVentCut {
+  const shared = sharedVentFork();
+  const trim = createBodyFeatureIds();
+  const suppressed = createBodyFeatureIds();
+  const document = replayCommands(
+    createProjectDocument('Shared vent', toUserId('user_2334'), 'mm'),
+    [
+      ...shared.document.commandLog,
+      commandFactories
+        .addPrimitive({
+          name: TRIM_TOOL,
+          bodyName: TRIM_TOOL,
+          primitiveKind: 'box',
+          dimensions: { width: 2, height: 2, depth: 2 },
+          ids: trim
+        })
+        .serialize(),
+      commandFactories
+        .moveFeature({ featureId: trim.featureId, toIndex: 0 })
+        .serialize(),
+      commandFactories
+        .booleanBodies({
+          name: SUPPRESSED_CUT,
+          operation: 'subtract',
+          targetBodyIds: [shared.vent, trim.bodyId],
+          ids: suppressed
+        })
+        .serialize(),
+      commandFactories
+        .setNodeMetadata({
+          nodeId: suppressed.featureNodeId,
+          metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+        })
+        .serialize()
+    ]
+  );
+  return {
+    document,
+    suppressedCutNode: suppressed.featureNodeId,
+    suppressedCutBody: suppressed.bodyId,
+    features: {
+      ...shared.features,
+      [TRIM_TOOL]: trim.featureId,
+      [SUPPRESSED_CUT]: suppressed.featureId
     }
   };
 }

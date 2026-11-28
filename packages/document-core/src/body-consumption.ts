@@ -199,7 +199,9 @@ export interface HistoryFork {
  * reported against it. A manually suppressed feature consumes only what its
  * pass-through consumes (the build then shows its input under its result id,
  * so a later feature on that input still forks), and is never reported
- * itself: it builds nothing of its own. A rollback-paused feature neither
+ * itself: it builds nothing of its own. Once an earlier feature consumed
+ * that input the build has nothing to pass through, so the suppressed step
+ * consumes nothing either. A rollback-paused feature neither
  * consumes nor is reported. A failed feature consumes exactly as a built
  * one: it passes its input through under its result id (ADR-017).
  *
@@ -234,13 +236,18 @@ function forksAgainst(
     const reported = !isFeatureManuallySuppressed(feature);
     const results = resultBodies(feature);
     for (const { bodyId, use } of bodyUses(feature)) {
+      const earlier = consumedBy.get(bodyId) ?? [];
+      // A suppressed step hands its input through only while that body is
+      // still live. After an earlier consumer the build passes nothing
+      // (kernel-adapter `passBodyThrough` fails closed), so the step takes
+      // nothing and leads nowhere, wherever it stands after that consumer.
+      if (!reported && earlier.length > 0) continue;
       if (use === 'consume') {
         children.set(bodyId, [
           ...(children.get(bodyId) ?? []),
           ...results.filter((result) => result !== bodyId)
         ]);
       }
-      const earlier = consumedBy.get(bodyId) ?? [];
       if (reported) {
         for (const consumer of consumers === 'first'
           ? earlier.slice(0, 1)
@@ -357,8 +364,16 @@ interface IntroducedHistoryFork {
  * placement after a consumer it ran ahead of, and that cut would move to the
  * unplaced position. Both are refused.
  *
+ * A suppressed step that has nothing left to pass through (see
+ * {@link historyForks}) is no consumer at all: it may move anywhere after
+ * the body's first consumer, and steps may move past it, with the same
+ * build either way. Above that consumer its pass-through takes the body, so
+ * that move is judged like any other consumer's.
+ *
  * Resuming or unsuppressing a step neither retargets nor reorders one, so it
- * is never refused here; and a feature added while History is rolled back is
+ * is never refused here: a fork the resume uncovers is reported by
+ * {@link historyForks}, and from then on the step is a consumer other steps
+ * are judged against. A feature added while History is rolled back is
  * judged where it lands, at the marker, ahead of the paused consumer.
  */
 function introducedHistoryForks(

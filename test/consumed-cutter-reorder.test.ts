@@ -18,6 +18,10 @@
  * such a document cannot move another cut to the unplaced position. And the
  * order is judged where a commit ends, not after each of its commands, so a
  * transaction may pass through a forking order on its way to a sound one.
+ *
+ * And a suppressed step counts as a consumer only while its pass-through
+ * takes the body. After an earlier consumer it passes nothing, so moving it
+ * among the later steps changes nothing that is built and is not refused.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -36,7 +40,11 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
+  toUserId,
+  type ProjectDocument
+} from '@openzcad/shared';
 import {
   CUT_A,
   CUT_B,
@@ -47,12 +55,15 @@ import {
   SHARED_PLACEMENT,
   SHARED_VENT,
   SUBTRACT,
+  SUPPRESSED_CUT,
+  SUPPRESSED_HISTORY,
   VENT,
   VENT_BODY,
   historyNames,
   sharedVentFork,
   stepCylinders,
   stepData,
+  suppressedVentCut,
   ventedBlock
 } from './support/history-reorder';
 
@@ -444,6 +455,114 @@ describe('reordering a cutter placement past its consuming Subtract', () => {
       expect(historyNames(manager.document).slice(-2)).toEqual([CUT_B, CUT_A]);
       const swapped = await exported(manager.document);
       expect(cuts(swapped.vents)).toEqual(cuts(placed.vents));
+    });
+
+    it('moves a suppressed cut that passes nothing through, with the same export', async () => {
+      const { document, features, suppressedCutNode, suppressedCutBody } =
+        suppressedVentCut();
+      expect(historyNames(document)).toEqual([...SUPPRESSED_HISTORY]);
+      /** Each step's warnings, by step: they are listed in history order. */
+      const warnings = (derived: Awaited<ReturnType<typeof exported>>) =>
+        (derived.derived.featureWarnings ?? [])
+          .map((entry) => `${entry.featureName}: ${entry.kind}`)
+          .sort();
+      const stored = await exported(document);
+      // Cut A consumed the cutter, so the suppressed cut stands for nothing.
+      expect(stored.derived.bodyRepresentations[suppressedCutBody]).toBe(
+        undefined
+      );
+      expect(cuts(stored.vents)).toEqual([
+        [0, 0, VENT.radius],
+        [VENT.x, VENT.y, VENT.radius]
+      ]);
+
+      const manager = new CommandManager(document);
+      const where = (name: (typeof SUPPRESSED_HISTORY)[number]) =>
+        historyNames(manager.document).indexOf(name);
+      const move = (toIndex: number) =>
+        commandFactories.moveFeature({
+          featureId: features[SUPPRESSED_CUT],
+          toIndex
+        });
+      // Directly above Cut B, then above the placement too: the build skips
+      // it at either place exactly as it did last.
+      for (const above of [CUT_B, SHARED_PLACEMENT] as const) {
+        const command = move(where(above));
+        expect(() =>
+          assertFeatureReorderCommits(manager.document, command.payload)
+        ).not.toThrow();
+        manager.execute(command);
+        expect(where(SUPPRESSED_CUT)).toBe(where(above) - 1);
+        const moved = await exported(manager.document);
+        expect(warnings(moved)).toEqual(warnings(stored));
+        expect(stepData(moved.step)).toBe(stepData(stored.step));
+      }
+      expect(historyNames(manager.document).slice(-4)).toEqual([
+        CUT_A,
+        SUPPRESSED_CUT,
+        SHARED_PLACEMENT,
+        CUT_B
+      ]);
+
+      // Above Cut A it is the cutter's first consumer. Its pass-through
+      // would then take the cutter and show it under the cut's own id, so
+      // that move is still refused, as any consumer's is.
+      const first = move(where(CUT_A));
+      const refused = `Cannot reorder: “${CUT_A}” would run after “${SUPPRESSED_CUT}” already replaced “${SHARED_VENT}”, which branches the history. Keep “${CUT_A}” before “${SUPPRESSED_CUT}”.`;
+      const settled = manager.document;
+      expect(() =>
+        assertFeatureReorderCommits(manager.document, first.payload)
+      ).toThrow(refused);
+      expect(() => manager.execute(first)).toThrow(refused);
+      expect(manager.document).toBe(settled);
+      const passed = await exported(
+        replayCommands(
+          createProjectDocument('Shared vent', toUserId('user_2334'), 'mm'),
+          [...settled.commandLog, first.serialize()]
+        )
+      );
+      expect(passed.derived.bodyRepresentations[suppressedCutBody]).not.toBe(
+        undefined
+      );
+      expect(stepData(passed.step)).not.toBe(stepData(stored.step));
+
+      // Resuming the moved cut is reported, not refused: it forks against
+      // Cut A, as it would have where it was stored.
+      const resume = (target: CommandManager) =>
+        target.execute(
+          commandFactories.setNodeMetadata({
+            nodeId: suppressedCutNode,
+            metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: null }
+          })
+        );
+      resume(manager);
+      expect(warnings(await exported(manager.document))).toContain(
+        `${SUPPRESSED_CUT}: history-fork`
+      );
+      const inPlace = new CommandManager(document);
+      resume(inPlace);
+      expect(warnings(await exported(inPlace.document))).toContain(
+        `${SUPPRESSED_CUT}: history-fork`
+      );
+      // Running, it is a consumer the placement is judged against.
+      expect(() =>
+        manager.execute(
+          commandFactories.moveFeature({
+            featureId: features[SUPPRESSED_CUT],
+            toIndex: where(CUT_B)
+          })
+        )
+      ).not.toThrow();
+      expect(() =>
+        manager.execute(
+          commandFactories.moveFeature({
+            featureId: features[SUPPRESSED_CUT],
+            toIndex: where(SHARED_PLACEMENT)
+          })
+        )
+      ).toThrow(
+        `Cannot reorder: “${SHARED_PLACEMENT}” would run after “${SUPPRESSED_CUT}” already replaced “${SHARED_VENT}”, which branches the history. Keep “${SHARED_PLACEMENT}” before “${SUPPRESSED_CUT}”.`
+      );
     });
   });
 });

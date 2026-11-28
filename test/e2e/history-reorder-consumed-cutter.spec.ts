@@ -19,6 +19,67 @@ import {
   test
 } from './openzcad-fixtures';
 
+declare global {
+  interface Window {
+    __holdRebuild?: { hold: boolean; held: number; release(): void };
+  }
+}
+
+/**
+ * Withholds the geometry worker's settled rebuild result for the document on
+ * screen while `hold` is set: the worker has answered, the app has not heard,
+ * so exact geometry stays pending for exactly as long as the spec needs.
+ *
+ * A rebuild answers in projection packets. The early one, whose state still
+ * carries `analysis`, only draws the model and is let through, since the
+ * workspace opens on it. The one after it is the settled result: it and
+ * everything behind it are held and delivered in order. A result answering a
+ * one-off request carries a request id and is never held.
+ */
+async function holdRebuilds(page: Page) {
+  await page.addInitScript(() => {
+    const results: (() => void)[] = [];
+    window.__holdRebuild = {
+      hold: true,
+      held: 0,
+      release() {
+        this.hold = false;
+        for (const deliver of results.splice(0)) deliver();
+      }
+    };
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Worker.prototype,
+      'onmessage'
+    )!;
+    Object.defineProperty(Worker.prototype, 'onmessage', {
+      ...descriptor,
+      set(listener: ((event: MessageEvent) => void) | null) {
+        if (!listener) {
+          descriptor.set!.call(this, listener);
+          return;
+        }
+        descriptor.set!.call(this, (event: MessageEvent) => {
+          const result = event.data as {
+            type?: string;
+            requestId?: string;
+            packet?: { state: object };
+          };
+          const gate = window.__holdRebuild!;
+          const live =
+            (result.type === 'projection-delta' || result.type === 'sync') &&
+            result.requestId === undefined;
+          const settled =
+            !result.packet || !('analysis' in result.packet.state);
+          if (gate.hold && live && (settled || results.length > 0)) {
+            gate.held += 1;
+            results.push(() => listener.call(this, event));
+          } else listener.call(this, event);
+        });
+      }
+    });
+  });
+}
+
 function historyOrder(page: Page) {
   return page.locator('.feature-row .feature-name').allTextContents();
 }
@@ -55,6 +116,12 @@ async function downloadStep(page: Page, testInfo: TestInfo, name: string) {
  * The move is refused by name, and the order and the downloaded vent are the
  * same before and after it. A reorder of independent steps still commits and
  * downloads the same DATA.
+ *
+ * The refusal is History's own order gate, asked before anything rebuilds,
+ * so it is first asked for while the opened project's exact rebuild has not
+ * landed. Without that gate the move waits on the rebuild: mid-rebuild it
+ * answers only that geometry is still rebuilding, and names the consumer
+ * once the rebuild is in, which is all the assertions further down see.
  */
 test(
   'refuses a history reorder that moves a cutter placement past its Subtract',
@@ -64,6 +131,7 @@ test(
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await stubApi(page, { panelLayout: { right: [['history']] } });
+    await holdRebuilds(page);
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/');
     await expect(page).toHaveTitle('OpenZCAD');
@@ -78,15 +146,32 @@ test(
     await page
       .getByRole('button', { name: 'History panel', exact: true })
       .waitFor({ state: 'visible', timeout: 60_000 });
-    // Stock, pocket tool and vent cutter, consumed by one Subtract.
-    await expectBodyCount(page, 1);
     await revealModelPanel(page);
     const status = page.getByRole('contentinfo');
-    await expect(status).toContainText('warnings0');
     const order = () => historyOrder(page);
     await expect.poll(order, { timeout: 30_000 }).toEqual([...HISTORY]);
     const undo = page.getByRole('button', { name: 'Undo', exact: true });
     await expect(undo).toBeDisabled();
+
+    // The project's exact rebuild has been answered and is withheld: the
+    // model on screen is not the settled one yet.
+    await expect
+      .poll(() => page.evaluate(() => window.__holdRebuild!.held), {
+        timeout: 120_000
+      })
+      .toBeGreaterThan(0);
+    const rebuilding = page.getByText('still rebuilding', { exact: false });
+    await grip(page, PLACEMENT).press('ArrowDown');
+    await expect(status).toContainText(REFUSAL);
+    await expect(rebuilding).toHaveCount(0);
+    expect(await order()).toEqual([...HISTORY]);
+    await expect(undo).toBeDisabled();
+    await page.evaluate(() => window.__holdRebuild!.release());
+
+    // Stock, pocket tool and vent cutter, consumed by one Subtract.
+    await expectBodyCount(page, 1);
+    await expect(status).toContainText('warnings0');
+    expect(await order()).toEqual([...HISTORY]);
 
     const expectVent = (step: string) => {
       const cuts = stepCylinders(step);
@@ -97,8 +182,11 @@ test(
     };
     const before = await downloadStep(page, testInfo, 'before.step');
     expectVent(before);
+    // The export has replaced the earlier refusal on the status line, so the
+    // one read next is the next press's own.
+    await expect(status).not.toContainText(REFUSAL, { timeout: 30_000 });
 
-    // The issue's gesture: the placement's grip, Down once.
+    // The issue's gesture again, on settled geometry: Down once.
     await grip(page, PLACEMENT).press('ArrowDown');
     await expect(status).toContainText(REFUSAL);
     expect(await order()).toEqual([...HISTORY]);

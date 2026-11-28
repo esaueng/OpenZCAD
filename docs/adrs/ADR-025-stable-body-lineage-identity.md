@@ -140,7 +140,10 @@ Neither changes what geometry is built.
 - `historyForks(document)` (document-core) lists every active feature that
   consumes or edits in place a body that an earlier active feature already
   consumed, using the same per-kind table. A manually suppressed consumer
-  still counts, because its pass-through replaces the body. A rolled-back one
+  still counts, because its pass-through replaces the body, unless an earlier
+  feature already consumed that body: the build then passes nothing through
+  (ADR-017 fails closed), so the suppressed step consumes nothing and may be
+  reordered freely after that consumer. A rolled-back one
   does not count, and a suppressed or rolled-back later feature is never
   reported. A failed step consumes like a built one, so its result id is the
   chain tip. Two consumers whose results a later boolean combines again (the
