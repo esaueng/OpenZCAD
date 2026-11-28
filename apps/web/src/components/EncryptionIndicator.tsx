@@ -6,7 +6,7 @@ import {
   ShieldAlert
 } from 'lucide-react';
 import {
-  IDENTITY_DISCONTINUED_PROBLEM,
+  isRecoveryGuidedProblem,
   type EncryptionStatus,
   type EncryptionStatusState
 } from '../lib/e2ee/encryptionStatus';
@@ -98,8 +98,9 @@ function presentationOf(
         text: [
           ...(problem !== undefined ? [problem] : []),
           // Retrying cannot verify a copy secured by keys the account no
-          // longer has; that problem already names the way forward.
-          ...(needsRepair && problem !== IDENTITY_DISCONTINUED_PROBLEM
+          // longer has, or bring back a record the account dropped; those
+          // problems already name the way forward.
+          ...(needsRepair && !isRecoveryGuidedProblem(problem)
             ? [REPAIR_SENTENCE]
             : [])
         ].join(' ')

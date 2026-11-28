@@ -54,6 +54,25 @@ export interface EncryptionStatus {
 export const IDENTITY_DISCONTINUED_PROBLEM =
   'This project was secured with encryption keys your account no longer has: your account’s encryption was set up again with new keys that don’t continue them, so this device can’t verify the account copy and won’t sync it. Nothing was changed, and your work stays on this device. To keep it in your account, choose Export project in the File menu, then Import project and save the imported copy.';
 
+/**
+ * The refusal for a project this account owns, under its current identity,
+ * whose authority record the account no longer returns although this device
+ * verified one (issue #1704). The device keeps refusing: an account that
+ * could drop the record and be believed could roll the project's membership
+ * back. Retrying cannot help, but the owner can put the record back from
+ * this device's own verified copy, after confirming, in Settings.
+ */
+export const AUTHORITY_WITHDRAWN_PROBLEM =
+  'Your account no longer returns this project’s verification record, which this device had already verified, so this device won’t trust or sync the account copy. Nothing was changed, and your work stays on this device. To restore the record from this device’s verified copy, open Settings › Encryption › Advanced encryption settings › Encrypted project recovery.';
+
+/** Problems whose own words name the way forward; a retry cannot fix them. */
+export function isRecoveryGuidedProblem(problem: string | undefined): boolean {
+  return (
+    problem === IDENTITY_DISCONTINUED_PROBLEM ||
+    problem === AUTHORITY_WITHDRAWN_PROBLEM
+  );
+}
+
 /** A project-scoped verification outcome; the lock is device-wide. */
 interface ProjectRecord {
   readonly verified: boolean;

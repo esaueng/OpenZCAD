@@ -77,6 +77,20 @@ export async function projectAuthority(
       'E2EE_AUTHORITY_INVALID',
       'Authority sequence must advance by one.'
     );
+  // Issue #1704: the owner's confirmed restoration of a record this account
+  // no longer stores. The device continues the sequence it pinned, so the
+  // compare-and-swap below cannot apply; instead the row must be absent.
+  // The Worker cannot tell a restoration from any other signed record, and
+  // need not: devices check every record against their own pins.
+  if (body.restoreMissing !== undefined && body.restoreMissing !== true)
+    refuse(400, 'E2EE_AUTHORITY_INVALID', 'restoreMissing must be true.');
+  const restore = body.restoreMissing === true;
+  if (restore && (access.staging || access.ownerUserId !== userId))
+    refuse(
+      403,
+      'E2EE_AUTHORITY_RESTORE_REFUSED',
+      'Only the owner of an encrypted project can restore its authority record.'
+    );
   const record = bytesField(body.record, 'record', {
     max: MAX_MLS_AUTHORITY_BYTES
   });
@@ -112,17 +126,47 @@ export async function projectAuthority(
       'E2EE_AUTHORITY_INVALID',
       'Authority metadata names another account, key or project.'
     );
-  const fence = projectFence(access, projectId, userId, 'member');
+  const fence = projectFence(
+    access,
+    projectId,
+    userId,
+    restore ? 'owner' : 'member'
+  );
   const device = deviceListUnchanged(userId, account);
   const predicate = `${authorization.sql} AND ${fence.sql} AND ${device.sql}`;
   const binds = [...authorization.binds, ...fence.binds, ...device.binds];
-  await runBatch(db, [
-    db
-      .prepare(
-        `INSERT INTO e2ee_project_authority
+  const values = [
+    userId,
+    projectId,
+    sequence,
+    decoded.accountKeyGeneration,
+    decoded.accountKeySequence,
+    deviceId,
+    record.text,
+    recordMac.text,
+    signature.text,
+    new Date().toISOString(),
+    ...binds
+  ];
+  const insert = `INSERT INTO e2ee_project_authority
     (user_id, project_id, sequence, account_key_generation, account_key_sequence,
      signer_device_id, record, record_mac, signature, updated_at)
-    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${predicate}
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${predicate}`;
+  await runBatch(db, [
+    restore
+      ? // Never replaces a row: a record the account still stores is advanced
+        // only by the compare-and-swap, whatever this request claims.
+        db
+          .prepare(
+            `${insert}
+      AND NOT EXISTS (SELECT 1 FROM e2ee_project_authority
+        WHERE user_id = ? AND project_id = ?)
+    ON CONFLICT (user_id, project_id) DO NOTHING`
+          )
+          .bind(...values, userId, projectId)
+      : db
+          .prepare(
+            `${insert}
       AND (? = 0 OR EXISTS (SELECT 1 FROM e2ee_project_authority
         WHERE user_id = ? AND project_id = ? AND sequence = ?))
     ON CONFLICT (user_id, project_id) DO UPDATE SET sequence = excluded.sequence,
@@ -131,25 +175,8 @@ export async function projectAuthority(
       record = excluded.record, record_mac = excluded.record_mac, signature = excluded.signature,
       updated_at = excluded.updated_at
     WHERE e2ee_project_authority.sequence = ?`
-      )
-      .bind(
-        userId,
-        projectId,
-        sequence,
-        decoded.accountKeyGeneration,
-        decoded.accountKeySequence,
-        deviceId,
-        record.text,
-        recordMac.text,
-        signature.text,
-        new Date().toISOString(),
-        ...binds,
-        expected,
-        userId,
-        projectId,
-        expected,
-        expected
-      )
+          )
+          .bind(...values, expected, userId, projectId, expected, expected)
   ]);
   if (
     !(await db

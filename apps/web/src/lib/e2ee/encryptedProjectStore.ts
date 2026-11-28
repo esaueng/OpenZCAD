@@ -611,14 +611,16 @@ async function groupCutoffs(
 
 /** Group and key-store refusals become ApiErrors the sync paths understand. */
 function asApiError(error: unknown): unknown {
-  // Issue #1704: an owner identity the account no longer continues. Still
-  // an integrity refusal; its own words carry the way forward.
+  // Issue #1704: an owner identity the account no longer continues, or an
+  // authority record the account dropped. Still an integrity refusal; its
+  // own words carry the way forward.
   if (
     (error instanceof ProjectGroupError &&
       error.code === 'archive-invalid' &&
-      error.detail === 'identity-discontinued') ||
+      error.detail !== undefined) ||
     (error instanceof ProjectAuthorityError &&
-      error.code === 'identity-discontinued')
+      (error.code === 'identity-discontinued' ||
+        error.code === 'authority-withdrawn'))
   )
     return new EncryptedProjectIntegrityError('authority', error.message);
   if (error instanceof ProjectGroupError && error.code === 'archive-invalid')
