@@ -1081,11 +1081,17 @@ export interface ExactKernelAdapter {
    * geometry is listed in `missing`, and a pair naming one is left out.
    * Parts in another configuration row are read as `assemblyInterference`
    * reads them.
+   *
+   * A sweep is several requests (the even positions, then each refinement
+   * round). `sweep` names the one they belong to: the rows its parts name
+   * are built for the first request and reused by the rest. Without it,
+   * each request builds them again.
    */
   assemblyInterferenceSweep(
     document: ProjectDocument,
     components: AssemblySweepComponent[],
-    positions: AssemblySweepPosition[]
+    positions: AssemblySweepPosition[],
+    sweep?: string
   ): Promise<AssemblySweepWorkerReport>;
   /**
    * M09 analysis overlays: the exact kernel's per-face analysis of each
@@ -5999,6 +6005,42 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     return out;
   }
 
+  /**
+   * The rows built for the sweep in progress, so its refinement requests do
+   * not build each of them again. One sweep at a time: the next sweep's
+   * first request replaces it. It holds serialized solids only, no kernel
+   * handle, so nothing in the kernel outlives a request.
+   */
+  private sweepRowParts: {
+    key: string;
+    rows: Map<string, AssemblyCheckRowPart>;
+  } | null = null;
+
+  /**
+   * `assemblyCheckRowParts` for one request of the sweep `sweep` names. A
+   * row that failed to build stays failed for the whole sweep, so a pair is
+   * never decided at some positions on geometry it lacked at others.
+   */
+  private async assemblySweepRowParts(
+    document: ProjectDocument,
+    componentIds: ReadonlySet<string>,
+    sweep: string | undefined
+  ): Promise<Map<string, AssemblyCheckRowPart>> {
+    if (sweep === undefined)
+      return this.assemblyCheckRowParts(document, componentIds);
+    // The id alone names the sweep; the rest refuses a caller reusing one.
+    const key = JSON.stringify([
+      sweep,
+      document.projectId,
+      document.version,
+      [...componentIds].sort()
+    ]);
+    if (this.sweepRowParts?.key === key) return this.sweepRowParts.rows;
+    const rows = await this.assemblyCheckRowParts(document, componentIds);
+    this.sweepRowParts = { key, rows };
+    return rows;
+  }
+
   private exportSolidsFor(
     kernel: RemusKernel,
     build: ExactBuildResult,
@@ -7112,7 +7154,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   async assemblyInterferenceSweep(
     document: ProjectDocument,
     components: AssemblySweepComponent[],
-    positions: AssemblySweepPosition[]
+    positions: AssemblySweepPosition[],
+    sweep?: string
   ): Promise<AssemblySweepWorkerReport> {
     // Checked before the build: a malformed pose refuses the whole sweep.
     const posesAt = positions.map((position) =>
@@ -7123,9 +7166,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ])
       )
     );
-    const rows = await this.assemblyCheckRowParts(
+    const rows = await this.assemblySweepRowParts(
       document,
-      new Set(components.map((component) => component.componentId))
+      new Set(components.map((component) => component.componentId)),
+      sweep
     );
     return this.withExportBuild(
       document,
@@ -7536,6 +7580,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // Export and solve methods own short-lived kernels, but the history
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
+    this.sweepRowParts = null;
     this.importedSteps.clear();
     this.edgeSelections.clear();
     this.meshPayloads.clear();

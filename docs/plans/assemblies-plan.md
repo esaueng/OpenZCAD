@@ -262,16 +262,23 @@ positions along one motion: a joint's Animate sweep (its limits, or a full
 turn for an unlimited angle, a coupled joint only as far as its mates
 allow) or a motion study's timeline, couplings followed as in playback. It is read-only and stores nothing.
 
-- **Pairs.** Only pairs whose relative pose changes along the motion are
-  checked; pairs that keep their places are counted and left to the static
-  check. More than 4000 pair checks in one sweep is refused by name.
+- **Pairs.** Pairs whose relative pose changes along the motion are checked
+  at every position. A pair the motion holds in one relative pose is left to
+  the static check (and counted) only when that pose is its rest pose; a
+  pair held anywhere else, as by a study that keys two parts to one place
+  for its whole length, is checked there once, and that verdict stands for
+  the whole motion. More than 4000 pair checks in one sweep is refused by
+  name.
 - **Positions.** 37 evenly spaced positions along a joint's sweep (36
   steps), or 8 per second of a study (24 to 120 steps), ends included, all
   in one geometry-worker job on one build: each position poses copies of
   the parts it checks (`assemblyInterferenceSweep` in the adapter). Then,
   four times, each gap across which a pair turns between overlap and no
   overlap is halved. An unknown position decides nothing, so every gap
-  between the two decided positions around it is halved instead. Each
+  between the two decided positions around it is halved instead. A
+  refinement the check does not answer is recorded as unknown, so it is
+  counted and never asked for again. The requests of one sweep share its
+  builds of the configuration rows the parts name. Each
   start and end is found to within 1/16 of a step; where undecided
   positions stay beside a turn, the pair says how far from it the turn
   can lie.

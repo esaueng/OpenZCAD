@@ -14,11 +14,13 @@ import {
   assemblyRuntime,
   useAssemblyRuntime
 } from '../../lib/assembly/assemblyRuntime';
+import { assemblyViewLeavesRest } from '../../lib/assembly/assemblyView';
 import {
   checkedPartName,
   describeInterference,
   describeInterferenceSummary,
-  INTERFERENCE_OTHER_POSITION
+  INTERFERENCE_OTHER_POSITION,
+  INTERFERENCE_OUTDATED_STATUS
 } from '../../lib/assembly/interferenceUi';
 import { AssemblyMotionInterference } from './AssemblyMotionInterference';
 import type { AssemblySweepCheck } from '@openzcad/document-core';
@@ -48,7 +50,11 @@ function plural(count: number, one: string, many = `${one}s`) {
  *
  * The pose checked is the saved one, the rest position, whatever the view
  * shows: every summary names it, and says so outright while a study, a
- * scrub or a sweep's "Show" poses the view somewhere else (#2154).
+ * scrub, a sweep's "Show" or the exploded view draws the parts somewhere
+ * else (#2154).
+ *
+ * A check that returns after its inputs changed is shown as out of date,
+ * and its summary is not posted to the workspace status as if current.
  */
 export function AssemblyInterferenceSection({
   document,
@@ -66,24 +72,26 @@ export function AssemblyInterferenceSection({
   const [openPair, setOpenPair] = useState<string | null>(null);
   const run = useRef(0);
   const selected = useAssemblyRuntime((s) => s.selectedComponentIds);
-  const shown = useAssemblyRuntime((s) => s.overrides);
-  const placed = useAssemblyRuntime((s) => s.placementOverrides);
+  const overrides = useAssemblyRuntime((s) => s.overrides);
+  const placementOverrides = useAssemblyRuntime((s) => s.placementOverrides);
+  const exploded = useAssemblyRuntime((s) => s.exploded);
+  const explodeOverrides = useAssemblyRuntime((s) => s.explodeOverrides);
   const set = document.assembly;
-  // Whether the view is posed away from the saved values this check reads.
-  const elsewhere =
-    placed.size > 0 ||
-    [...shown].some(([jointId, values]) => {
-      const saved = set?.joints.find((joint) => joint.id === jointId)?.values;
-      return (
-        !saved ||
-        values.some((value, dof) => Math.abs(value - (saved[dof] ?? 0)) > 1e-9)
-      );
-    });
+  // Whether the view draws the parts away from the pose this check reads.
+  const elsewhere = assemblyViewLeavesRest(set, {
+    overrides,
+    placementOverrides,
+    exploded,
+    explodeOverrides
+  });
   const { operands, missing } = useMemo(
     () => assemblyInterferenceOperands(document),
     [document]
   );
   const key = `${document.version}:${JSON.stringify(operands)}`;
+  // What a check that is still running is compared with when it returns.
+  const current = useRef(key);
+  current.current = key;
   const names = new Map(set?.components.map((c) => [c.id, c.name]) ?? []);
   const enough = operands.length >= 2;
 
@@ -100,8 +108,11 @@ export function AssemblyInterferenceSection({
           missing: [...new Set([...missing, ...report.missing])]
         };
         setState({ kind: 'done', key, report: merged });
+        // Of the parts as they were when it started: not the current ones.
         onStatus(
-          describeInterferenceSummary(summarizeInterference(merged)).status
+          current.current === key
+            ? describeInterferenceSummary(summarizeInterference(merged)).status
+            : INTERFERENCE_OUTDATED_STATUS
         );
       },
       (error: unknown) => {

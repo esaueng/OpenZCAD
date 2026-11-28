@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   activateConfiguration,
   addAssemblyComponents,
@@ -17,6 +17,7 @@ import {
   setConfigurationCell,
   setParameter,
   summarizeInterference,
+  SWEEP_REFINEMENTS,
   updateAssemblyComponent,
   type AssemblySweepCheck
 } from '@openzcad/document-core';
@@ -292,7 +293,7 @@ describe('AS04 interference of parts in another configuration (#2388)', () => {
   }, 120_000);
 
   it('sweeps a part in another row as that row builds it', async () => {
-    // The stop slides along +X by 0 to 20 mm: it starts 10 mm clear of the
+    // The stop slides along +X by 0 to 5 mm: it starts 10 mm clear of the
     // Narrow plate and never reaches it, but is inside the Wide one throughout.
     const along = (x: number): AssemblyFrame => ({
       origin: { x, y: 0, z: 0 },
@@ -300,32 +301,51 @@ describe('AS04 interference of parts in another configuration (#2388)', () => {
       xAxis: { x: 0, y: 1, z: 0 }
     });
     const base = fixture();
-    const moving: ProjectDocument = addAssemblyJoint(
-      {
-        ...base,
-        assembly: {
-          ...base.assembly!,
-          components: base.assembly!.components.map((c) =>
-            c.id === 'c_stop'
-              ? { ...c, grounded: false, placement: { ...IDENTITY_PLACEMENT } }
-              : c
-          )
+    const movingTo = (max: number): ProjectDocument =>
+      addAssemblyJoint(
+        {
+          ...base,
+          assembly: {
+            ...base.assembly!,
+            components: base.assembly!.components.map((c) =>
+              c.id === 'c_stop'
+                ? {
+                    ...c,
+                    grounded: false,
+                    placement: { ...IDENTITY_PLACEMENT }
+                  }
+                : c
+            )
+          }
+        },
+        {
+          joint: {
+            id: 'j_slide',
+            name: 'Slide',
+            kind: 'slider',
+            parent: { componentId: 'c_plate', frame: along(30) },
+            child: { componentId: 'c_stop', frame: along(0) },
+            values: [0],
+            limits: [{ min: 0, max }]
+          }
         }
-      },
-      {
-        joint: {
-          id: 'j_slide',
-          name: 'Slide',
-          kind: 'slider',
-          parent: { componentId: 'c_plate', frame: along(30) },
-          child: { componentId: 'c_stop', frame: along(0) },
-          values: [0],
-          limits: [{ min: 0, max: 5 }]
-        }
-      }
-    );
-    const check: AssemblySweepCheck = (document, components, positions) =>
-      adapter.assemblyInterferenceSweep(document, components, positions);
+      );
+    const moving = movingTo(5);
+    let requests = 0;
+    const check: AssemblySweepCheck = (
+      document,
+      components,
+      positions,
+      sweep
+    ) => {
+      requests += 1;
+      return adapter.assemblyInterferenceSweep(
+        document,
+        components,
+        positions,
+        sweep
+      );
+    };
     const sweep = async (document: ProjectDocument) => {
       const live = await synced(document);
       const planned = planAssemblySweep(live, {
@@ -358,5 +378,52 @@ describe('AS04 interference of parts in another configuration (#2388)', () => {
     expect(wide.report.configurations).toEqual({
       c_plate: { rowId: 'wide', rowName: 'Wide' }
     });
+
+    // Sliding 20 mm, the stop leaves the Wide plate at 15: the turn is
+    // refined over four more requests, all on one build of the Wide row.
+    const builds = vi.spyOn(
+      adapter as unknown as {
+        withExportBuild(document: ProjectDocument): Promise<unknown>;
+      },
+      'withExportBuild'
+    );
+    requests = 0;
+    const leaving = await sweep(
+      updateAssemblyComponent(movingTo(20), {
+        componentId: 'c_plate',
+        configurationId: 'wide'
+      })
+    );
+    const rowBuilds = builds.mock.calls.filter(
+      ([built]) => built.configurations?.activeRowId === 'wide'
+    ).length;
+    builds.mockRestore();
+    expect(leaving.pair.overlaps).toHaveLength(1);
+    expect(leaving.pair.overlaps[0]!.from).toBe(0);
+    expect(leaving.pair.overlaps[0]!.to).toBeLessThan(15);
+    expect(15 - leaving.pair.overlaps[0]!.to).toBeLessThanOrEqual(
+      leaving.report.resolution + 1e-9
+    );
+    expect(requests).toBe(1 + SWEEP_REFINEMENTS);
+    expect(rowBuilds).toBe(1);
+
+    // A row that cannot be built: unknown at every position, and the
+    // details keep which configuration of which part it was.
+    const width = listParameters(moving)[0]!.parameterId;
+    const unbuilt = await sweep(
+      updateAssemblyComponent(
+        setConfigurationCell(moving, {
+          rowId: 'wide',
+          column: { kind: 'parameter', parameterId: width },
+          value: '1/0'
+        }),
+        { componentId: 'c_plate', configurationId: 'wide' }
+      )
+    );
+    expect(unbuilt.pair.overlaps).toEqual([]);
+    expect(unbuilt.pair.unknownAt).toHaveLength(unbuilt.pair.checked);
+    expect(unbuilt.pair.unknownReasons).toEqual([
+      'the Wide configuration of Plate could not be built'
+    ]);
   }, 240_000);
 });

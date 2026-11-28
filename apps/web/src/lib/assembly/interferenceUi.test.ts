@@ -4,7 +4,8 @@ import {
   checkedPartName,
   describeInterference,
   describeInterferenceSummary,
-  describeSweepSummary
+  describeSweepSummary,
+  describeSweepUnknown
 } from './interferenceUi';
 
 const clear = (
@@ -188,5 +189,27 @@ describe('interference summaries (AS04)', () => {
   it('names a part with the configuration it was checked in (#2388)', () => {
     expect(checkedPartName('Plate', { rowName: 'Wide' })).toBe('Plate (Wide)');
     expect(checkedPartName('Plate', undefined)).toBe('Plate');
+  });
+
+  it("says why a swept pair is undecided, in the check's own words (#2388)", () => {
+    expect(
+      describeSweepUnknown(['0 mm', '5 mm'], false, [
+        'the Wide configuration of Plate could not be built'
+      ])
+    ).toBe(
+      'Not checked exactly at 0 mm, 5 mm: the Wide configuration of Plate could not be built. Not reported as clear there.'
+    );
+    // Each reason once, without doubling a full stop the kernel wrote.
+    expect(
+      describeSweepUnknown(['0 mm'], true, [
+        'the bodies could not be intersected exactly.',
+        'the check returned no result for this position'
+      ])
+    ).toBe(
+      'Not checked exactly at 0 mm, …: the bodies could not be intersected exactly; the check returned no result for this position. Not reported as clear there.'
+    );
+    expect(describeSweepUnknown(['0 mm'], false, [])).toBe(
+      'Not checked exactly at 0 mm; not reported as clear there.'
+    );
   });
 });

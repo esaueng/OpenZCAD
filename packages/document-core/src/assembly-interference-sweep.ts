@@ -22,9 +22,11 @@ import { assemblyCheckComponents } from './assembly-interference';
  * AS04 interference through motion (no schema change: a read-only query).
  * The exact pairwise check of `assembly-interference.ts`, run at positions
  * along one motion: a joint's Animate sweep (its limits, or a full turn for
- * an unlimited angle) or a motion study's timeline. Only pairs whose
- * relative pose changes along the motion are checked; every other pair is
- * where the static check left it.
+ * an unlimited angle) or a motion study's timeline. A pair whose relative
+ * pose changes along the motion is checked at every position. A pair the
+ * motion holds in one relative pose is left to the static check only when
+ * that pose is its rest pose; held anywhere else, it is checked there once,
+ * and that verdict stands for the whole motion.
  *
  * The motion is sampled, and labelled so: evenly spaced positions, then,
  * wherever a pair's verdict turns between overlap and no overlap, the gap
@@ -65,7 +67,16 @@ export interface AssemblySweepPlan {
   missing: string[];
   /** Pairs (display order, a before b) that move relative to each other. */
   pairs: [string, string][];
-  /** Pairs that keep their relative pose: the static check covers them. */
+  /**
+   * Pairs the motion holds in one relative pose that is not their rest
+   * pose (a study keying two parts somewhere for its whole length): the
+   * static check never saw them there, so the sweep checks each once.
+   */
+  held: [string, string][];
+  /**
+   * Pairs that keep their rest pose relative to each other throughout: the
+   * static check covers them.
+   */
   still: number;
 }
 
@@ -228,7 +239,17 @@ export function planAssemblySweep(
       components.push(component);
     else missing.push(component.componentId);
   }
+  // The pose the static check reads: the saved joint values.
+  const rest = new Map<string, number[]>();
+  for (const [componentId, pose] of solveAssembly(set).poses)
+    rest.set(componentId, transformToMatrix4(pose));
+  const differs = (rel: readonly number[], base: readonly number[]) =>
+    rel.some((value, index) => {
+      const scale = index >= 12 ? Math.max(1, Math.abs(base[index]!)) : 1;
+      return Math.abs(value - base[index]!) > 1e-9 * scale;
+    });
   const pairs: [string, string][] = [];
+  const held: [string, string][] = [];
   let still = 0;
   for (let i = 0; i < components.length; i += 1)
     for (let j = i + 1; j < components.length; j += 1) {
@@ -236,17 +257,24 @@ export function planAssemblySweep(
       const b = components[j]!.componentId;
       const first = poses[0]!;
       const base = relative(first.get(a)!, first.get(b)!);
-      const moves = poses.some((pose) => {
-        const rel = relative(pose.get(a)!, pose.get(b)!);
-        return rel.some((value, index) => {
-          const scale = index >= 12 ? Math.max(1, Math.abs(base[index]!)) : 1;
-          return Math.abs(value - base[index]!) > 1e-9 * scale;
-        });
-      });
-      if (moves) pairs.push([a, b]);
-      else still += 1;
+      if (
+        poses.some((pose) =>
+          differs(relative(pose.get(a)!, pose.get(b)!), base)
+        )
+      ) {
+        pairs.push([a, b]);
+        continue;
+      }
+      // Still along the motion. That is the static check's pair only where
+      // the motion holds it as it rests: a study can key both parts to
+      // another place for its whole length (or the rest solve can place
+      // neither), and the rest-pose verdict says nothing about that pose.
+      const restA = rest.get(a);
+      const restB = rest.get(b);
+      if (restA && restB && !differs(base, relative(restA, restB))) still += 1;
+      else held.push([a, b]);
     }
-  if (pairs.length === 0)
+  if (pairs.length === 0 && held.length === 0)
     return {
       ok: false,
       reason: 'This motion moves no part relative to another.'
@@ -255,6 +283,11 @@ export function planAssemblySweep(
     return {
       ok: false,
       reason: `This motion moves ${pairs.length} pairs of parts: too many to check at ${positions.length} positions.`
+    };
+  if (pairs.length * positions.length + held.length > MAX_SWEEP_PAIR_CHECKS)
+    return {
+      ok: false,
+      reason: `This motion holds ${held.length} pairs of parts away from their rest position: too many to check.`
     };
   return {
     ok: true,
@@ -267,6 +300,7 @@ export function planAssemblySweep(
       components,
       missing,
       pairs,
+      held,
       still
     }
   };
@@ -346,10 +380,16 @@ export function assemblySweepRefinements(
     .map(([at, pairs]) => ({ at, pairs }));
 }
 
-/** One moving pair's verdict along the motion. */
+/** One checked pair's verdict along the motion. */
 export interface AssemblySweptPair {
   a: string;
   b: string;
+  /**
+   * The motion holds this pair in one relative pose, away from its rest
+   * pose (`AssemblySweepPlan.held`): it was checked once, and that verdict
+   * is its verdict at every position.
+   */
+  held: boolean;
   /**
    * The stretches it overlaps, as the first and last positions found
    * overlapping; the turn lies within `resolution` beyond each end (or at
@@ -377,7 +417,16 @@ export interface AssemblySweptPair {
    * returned no verdict for: never read as clear.
    */
   unknownAt: number[];
-  /** Positions this pair was put to the check at, `unknownAt` included. */
+  /**
+   * Why, for the details: each distinct reason the check gave at those
+   * positions, in position order (a configuration row that could not be
+   * built names the row and the part).
+   */
+  unknownReasons: string[];
+  /**
+   * Positions this pair has a verdict or an unknown at, `unknownAt`
+   * included: every planned position, and each refinement asked for it.
+   */
   checked: number;
   /** The smallest certified gap at a position without overlap, if any. */
   closest: { at: number; distance: number } | null;
@@ -433,20 +482,33 @@ export function summarizeAssemblySweep(
     }
   const missing = new Set([...plan.missing, ...workerMissing]);
   const pairs: AssemblySweptPair[] = [];
-  for (const [a, b] of plan.pairs) {
+  let heldReported = false;
+  for (const { pair, held } of [
+    ...plan.pairs.map((entry) => ({ pair: entry, held: false })),
+    ...plan.held.map((entry) => ({ pair: entry, held: true }))
+  ]) {
+    const [a, b] = pair;
     // A pair with a part that has no geometry was not checked at all: it is
     // reported through `missing`, never as a pair clear along the motion.
     if (missing.has(a) || missing.has(b)) continue;
     const list = byPair.get(pairKey(a, b)) ?? [];
+    list.sort((p, q) => p.at - q.at);
     const answered = new Set(list.map(({ at }) => at));
+    // A held pair keeps one relative pose for the whole motion, so the
+    // verdict where it was checked is its verdict at every other position
+    // (an unknown there is unknown throughout). A moving pair has no such
+    // stand-in: a position without an answer is unknown.
+    const standIn = (held ? list[0]?.verdict : undefined) ?? UNANSWERED;
+    if (held) heldReported = true;
     for (const at of plan.positions)
-      if (!answered.has(at)) list.push({ at, verdict: UNANSWERED });
+      if (!answered.has(at)) list.push({ at, verdict: standIn });
     list.sort((p, q) => p.at - q.at);
     const stretches: AssemblySweptPair['overlaps'] = [];
     let open: AssemblySweptPair['overlaps'][number] | null = null;
     let worst: AssemblySweptPair['worst'] = null;
     let worstVolume = -1;
     const unknownAt: number[] = [];
+    const unknownReasons: string[] = [];
     let closest: AssemblySweptPair['closest'] = null;
     let touches = false;
     for (const { at, verdict } of list) {
@@ -466,6 +528,8 @@ export function summarizeAssemblySweep(
       // An unknown position neither ends nor continues a stretch.
       if (verdict.kind === 'unknown') {
         unknownAt.push(at);
+        if (!unknownReasons.includes(verdict.message))
+          unknownReasons.push(verdict.message);
         continue;
       }
       open = null;
@@ -491,15 +555,21 @@ export function summarizeAssemblySweep(
     pairs.push({
       a,
       b,
+      held,
       overlaps: stretches,
       worst,
       unknownAt,
+      unknownReasons,
       checked: list.length,
       closest,
       touches
     });
   }
-  const atAll = new Set(results.map((result) => result.at));
+  // A held pair's verdict covers every planned position, checked or not.
+  const atAll = new Set([
+    ...results.map((result) => result.at),
+    ...(heldReported ? plan.positions : [])
+  ]);
   return {
     step,
     resolution: step / 2 ** SWEEP_REFINEMENTS,
@@ -591,50 +661,91 @@ export function sortSweptPairs(
     .map(({ pair }) => pair);
 }
 
-/** Checks positions in the geometry worker (`assemblyInterferenceSweep`). */
+/**
+ * Checks positions in the geometry worker (`assemblyInterferenceSweep`).
+ * `sweep` is the same for every request of one sweep and no other, so the
+ * worker can build each configuration row the parts name once for all of
+ * them instead of once per request.
+ */
 export type AssemblySweepCheck = (
   document: ProjectDocument,
   components: AssemblySweepPlan['components'],
-  positions: AssemblySweepPosition[]
+  positions: AssemblySweepPosition[],
+  sweep: string
 ) => Promise<{
   positions: AssemblySweepPositionResult[];
   missing: string[];
   configurations?: Record<string, AssemblyCheckedConfiguration>;
 }>;
 
+let sweepsRun = 0;
+
 /**
- * Runs a planned sweep: every pair at the even positions, then
- * {@link SWEEP_REFINEMENTS} rounds halving each gap where a pair's verdict
- * turns, each round one worker request.
+ * Runs a planned sweep: every moving pair at the even positions and every
+ * held pair at the first of them, then {@link SWEEP_REFINEMENTS} rounds
+ * halving each gap where a pair's verdict turns, each round one worker
+ * request.
+ *
+ * Every pair asked at a position is recorded there: with the check's
+ * verdict, or as unknown when the response leaves the pair or the position
+ * out. So an unanswered refinement is counted, and the next round halves
+ * around it instead of asking for the same midpoint again.
  */
 export async function runAssemblySweep(
   document: ProjectDocument,
   plan: AssemblySweepPlan,
   check: AssemblySweepCheck
 ): Promise<AssemblySweepReport> {
-  const first = await check(
-    document,
-    plan.components,
-    assemblySweepPositions(
-      document,
-      plan,
-      plan.positions.map((at) => ({ at, pairs: plan.pairs }))
-    )
-  );
-  const results = [...first.positions];
-  const missing = new Set(first.missing);
-  const configurations = { ...first.configurations };
-  for (let round = 0; round < SWEEP_REFINEMENTS; round += 1) {
-    const asks = assemblySweepRefinements(results);
-    if (asks.length === 0) break;
-    const next = await check(
+  sweepsRun += 1;
+  const sweep = `sweep-${sweepsRun}-${Date.now().toString(36)}`;
+  const results: AssemblySweepPositionResult[] = [];
+  const missing = new Set<string>();
+  const configurations: Record<string, AssemblyCheckedConfiguration> = {};
+  const asked = new Set<string>();
+  const request = async (
+    wanted: readonly { at: number; pairs: readonly [string, string][] }[]
+  ): Promise<boolean> => {
+    const asks = wanted
+      .map(({ at, pairs }) => ({
+        at,
+        pairs: pairs.filter(([a, b]) => !asked.has(`${at}:${pairKey(a, b)}`))
+      }))
+      .filter(({ pairs }) => pairs.length > 0);
+    if (asks.length === 0) return false;
+    for (const { at, pairs } of asks)
+      for (const [a, b] of pairs) asked.add(`${at}:${pairKey(a, b)}`);
+    const response = await check(
       document,
       plan.components,
-      assemblySweepPositions(document, plan, asks)
+      assemblySweepPositions(document, plan, asks),
+      sweep
     );
-    results.push(...next.positions);
-    for (const id of next.missing) missing.add(id);
-    Object.assign(configurations, next.configurations);
-  }
+    for (const id of response.missing) missing.add(id);
+    Object.assign(configurations, response.configurations);
+    const answers = new Map<string, BodyClashVerdict>();
+    for (const result of response.positions)
+      for (const pair of result.pairs) {
+        const key = `${result.at}:${pairKey(pair.a, pair.b)}`;
+        if (!answers.has(key)) answers.set(key, pair.verdict);
+      }
+    for (const { at, pairs } of asks)
+      results.push({
+        at,
+        pairs: pairs.map(([a, b]) => ({
+          a,
+          b,
+          verdict: answers.get(`${at}:${pairKey(a, b)}`) ?? UNANSWERED
+        }))
+      });
+    return true;
+  };
+  await request(
+    plan.positions.map((at, index) => ({
+      at,
+      pairs: index === 0 ? [...plan.pairs, ...plan.held] : plan.pairs
+    }))
+  );
+  for (let round = 0; round < SWEEP_REFINEMENTS; round += 1)
+    if (!(await request(assemblySweepRefinements(results)))) break;
   return summarizeAssemblySweep(plan, results, [...missing], configurations);
 }

@@ -45,8 +45,8 @@ beforeAll(async () => {
 }, 120_000);
 afterAll(() => adapter.dispose());
 
-const check: AssemblySweepCheck = (document, components, positions) =>
-  adapter.assemblyInterferenceSweep(document, components, positions);
+const check: AssemblySweepCheck = (document, components, positions, sweep) =>
+  adapter.assemblyInterferenceSweep(document, components, positions, sweep);
 
 /** A frame at `x` whose z axis (a slider's travel) is world +X. */
 const along = (x: number): AssemblyFrame => ({
@@ -307,6 +307,7 @@ describe('AS04 interference through motion', () => {
         ['a', 'b'],
         ['a', 'gone']
       ] as [string, string][],
+      held: [],
       still: 0
     };
     const report = summarizeAssemblySweep(
@@ -349,6 +350,7 @@ describe('AS04 interference through motion', () => {
         ['plate', 'rack'],
         ['pinion', 'plate']
       ] as [string, string][],
+      held: [],
       still: 0
     };
     const report = summarizeAssemblySweep(
@@ -401,6 +403,7 @@ describe('AS04 interference through motion', () => {
       components: [],
       missing: [],
       pairs: [['a', 'b']] as [string, string][],
+      held: [],
       still: 0
     };
     // Position 1 came back without the pair; position 2 never came back.
@@ -539,6 +542,351 @@ describe('AS04 interference through motion', () => {
       [0]
     ]);
   }, 240_000);
+
+  it('checks a pair a study holds away from its rest pose, though it never moves along the study', async () => {
+    // Two 20 × 12 × 10 carriers on parallel sliders, 60 mm apart at rest.
+    // The study keys both to the same place for its whole length, so their
+    // relative pose never changes along it; a pin far away does the moving.
+    const manager = new CommandManager(createProjectDocument('Held', owner));
+    for (const name of ['Base', 'Left', 'Right', 'Pin'])
+      manager.execute(
+        commandFactories.addPrimitive({
+          name,
+          primitiveKind: 'box',
+          dimensions:
+            name === 'Base' || name === 'Pin'
+              ? { width: 10, height: 10, depth: 10 }
+              : { width: 20, height: 12, depth: 10 }
+        })
+      );
+    const ids = [...manager.document.bodyOrder] as BodyId[];
+    const start = [
+      { x: 0, y: 0, z: -50 },
+      { x: 0, y: 0, z: 0 },
+      { x: 60, y: 0, z: 0 },
+      { x: 0, y: 300, z: 0 }
+    ];
+    manager.execute(
+      commandFactories.addAssemblyComponents({
+        components: ids.map((bodyId, index) => ({
+          componentId: ['c_base', 'c_left', 'c_right', 'c_pin'][index]!,
+          name: ['Base', 'Left', 'Right', 'Pin'][index]!,
+          bodyId,
+          grounded: index === 0,
+          placement: { ...IDENTITY_PLACEMENT, translation: start[index]! }
+        }))
+      })
+    );
+    for (const [id, child, x, y] of [
+      ['j_left', 'c_left', 0, 0],
+      ['j_right', 'c_right', 60, 0],
+      ['j_pin', 'c_pin', 0, 300]
+    ] as const)
+      manager.execute(
+        commandFactories.addAssemblyJoint({
+          joint: {
+            id,
+            name: id,
+            kind: 'slider',
+            // In the base's own frame, 50 mm above it: world z = 0.
+            parent: {
+              componentId: 'c_base',
+              frame: { ...along(x), origin: { x, y, z: 50 } }
+            },
+            child: { componentId: child, frame: along(0) },
+            values: [0],
+            limits: [{ min: -60, max: 60 }]
+          }
+        })
+      );
+    const held = (jointId: string, value: number) => ({
+      jointId,
+      dof: 0,
+      keys: [
+        { t: 0, value, easing: 'linear' as const },
+        { t: 2, value, easing: 'linear' as const }
+      ]
+    });
+    manager.execute(
+      commandFactories.setAssemblyStudy({
+        study: {
+          id: 'st_held',
+          name: 'Held',
+          durationS: 2,
+          playback: 'once',
+          tracks: [
+            held('j_left', 30),
+            held('j_right', -30),
+            {
+              jointId: 'j_pin',
+              dof: 0,
+              keys: [
+                { t: 0, value: 0, easing: 'linear' },
+                { t: 2, value: 20, easing: 'linear' }
+              ]
+            }
+          ]
+        }
+      })
+    );
+    const document = await synced(manager.document);
+
+    // At rest the carriers are 40 mm apart, and the static check says so.
+    const { operands } = assemblyInterferenceOperands(document, () => true);
+    const rest = await adapter.assemblyInterference(document, operands);
+    expect(
+      rest.pairs.find((p) => p.a === 'c_left' && p.b === 'c_right')!.verdict
+    ).toMatchObject({ kind: 'clear', distance: 40 });
+
+    const planned = planAssemblySweep(
+      document,
+      { kind: 'study', studyId: 'st_held' },
+      () => true
+    );
+    if (!planned.ok) throw new Error(planned.reason);
+    const { plan } = planned;
+    // Only the pin moves against the others along the study.
+    expect(plan.pairs).toEqual([
+      ['c_base', 'c_pin'],
+      ['c_left', 'c_pin'],
+      ['c_right', 'c_pin']
+    ]);
+    // The study holds every other pair somewhere the static check did not
+    // look: none of them is left to it.
+    expect(plan.held).toEqual([
+      ['c_base', 'c_left'],
+      ['c_base', 'c_right'],
+      ['c_left', 'c_right']
+    ]);
+    expect(plan.still).toBe(0);
+
+    const asked: number[] = [];
+    const report = await runAssemblySweep(
+      document,
+      plan,
+      (doc, components, positions, sweep) => {
+        for (const position of positions)
+          if (
+            position.pairs.some(([a, b]) => a === 'c_left' && b === 'c_right')
+          )
+            asked.push(position.at);
+        return check(doc, components, positions, sweep);
+      }
+    );
+    // One exact check decides a pose held for the whole study.
+    expect(asked).toEqual([0]);
+    const carriers = report.pairs.find(
+      (pair) => pair.a === 'c_left' && pair.b === 'c_right'
+    )!;
+    expect(carriers.held).toBe(true);
+    expect(carriers.overlaps).toEqual([
+      { from: 0, to: 2, fromWithin: 0, toWithin: 0 }
+    ]);
+    expect(carriers.unknownAt).toEqual([]);
+    expect(carriers.checked).toBe(plan.positions.length);
+    expect(carriers.worst!.at).toBe(0);
+    const worst = carriers.worst!.verdict;
+    expect(worst.kind).toBe('interference');
+    if (worst.kind === 'interference')
+      expect(worst.volume).toBeCloseTo(2400, 6);
+    expect(summarizeSweptPairs(report).overlapping).toBe(1);
+    expect(report.still).toBe(0);
+    // A moving pair is not marked held.
+    expect(
+      report.pairs.find((pair) => pair.a === 'c_left' && pair.b === 'c_pin')!
+        .held
+    ).toBe(false);
+  }, 240_000);
+
+  it('sweeps a study that only holds parts away from rest, and leaves a pair at its rest pose to the static check', async () => {
+    const manager = await rig();
+    const study = (value: number) =>
+      commandFactories.setAssemblyStudy({
+        study: {
+          id: 'st_hold',
+          name: 'Hold',
+          durationS: 1,
+          playback: 'once',
+          tracks: [
+            {
+              jointId: 'j_slide',
+              dof: 0,
+              keys: [
+                { t: 0, value, easing: 'linear' },
+                { t: 1, value, easing: 'linear' }
+              ]
+            }
+          ]
+        }
+      });
+    // Held at 40 mm, the pin sits inside the block for the whole study.
+    manager.execute(study(40));
+    const planned = planAssemblySweep(
+      manager.document,
+      { kind: 'study', studyId: 'st_hold' },
+      () => true
+    );
+    if (!planned.ok) throw new Error(planned.reason);
+    expect(planned.plan.pairs).toEqual([]);
+    expect(planned.plan.held).toEqual([
+      ['c_block', 'c_pin'],
+      ['c_pin', 'c_post']
+    ]);
+    expect(planned.plan.still).toBe(1);
+    // Held where the parts rest, nothing differs from the static check.
+    manager.execute(study(0));
+    expect(
+      planAssemblySweep(
+        manager.document,
+        { kind: 'study', studyId: 'st_hold' },
+        () => true
+      )
+    ).toEqual({
+      ok: false,
+      reason: 'This motion moves no part relative to another.'
+    });
+  });
+
+  it('applies the one verdict of a held pair to every position, unknown included', () => {
+    const plan = {
+      source: { kind: 'study' as const, studyId: 's' },
+      unit: 's' as const,
+      from: 0,
+      to: 2,
+      positions: [0, 1, 2],
+      components: [],
+      missing: [],
+      pairs: [['a', 'b']] as [string, string][],
+      held: [
+        ['a', 'c'],
+        ['b', 'c']
+      ] as [string, string][],
+      still: 0
+    };
+    const report = summarizeAssemblySweep(plan, [
+      {
+        at: 0,
+        pairs: [
+          { a: 'a', b: 'b', verdict: clear },
+          { a: 'a', b: 'c', verdict: unknown }
+        ]
+      },
+      at(1, clear),
+      at(2, clear)
+    ]);
+    expect(report.pairs.map((pair) => [pair.a, pair.b, pair.held])).toEqual([
+      ['a', 'b', false],
+      ['a', 'c', true],
+      ['b', 'c', true]
+    ]);
+    // Undecided where it was checked: undecided for the whole motion.
+    expect(report.pairs[1]!.unknownAt).toEqual([0, 1, 2]);
+    // Never answered: unknown throughout, never clear.
+    expect(report.pairs[2]!.unknownAt).toEqual([0, 1, 2]);
+    expect(report.pairs[2]!.unknownReasons).toEqual([
+      'the check returned no result for this position'
+    ]);
+    expect(summarizeSweptPairs(report)).toMatchObject({
+      unknown: 2,
+      unknownEverywhere: 2,
+      clear: 1
+    });
+  });
+
+  it('counts a refinement the check does not answer as unknown, and never asks the same position twice', async () => {
+    const document = (await rig()).document;
+    const planned = planAssemblySweep(
+      document,
+      { kind: 'joint', jointId: 'j_slide', dof: 0 },
+      () => true
+    );
+    if (!planned.ok) throw new Error(planned.reason);
+    const rounds: number[][] = [];
+    // The even positions are answered (the pin is in the block between 30
+    // and 50 mm); every refinement comes back without the pair, or without
+    // the position at all.
+    const report = await runAssemblySweep(
+      document,
+      planned.plan,
+      async (_document, _components, positions) => {
+        rounds.push(positions.map((position) => position.at));
+        if (rounds.length > 1)
+          return {
+            positions: positions
+              .filter((_position, index) => index % 2 === 0)
+              .map((position) => ({ at: position.at, pairs: [] })),
+            missing: []
+          };
+        return {
+          positions: positions.map((position) => ({
+            at: position.at,
+            pairs: position.pairs.map(([a, b]) => ({
+              a,
+              b,
+              verdict:
+                a === 'c_block' && position.at > 30 && position.at < 50
+                  ? hit
+                  : clear
+            }))
+          })),
+          missing: []
+        };
+      }
+    );
+    expect(rounds).toHaveLength(1 + SWEEP_REFINEMENTS);
+    const refined = rounds.slice(1).flat();
+    expect(refined.length).toBeGreaterThan(0);
+    expect(new Set(refined).size).toBe(refined.length);
+    const pair = report.pairs.find(
+      (entry) => entry.a === 'c_block' && entry.b === 'c_pin'
+    )!;
+    // Every position asked and not answered is listed, never dropped.
+    expect(pair.unknownAt).toEqual([...refined].sort((p, q) => p - q));
+    expect(pair.checked).toBe(planned.plan.positions.length + refined.length);
+    expect(pair.unknownReasons).toEqual([
+      'the check returned no result for this position'
+    ]);
+    expect(summarizeSweptPairs(report)).toMatchObject({
+      overlapping: 1,
+      unknown: 1,
+      unknownEverywhere: 0
+    });
+    // The pair the refinements never named is untouched by them.
+    expect(
+      report.pairs.find((entry) => entry.a === 'c_pin' && entry.b === 'c_post')!
+        .unknownAt
+    ).toEqual([]);
+  });
+
+  it('keeps the reason a position could not be checked, for the details (#2388)', () => {
+    const plan = {
+      source: { kind: 'joint' as const, jointId: 'j', dof: 0 },
+      unit: 'mm' as const,
+      from: 0,
+      to: 2,
+      positions: [0, 1, 2],
+      components: [],
+      missing: [],
+      pairs: [['plate', 'stop']] as [string, string][],
+      held: [],
+      still: 0
+    };
+    const unbuilt: BodyClashVerdict = {
+      kind: 'unknown',
+      reason: 'configuration_unavailable',
+      message: 'the Wide configuration of Plate could not be built'
+    };
+    const report = summarizeAssemblySweep(plan, [
+      { at: 0, pairs: [{ a: 'plate', b: 'stop', verdict: unbuilt }] },
+      { at: 1, pairs: [{ a: 'plate', b: 'stop', verdict: unbuilt }] }
+    ]);
+    expect(report.pairs[0]!.unknownAt).toEqual([0, 1, 2]);
+    // Each distinct reason once, in the order the positions give them.
+    expect(report.pairs[0]!.unknownReasons).toEqual([
+      'the Wide configuration of Plate could not be built',
+      'the check returned no result for this position'
+    ]);
+  });
 
   it('sweeps a coupled joint only as far as its mate allows, as Animate does', async () => {
     const document = (await rig(null)).document;

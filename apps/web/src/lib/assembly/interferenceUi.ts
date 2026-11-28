@@ -167,6 +167,42 @@ export const INTERFERENCE_OTHER_POSITION =
   'The view shows another position, which this check does not cover.';
 
 /**
+ * The workspace status when a check returns after its inputs changed. The
+ * result is of parts that are no longer what the model holds, so its summary
+ * is never posted as if it were current; the panel marks it out of date.
+ */
+export const INTERFERENCE_OUTDATED_STATUS =
+  'Interference: the parts or their positions changed during the check. Check again.';
+export const SWEEP_OUTDATED_STATUS =
+  'Interference through motion: the parts, their motion or the model changed during the check. Sweep again.';
+
+/** Said under a pair the motion holds in one pose away from its rest pose. */
+export const SWEEP_HELD_NOTE =
+  'The motion holds these parts in one position, away from where they rest. It was checked once, and the result stands for the whole motion.';
+
+/**
+ * A swept pair's undecided positions, for its details: where (the first few,
+ * already formatted) and why, in the check's own words, so a configuration
+ * row that could not be built is named with its part (#2388).
+ */
+export function describeSweepUnknown(
+  /** The positions to list. */
+  positions: readonly string[],
+  /** Whether more positions are undecided than those listed. */
+  more: boolean,
+  reasons: readonly string[]
+): string {
+  const where = `Not checked exactly at ${positions.join(', ')}${more ? ', …' : ''}`;
+  const why = reasons
+    .map((reason) => reason.replace(/[.\s]+$/, ''))
+    .filter(Boolean)
+    .join('; ');
+  return why
+    ? `${where}: ${why}. Not reported as clear there.`
+    : `${where}; not reported as clear there.`;
+}
+
+/**
  * AS04 one-line summary of a sweep. "No overlap at the positions checked"
  * is a claim about every moving pair at every one of them, so it is made
  * only when each was decided: a pair unknown somewhere (at every position,

@@ -10,6 +10,7 @@ import {
   type BodyId
 } from '@openzcad/shared';
 import {
+  assemblyViewLeavesRest,
   buildAssemblyView,
   MOTION_SETUP_PREVIEW_JOINT_ID,
   jointFromTool,
@@ -248,6 +249,100 @@ describe('assembly view model', () => {
       3000
     );
     expect(back?.overrides.get('joint_pivot')?.[0]).toBeCloseTo(0, 9);
+  });
+});
+
+describe('whether the view leaves the rest position', () => {
+  function pinned() {
+    const { manager, a, b } = scissors();
+    manager.execute(
+      commandFactories.addAssemblyJoint({
+        joint: {
+          id: 'joint_pin',
+          name: 'Pivot',
+          kind: 'revolute',
+          parent: { componentId: 'comp_a', frame: PIVOT },
+          child: { componentId: 'comp_b', frame: PIVOT },
+          values: [12],
+          limits: [null]
+        }
+      })
+    );
+    return { document: manager.document, a, b };
+  }
+  const still = {
+    ...runtime,
+    exploded: false,
+    explodeOverrides: new Map<string, { x: number; y: number; z: number }>()
+  };
+
+  it('is the rest position until a joint value, a placement or an exploded offset moves a part', () => {
+    const { document } = pinned();
+    const set = document.assembly!;
+    expect(assemblyViewLeavesRest(set, still)).toBe(false);
+    // A value shown where it is saved changes nothing.
+    expect(
+      assemblyViewLeavesRest(set, {
+        ...still,
+        overrides: new Map([['joint_pin', [12]]])
+      })
+    ).toBe(false);
+    expect(
+      assemblyViewLeavesRest(set, {
+        ...still,
+        overrides: new Map([['joint_pin', [90]]])
+      })
+    ).toBe(true);
+    expect(
+      assemblyViewLeavesRest(set, {
+        ...still,
+        placementOverrides: new Map([['comp_b', set.components[1]!.placement]])
+      })
+    ).toBe(true);
+  });
+
+  it('counts the exploded view exactly when it draws a part off its solved pose', () => {
+    const { document, b } = pinned();
+    const saved = {
+      ...document,
+      assembly: {
+        ...document.assembly!,
+        explode: { offsets: { comp_b: { x: 0, y: 0, z: 30 } } }
+      }
+    };
+    const cases = [
+      // Saved offsets are drawn only while exploded.
+      { doc: saved, state: still, away: false },
+      { doc: saved, state: { ...still, exploded: true }, away: true },
+      // Exploded with nothing pulled out is the rest position.
+      { doc: document, state: { ...still, exploded: true }, away: false },
+      {
+        doc: document,
+        state: {
+          ...still,
+          exploded: true,
+          explodeOverrides: new Map([['comp_b', { x: 5, y: 0, z: 0 }]])
+        },
+        away: true
+      },
+      // A drag back onto the solved pose replaces the saved offset.
+      {
+        doc: saved,
+        state: {
+          ...still,
+          exploded: true,
+          explodeOverrides: new Map([['comp_b', { x: 0, y: 0, z: 0 }]])
+        },
+        away: false
+      }
+    ];
+    const rest = buildAssemblyView(document, still)!.matrices.get(b)!;
+    for (const { doc, state, away } of cases) {
+      expect(assemblyViewLeavesRest(doc.assembly, state)).toBe(away);
+      // It says what the view draws: the matrix moves exactly when it does.
+      const drawn = buildAssemblyView(doc, state)!.matrices.get(b)!;
+      expect(drawn.some((value, index) => value !== rest[index])).toBe(away);
+    }
   });
 });
 

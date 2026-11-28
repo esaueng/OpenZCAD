@@ -23,13 +23,23 @@ import { formatAssemblyValue } from '../../lib/assembly/assemblyUi';
 import {
   checkedPartName,
   describeInterference,
-  describeSweepSummary
+  describeSweepSummary,
+  describeSweepUnknown,
+  SWEEP_HELD_NOTE,
+  SWEEP_OUTDATED_STATUS
 } from '../../lib/assembly/interferenceUi';
 import { formatNumber } from '../../lib/model';
 
 type SweepState =
   | { kind: 'idle' }
-  | { kind: 'running'; key: string; pairs: number; positions: number }
+  | {
+      kind: 'running';
+      key: string;
+      pairs: number;
+      /** Pairs the motion holds away from rest: checked once each. */
+      held: number;
+      positions: number;
+    }
   | {
       kind: 'done';
       key: string;
@@ -53,13 +63,18 @@ const sourceValue = (source: AssemblySweepSource) =>
 /**
  * AS04 interference through motion: the exact pairwise check at positions
  * along one joint's sweep or one motion study, for the pairs that move
- * relative to each other. Every figure says it was sampled: an overlap
+ * relative to each other, and once for each pair the motion holds away from
+ * its rest position. Every figure says it was sampled: an overlap
  * shorter than one step can fall between positions, so nothing is called
  * clear outright. "Show" poses the assembly at a pair's worst position, as
  * a transient scrub that is never saved.
  *
  * The summary line counts what was not decided as well as what overlaps: a
  * pair unknown at every position never reads as "no overlap" (#2183).
+ *
+ * A sweep that returns after the motion picked, the parts or the model
+ * changed is shown as out of date, and its summary is not posted to the
+ * workspace status as if current.
  */
 export function AssemblyMotionInterference({
   document,
@@ -117,6 +132,9 @@ export function AssemblyMotionInterference({
   const key = selected
     ? `${document.version}:${selected.value}:${JSON.stringify(set)}`
     : '';
+  // What a sweep that is still running is compared with when it returns.
+  const current = useRef(key);
+  current.current = key;
 
   if (!set || sources.length === 0) return null;
 
@@ -139,6 +157,7 @@ export function AssemblyMotionInterference({
       kind: 'running',
       key,
       pairs: plan.pairs.length,
+      held: plan.held.length,
       positions: plan.positions.length
     });
     runAssemblySweep(document, plan, check).then(
@@ -152,12 +171,15 @@ export function AssemblyMotionInterference({
           label: selected.label,
           report
         });
+        // Of the motion and parts as they were when it started.
         onStatus(
-          describeSweepSummary(
-            summarizeSweptPairs(report),
-            report.checked,
-            selected.label
-          ).status
+          current.current === key
+            ? describeSweepSummary(
+                summarizeSweptPairs(report),
+                report.checked,
+                selected.label
+              ).status
+            : SWEEP_OUTDATED_STATUS
         );
       },
       (error: unknown) => {
@@ -207,7 +229,11 @@ export function AssemblyMotionInterference({
           pair.overlaps.length > 0 || pair.unknownAt.length > 0 || pair.touches
       )
     : [];
-  const quiet = done ? done.report.pairs.length - attention.length : 0;
+  const quiet = done
+    ? done.report.pairs.filter((pair) => !attention.includes(pair))
+    : [];
+  const quietHeld = quiet.filter((pair) => pair.held).length;
+  const quietMoving = quiet.length - quietHeld;
 
   const pairValue = (pair: AssemblySweptPair, unit: AssemblyDofUnit | 's') => {
     if (pair.overlaps.length > 0)
@@ -242,7 +268,16 @@ export function AssemblyMotionInterference({
         {/* Not a second status role: the section's own status leads. */}
         <p className="assembly-muted" aria-live="polite">
           {state.kind === 'running'
-            ? `Checking ${plural(state.pairs, 'moving pair')} at ${plural(state.positions, 'position')}…`
+            ? `Checking ${[
+                state.pairs > 0
+                  ? `${plural(state.pairs, 'moving pair')} at ${plural(state.positions, 'position')}`
+                  : '',
+                state.held > 0
+                  ? `${plural(state.held, 'pair')} held away from rest`
+                  : ''
+              ]
+                .filter(Boolean)
+                .join(', and ')}…`
             : state.kind === 'failed'
               ? `The check failed: ${state.message}`
               : done
@@ -326,14 +361,16 @@ export function AssemblyMotionInterference({
                             }
                           </p>
                         ) : null}
+                        {pair.held ? <p>{SWEEP_HELD_NOTE}</p> : null}
                         {pair.unknownAt.length > 0 ? (
                           <p>
-                            {`Not checked exactly at ${pair.unknownAt
-                              .slice(0, 6)
-                              .map((at) => format(at, done.unit))
-                              .join(
-                                ', '
-                              )}${pair.unknownAt.length > 6 ? ', …' : ''}; not reported as clear there.`}
+                            {describeSweepUnknown(
+                              pair.unknownAt
+                                .slice(0, 6)
+                                .map((at) => format(at, done.unit)),
+                              pair.unknownAt.length > 6,
+                              pair.unknownReasons
+                            )}
                           </p>
                         ) : null}
                         {pair.overlaps.some(
@@ -369,8 +406,11 @@ export function AssemblyMotionInterference({
           ) : null}
           <p className="assembly-muted">
             {[
-              quiet > 0
-                ? `${plural(quiet, 'moving pair')} clear at every position checked`
+              quietMoving > 0
+                ? `${plural(quietMoving, 'moving pair')} clear at every position checked`
+                : '',
+              quietHeld > 0
+                ? `${plural(quietHeld, 'pair')} held away from rest, clear where held`
                 : '',
               done.report.still > 0
                 ? `${plural(done.report.still, 'pair')} keep their places (see the check above)`

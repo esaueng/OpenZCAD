@@ -274,6 +274,44 @@ export function buildAssemblyView(
   };
 }
 
+/**
+ * Whether the view draws a part anywhere but its rest position, the pose the
+ * saved joint values and placements solve to (which the static interference
+ * check reads). Every way `buildAssemblyView` moves a part counts: a
+ * transient joint value (a study, a scrub, a sweep's "Show"), a placement
+ * being dragged, and the exploded view's offsets, which it applies on top of
+ * the solved pose. Exploded with no part pulled out is still the rest
+ * position.
+ */
+export function assemblyViewLeavesRest(
+  set: AssemblySet | undefined,
+  runtime: Pick<
+    AssemblyRuntimeState,
+    'overrides' | 'placementOverrides' | 'exploded' | 'explodeOverrides'
+  >
+): boolean {
+  if (runtime.placementOverrides.size > 0) return true;
+  for (const [jointId, values] of runtime.overrides) {
+    const saved = set?.joints.find((joint) => joint.id === jointId)?.values;
+    if (
+      !saved ||
+      values.some((value, dof) => Math.abs(value - (saved[dof] ?? 0)) > 1e-9)
+    )
+      return true;
+  }
+  if (!runtime.exploded || !set) return false;
+  return set.components.some((component) => {
+    const offset =
+      runtime.explodeOverrides.get(component.id) ??
+      assemblyExplodeOffset(set, component.id);
+    return (
+      offset !== null &&
+      Math.max(Math.abs(offset.x), Math.abs(offset.y), Math.abs(offset.z)) >
+        1e-9
+    );
+  });
+}
+
 /** A component's placement as a column-major matrix (identity: as modelled). */
 export function placementMatrix(
   set: AssemblySet,

@@ -235,6 +235,96 @@ describe('Assembly interference section (AS04)', () => {
     );
   });
 
+  it('says the view shows another position while it is exploded', async () => {
+    const { section } = renderPanel(async () => ({
+      pairs: [
+        {
+          a: 'comp_a',
+          b: 'comp_b',
+          verdict: {
+            kind: 'clear',
+            touching: false,
+            distance: 5,
+            closest: null,
+            atLeast: 5
+          }
+        }
+      ],
+      missing: []
+    }));
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
+    });
+    const status = () => within(section()).getByRole('status');
+    expect(status()).toHaveTextContent(
+      /^No parts overlap at the rest position\.$/
+    );
+    // Exploded with no part pulled out, the view is still the rest position.
+    act(() => assemblyRuntime.setExploded(true));
+    expect(status()).toHaveTextContent(
+      /^No parts overlap at the rest position\.$/
+    );
+    // A part pulled out is drawn away from where the check read it.
+    act(() =>
+      assemblyRuntime.setExplodeOverride('comp_b', { x: 0, y: 0, z: 30 })
+    );
+    expect(status()).toHaveTextContent(
+      'No parts overlap at the rest position. The view shows another position, which this check does not cover.'
+    );
+    act(() => assemblyRuntime.setExploded(false));
+    expect(status()).toHaveTextContent(
+      /^No parts overlap at the rest position\.$/
+    );
+  });
+
+  it('does not post a result for parts that changed while it was being checked', async () => {
+    let finish: (report: AssemblyInterferenceReport) => void = () => {};
+    const { section, onStatus, execute, rerender } = renderPanel(
+      () =>
+        new Promise<AssemblyInterferenceReport>((resolve) => {
+          finish = resolve;
+        })
+    );
+    fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
+    // The part moves before the check returns.
+    act(() => {
+      execute(
+        commandFactories.updateAssemblyComponent({
+          componentId: 'comp_b',
+          placement: {
+            ...IDENTITY_PLACEMENT,
+            translation: { x: 40, y: 0, z: 0 }
+          }
+        })
+      );
+    });
+    rerender();
+    await act(async () => {
+      finish({
+        pairs: [
+          {
+            a: 'comp_a',
+            b: 'comp_b',
+            verdict: {
+              kind: 'clear',
+              touching: false,
+              distance: 5,
+              closest: null,
+              atLeast: 5
+            }
+          }
+        ],
+        missing: []
+      });
+    });
+    // The panel shows the result as what it is: of the parts as they were.
+    expect(within(section()).getByText(/Out of date/)).toBeInTheDocument();
+    expect(onStatus).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenCalledWith(
+      'Interference: the parts or their positions changed during the check. Check again.'
+    );
+  });
+
   it('names the configuration a part was checked in (#2388)', async () => {
     const { section } = renderPanel(async () => ({
       ...overlapping,
@@ -408,6 +498,187 @@ describe('Interference through motion (AS04)', () => {
     );
     expect(section()).toHaveTextContent(
       '1 moving pair clear at every position checked'
+    );
+  });
+
+  it('does not post a sweep of one motion once another is chosen', async () => {
+    const fixture = scissorsManager({ joint: true });
+    fixture.manager.execute(
+      commandFactories.setAssemblyStudy({
+        study: {
+          id: 'st_swing',
+          name: 'Swing',
+          durationS: 2,
+          playback: 'once',
+          tracks: [
+            {
+              jointId: 'joint_pin',
+              dof: 0,
+              keys: [
+                { t: 0, value: 0, easing: 'linear' },
+                { t: 2, value: 90, easing: 'linear' }
+              ]
+            }
+          ]
+        }
+      })
+    );
+    const onStatus = vi.fn();
+    type Answer = Awaited<ReturnType<AssemblySweepCheck>>;
+    let finish: (answer: Answer) => void = () => {};
+    let asked: Parameters<AssemblySweepCheck>[2] = [];
+    render(
+      <AssemblyPanel
+        document={fixture.live()}
+        execute={recordingExecute(fixture.manager).execute}
+        onStatus={onStatus}
+        checkInterference={async () => ({ pairs: [], missing: [] })}
+        checkInterferenceSweep={(_document, _parts, positions) => {
+          asked = positions;
+          return new Promise<Answer>((resolve) => {
+            finish = resolve;
+          });
+        }}
+      />
+    );
+    const section = () => screen.getByRole('region', { name: 'Interference' });
+    const picker = () =>
+      within(section()).getByRole('combobox', { name: 'Motion to check' });
+    expect(picker()).toHaveDisplayValue('Pivot (0.0° to 360.0°)');
+    fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
+    // Another motion is picked before the sweep of the pivot returns.
+    fireEvent.change(picker(), { target: { value: 'study:st_swing' } });
+    expect(picker()).toHaveDisplayValue('Swing (2 s study)');
+    await act(async () => {
+      finish({
+        positions: asked.map((position) => ({
+          at: position.at,
+          pairs: position.pairs.map(([a, b]) => ({
+            a,
+            b,
+            verdict: {
+              kind: 'clear' as const,
+              touching: false,
+              distance: null,
+              closest: null,
+              atLeast: null
+            }
+          }))
+        })),
+        missing: []
+      });
+    });
+    expect(within(section()).getByText(/Out of date/)).toBeInTheDocument();
+    expect(onStatus).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenCalledWith(
+      'Interference through motion: the parts, their motion or the model changed during the check. Sweep again.'
+    );
+  });
+
+  it('says which configuration could not be built, under the pair it leaves unknown (#2388)', async () => {
+    const { section } = renderSweep(async (_document, _parts, positions) => ({
+      positions: positions.map((position) => ({
+        at: position.at,
+        pairs: position.pairs.map(([a, b]) => ({
+          a,
+          b,
+          verdict: {
+            kind: 'unknown' as const,
+            reason: 'configuration_unavailable',
+            message: 'the Wide configuration of Blade A could not be built'
+          }
+        }))
+      })),
+      missing: [],
+      configurations: { comp_a: { rowId: 'wide', rowName: 'Wide' } }
+    }));
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
+    });
+    fireEvent.click(
+      within(section()).getByRole('button', {
+        name: 'Blade A (Wide) and Blade B: Unknown at 37 positions'
+      })
+    );
+    expect(section()).toHaveTextContent(
+      'Not checked exactly at 0.0°, 10.0°, 20.0°, 30.0°, 40.0°, 50.0°, …: the Wide configuration of Blade A could not be built. Not reported as clear there.'
+    );
+  });
+
+  it('checks a pair a study holds away from rest, and says it is held', async () => {
+    const fixture = scissorsManager({ joint: true });
+    // The pivot rests at 12°; the study holds it at 90° for its whole length.
+    fixture.manager.execute(
+      commandFactories.setAssemblyStudy({
+        study: {
+          id: 'st_hold',
+          name: 'Hold',
+          durationS: 1,
+          playback: 'once',
+          tracks: [
+            {
+              jointId: 'joint_pin',
+              dof: 0,
+              keys: [
+                { t: 0, value: 90, easing: 'linear' },
+                { t: 1, value: 90, easing: 'linear' }
+              ]
+            }
+          ]
+        }
+      })
+    );
+    const onStatus = vi.fn();
+    const check = vi.fn<AssemblySweepCheck>(
+      async (_document, _parts, positions) => ({
+        positions: positions.map((position) => ({
+          at: position.at,
+          pairs: position.pairs.map(([a, b]) => ({
+            a,
+            b,
+            verdict: {
+              kind: 'interference' as const,
+              volume: 40,
+              proof: 'intersect' as const,
+              point: null,
+              bounds: null,
+              complete: true
+            }
+          }))
+        })),
+        missing: []
+      })
+    );
+    render(
+      <AssemblyPanel
+        document={fixture.live()}
+        execute={recordingExecute(fixture.manager).execute}
+        onStatus={onStatus}
+        checkInterference={async () => ({ pairs: [], missing: [] })}
+        checkInterferenceSweep={check}
+      />
+    );
+    const section = () => screen.getByRole('region', { name: 'Interference' });
+    fireEvent.change(
+      within(section()).getByRole('combobox', { name: 'Motion to check' }),
+      { target: { value: 'study:st_hold' } }
+    );
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
+    });
+    // One request, one position: the pose is the same along the whole study.
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(check.mock.calls[0]![2]).toHaveLength(1);
+    expect(onStatus).toHaveBeenCalledWith(
+      'Interference through motion: 1 pair of parts overlaps along Hold (1 s study).'
+    );
+    fireEvent.click(
+      within(section()).getByRole('button', {
+        name: 'Blade A and Blade B: 0 s to 1 s'
+      })
+    );
+    expect(section()).toHaveTextContent(
+      'The motion holds these parts in one position, away from where they rest. It was checked once, and the result stands for the whole motion.'
     );
   });
 
