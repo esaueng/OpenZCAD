@@ -8,7 +8,9 @@ were (#2334; [ADR-025](docs/adrs/ADR-025-stable-body-lineage-identity.md)
 interim reorder guard). The reported case, a cutter placement moved below its
 Subtract, committed and exported the vent at the unplaced position; a reorder
 of independent steps still commits with the same STEP DATA, and a stored fork
-replays, stays editable and can be moved back out. Synthetic coverage:
+replays, stays editable and can be moved back out. A stored fork exempts only
+the step-and-consumer pairs it already holds, and a transaction is judged by
+the order it ends on, not each move on the way. Synthetic coverage:
 `packages/document-core/src/body-consumption.test.ts`,
 `test/consumed-cutter-reorder.test.ts`; browser coverage:
 `test/e2e/history-reorder-consumed-cutter.spec.ts` (order and downloaded vent

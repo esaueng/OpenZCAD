@@ -210,7 +210,21 @@ export interface HistoryFork {
  * consumed body has no result of its own to rejoin, so it always is.
  */
 export function historyForks(document: ProjectDocument): HistoryFork[] {
-  const consumedBy = new Map<BodyId, FeatureNode>();
+  return forksAgainst(document, 'first');
+}
+
+/**
+ * {@link historyForks}, against the `first` consumer of each body, which is
+ * what a document reports, or against `every` earlier consumer, which is what
+ * an edit is judged by (see {@link introducedHistoryForks}): a body two
+ * features already consumed has a later state for each, and a step that
+ * reaches the second one's far side builds on a state that one replaced too.
+ */
+function forksAgainst(
+  document: ProjectDocument,
+  consumers: 'first' | 'every'
+): HistoryFork[] {
+  const consumedBy = new Map<BodyId, FeatureNode[]>();
   const children = new Map<BodyId, BodyId[]>();
   const candidates: {
     fork: HistoryFork;
@@ -226,9 +240,11 @@ export function historyForks(document: ProjectDocument): HistoryFork[] {
           ...results.filter((result) => result !== bodyId)
         ]);
       }
-      const consumer = consumedBy.get(bodyId);
-      if (consumer !== undefined) {
-        if (reported)
+      const earlier = consumedBy.get(bodyId) ?? [];
+      if (reported) {
+        for (const consumer of consumers === 'first'
+          ? earlier.slice(0, 1)
+          : earlier)
           candidates.push({
             fork: {
               featureId: feature.featureId,
@@ -239,9 +255,8 @@ export function historyForks(document: ProjectDocument): HistoryFork[] {
               ? { branches: [resultBodies(consumer), results] }
               : {})
           });
-      } else if (use === 'consume') {
-        consumedBy.set(bodyId, feature);
       }
+      if (use === 'consume') consumedBy.set(bodyId, [...earlier, feature]);
     }
   }
   const descendants = (roots: readonly BodyId[]): Set<BodyId> => {
@@ -328,13 +343,23 @@ interface IntroducedHistoryFork {
  *   unplaced position while the order committed. Moving the consumer above
  *   the placement reaches the same arrangement and is judged the same.
  *
- * Every other fork is left alone. A stored history that already forked keeps
- * loading, replaying and accepting unrelated edits, and its two branches may
- * still be reordered around each other: a feature already on either side of
- * a fork of the same body is not judged by order. Resuming or unsuppressing a
- * step neither retargets nor reorders one, so it is never refused here; and a
- * feature added while History is rolled back is judged where it lands, at
- * the marker, ahead of the paused consumer.
+ * A fork is one step and one consumer, and is compared as that pair, against
+ * EVERY earlier consumer of the body, not only the first one a document
+ * reports. A stored history that already forked keeps loading, replaying and
+ * accepting unrelated edits, and the pairs it already holds may be moved
+ * around: a step stays after a consumer it already ran after, two consumers
+ * of one body may swap places (each still takes the body as it finds it, and
+ * only which one is reported changes), and the move that takes a step back
+ * ahead of its consumer is accepted. But a stored fork exempts nothing else.
+ * With two stocks cut by one cutter and the cutter's placement between the
+ * cuts, the placement already forks against the first cut; moving the second
+ * cut above the first, or the placement below the second, still puts the
+ * placement after a consumer it ran ahead of, and that cut would move to the
+ * unplaced position. Both are refused.
+ *
+ * Resuming or unsuppressing a step neither retargets nor reorders one, so it
+ * is never refused here; and a feature added while History is rolled back is
+ * judged where it lands, at the marker, ahead of the paused consumer.
  */
 function introducedHistoryForks(
   previous: ProjectDocument,
@@ -363,35 +388,42 @@ function introducedHistoryForks(
     .filter((index): index is number => index !== undefined);
   const reordered = kept.some((index, at) => at > 0 && kept[at - 1]! > index);
   if (changed.size === 0 && !reordered) return [];
-  const key = (fork: HistoryFork) =>
-    `${fork.featureId} ${fork.bodyId} ${fork.consumerFeatureId}`;
-  const side = (featureId: FeatureId, bodyId: BodyId) =>
-    `${featureId} ${bodyId}`;
-  const before = historyForks(previous);
-  const existing = new Set(before.map(key));
-  const alreadyForked = new Set(
-    before.flatMap((fork) => [
-      side(fork.featureId, fork.bodyId),
-      side(fork.consumerFeatureId, fork.bodyId)
-    ])
+  const key = (later: FeatureId, bodyId: BodyId, consumer: FeatureId) =>
+    `${later} ${bodyId} ${consumer}`;
+  const before = forksAgainst(previous, 'every');
+  const existing = new Set(
+    before.map((fork) =>
+      key(fork.featureId, fork.bodyId, fork.consumerFeatureId)
+    )
   );
-  return historyForks(next).flatMap((fork): IntroducedHistoryFork[] => {
-    if (existing.has(key(fork))) return [];
-    if (changed.has(fork.featureId)) return [{ fork, cause: 'target' }];
-    if (alreadyForked.has(side(fork.featureId, fork.bodyId))) return [];
-    // Unchanged uses mean the feature was in `previous`.
-    const was = position.get(fork.featureId)!;
-    const consumerWas = position.get(fork.consumerFeatureId);
-    return consumerWas === undefined || consumerWas > was
-      ? [{ fork, cause: 'order' }]
-      : [];
-  });
+  // The same two steps the other way round: two consumers swapping places.
+  const swapped = new Set(
+    before.map((fork) =>
+      key(fork.consumerFeatureId, fork.bodyId, fork.featureId)
+    )
+  );
+  return forksAgainst(next, 'every').flatMap(
+    (fork): IntroducedHistoryFork[] => {
+      const pair = key(fork.featureId, fork.bodyId, fork.consumerFeatureId);
+      if (existing.has(pair)) return [];
+      if (changed.has(fork.featureId)) return [{ fork, cause: 'target' }];
+      if (swapped.has(pair)) return [];
+      // Unchanged uses mean the feature was in `previous`.
+      const was = position.get(fork.featureId)!;
+      const consumerWas = position.get(fork.consumerFeatureId);
+      return consumerWas === undefined || consumerWas > was
+        ? [{ fork, cause: 'order' }]
+        : [];
+    }
+  );
 }
 
 /**
  * Forks an edit would introduce: on a feature it adds or retargets, or by
  * ordering a consumer of a body ahead of a step that still uses that body
- * (see {@link introducedHistoryForks}).
+ * (see {@link introducedHistoryForks}). Each names the consumer the step
+ * would newly run after, which in a history that already forks need not be
+ * the body's first consumer, the one {@link historyForks} reports.
  */
 export function newHistoryForks(
   previous: ProjectDocument,

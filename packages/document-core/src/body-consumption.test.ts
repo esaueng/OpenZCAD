@@ -470,6 +470,112 @@ describe('history fork detection', () => {
       expect(newHistoryForks(stale.document, swapped)).toEqual([]);
     });
 
+    /**
+     * A stored history that already forks: two stocks cut by one tool, with
+     * the tool's placement between the cuts. "Cut A" consumed the tool first,
+     * so the placement and "Cut B" each already fork against it.
+     */
+    function sharedTool() {
+      const stockA = block('Stock A');
+      const stockB = block('Stock B', stockA.document);
+      const tool = block('Tool', stockB.document);
+      const cutA = createBodyFeatureIds();
+      const place = createFeatureOnlyIds();
+      const cutB = createBodyFeatureIds();
+      let document = booleanBodies(tool.document, {
+        name: 'Cut A',
+        operation: 'subtract',
+        targetBodyIds: [stockA.bodyId, tool.bodyId],
+        ids: cutA
+      }).document;
+      document = transformBody(document, {
+        name: 'Place tool',
+        targetBodyId: tool.bodyId,
+        translation: { x: 5, y: 0, z: 0 },
+        ids: place
+      }).document;
+      document = booleanBodies(document, {
+        name: 'Cut B',
+        operation: 'subtract',
+        targetBodyIds: [stockB.bodyId, tool.bodyId],
+        ids: cutB
+      }).document;
+      return { document, tool, cutA, place, cutB };
+    }
+
+    it('refuses a new step-and-consumer pair in a history that already forks', () => {
+      const { document, tool, cutA, place, cutB } = sharedTool();
+      // Reported against the tool's first consumer only.
+      expect(historyForks(document)).toEqual([
+        {
+          featureId: place.featureId,
+          bodyId: tool.bodyId,
+          consumerFeatureId: cutA.featureId
+        },
+        {
+          featureId: cutB.featureId,
+          bodyId: tool.bodyId,
+          consumerFeatureId: cutA.featureId
+        }
+      ]);
+      // The placement already forks against Cut A. That does not let it land
+      // after Cut B, which it ran ahead of: Cut B would cut unplaced.
+      const fork = {
+        featureId: place.featureId,
+        bodyId: tool.bodyId,
+        consumerFeatureId: cutB.featureId
+      };
+      for (const moved of [
+        // Cut B above Cut A: Cut B, Cut A, Place tool.
+        moveFeature(document, {
+          featureId: cutB.featureId,
+          toIndex: position(document, cutA.featureId)
+        }),
+        // Cut B above the placement: Cut A, Cut B, Place tool.
+        moveFeature(document, {
+          featureId: cutB.featureId,
+          toIndex: position(document, place.featureId)
+        }),
+        // The placement below Cut B: the same order, and the same forks the
+        // document reports, since both are still listed against Cut A.
+        moveFeature(document, {
+          featureId: place.featureId,
+          toIndex: position(document, cutB.featureId)
+        })
+      ]) {
+        expect(newHistoryForks(document, moved)).toEqual([fork]);
+        expect(() => assertNoNewHistoryFork(document, moved)).toThrow(
+          'Cannot reorder: “Place tool” would run after “Cut B” already replaced “Tool”, which branches the history. Keep “Place tool” before “Cut B”.'
+        );
+      }
+    });
+
+    it('still lets the pairs a stored fork holds be moved, and taken apart', () => {
+      const { document, cutA, place, cutB } = sharedTool();
+      // An unrelated step moved through the fork.
+      const later = block('Later', document);
+      const around = moveFeature(later.document, {
+        featureId: later.featureId,
+        toIndex: position(later.document, place.featureId)
+      });
+      expect(newHistoryForks(later.document, around)).toEqual([]);
+      // Cut A below Cut B: Place tool, Cut B, Cut A. The placement no longer
+      // forks, and the two cuts are the pair they were, the other way round.
+      const cutALast = moveFeature(document, {
+        featureId: cutA.featureId,
+        toIndex: position(document, cutB.featureId)
+      });
+      expect(historyForks(cutALast)).toHaveLength(1);
+      expect(newHistoryForks(document, cutALast)).toEqual([]);
+      // The placement ahead of both cuts: only the two cuts still fork.
+      const placedFirst = moveFeature(document, {
+        featureId: place.featureId,
+        toIndex: position(document, cutA.featureId)
+      });
+      expect(historyForks(placedFirst)).toHaveLength(1);
+      expect(newHistoryForks(document, placedFirst)).toEqual([]);
+    });
+
     it('does not refuse a resume that uncovers a fork a reorder never made', () => {
       // An edit of the tool added while its consumer is paused. Resuming
       // changes neither targets nor order.

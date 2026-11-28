@@ -861,9 +861,13 @@ function validateParameterDelete(
  * replay is fail-soft per feature, so the model would quietly lose every
  * downstream body behind one warning.
  *
- * The opposite direction is refused too: a step that edits a body in place
- * (a Move, a direct edit) must not land after the feature that consumes that
- * body, where it would act on a state the history already replaced.
+ * The opposite direction, a step that edits a body in place landing after
+ * the feature that consumes that body, is a history fork (ADR-025). It is
+ * NOT judged here: this gate sees one command against the order the commands
+ * before it left, and a transaction may pass through such an order on its
+ * way to one that forks nothing. `CommandManager` judges the order a commit
+ * ends on, and {@link assertFeatureReorderCommits} judges a reorder that
+ * runs alone.
  */
 function validateFeatureReorder(
   document: ProjectDocument,
@@ -941,17 +945,43 @@ function validateFeatureReorder(
       }
     }
   });
+}
 
-  // ADR-025 (#2334): every id above is still produced in time when a
-  // placement moves below the boolean that consumes the placed body, so that
-  // order passed, committed, and the boolean cut at the unplaced position.
-  // Refused here, not only at commit, so History's order gate names the body
-  // and its consumer before any rebuild. Only the order is read, so a shallow
-  // copy stands in for the moved document.
-  assertNoNewHistoryFork(document, {
-    ...document,
-    featureOrder: reordered.map((feature) => feature.featureId)
-  });
+/**
+ * Everything that refuses a History reorder run by itself, before anything
+ * is rebuilt: the command's own order gate, and the fork check
+ * `CommandManager.execute` would run on the moved order (ADR-025, #2334).
+ *
+ * Every id a placement reads is still produced in time when it moves below
+ * the boolean that consumes the placed body, so the order gate alone passed
+ * that move, it committed, and the boolean cut at the unplaced position.
+ * History asks here first, so the refusal names the body and its consumer
+ * without waiting on an exact rebuild of the moved span.
+ *
+ * Only for a reorder that is the whole edit. One move of several is judged
+ * with the others, on the order the transaction ends on.
+ */
+export function assertFeatureReorderCommits(
+  document: ProjectDocument,
+  payload: FeatureMoveInput
+): void {
+  validateFeatureReorder(document, payload);
+  // The fork check reads the order alone, so a shallow copy stands in for
+  // the moved document.
+  const order = listFeaturesInOrder(document).map(
+    (feature) => feature.featureId
+  );
+  const from = order.indexOf(payload.featureId);
+  if (
+    !Number.isInteger(payload.toIndex) ||
+    payload.toIndex < 0 ||
+    payload.toIndex >= order.length ||
+    payload.toIndex === from
+  ) {
+    return; // The apply is a no-op.
+  }
+  order.splice(payload.toIndex, 0, ...order.splice(from, 1));
+  assertNoNewHistoryFork(document, { ...document, featureOrder: order });
 }
 
 /**

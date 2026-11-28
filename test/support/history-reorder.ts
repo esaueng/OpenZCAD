@@ -15,7 +15,11 @@
  *   misses the block and the Intersect after it cannot rebuild, which only
  *   the exact preflight can find.
  */
-import { CommandManager, commandFactories } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  replayCommands
+} from '@openzcad/command-system';
 import {
   createBodyFeatureIds,
   createFeatureOnlyIds,
@@ -150,6 +154,104 @@ export function ventedBlock(): VentedBlock {
       [VENT_BODY]: vent.featureId,
       [PLACEMENT]: locate.featureId,
       [SUBTRACT]: subtract.featureId
+    }
+  };
+}
+
+export const CUT_A = 'Cut A';
+export const CUT_B = 'Cut B';
+export const SHARED_PLACEMENT = 'Place shared vent';
+export const SHARED_VENT = 'Shared vent';
+
+/** The history of {@link sharedVentFork} as stored. */
+export const SHARED_HISTORY = [
+  'Stock A',
+  'Stock B',
+  'Lift Stock B',
+  SHARED_VENT,
+  CUT_A,
+  SHARED_PLACEMENT,
+  CUT_B
+] as const;
+
+export interface SharedVentFork {
+  /** A stored document that already forks; see {@link sharedVentFork}. */
+  document: ProjectDocument;
+  features: Record<(typeof SHARED_HISTORY)[number], FeatureId>;
+}
+
+/**
+ * A stored history that already forks: two stocks cut by one vent cutter,
+ * with the cutter's placement between the two cuts. "Cut A" consumes the
+ * cutter where it was created, at the origin; the placement then edits a body
+ * the history already replaced, and "Cut B" consumes it again at (52, 21).
+ * A client predating the refusals wrote such a log, so it is replayed, not
+ * built through `CommandManager`, which would refuse it.
+ *
+ * Stock A stands on Z 0–16 and Stock B on Z 24–40, both over X 0–64 and
+ * Y 0–42; the cutter is tall enough to pass through both, placed or not.
+ */
+export function sharedVentFork(): SharedVentFork {
+  const stockA = createBodyFeatureIds();
+  const stockB = createBodyFeatureIds();
+  const lift = createFeatureOnlyIds();
+  const vent = createBodyFeatureIds();
+  const cutA = createBodyFeatureIds();
+  const place = createFeatureOnlyIds();
+  const cutB = createBodyFeatureIds();
+  const stock = (name: string, ids: typeof stockA) =>
+    commandFactories.addPrimitive({
+      name,
+      bodyName: name,
+      primitiveKind: 'box',
+      dimensions: { width: STOCK.x, height: STOCK.y, depth: STOCK.z },
+      ids
+    });
+  const cut = (name: string, target: BodyId, ids: typeof cutA) =>
+    commandFactories.booleanBodies({
+      name,
+      operation: 'subtract',
+      targetBodyIds: [target, vent.bodyId],
+      ids
+    });
+  const document = replayCommands(
+    createProjectDocument('Shared vent', toUserId('user_2334'), 'mm'),
+    [
+      stock('Stock A', stockA),
+      stock('Stock B', stockB),
+      commandFactories.transformBody({
+        name: 'Lift Stock B',
+        targetBodyId: stockB.bodyId,
+        translation: { x: 0, y: 0, z: STOCK.z + 8 },
+        ids: lift
+      }),
+      commandFactories.addPrimitive({
+        name: SHARED_VENT,
+        bodyName: SHARED_VENT,
+        primitiveKind: 'cylinder',
+        dimensions: { radius: VENT.radius, height: 2 * STOCK.z + 10 },
+        ids: vent
+      }),
+      cut(CUT_A, stockA.bodyId, cutA),
+      commandFactories.transformBody({
+        name: SHARED_PLACEMENT,
+        targetBodyId: vent.bodyId,
+        translation: { x: VENT.x, y: VENT.y, z: -1 },
+        ids: place
+      }),
+      cut(CUT_B, stockB.bodyId, cutB)
+    ].map((command) => command.serialize())
+  );
+  return {
+    document,
+    features: {
+      'Stock A': stockA.featureId,
+      'Stock B': stockB.featureId,
+      'Lift Stock B': lift.featureId,
+      [SHARED_VENT]: vent.featureId,
+      [CUT_A]: cutA.featureId,
+      [SHARED_PLACEMENT]: place.featureId,
+      [CUT_B]: cutB.featureId
     }
   };
 }

@@ -169,16 +169,28 @@ Neither changes what geometry is built.
   time, so the order gate passed, the Subtract cut at the unplaced position,
   and STEP export wrote that solid behind one `history-fork` advisory. Moving
   the consumer above the placement reaches the same arrangement and is
-  refused the same way. `feature.reorder` asks in its own `validate`, so
-  History's order gate refuses before any rebuild, and the manager's
-  end-of-edit check covers a transaction that reaches the order by several
-  commands. The refusal names the step, the body and the consumer: "Cannot
-  reorder: “Locate Offset vent” would run after “Subtract 1” already replaced
-  “Offset vent”, which branches the history. Keep “Locate Offset vent” before
-  “Subtract 1”." A feature already on either side of a stored fork of that
-  body is not judged by order, so the branches of a stored fork can still be
-  reordered around each other and the move that removes a fork is accepted.
-  A reorder of steps that share no body is untouched.
+  refused the same way. The order is judged where an edit ENDS, by the
+  manager's end-of-edit check: `feature.reorder`'s own `validate` does not
+  ask, because it sees one command against the order the commands before it
+  left, and a transaction (an assistant patch, a composed gesture) may pass
+  through a forking order on its way to one that forks nothing. History's
+  single move is the whole edit, so its order gate asks
+  `assertFeatureReorderCommits`, which adds the fork check to the command's
+  gate and refuses before any rebuild. The refusal names the step, the body
+  and the consumer: "Cannot reorder: “Locate Offset vent” would run after
+  “Subtract 1” already replaced “Offset vent”, which branches the history.
+  Keep “Locate Offset vent” before “Subtract 1”."
+- For this guard a fork is one step and one consumer, compared as that pair
+  against every earlier consumer of the body, not only the first one the
+  diagnostic reports. A stored fork therefore exempts exactly the pairs it
+  already holds: a step may stay after a consumer it already ran after, two
+  consumers of one body may swap places, and the move that takes a step back
+  ahead of its consumer is accepted. It exempts nothing else. With two stocks
+  cut by one cutter and the cutter's placement between the cuts, the
+  placement already forks against the first cut; moving the second cut above
+  the first, or the placement below the second, would still move that cut to
+  the unplaced position, and both are refused. A reorder of steps that share
+  no body is untouched.
 - Duplicate refuses a Pattern step, which would repeat the pattern on the
   same seed beside the original.
 
