@@ -2,7 +2,8 @@ import { observeWorker } from './diagnosticSignal';
 import {
   MESH_IMPORT_POLICIES,
   meshImportTooLargeMessage,
-  type MeshImportFormat
+  type MeshImportFormat,
+  type UnitlessMeshFormat
 } from '@openzcad/kernel-adapter/mesh-import-formats';
 import { MAX_SOURCE_IMPORT_BYTES, type UnitSystem } from '@openzcad/shared';
 
@@ -49,25 +50,58 @@ function abortError(): Error {
  * rebuild sews at a tolerance derived from the numbers it is handed. Checking
  * millimetres on the way into a metre document passes files that then rebuild
  * to nothing.
+ *
+ * `readAs` is the unit an OBJ or PLY file's numbers are in. The worker
+ * rewrites them into millimetres before the translator reads the file, so a
+ * part imports to the same triangles from an inch file as from a millimetre
+ * one (#2096); the vertices that come back are millimetres either way.
  */
 export function importMeshFileInDisposableWorker(
   file: File,
   format: MeshImportFormat,
   units: UnitSystem,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  readAs?: UnitSystem
 ): Promise<ImportedMeshFile> {
   if (file.size > MESH_IMPORT_POLICIES[format].maxInputBytes) {
     return Promise.reject(
       new Error(meshImportTooLargeMessage(format, file.size))
     );
   }
-  return readMeshInWorker({ type: 'import', file, format, units }, signal).then(
-    ({ vertices, indices, triangleCount, sourceUnit }) => ({
-      vertices: Array.from(vertices),
-      indices: Array.from(indices),
-      triangleCount,
-      ...(sourceUnit === undefined ? {} : { sourceUnit })
-    })
+  return readMeshInWorker(
+    {
+      type: 'import',
+      file,
+      format,
+      units,
+      ...(readAs && readAs !== 'mm' ? { readAs } : {})
+    },
+    signal
+  ).then(({ vertices, indices, triangleCount, sourceUnit }) => ({
+    vertices: Array.from(vertices),
+    indices: Array.from(indices),
+    triangleCount,
+    ...(sourceUnit === undefined ? {} : { sourceUnit })
+  }));
+}
+
+/**
+ * An OBJ or PLY file's raw extent, in its own numbers, for the unit prompt —
+ * read without the kernel, so the prompt can be answered before the import
+ * runs at the chosen unit. Null when the file has no readable positions; the
+ * import that follows names what is wrong with it.
+ */
+export function inspectUnitlessMeshInDisposableWorker(
+  file: File,
+  format: UnitlessMeshFormat
+): Promise<number[] | null> {
+  if (file.size > MESH_IMPORT_POLICIES[format].maxInputBytes) {
+    return Promise.reject(
+      new Error(meshImportTooLargeMessage(format, file.size))
+    );
+  }
+  return readMeshInWorker({ type: 'inspect-unitless', file, format }).then(
+    ({ extent }) => extent ?? null
   );
 }
 

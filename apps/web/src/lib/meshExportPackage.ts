@@ -10,8 +10,12 @@ import {
   type CadBinaryExportFormat
 } from './desktopBridge';
 import { saveFile } from './saveFile';
+import {
+  MESH_PACKAGE_UNITS_MANIFEST,
+  meshPackageUnitsManifest
+} from './meshExportUnits';
 
-import type { BodyId, ProjectDocument } from '@openzcad/shared';
+import type { BodyId, ProjectDocument, UnitSystem } from '@openzcad/shared';
 import type { MeshExportDialogFormat } from '../components/ExportDialog';
 import type { GeometryWorkerApi } from '../hooks/useGeometryWorker';
 import type { GeometryWorkerState } from '../worker/geometryWorker';
@@ -48,6 +52,12 @@ export async function packageMeshExport<Id>(input: {
   formats: readonly MeshExportDialogFormat[];
   scopes: readonly { bodyIds: Id[]; stem: string }[];
   objMaterials: boolean;
+  /**
+   * The export unit. When given, the package also carries a units manifest
+   * naming each file's unit, because STL, OBJ and PLY record none of their
+   * own and a 3MF or glTF beside them must not seem to speak for them (#2369).
+   */
+  units?: UnitSystem;
   write(
     format: MeshExportDialogFormat,
     bodyIds: Id[],
@@ -56,6 +66,7 @@ export async function packageMeshExport<Id>(input: {
 }): Promise<MeshPackageResult> {
   const entries: Record<string, Uint8Array> = {};
   const names: string[] = [];
+  const meshFiles: { name: string; format: MeshExportDialogFormat }[] = [];
   let warnings = 0;
   const add = (name: string, data: Uint8Array) => {
     let unique = name;
@@ -64,6 +75,7 @@ export async function packageMeshExport<Id>(input: {
     }
     entries[unique] = data;
     names.push(unique);
+    return unique;
   };
   const formats = [...new Set(input.formats)];
   // Unique stems before anything is written: an OBJ names its MTL by stem,
@@ -90,12 +102,22 @@ export async function packageMeshExport<Id>(input: {
       if (withMaterials) {
         // The OBJ arrives with its MTL as a ZIP of its own.
         for (const [name, file] of Object.entries(unzipSync(data))) {
-          add(name, file);
+          const added = add(name, file);
+          if (added.endsWith('.obj')) meshFiles.push({ name: added, format });
         }
       } else {
-        add(`${scope.stem}.${EXTENSIONS[format]}`, data);
+        meshFiles.push({
+          name: add(`${scope.stem}.${EXTENSIONS[format]}`, data),
+          format
+        });
       }
     }
+  }
+  if (input.units) {
+    add(
+      MESH_PACKAGE_UNITS_MANIFEST,
+      new TextEncoder().encode(meshPackageUnitsManifest(meshFiles, input.units))
+    );
   }
   return { zip: zipSync(entries), names, warnings };
 }
@@ -225,6 +247,7 @@ function exportMeshPackage(input: MeshExportRequest): void {
             }))
           : [{ bodyIds: target.bodyIds, stem }],
         objMaterials: Boolean(objMaterials),
+        units: input.units,
         write: (format, ids, extra) =>
           input.exportModel(format, target.document, ids, {
             deflection: input.deflection,
