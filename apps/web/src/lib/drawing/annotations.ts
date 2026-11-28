@@ -68,6 +68,7 @@ import {
   viewPaperPerModelUnit,
   clipPolylineToCircle,
   fitText,
+  sheetBoxOnPaper,
   sheetMarksOnPaper,
   viewClipCircle,
   sheetSafeText,
@@ -5069,12 +5070,8 @@ export function composeSheetAnnotations(
     texts.push(...layout.texts);
     if (layout.images) images.push(...layout.images);
     boxes.set(annotation.annotationId, layout.box);
-    const picturesOn = (layout.images ?? []).every(
-      (image) =>
-        image.x >= 0 &&
-        image.y >= 0 &&
-        image.x + image.width <= paper.width &&
-        image.y + image.height <= paper.height
+    const picturesOn = (layout.images ?? []).every((image) =>
+      sheetBoxOnPaper(image, paper)
     );
     if (!picturesOn || !sheetMarksOnPaper(layout.strokes, layout.texts, paper))
       offPaper.push(annotation.annotationId);

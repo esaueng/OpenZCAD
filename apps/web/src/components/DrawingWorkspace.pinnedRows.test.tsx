@@ -289,12 +289,14 @@ function workspace(
     requestBodies = true,
     requestSection,
     onCommand = vi.fn(() => true),
+    onStatus = vi.fn(),
     build = rowBodies
   }: {
     /** False for none; a function to answer a row's bodies another way. */
     requestBodies?: boolean | NonNullable<Props['requestBodies']>;
     requestSection?: Props['requestSection'];
     onCommand?: Props['onCommand'];
+    onStatus?: Props['onStatus'];
     /** What a row's document builds. */
     build?: Build;
   } = {}
@@ -312,12 +314,13 @@ function workspace(
             requestBodies:
               typeof requestBodies === 'function'
                 ? requestBodies
-                : (row: ProjectDocument) => Promise.resolve(build(row))
+                : (row: ProjectDocument) =>
+                    Promise.resolve({ bodies: build(row) })
           }
         : {})}
       editDisabledReason={null}
       onCommand={onCommand}
-      onStatus={vi.fn()}
+      onStatus={onStatus}
     />
   );
 }
@@ -920,7 +923,9 @@ describe('DrawingWorkspace: pinned rows read, key, fail and keep their own row',
     render(
       workspace(
         { ...configured(WIDE), drawings: { sheets: [sheet] } },
-        { requestBodies: (row) => built.then(() => rowBodies(row)) }
+        {
+          requestBodies: (row) => built.then(() => ({ bodies: rowBodies(row) }))
+        }
       )
     );
     // Narrow is still building: nothing of it has been read, so the sheet
@@ -952,7 +957,9 @@ describe('DrawingWorkspace: pinned rows read, key, fail and keep their own row',
         { ...configured(WIDE), drawings: { sheets: [twoFronts()] } },
         {
           requestBodies: (row) =>
-            Promise.resolve({ ...rowBodies(row), body_other: other })
+            Promise.resolve({
+              bodies: { ...rowBodies(row), body_other: other }
+            })
         }
       )
     );
@@ -991,7 +998,7 @@ describe('DrawingWorkspace: pinned rows read, key, fail and keep their own row',
       });
     };
     const requestBodies = vi.fn((row: ProjectDocument) =>
-      Promise.resolve(rowBodies(row))
+      Promise.resolve({ bodies: rowBodies(row) })
     );
     const builds = (row: string) =>
       requestBodies.mock.calls.filter(
@@ -1172,7 +1179,7 @@ describe('DrawingWorkspace: pinned rows stay fenced, bounded and reported', () =
     // The kept drawing is evicted (a reload does the same).
     resetRetainedProjections();
     const requestBodies = vi.fn((row: ProjectDocument) =>
-      Promise.resolve(sizedBodies(row))
+      Promise.resolve({ bodies: sizedBodies(row) })
     );
     render(
       sizedWorkspace(
@@ -1253,13 +1260,133 @@ describe('DrawingWorkspace: pinned rows stay fenced, bounded and reported', () =
       source: { fingerprint: 'v1:any' }
     };
     const requestBodies = vi.fn((row: ProjectDocument) =>
-      Promise.resolve(sizedBodies(row))
+      Promise.resolve({ bodies: sizedBodies(row) })
     );
     render(sizedWorkspace(sized.document, sheet, { requestBodies }));
     await screen.findByText('Model changed');
     expect(screen.getByRole('button', { name: 'Update' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Export SVG' })).toBeDisabled();
     expect(requestBodies).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Each row's build, with Narrow's plate standing in for its third bore
+   * while `fails` says the bore fails there (#2382).
+   */
+  const boreFailsInNarrow =
+    (fails: () => boolean = () => true): NonNullable<Props['requestBodies']> =>
+    (row) =>
+      Promise.resolve({
+        bodies: sizedBodies(row),
+        ...(row.configurations!.activeRowId === NARROW && fails()
+          ? { failedBodies: new Map([[bodyId, { featureName: 'Bore 3' }]]) }
+          : {})
+      });
+  const narrowFailure = (then: string) =>
+    `“Bore 3” failed to rebuild in the configuration “Narrow”, so Plate is not the design there and this sheet would not show it. Fix or suppress the failed feature, or change that configuration’s values, then ${then}.`;
+
+  it('never marks current, exports or keeps a sheet whose pinned row’s feature failed (#2382)', async () => {
+    // Wide is active and builds; the view pinned to Narrow draws a row
+    // whose third bore fails, so its plate is the bore's unfinished input.
+    const sheet = fronts(null, NARROW);
+    const first = render(
+      sizedWorkspace(sized.document, sheet, {
+        requestBodies: boreFailsInNarrow()
+      })
+    );
+    await drawn();
+    const svg = screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Export SVG'
+    });
+    await waitFor(() => expect(svg.title).toBe(narrowFailure('export')));
+    expect(svg.disabled).toBe(true);
+    expect(screen.queryByText('Drawing up to date')).toBeNull();
+    expect(screen.getByText(narrowFailure('export'))).toBeTruthy();
+    first.unmount();
+    // Not kept either: once the model moves on there is no drawing of the
+    // failed row to fall back on and export as the earlier design.
+    render(
+      sizedWorkspace(resized(), sheet, { requestBodies: boreFailsInNarrow() })
+    );
+    await screen.findByText('Model changed');
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    expect(
+      canvas.querySelectorAll('.drawing-view.is-placeholder')
+    ).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Export SVG' })).toBeDisabled();
+  });
+
+  it('holds the same sheet to nothing once the pinned row builds (#2382)', async () => {
+    render(
+      sizedWorkspace(sized.document, fronts(null, NARROW), {
+        requestBodies: boreFailsInNarrow(() => false)
+      })
+    );
+    await drawn();
+    await screen.findByText('Drawing up to date');
+    expect(
+      screen.getByRole('button', { name: 'Export SVG' })
+    ).not.toBeDisabled();
+  });
+
+  it('refuses the Update that would fence a sheet to a pinned row’s failed feature (#2382)', async () => {
+    const sheet = fronts(null, NARROW);
+    const first = render(sizedWorkspace(sized.document, sheet));
+    const before = await drawn();
+    await waitFor(() => expect(dimension(before, 40)).toBeTruthy());
+    first.unmount();
+    // Narrow is edited while Wide stays active, and its bore now fails.
+    const edit = (value: string) =>
+      setConfigurationCell(sized.document, {
+        rowId: NARROW,
+        column: sized.column,
+        value
+      });
+    let fails = true;
+    const onCommand = vi.fn<Props['onCommand']>(() => true);
+    const onStatus = vi.fn<Props['onStatus']>();
+    const options = {
+      onCommand,
+      onStatus,
+      requestBodies: vi.fn(boreFailsInNarrow(() => fails))
+    };
+    const view = render(sizedWorkspace(edit('45'), sheet, options));
+    await screen.findByText('Model changed');
+    // Nothing of the row is built until the Update is asked for.
+    expect(options.requestBodies).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Update' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
+    );
+    // The fence is not saved, and the sheet says why.
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenCalledWith(
+      narrowFailure('Update the sheet to export it')
+    );
+    expect(screen.queryByText('Drawing up to date')).toBeNull();
+    // The drawing of the row as it last built still exports, as drawn.
+    const kept = svgTexts(await exported('SVG'));
+    expect(kept).toContain('40');
+    expect(kept).not.toContain('45');
+    // Once the row builds, the Update is offered again and saves.
+    fails = false;
+    view.rerender(sizedWorkspace(edit('46'), sheet, options));
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Update' })
+    );
+    await waitFor(() => expect(onCommand).toHaveBeenCalledTimes(1));
+    view.rerender(
+      sizedWorkspace(edit('46'), updatedSheet(sheet, onCommand), options)
+    );
+    const canvas = await drawn();
+    await waitFor(() => expect(dimension(canvas, 46)).toBeTruthy());
+    await screen.findByText('Drawing up to date');
+    // Each row was built once: the Update's check is the build it draws.
+    expect(
+      options.requestBodies.mock.calls.filter(
+        ([row]) => getParameterScope(row).scope.width === 46
+      )
+    ).toHaveLength(1);
   });
 
   it('fences a current sheet to the row a view is moved to, in the same step', async () => {
@@ -1338,8 +1465,8 @@ describe('DrawingWorkspace: pinned rows stay fenced, bounded and reported', () =
     });
     const requestBodies = vi.fn((row: ProjectDocument) =>
       row.configurations!.activeRowId === NARROW
-        ? slow.then(() => rowBodies(row))
-        : Promise.resolve(rowBodies(row))
+        ? slow.then(() => ({ bodies: rowBodies(row) }))
+        : Promise.resolve({ bodies: rowBodies(row) })
     );
     render(
       workspace(

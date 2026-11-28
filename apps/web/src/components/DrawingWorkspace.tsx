@@ -445,11 +445,19 @@ export interface DrawingWorkspaceProps {
    * holds the active row's: what dimensions on a view drawing that row
    * measure. Absent, such a view draws but measures nothing, so a
    * dimension on it is broken rather than read from the active row.
+   *
+   * #2382: with them, the row's bodies that stand in for a feature that
+   * failed in that build, as `failedBodies` is for the active row's. A
+   * sheet with a view drawing one is never marked current, updated or
+   * exported from it either.
    */
   requestBodies?: (
     document: ProjectDocument,
     signal: AbortSignal
-  ) => Promise<Readonly<Record<string, BodyRepresentation | undefined>>>;
+  ) => Promise<{
+    bodies: Readonly<Record<string, BodyRepresentation | undefined>>;
+    failedBodies?: ReadonlyMap<BodyId, { featureName: string }>;
+  }>;
   /** Why drawing edits are refused, or null. */
   editDisabledReason: string | null;
   onCommand: (command: AnyCommand) => boolean;
@@ -1359,8 +1367,16 @@ type RowBodiesState =
       bodies: RowBodies;
       /** The bodies it was kept for (`rowBodiesScope`). */
       scope: string;
+      /**
+       * #2382: the row's bodies that stand in for a feature that failed in
+       * this build, whatever the scope: each names a feature, no geometry.
+       */
+      failed: ReadonlyMap<BodyId, { featureName: string }>;
     }
   | { state: 'error'; message: string };
+
+const NO_FAILED_BODIES: ReadonlyMap<BodyId, { featureName: string }> =
+  new Map();
 
 function rowBodiesStateBytes(entry: RowBodiesState): number {
   return entry.state === 'ready' ? rowBodiesBytes(entry.bodies) : 0;
@@ -1438,7 +1454,8 @@ function useRowBodies(
       cache.set(key, {
         state: 'ready',
         bodies: scopedRowBodies(held.bodies, scope),
-        scope
+        scope,
+        failed: held.failed
       });
       answered = true;
     }
@@ -1477,16 +1494,17 @@ function useRowBodies(
         if (entry) prune();
         if (!signal.aborted) setRevision((value) => value + 1);
       };
-      new Promise<RowBodies>((resolve) => {
+      new Promise<Awaited<ReturnType<typeof build>>>((resolve) => {
         resolve(build(source.document, signal));
       }).then(
-        (bodies) => {
+        (built) => {
           // What its views draw by now, should they have changed meanwhile.
           const scope = latest.current.retained.get(key) ?? needed;
           settle({
             state: 'ready',
-            bodies: scopedRowBodies(bodies, scope),
-            scope
+            bodies: scopedRowBodies(built.bodies, scope),
+            scope,
+            failed: built.failedBodies ?? NO_FAILED_BODIES
           });
         },
         (error: unknown) =>
@@ -4720,36 +4738,6 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       storedFence
     ]
   );
-  /**
-   * #2382: the bodies this sheet draws, or would draw once updated, that
-   * stand in for a feature that failed to rebuild. Read once the model is
-   * built, for a sheet on the active build: such a sheet is never current,
-   * never updated, and never exported from that geometry.
-   */
-  const { failedBodies } = props;
-  const sourceFailure = useMemo(() => {
-    if (
-      !sheet ||
-      !status ||
-      (status.kind !== 'ready' &&
-        status.kind !== 'stale' &&
-        status.kind !== 'replaced')
-    )
-      return [];
-    const ids = sheetBodyIds(
-      activeRowSheet(sheet, viewConfigurationRows(sheet, document))
-    );
-    const targets =
-      status.kind === 'replaced'
-        ? new Map(status.replacements.map(({ from, to }) => [from, to]))
-        : null;
-    return sheetFailedBodies(
-      targets ? ids.map((id) => targets.get(id) ?? id) : ids,
-      failedBodies,
-      (id) => bodies[id]?.name ?? 'A body'
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheet, status, failedBodies, bodies, document.configurations]);
   const liveProjections = useViewProjections(
     sheet
       ? {
@@ -4791,13 +4779,119 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       ),
     [sheet, keySheets, rowScopes]
   );
+  /**
+   * #2382: the Update asked of a stale sheet that draws other configuration
+   * rows, held until those rows are built: an Update saves the sheet's
+   * fence, and a row whose feature fails must not become what the sheet is
+   * fenced to. Null once the rows are in, or the sheet or model moved on.
+   */
+  const [rowCheck, setRowCheck] = useState<{
+    sheetId: DrawingSheetId;
+    fingerprint: string;
+  } | null>(null);
+  const checkingRows =
+    rowCheck !== null &&
+    sheet?.sheetId === rowCheck.sheetId &&
+    (status?.kind === 'stale' || status?.kind === 'replaced') &&
+    status.fingerprint === rowCheck.fingerprint;
   const liveRowBodies = useRowBodies(
     rowKeys,
     rowScopes,
-    status?.kind === 'ready',
+    status?.kind === 'ready' || checkingRows,
     document,
     props.requestBodies
   );
+  /**
+   * #2382: the bodies this sheet draws, or would draw once updated, that
+   * stand in for a feature that failed to rebuild: in the active build
+   * (`failedBodies`), or in the build of another configuration row a view
+   * is pinned to, which reports its own. Read once the model is built: such
+   * a sheet is never current, never updated, and never exported from that
+   * geometry.
+   */
+  const { failedBodies } = props;
+  const sourceFailure = useMemo(() => {
+    if (
+      !sheet ||
+      !status ||
+      (status.kind !== 'ready' &&
+        status.kind !== 'stale' &&
+        status.kind !== 'replaced')
+    )
+      return [];
+    const targets =
+      status.kind === 'replaced'
+        ? new Map(status.replacements.map(({ from, to }) => [from, to]))
+        : null;
+    const drawnIds = (ids: readonly BodyId[]) =>
+      targets ? ids.map((id) => targets.get(id) ?? id) : ids;
+    const failed = sheetFailedBodies(
+      drawnIds(
+        sheetBodyIds(
+          activeRowSheet(sheet, viewConfigurationRows(sheet, document))
+        )
+      ),
+      failedBodies,
+      (id) => bodies[id]?.name ?? 'A body'
+    );
+    // Each other row a view draws, once, in view order.
+    const rows = new Map<string, BodyId[]>();
+    for (const view of keySheets.get(sheet.sheetId)?.views ?? []) {
+      const key = projectionViewCacheKey(view);
+      if (key) rows.set(key, [...(rows.get(key) ?? []), ...view.bodyIds]);
+    }
+    for (const [key, ids] of rows) {
+      const built = liveRowBodies.get(key);
+      if (built?.state !== 'ready' || built.failed.size === 0) continue;
+      const rowId = key.split(ROW_SEPARATOR)[0]!;
+      const rowName =
+        document.configurations?.rows.find((row) => row.id === rowId)?.name ??
+        rowId;
+      failed.push(
+        ...sheetFailedBodies(
+          drawnIds(ids),
+          built.failed,
+          (id) => built.bodies[id]?.name ?? bodies[id]?.name ?? 'A body'
+        ).map((entry) => ({ ...entry, rowName }))
+      );
+    }
+    return failed;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    sheet,
+    status,
+    failedBodies,
+    bodies,
+    document.configurations,
+    keySheets,
+    liveRowBodies
+  ]);
+  /**
+   * Whether every other row the sheet on screen draws has been built, or
+   * refused: what a row check waits for. True with no such row.
+   */
+  const rowsSettled = useMemo(() => {
+    for (const key of rowKeys.keys()) {
+      const built = liveRowBodies.get(key);
+      if (!built || built.state === 'loading') return false;
+    }
+    return true;
+  }, [rowKeys, liveRowBodies]);
+  /** The Update as the render that asked for it would run it. */
+  const commitUpdate = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!rowCheck) return;
+    if (!checkingRows) {
+      setRowCheck(null);
+      return;
+    }
+    if (!rowsSettled) return;
+    setRowCheck(null);
+    const refusal = sheetSourceFailureMessage(sourceFailure, true);
+    if (refusal) props.onStatus(refusal);
+    else commitUpdate.current?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowCheck, checkingRows, rowsSettled, sourceFailure]);
   const keptDrawings = keptDrawingsFor(document.projectId);
   // M01: a hole's callout data, read from the document by its feature id,
   // for a diameter on its bore to call it out (standard, thread). Bound to
@@ -7769,7 +7863,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const canUpdate =
     (status.kind === 'stale' || status.kind === 'replaced') &&
     sourceFailureReason === null;
-  const onUpdateSheet = () => {
+  const updateNow = () => {
     if (!canUpdate) return;
     updateSheet({
       source: { fingerprint: status.fingerprint },
@@ -7778,6 +7872,28 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         : {})
     });
   };
+  commitUpdate.current = updateNow;
+  const onUpdateSheet = () => {
+    if (!canUpdate || checkingRows) return;
+    // #2382: a view on another configuration row draws that row's own
+    // build, which is not made until the sheet is updated. It is made
+    // first, so a row whose feature fails is refused here instead of
+    // becoming what the sheet is fenced to.
+    if (hasRowBodies && !rowsSettled) {
+      if (!editable) {
+        props.onStatus(editDisabledReason ?? 'Drawing edits are unavailable.');
+        return;
+      }
+      setRowCheck({ sheetId: sheet.sheetId, fingerprint: status.fingerprint });
+      return;
+    }
+    updateNow();
+  };
+  const updateDisabledReason = !editable
+    ? (editDisabledReason ?? 'Drawing edits are unavailable.')
+    : checkingRows
+      ? 'Building the configurations this sheet draws…'
+      : null;
   /** Each export button's title: why it is refused, or what it writes. */
   const exportTitle = (format: 'pdf' | 'svg' | 'dxf') =>
     exportReason ??
@@ -8686,9 +8802,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           outdatedWarning: outdatedExportWarning,
           update: canUpdate
             ? {
-                disabledReason: editable
-                  ? null
-                  : (editDisabledReason ?? 'Drawing edits are unavailable.'),
+                disabledReason: updateDisabledReason,
                 onUpdate: onUpdateSheet
               }
             : null,
@@ -8709,8 +8823,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           type="button"
           className="compact-draw-chip"
           aria-label="Update"
-          disabled={!editable}
-          title={editDisabledReason ?? 'Redraw this sheet from the current model'}
+          disabled={updateDisabledReason !== null}
+          title={
+            updateDisabledReason ?? 'Redraw this sheet from the current model'
+          }
           onClick={onUpdateSheet}
         >
           <RefreshCw size={18} aria-hidden="true" />
@@ -8884,9 +9000,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 <button
                   type="button"
                   className="drawing-sync-update"
-                  disabled={!editable}
+                  disabled={updateDisabledReason !== null}
                   title={
-                    editDisabledReason ??
+                    updateDisabledReason ??
                     'Redraw this sheet from the current model'
                   }
                   onClick={onUpdateSheet}

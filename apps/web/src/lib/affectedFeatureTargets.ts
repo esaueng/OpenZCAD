@@ -1,4 +1,8 @@
-import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  featureReplacedInputBody,
+  findSketch,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
 import {
   displayLengthName,
   transformStampBodyIds,
@@ -17,6 +21,7 @@ import {
   type FeatureData,
   featureDatumAxisRefs,
   isDatumPlaneRef,
+  isFeatureManuallySuppressed,
   isFeatureSuppressed,
   type DatumPlaneSource,
   type BodyId,
@@ -110,6 +115,13 @@ export function affectedFeatureTargets(
      * feature as stored does not, since its kept inputs stand on their own.
      */
     inputBranches?: boolean;
+    /**
+     * Also list each manually suppressed step that hands an affected body on
+     * under its own result id (ADR-017). It builds nothing, so an edit has
+     * nothing of its own to validate there; a failure upstream of it is
+     * still what stands under that id (#2382).
+     */
+    standIns?: boolean;
   } = {}
 ): AffectedFeatureTarget[] {
   const features = listFeaturesInOrder(document);
@@ -197,6 +209,23 @@ export function affectedFeatureTargets(
 
   for (const feature of features.slice(sourceIndex + 1)) {
     if (isFeatureSuppressed(feature)) {
+      // ADR-017: a manually suppressed step that replaces its input hands
+      // that input through under its own result id, so what follows it
+      // still builds on the affected body. Read from the build's own table
+      // (`featureReplacedInputBody`); a rollback-paused step passes nothing.
+      const passed = isFeatureManuallySuppressed(feature)
+        ? featureReplacedInputBody(feature)
+        : null;
+      if (passed !== null && feature.bodyId && affectedBodies.has(passed)) {
+        affectedBodies.add(feature.bodyId);
+        if (options.standIns)
+          targets.push({
+            featureName: feature.name,
+            featureId: feature.featureId,
+            resultBodyId: feature.bodyId,
+            dependent: true
+          });
+      }
       continue;
     }
     const data = feature.data;

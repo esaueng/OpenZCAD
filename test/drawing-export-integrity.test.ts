@@ -5,6 +5,7 @@ import {
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
+  drawingPaperMm,
   toUserId,
   type BodyRepresentation,
   type DrawingAnnotation,
@@ -25,6 +26,7 @@ import {
   joinHiddenRuns,
   sectionCaption,
   SECTION_APPROXIMATE_NOTE,
+  sheetMarksOnPaper,
   viewPageBox,
   viewPlacementIssue,
   type ComposedView,
@@ -279,30 +281,91 @@ describe('hidden edges export as hidden (#2073)', () => {
     ]);
     const svg = sheetPageToSvg(page, 'Integrity');
     const hidden = svgGroup(svg, 'hidden');
-    // The corner joins into one run; the far piece, drawn twice, is once.
-    expect(hidden).toHaveLength(2);
-    expect(hidden.map((element) => svgPoints(element).length).sort()).toEqual([
-      2, 3
+    // The two edges of the corner stay two runs; the far piece, drawn
+    // twice, is once.
+    expect(hidden).toHaveLength(3);
+    expect(hidden.map((element) => svgPoints(element).length)).toEqual([
+      2, 2, 2
     ]);
     expect(svgGroup(svg, 'visible')).toHaveLength(1);
   });
 
-  it('joins pieces end to end, stops at branches and keeps the same order', () => {
-    const lines = [
-      [0, 0, 1, 0],
-      [1, 0, 2, 0],
-      [1, 0, 1, 1],
-      [5, 5, 6, 5],
-      [6, 5, 6, 6],
-      [6, 6, 5, 5]
+  it('never joins two edges that only share a corner', () => {
+    // A 3.2 mm hidden edge, then a 0.9 mm one square to it. As one run the
+    // 3 mm dash ends on the first and its 1.5 mm gap swallows the second.
+    const corner = [
+      [0, 0, 3.2, 0],
+      [3.2, 0, 3.2, 0.9]
     ];
+    expect(joinHiddenRuns(corner)).toEqual([
+      { points: [0, 0, 3.2, 0], closed: false },
+      { points: [3.2, 0, 3.2, 0.9], closed: false }
+    ]);
+    const page = portPage(corner.map((line) => Float64Array.from(line)));
+    const hidden = svgGroup(sheetPageToSvg(page, 'Integrity'), 'hidden').map(
+      (element) => perimeter(svgPoints(element), false)
+    );
+    expect(hidden).toHaveLength(2);
+    expect(hidden[0]).toBeCloseTo(3.2, 9);
+    expect(hidden[1]).toBeCloseTo(0.9, 9);
+    // A sharp corner on a loop is where its run starts and ends.
+    expect(
+      joinHiddenRuns([
+        [5, 5, 6, 5],
+        [6, 5, 6, 6],
+        [6, 6, 5, 5]
+      ])
+    ).toEqual([
+      { points: [5, 5, 6, 5], closed: false },
+      { points: [6, 5, 6, 6], closed: false },
+      { points: [6, 6, 5, 5], closed: false }
+    ]);
+    // The coarsest tessellation's chords (0.24 rad apart) still join.
+    const arc = [0, 1, 2, 3].map((i) => [
+      Math.cos(0.24 * i),
+      Math.sin(0.24 * i),
+      Math.cos(0.24 * (i + 1)),
+      Math.sin(0.24 * (i + 1))
+    ]);
+    expect(joinHiddenRuns(arc)).toHaveLength(1);
+  });
+
+  it('measures the joining tolerance along the line between the ends', () => {
+    // 0.8 µm on each axis is 1.13 µm apart: not one point.
+    expect(
+      joinHiddenRuns([
+        [0, 0, 1, 0],
+        [1.0008, 0.0008, 2, 0]
+      ])
+    ).toHaveLength(2);
+    expect(
+      joinHiddenRuns([
+        [0, 0, 1, 0],
+        [1.0007, 0.0007, 2, 0]
+      ])
+    ).toHaveLength(1);
+  });
+
+  it('joins pieces end to end, stops at branches and keeps the same order', () => {
+    // A 36-sided ring: every joint turns 10 degrees, so it is one loop.
+    const ring = Array.from({ length: 36 }, (_, i) => {
+      const at = (k: number) => [
+        5 + Math.cos((Math.PI * k) / 18),
+        5 + Math.sin((Math.PI * k) / 18)
+      ];
+      return [...at(i), ...at(i + 1)];
+    });
+    const lines = [[0, 0, 1, 0], [1, 0, 2, 0], [1, 0, 1, 1], ...ring];
     const runs = joinHiddenRuns(lines);
-    expect(runs).toEqual([
+    expect(runs.slice(0, 3)).toEqual([
       { points: [0, 0, 1, 0], closed: false },
       { points: [1, 0, 2, 0], closed: false },
-      { points: [1, 0, 1, 1], closed: false },
-      { points: [5, 5, 6, 5, 6, 6], closed: true }
+      { points: [1, 0, 1, 1], closed: false }
     ]);
+    expect(runs).toHaveLength(4);
+    expect(runs[3]!.closed).toBe(true);
+    expect(runs[3]!.points).toHaveLength(72);
+    expect(runs[3]!.points.slice(0, 2)).toEqual([6, 5]);
     expect(joinHiddenRuns(lines)).toEqual(runs);
     // Ends a micron apart are one point; a piece of no length is none.
     expect(
@@ -369,6 +432,71 @@ describe('a section cut from the tessellation says so on the paper (#2110)', () 
     expect(dxfTexts(sheetPageToDxf(page))).toEqual(
       expect.arrayContaining([sectionCaption('A'), SECTION_APPROXIMATE_NOTE])
     );
+  });
+
+  /** An approximate section of a Front at `source`, centred at `center`. */
+  function edgePage(
+    orientation: DrawingView['orientation'],
+    source: { x: number; y: number },
+    center: { x: number; y: number }
+  ): SheetPage {
+    const front = view(frontId, 'front', { centerMm: source });
+    const section = view(sectionId, orientation, {
+      centerMm: center,
+      section: { sourceViewId: frontId, label: 'A', depth: 0 }
+    });
+    const bounds = { minU: -10, minV: -10, maxU: 10, maxV: 10 };
+    return composeSheetPage(
+      sheetOf([front, section]),
+      [
+        {
+          view: front,
+          projection: { visible: [square(10)], hidden: [], bounds }
+        },
+        {
+          view: section,
+          projection: {
+            visible: [square(10)],
+            hidden: [],
+            bounds,
+            sectionApproximate: 'The kernel could not cut it exactly.'
+          }
+        }
+      ],
+      { projectName: 'Spindle', units: 'mm' }
+    );
+  }
+  const a3 = drawingPaperMm({ size: 'A3', orientation: 'landscape' });
+
+  it('keeps the approximation on the page when its section sits at an edge', () => {
+    for (const [name, page] of [
+      // Under its source with its outline 8 mm above the bottom edge: the
+      // caption's baseline is 1 mm up, and the note under it would be 3 mm
+      // below the paper.
+      ['bottom', edgePage('bottom', { x: 120, y: 150 }, { x: 120, y: 18 })],
+      // Beside its source, its caption just under the top edge.
+      ['top', edgePage('right', { x: 120, y: 279 }, { x: 260, y: 279 })],
+      // Hard against the left and the right edge: the note is wider than
+      // the view.
+      ['left', edgePage('right', { x: 200, y: 150 }, { x: 12, y: 150 })],
+      ['right', edgePage('right', { x: 200, y: 150 }, { x: 408, y: 150 })]
+    ] as const) {
+      const note = page.texts.find(
+        (text) => text.text === SECTION_APPROXIMATE_NOTE
+      );
+      expect(note, name).toBeDefined();
+      // Whole, as the writers set it: nothing of it past the paper.
+      expect(sheetMarksOnPaper([], [note!], a3), name).toBe(true);
+      expect(svgTexts(sheetPageToSvg(page, 'Integrity')), name).toContain(
+        SECTION_APPROXIMATE_NOTE
+      );
+      expect(pdfText(page, 'Integrity'), name).toContain(
+        `(${SECTION_APPROXIMATE_NOTE}) Tj`
+      );
+      expect(dxfTexts(sheetPageToDxf(page)), name).toContain(
+        SECTION_APPROXIMATE_NOTE
+      );
+    }
   });
 
   it('leaves an exact section as it was', () => {
@@ -479,6 +607,70 @@ describe('a dimension that leaves the paper is diagnosed, not dropped (#2166)', 
   });
 });
 
+describe('the off-paper check and the page agree on the paper’s edge (#2166)', () => {
+  const paper = drawingPaperMm({ size: 'A3', orientation: 'landscape' });
+  const note = (x: number) => ({
+    x,
+    y: 50,
+    sizeMm: 3,
+    text: 'EDGE NOTE',
+    align: 'start' as const
+  });
+  const head = (x: number) => ({
+    kind: 'dimension' as const,
+    points: [x, 60, x + 3, 61, x + 3, 59],
+    closed: true,
+    filled: true
+  });
+  const line = (x: number) => ({
+    kind: 'dimension' as const,
+    points: [x, 70, 40, 70]
+  });
+  const pageOf = (x: number) =>
+    composeSheetPage(
+      sheetOf([]),
+      [],
+      { projectName: 'Edge', units: 'mm' },
+      { strokes: [head(x), line(x)], texts: [note(x)] }
+    );
+  const drawnMarks = (page: SheetPage) => ({
+    note: page.texts.find((text) => text.text === 'EDGE NOTE'),
+    head: page.strokes.find(
+      (stroke) => stroke.filled && stroke.points[1] === 60
+    ),
+    line: page.strokes.find((stroke) => stroke.points[1] === 70)
+  });
+
+  it('prints whole every mark the check passes', () => {
+    // 5 µm past the left edge: inside the check's tolerance.
+    for (const x of [0, -0.005, -0.0099]) {
+      expect(sheetMarksOnPaper([head(x), line(x)], [note(x)], paper)).toBe(
+        true
+      );
+      const drawn = drawnMarks(pageOf(x));
+      expect(drawn.note, String(x)).toBeDefined();
+      expect(drawn.head, String(x)).toBeDefined();
+      expect(drawn.line?.points, String(x)).toHaveLength(4);
+      // And nothing of them leaves the page.
+      expect(drawn.note!.x).toBeGreaterThanOrEqual(0);
+      expect(Math.min(...drawn.head!.points)).toBeGreaterThanOrEqual(0);
+      expect(Math.min(...drawn.line!.points)).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('refuses every mark the page would cut or drop', () => {
+    for (const x of [-0.02, -1]) {
+      expect(sheetMarksOnPaper([], [note(x)], paper)).toBe(false);
+      expect(sheetMarksOnPaper([head(x)], [], paper)).toBe(false);
+      expect(sheetMarksOnPaper([line(x)], [], paper)).toBe(false);
+      const drawn = drawnMarks(pageOf(x));
+      expect(drawn.note).toBeUndefined();
+      expect(drawn.head).toBeUndefined();
+      expect(drawn.line!.points[0]).toBe(0);
+    }
+  });
+});
+
 describe('a sheet of a model that failed to rebuild names the failure (#2382)', () => {
   const plate = 'body_plate' as never;
   const other = 'body_other' as never;
@@ -502,5 +694,27 @@ describe('a sheet of a model that failed to rebuild names the failure (#2382)', 
       'then Update the sheet to export it.'
     );
     expect(sheetSourceFailureMessage([], true)).toBeNull();
+  });
+
+  it('names the configuration a pinned view’s feature failed in', () => {
+    const [found] = sheetFailedBodies([plate], failed, name);
+    expect(
+      sheetSourceFailureMessage([{ ...found!, rowName: 'Narrow' }], false)
+    ).toBe(
+      '“Cut 3” failed to rebuild in the configuration “Narrow”, so Plate is not the design there and this sheet would not show it. Fix or suppress the failed feature, or change that configuration’s values, then export.'
+    );
+    // The same plate, failed in the active build and in two pinned rows.
+    expect(
+      sheetSourceFailureMessage(
+        [
+          found!,
+          { ...found!, rowName: 'Narrow' },
+          { ...found!, featureName: 'Bore 3', rowName: 'Third' }
+        ],
+        true
+      )
+    ).toBe(
+      'Features failed to rebuild (“Cut 3”, “Cut 3” in the configuration “Narrow”, “Bore 3” in the configuration “Third”), so Plate is not the design there and this sheet would not show it. Fix or suppress the failed feature, or change those configurations’ values, then Update the sheet to export it.'
+    );
   });
 });

@@ -85,9 +85,11 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
  * this keeps the file from contradicting it.
  *
  * Scoped to the failing branch: the feature's own results, the inputs it
- * passes through, and every result downstream of it. Advisory warnings,
- * suppressed features, and failures on another body's branch withhold
- * nothing, so an unrelated problem never blocks a sound body's export.
+ * passes through, and every result downstream of it, including the id a
+ * later suppressed or failed step hands that unfinished body on under.
+ * Advisory warnings, a suppressed feature's own state, and failures on
+ * another body's branch withhold nothing, so an unrelated problem never
+ * blocks a sound body's export.
  *
  * Attribution comes from the typed feature-warning record, never from warning
  * prose. The saved document does not carry that record (it is session advice
@@ -122,9 +124,11 @@ export function failedHistoryExportBodies(
         ? [feature.data.secondBodyId]
         : []),
       ...transformStampBodyIds(feature.data),
-      ...affectedFeatureTargets(document, feature.featureId).map(
-        (target) => target.resultBodyId
-      )
+      // With the stand-ins: a suppressed step after the failure hands the
+      // failed feature's unfinished input on under its own id (#2382).
+      ...affectedFeatureTargets(document, feature.featureId, {
+        standIns: true
+      }).map((target) => target.resultBodyId)
     ];
     for (const bodyId of bodies) {
       // Only a body on screen can be offered for export and so be withheld.

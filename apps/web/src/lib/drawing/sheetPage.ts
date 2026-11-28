@@ -610,6 +610,57 @@ function insideRect(rect: PaperRect, x: number, y: number): boolean {
   return x >= rect.minX && x <= rect.maxX && y >= rect.minY && y <= rect.maxY;
 }
 
+/**
+ * #2166: the paper as far as a mark may reach and still be on it: the one
+ * edge the off-paper checks (`sheetMarksOnPaper`, `sheetBoxOnPaper`) and the
+ * page (`composeSheetPage`) both read, so a mark the checks pass is never one
+ * the page cuts or drops. It allows the placement tolerance a view's own
+ * check does, for a mark laid out flush with the edge whose arithmetic lands
+ * a hair past it; the page then draws that hair on the edge
+ * (`ontoPaper`), so nothing drawn leaves the paper.
+ */
+function paperEdge(paper: { width: number; height: number }): PaperRect {
+  const e = PLACEMENT_TOLERANCE_MM;
+  return {
+    minX: -e,
+    minY: -e,
+    maxX: paper.width + e,
+    maxY: paper.height + e
+  };
+}
+
+/** Whether a box (a picture, say) lies on the paper, by `paperEdge`. */
+export function sheetBoxOnPaper(
+  box: { x: number; y: number; width: number; height: number },
+  paper: { width: number; height: number }
+): boolean {
+  const edge = paperEdge(paper);
+  return (
+    insideRect(edge, box.x, box.y) &&
+    insideRect(edge, box.x + box.width, box.y + box.height)
+  );
+}
+
+/**
+ * `points` with each one within `paperEdge`'s tolerance of the paper moved
+ * onto it; the same array when none is.
+ */
+function ontoPaper(
+  points: number[],
+  paper: { width: number; height: number }
+): number[] {
+  let moved: number[] | null = null;
+  for (let i = 0; i < points.length; i += 1) {
+    const max = i % 2 === 0 ? paper.width : paper.height;
+    const value = points[i]!;
+    const on = value < 0 ? 0 : value > max ? max : value;
+    if (on === value) continue;
+    moved ??= [...points];
+    moved[i] = on;
+  }
+  return moved ?? points;
+}
+
 /** Liang–Barsky: the part of a segment inside `rect`, or null. */
 function clipSegment(
   rect: PaperRect,
@@ -688,17 +739,31 @@ function clipStroke(stroke: SheetStroke, rect: PaperRect): SheetStroke[] {
 
 /** Hidden-line ends closer than this on the paper are one point (mm). */
 const HIDDEN_JOIN_MM = 1e-3;
+/**
+ * The most a hidden line may turn where two pieces are joined into one run,
+ * as the cosine of that angle (20 degrees). Hidden lines carry no record of
+ * the edge they came from, so the turn stands for it: the chords of one
+ * curved edge turn by the tessellation's angular step, at most 0.24 rad
+ * (13.8 degrees), while two edges that meet at a corner turn by the corner.
+ */
+const HIDDEN_JOIN_MIN_COS = Math.cos((20 * Math.PI) / 180);
 
 /**
  * #2073: a view's hidden lines on the paper as the fewest continuous runs:
- * every repeated segment once, and runs that meet end to end, with nothing
- * else meeting them there, joined into one polyline (closed where it comes
- * back to its start). Hidden-line removal hands a curved edge over in many
- * short pieces, often more than once (the edge, the face silhouette along
- * it); each drawn alone restarts the dash pattern, so pieces shorter than a
- * dash print solid and a hidden port reads as a visible opening. Joined, the
- * pattern runs on along the curve, as a plotter would draw it. Pure and
- * order-preserving, so the same lines always give the same runs.
+ * every repeated segment once, and pieces that meet end to end and carry
+ * straight on (within `HIDDEN_JOIN_MIN_COS`), with nothing else meeting them
+ * there, joined into one polyline (closed where it comes back to its start).
+ * Hidden-line removal hands a curved edge over in many short pieces, often
+ * more than once (the edge, the face silhouette along it); each drawn alone
+ * restarts the dash pattern, so pieces shorter than a dash print solid and a
+ * hidden port reads as a visible opening. Joined, the pattern runs on along
+ * the curve, as a plotter would draw it.
+ *
+ * Two edges that only share a corner stay two runs: joined, the dash that
+ * ends on one puts its gap over the start of the next, and a short edge
+ * after the corner would not print at all. Ends are one point when the
+ * distance between them (not each coordinate's) is within `HIDDEN_JOIN_MM`.
+ * Pure and order-preserving, so the same lines always give the same runs.
  */
 export function joinHiddenRuns(
   lines: readonly (readonly number[])[]
@@ -713,8 +778,7 @@ export function joinHiddenRuns(
     for (let dx = -1; dx <= 1; dx += 1)
       for (let dy = -1; dy <= 1; dy += 1)
         for (const id of cells.get(`${cx + dx},${cy + dy}`) ?? [])
-          if (Math.abs(xs[id]! - x) <= q && Math.abs(ys[id]! - y) <= q)
-            return id;
+          if (Math.hypot(xs[id]! - x, ys[id]! - y) <= q) return id;
     const id = xs.length;
     xs.push(x);
     ys.push(y);
@@ -751,6 +815,19 @@ export function joinHiddenRuns(
     }
   const used = new Uint8Array(from.length);
   const other = (s: number, v: number) => (from[s] === v ? to[s]! : from[s]!);
+  /** A point where exactly two pieces meet and the line carries on. */
+  const joint = (v: number): boolean => {
+    const meeting = incident.get(v)!;
+    if (meeting.length !== 2) return false;
+    const [a, b] = [other(meeting[0]!, v), other(meeting[1]!, v)];
+    const [ax, ay] = [xs[a]! - xs[v]!, ys[a]! - ys[v]!];
+    const [bx, by] = [xs[b]! - xs[v]!, ys[b]! - ys[v]!];
+    // Straight on: the two pieces leave the point in opposite directions.
+    return (
+      -(ax * bx + ay * by) >=
+      HIDDEN_JOIN_MIN_COS * Math.hypot(ax, ay) * Math.hypot(bx, by)
+    );
+  };
   const walk = (start: number, first: number) => {
     const ids = [start];
     let at = start;
@@ -759,9 +836,10 @@ export function joinHiddenRuns(
       used[segment] = 1;
       at = other(segment, at);
       ids.push(at);
+      // Only a plain joint carries on; a branch, a corner or an end stops
+      // the run.
+      if (at === start || !joint(at)) break;
       const next = incident.get(at)!;
-      // Only a plain joint carries on; a branch or an end stops the run.
-      if (next.length !== 2 || at === start) break;
       const onward = next[0] === segment ? next[1]! : next[0]!;
       if (used[onward]) break;
       segment = onward;
@@ -774,12 +852,12 @@ export function joinHiddenRuns(
     };
   };
   const runs: { points: number[]; closed: boolean }[] = [];
-  // Open runs from their ends (and branch points) first, then the loops
-  // left over, each from its first segment in input order.
+  // Open runs from their ends (and branch points and corners) first, then
+  // the loops left over, each from its first segment in input order.
   for (let s = 0; s < from.length; s += 1) {
     if (used[s]) continue;
     for (const v of [from[s]!, to[s]!]) {
-      if (used[s] || incident.get(v)!.length === 2) continue;
+      if (used[s] || joint(v)) continue;
       runs.push(walk(v, s));
     }
   }
@@ -800,9 +878,8 @@ export function sheetMarksOnPaper(
   texts: readonly SheetText[],
   paper: { width: number; height: number }
 ): boolean {
-  const e = PLACEMENT_TOLERANCE_MM;
-  const on = (x: number, y: number) =>
-    x >= -e && y >= -e && x <= paper.width + e && y <= paper.height + e;
+  const edge = paperEdge(paper);
+  const on = (x: number, y: number) => insideRect(edge, x, y);
   for (const stroke of strokes)
     for (let i = 0; i + 1 < stroke.points.length; i += 2)
       if (!on(stroke.points[i]!, stroke.points[i + 1]!)) return false;
@@ -916,12 +993,8 @@ export function composeSheetPage(
   const block = titleBlock(sheet, context);
   // Views and annotations can be placed past the paper's edge (a smaller
   // paper, a drag); what lies there is not on the page, so it is not drawn.
-  const onPaper: PaperRect = {
-    minX: 0,
-    minY: 0,
-    maxX: paper.width,
-    maxY: paper.height
-  };
+  // #2166: by the edge the off-paper check reads (`paperEdge`).
+  const onPaper = paperEdge(paper);
   const weights = sheet.format?.lineWidthsMm;
   // D02 (v92): a picture is kept whole while any of it is on the paper (the
   // writers clip to the page); one wholly off it is not drawn.
@@ -946,14 +1019,24 @@ export function composeSheetPage(
       ...auxiliaries.strokes,
       ...(annotations?.strokes ?? []),
       ...block.strokes
-    ].flatMap((stroke) => clipStroke(stroke, onPaper)),
+    ]
+      .flatMap((stroke) => clipStroke(stroke, onPaper))
+      .map((stroke) => {
+        const points = ontoPaper(stroke.points, paper);
+        return points === stroke.points ? stroke : { ...stroke, points };
+      }),
     texts: [
       ...marks.texts,
       ...details.texts,
       ...auxiliaries.texts,
       ...(annotations?.texts ?? []),
       ...block.texts
-    ].filter((text) => insideRect(onPaper, text.x, text.y))
+    ]
+      .filter((text) => insideRect(onPaper, text.x, text.y))
+      .map((text) => {
+        const [x, y] = ontoPaper([text.x, text.y], paper);
+        return x === text.x && y === text.y ? text : { ...text, x: x!, y: y! };
+      })
   };
 }
 
@@ -988,6 +1071,53 @@ export function sectionCaption(label: string): string {
 export const SECTION_APPROXIMATE_NOTE =
   'APPROXIMATE: CUT FROM THE TESSELLATION, NOT DIMENSIONABLE';
 const SECTION_NOTE_MM = 2.5;
+/** The least paper left around the note: its comma hangs under the line. */
+const SECTION_NOTE_INSET_MM = 1;
+
+/**
+ * #2110: where a section's approximation note prints (the middle of its
+ * baseline), so that all of it is on the paper. The page draws no text whose
+ * anchor is off the paper and the writers cut the rest at the edge, and a
+ * section whose note went missing would export as an exact one.
+ *
+ * Tried in order: beyond the caption, away from the view, where it reads
+ * with the caption; in the gap between the caption and the view; beyond the
+ * view on its other side. Failing all three (a view as tall as the paper)
+ * it is moved up or down onto the paper where it would first have gone. It
+ * is as wide as a small view, so along the caption it is moved in from the
+ * left or right edge by as much as it would overrun.
+ */
+function sectionNotePlacement(
+  centerX: number,
+  box: { y: number; height: number },
+  captionY: number,
+  below: boolean,
+  paper: { width: number; height: number }
+): { x: number; y: number } {
+  const inset = SECTION_NOTE_INSET_MM;
+  const caption = SECTION_LABEL_MM * 0.7;
+  const candidates = below
+    ? [
+        captionY - SECTION_NOTE_MM - 1.5,
+        captionY + caption + 0.5,
+        box.y + box.height + 1.5
+      ]
+    : [
+        captionY + caption + 1.5,
+        captionY - SECTION_NOTE_MM - 0.5,
+        box.y - SECTION_NOTE_MM - 1.5
+      ];
+  const top = paper.height - inset - SECTION_NOTE_MM;
+  const y =
+    candidates.find((candidate) => candidate >= inset && candidate <= top) ??
+    Math.min(Math.max(candidates[0]!, inset), top);
+  const half = textWidthMm(SECTION_APPROXIMATE_NOTE, SECTION_NOTE_MM) / 2;
+  const x = Math.min(
+    Math.max(centerX, half + inset),
+    Math.max(paper.width - half - inset, half + inset)
+  );
+  return { x, y };
+}
 
 /**
  * 45° hatching over a section view's cut faces, on the paper. Lines sit at
@@ -1209,7 +1339,7 @@ export function sectionLineOnPage(
  * section view itself. A mark is drawn once the view it sits on is.
  */
 export function composeSectionMarks(
-  sheet: Pick<DrawingSheet, 'scale' | 'views'>,
+  sheet: Pick<DrawingSheet, 'paper' | 'scale' | 'views'>,
   views: readonly ComposedView[],
   units: UnitSystem
 ): { strokes: SheetStroke[]; texts: SheetText[] } {
@@ -1309,13 +1439,17 @@ export function composeSectionMarks(
         bold: true,
         align: 'middle'
       });
-      // #2110: on the caption's far side from the view, so it reads with it.
+      // #2110: on the caption's far side from the view, so it reads with
+      // it, unless that is off the paper (`sectionNotePlacement`).
       if (own.projection.sectionApproximate)
         texts.push({
-          x: view.centerMm.x,
-          y: below
-            ? captionY - SECTION_NOTE_MM - 1.5
-            : captionY + SECTION_LABEL_MM * 0.7 + 1.5,
+          ...sectionNotePlacement(
+            view.centerMm.x,
+            box,
+            captionY,
+            below,
+            drawingPaperMm(sheet.paper)
+          ),
           sizeMm: SECTION_NOTE_MM,
           text: SECTION_APPROXIMATE_NOTE,
           align: 'middle'

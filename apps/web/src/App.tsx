@@ -44213,13 +44213,19 @@ export function App() {
                   )
                 }
                 requestBodies={(source, signal) =>
-                  solvedDrawingSource(source)
-                    .then((solved) =>
-                      geometry.syncOnce(solved, undefined, undefined, {
-                        signal
-                      })
-                    )
-                    .then((derived) => derived.bodyRepresentations)
+                  solvedDrawingSource(source).then((solved) =>
+                    geometry
+                      .syncOnce(solved, undefined, undefined, { signal })
+                      .then((derived) => ({
+                        bodies: derived.bodyRepresentations,
+                        // #2382: this row's own failed features, as
+                        // `failedHistoryBodies` reads the active row's.
+                        failedBodies: failedHistoryExportBodies(
+                          { ...solved, derived },
+                          derived.featureWarnings
+                        )
+                      }))
+                  )
                 }
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
