@@ -475,6 +475,32 @@ export default function CompactWorkspace({
   const moreOpen = state.stack.some((page) => page.key === 'more');
   const projectOpen = state.stack.some((page) => page.key === 'project');
   const allToolsOpen = state.stack.some((page) => page.key === 'all-tools');
+  // The sheet holds nothing but the mode's tray: no content of the
+  // workspace's, no running tool's row, no keypad.
+  const trayOnly =
+    trayShown && !hasSheetContent && !commandRowPresent && !keypadUp;
+  // Build's tray pulled up opens All tools at the height it was pulled to:
+  // the tray alone at half or full was a row over blank space (the space
+  // review; the owner's choice).
+  const onRowRaise =
+    build !== null && trayOnly
+      ? (detent: 'half' | 'full') => {
+          push('all-tools', detent);
+          return true;
+        }
+      : undefined;
+  // A page leaving a sheet that holds only its tray takes it back to peek,
+  // wherever the page found it: a page opened over a raised sheet left the
+  // tray standing at half over blank space when it went.
+  const stackDepth = state.stack.length;
+  const lastStackDepth = useRef(stackDepth);
+  useEffect(() => {
+    const emptied = lastStackDepth.current > 0 && stackDepth === 0;
+    lastStackDepth.current = stackDepth;
+    if (emptied && trayOnly && stateRef.current.detent !== 'peek') {
+      dispatch({ type: 'set-detent', detent: 'peek' });
+    }
+  }, [dispatch, stackDepth, trayOnly]);
 
   // The panel sheet follows the workspace's open panel (every route to a
   // panel sets it), and a sheet put away by Back, Close or Escape shuts it.
@@ -905,6 +931,7 @@ export default function CompactWorkspace({
           background={background}
           companions={companions}
           onHeight={onHeight}
+          onRowRaise={onRowRaise}
         >
           {/* The mode's tray first: the row the sheet shows at peek. A
               running command's bar brings its own row, which stands in for

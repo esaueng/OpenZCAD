@@ -166,6 +166,12 @@ interface BottomSheetProps {
   companions?(): readonly (Element | null | undefined)[];
   /** The sheet's drawn height in CSS pixels, as it changes. */
   onHeight?(px: number): void;
+  /**
+   * The workspace's row raised from peek (dragged, or the slider's keys):
+   * answering true, the workspace shows something there itself (Build's
+   * All tools) and the sheet does not rise on its own into blank space.
+   */
+  onRowRaise?(detent: 'half' | 'full'): boolean;
 }
 
 /**
@@ -187,7 +193,8 @@ export function BottomSheet({
   reducedMotion = false,
   background,
   companions,
-  onHeight
+  onHeight,
+  onRowRaise
 }: BottomSheetProps) {
   const sheetRef = useRef<HTMLElement | null>(null);
   const grabberRef = useRef<HTMLDivElement | null>(null);
@@ -428,6 +435,11 @@ export function BottomSheet({
   // a grip above it. A press on the row that is not one of its controls
   // drags the sheet too (its surface).
   const asRow = detent === 'peek' && page === null && hasRoot;
+  /** The row raised to `next`: the workspace's to answer, if it will. */
+  const rowRaised = (next: SheetDetent) =>
+    asRow &&
+    (next === 'half' || next === 'full') &&
+    onRowRaise?.(next) === true;
   const hostHeight = () =>
     sheetRef.current?.parentElement?.getBoundingClientRect().height ?? 0;
   // A phone held landscape draws the sheet at the stage's side
@@ -467,10 +479,14 @@ export function BottomSheet({
     if (drag.moved) {
       const height = drag.startHeight + (drag.startY - event.clientY);
       setDragHeight(null);
-      dispatch({
-        type: 'set-detent',
-        detent: nearestDetent(height, hostHeight(), canClose, isSideSheet())
-      });
+      const next = nearestDetent(
+        height,
+        hostHeight(),
+        canClose,
+        isSideSheet()
+      );
+      if (rowRaised(next)) return;
+      dispatch({ type: 'set-detent', detent: next });
     } else if (!drag.tapIsNothing) {
       // A tap toggles between peek and half; from full it comes down.
       dispatch({
@@ -504,6 +520,7 @@ export function BottomSheet({
     const step = (next: SheetDetent) => {
       event.preventDefault();
       event.stopPropagation();
+      if (rowRaised(next)) return;
       dispatch({ type: 'set-detent', detent: next });
     };
     switch (event.key) {
@@ -511,6 +528,7 @@ export function BottomSheet({
       case 'PageUp':
         event.preventDefault();
         event.stopPropagation();
+        if (rowRaised('half')) return;
         dispatch({ type: 'step-up' });
         return;
       case 'ArrowDown':
