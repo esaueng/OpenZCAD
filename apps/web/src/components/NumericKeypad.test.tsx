@@ -2037,6 +2037,52 @@ describe('the keypad in the compact sheet', () => {
     }
   });
 
+  it('keeps its keys when a touch on the field asks for the system keyboard', () => {
+    // The sheet rides above the keyboard: folding its keys (as the stage's
+    // keypad does) left them folded after the keyboard went away (review on
+    // #2451).
+    const host = document.createElement('div');
+    document.body.append(host);
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: query === '(pointer: coarse)',
+          media: query,
+          addEventListener() {},
+          removeEventListener() {}
+        }) as unknown as MediaQueryList
+    );
+    try {
+      render(
+        <CompactOverlayHostContext.Provider value={host}>
+          <NumericKeypad
+            request={{
+              kind: 'offset',
+              label: 'Height',
+              initial: '5',
+              unitKind: 'length'
+            }}
+            units="mm"
+            scope={{}}
+            anchorRef={{ current: null }}
+            onPreview={vi.fn()}
+            onCommit={vi.fn()}
+            onCancel={() => undefined}
+          />
+        </CompactOverlayHostContext.Provider>
+      );
+      fireEvent.pointerDown(screen.getByRole('textbox'), {
+        pointerType: 'touch'
+      });
+      expect(screen.getByRole('button', { name: '7' })).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+      cleanup();
+      host.remove();
+    }
+  });
+
   it('refocuses as before on the regular stage', () => {
     const calls = tapKeys(null);
     expect(calls.length).toBeGreaterThanOrEqual(2);

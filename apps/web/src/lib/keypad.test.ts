@@ -133,6 +133,20 @@ describe('keypadKeptPosition', () => {
     ).toEqual(placed);
   });
 
+  it('keeps a control that shrank where it still fits, beside a panel', () => {
+    // Review on #2451: placed squeezed at x=100 beside a panel at 400–550,
+    // a control that shrank to 232 px fits where it is and stays there,
+    // rather than jumping to the widest gap at 558.
+    expect(
+      keypadKeptPosition(
+        { x: 100, y: 200, side: 'over' },
+        { width: 232, height: 200 },
+        VIEWPORT,
+        [{ x: 400, width: 150 }]
+      )
+    ).toEqual({ x: 100, y: 200, side: 'over' });
+  });
+
   it('moves it only as far as the stage and the docked panels require', () => {
     const placed = { x: 700, y: 500, side: 'over' as const };
     expect(

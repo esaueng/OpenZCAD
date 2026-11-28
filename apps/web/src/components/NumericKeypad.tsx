@@ -1347,11 +1347,12 @@ function NumericKeypadControl({
             ) {
               raiseSystemKeyboard.current = true;
               setSystemKeyboard(true);
-              // The system keyboard stands in for the pad's keys, which
-              // otherwise took the room it leaves: an iPad on its side had
-              // the keys clipped and Apply under the mode switch. The pad's
-              // toggle brings them back.
-              setGridOpen(false);
+              // On the stage the system keyboard stands in for the pad's
+              // keys, which otherwise took the room it leaves: an iPad on
+              // its side had the keys clipped and Apply under the mode
+              // switch. The pad's toggle brings them back. A phone's sheet
+              // rides above the keyboard and keeps its keys for after it.
+              if (placement !== 'sheet') setGridOpen(false);
             }
           }}
           onClick={(event) => {

@@ -1649,6 +1649,18 @@ button.history-row-refused.is-reopen:focus-visible {
     gap: 3px;
     padding-inline: 2px;
   }
+
+  /* More has its own room here, so hovering or focusing the row no longer
+     fades the value it used to cover. */
+  .history-timeline
+    .feature-row:is(
+      :hover,
+      :has(:focus-visible),
+      :has(.history-row-actions :focus)
+    )
+    .history-row-value {
+    opacity: 1;
+  }
 }
 
 /* A rule above the details, not below: the History section's own

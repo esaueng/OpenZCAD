@@ -16502,7 +16502,16 @@ export function ModelViewer({
         let fitted = pose();
         const until = performance.now() + OPENING_FOLLOW_MS;
         const follow = () => {
-          if (contextRef.current !== context || moved(fitted)) return;
+          // Revealed (or past the deadline) before this frame ran: what is
+          // on screen now is the user's to move.
+          if (
+            contextRef.current !== context ||
+            moved(fitted) ||
+            !openingCoverHides(canvas) ||
+            performance.now() >= until
+          ) {
+            return;
+          }
           const next = measureOpeningFrame(canvas);
           if (!sameOpeningFrame(next, frame)) {
             frame = next;
@@ -16510,9 +16519,7 @@ export function ModelViewer({
             fitted = pose();
             context.requestRender();
           }
-          if (openingCoverHides(canvas) && performance.now() < until) {
-            openingFollowRef.current = requestAnimationFrame(follow);
-          }
+          openingFollowRef.current = requestAnimationFrame(follow);
         };
         openingFollowRef.current = requestAnimationFrame(follow);
       }
