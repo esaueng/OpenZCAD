@@ -417,6 +417,23 @@ test('an exact coil takes a typed turn count over its rounded text, and keeps it
   await page.keyboard.type('1');
   await page.keyboard.press('Tab');
   await expect(bar).toContainText('Climbs 4.2 mm along its axis');
+  // #2188, #2189: at one turn a 2.997 mm pitch would overlap the Ø3 mm
+  // wire's end caps. The bar says so, with what clears it, and Done waits.
+  const pitch = bar.getByRole('textbox', { name: 'Pitch' });
+  await pitch.click();
+  await page.keyboard.type('-2.997');
+  await page.keyboard.press('Tab');
+  await expect(bar).toContainText(
+    'The coils would overlap: one turn must climb further than the profile is tall.',
+    { timeout: 30_000 }
+  );
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeDisabled();
+  await pitch.click();
+  await page.keyboard.type('-4.2');
+  await page.keyboard.press('Tab');
+  await expect(bar).not.toContainText('The coils would overlap', {
+    timeout: 30_000
+  });
   // Sized by height instead: a size, with the coil still running back.
   await bar.getByRole('radio', { name: 'Height & turns' }).click();
   await expect(bar.getByRole('textbox', { name: 'Height' })).toHaveValue('4.2');
