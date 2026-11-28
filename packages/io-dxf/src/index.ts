@@ -353,7 +353,11 @@ export interface DxfLayer {
   readonly lineType?: 'CONTINUOUS' | 'DASHED' | 'HIDDEN' | 'CENTER';
 }
 
-/** The patterns of the non-continuous line types, in drawing units. */
+/**
+ * The patterns of the non-continuous line types, in millimetres. The
+ * writer converts them to the file's declared unit, so a dash is the same
+ * physical length in a millimetre and an inch file.
+ */
 const LINE_TYPE_PATTERNS: Readonly<
   Record<'DASHED' | 'HIDDEN' | 'CENTER', { text: string; dashes: number[] }>
 > = {
@@ -362,7 +366,11 @@ const LINE_TYPE_PATTERNS: Readonly<
   CENTER: { text: 'Center ____ _ ____', dashes: [12, -1.5, 0.5, -1.5] }
 };
 
-function layerTables(layers: readonly DxfLayer[]): string[] {
+function layerTables(
+  layers: readonly DxfLayer[],
+  units: DxfLengthUnit
+): string[] {
+  const unitMm = MILLIMETRES_PER_UNIT[units];
   // Layer names are case-insensitive: readers merge `BEND_UP` and `bend_up`
   // into one layer and keep only the last declaration's colour and type.
   const names = new Set<string>();
@@ -400,7 +408,8 @@ function layerTables(layers: readonly DxfLayer[]): string[] {
     ...group(40, 0)
   ];
   for (const type of patterns) {
-    const { text, dashes } = LINE_TYPE_PATTERNS[type];
+    const { text } = LINE_TYPE_PATTERNS[type];
+    const dashes = LINE_TYPE_PATTERNS[type].dashes.map((dash) => dash / unitMm);
     lineTypes.push(
       ...group(0, 'LTYPE'),
       ...group(2, type),
@@ -450,6 +459,14 @@ const INSUNITS_CODE: Record<DxfLengthUnit, string> = {
   m: '6'
 };
 
+/** One drawing unit in millimetres, for the line-type patterns. */
+const MILLIMETRES_PER_UNIT: Record<DxfLengthUnit, number> = {
+  inch: 25.4,
+  mm: 1,
+  cm: 10,
+  m: 1000
+};
+
 /**
  * Assemble a complete R12 document from 2D entities.
  *
@@ -461,7 +478,9 @@ const INSUNITS_CODE: Record<DxfLengthUnit, string> = {
  * Everything else stays out: each additional header variable is another
  * thing an importer can choke on. Coordinates are emitted as given; callers
  * are responsible for having scaled them to `options.units` (millimetres
- * unless they say otherwise).
+ * unless they say otherwise). Line-type dash lengths are the one thing the
+ * writer scales itself: they are fixed physical lengths, written in
+ * `options.units`.
  */
 export function writeDxf(
   entities: readonly DxfEntity[],
@@ -480,7 +499,7 @@ export function writeDxf(
     ...group(0, 'ENDSEC')
   ];
   if (options.layers && options.layers.length > 0) {
-    lines.push(...layerTables(options.layers));
+    lines.push(...layerTables(options.layers, units));
   }
   lines.push(...group(0, 'SECTION'), ...group(2, 'ENTITIES'));
   for (const entity of entities) {

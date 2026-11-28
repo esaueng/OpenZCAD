@@ -174,6 +174,232 @@ export function featureConsumedBodyIds(feature: FeatureNode): BodyId[] {
 }
 
 /**
+ * One piece of a body's material where the later history left it (see
+ * {@link bodyPiecesAfter}).
+ */
+export interface BodyPiece {
+  /** The id the piece ended under. */
+  bodyId: BodyId;
+  /**
+   * False once a feature took the piece out of the model without putting it
+   * in its result: a subtract's tool, or an operand of a boolean that is
+   * switched off. `bodyId` is then the id it was last live under.
+   */
+  live: boolean;
+  /**
+   * The in-place transforms (a Move, a Scale) that built on this piece, in
+   * history order.
+   */
+  transforms: FeatureNode[];
+  /**
+   * The first feature that combined this piece with other material (see
+   * {@link bodyPiecesAfter}), or null while the piece's body holds only the
+   * origin's own material. From there on the ids say which body the piece is
+   * in, not where in that body, or whether any of it is left: a later Split,
+   * cut or intersect can keep only the other material under the id this
+   * piece is followed by.
+   */
+  merge: BodyPieceMerge | null;
+}
+
+/** Where a {@link BodyPiece} stopped being a body of its own material. */
+export interface BodyPieceMerge {
+  feature: FeatureNode;
+  /**
+   * How many of the piece's `transforms` came before the merge; the rest
+   * moved or scaled the merged body.
+   */
+  transformsBefore: number;
+}
+
+/** One piece while {@link bodyPiecesAfter} follows it. */
+type TrackedPiece = Pick<BodyPiece, 'transforms' | 'merge'>;
+
+/**
+ * Whether an active feature that is not a boolean joins material from
+ * outside its target body to it: a sketch profile's (an add extrude, a rib,
+ * an embossed wrap) or a copy's (a pattern of the body, or of an add extrude
+ * on it). A custom feature's script may run any step, so it counts.
+ */
+function addsOtherMaterial(
+  data: FeatureData,
+  features: readonly FeatureNode[]
+): boolean {
+  switch (data.featureKind) {
+    case 'extrude':
+      return data.operation === 'add' && data.targetBodyId !== undefined;
+    case 'rib':
+    case 'custom-feature':
+      return true;
+    case 'wrap':
+      return data.mode === 'emboss';
+    case 'pattern': {
+      const sources = data.sourceFeatureIds ?? [];
+      if (sources.length === 0) return true;
+      return sources.some((featureId) => {
+        const source = features.find((entry) => entry.featureId === featureId);
+        // A source the history no longer has is not known to only cut.
+        return (
+          !source ||
+          (source.data.featureKind === 'extrude' &&
+            source.data.operation === 'add')
+        );
+      });
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * What only a build knows about a later feature, for {@link bodyPiecesAfter}.
+ */
+export interface BodyPieceOutcomes {
+  /**
+   * The build ran this feature and it failed. A failed feature hands its
+   * input through exactly as a manually suppressed one does (ADR-017,
+   * November 2026) and changes nothing else.
+   */
+  failed(feature: FeatureNode): boolean;
+  /**
+   * A boolean switched off (`activeWhen` resolves to zero): its result is
+   * its first operand unchanged, and its other consumed operands are gone.
+   */
+  inactive(feature: FeatureNode): boolean;
+}
+
+/**
+ * Where the body `origin` made is by the end of the history: every piece of
+ * its material, under the id it now has, with the in-place transforms
+ * applied to it on the way. Follows the ids as the build assigns them, from
+ * the same per-kind table ({@link replacedInputBodyId},
+ * {@link featureConsumedBodyIds}) the build's pass-through and the fork check
+ * read:
+ *
+ * - A feature that replaces the body (a hole, a cut, a boolean's first
+ *   operand) carries the piece to its result id. Manually suppressed or
+ *   failed, it still does: the build passes the input through under that id.
+ *   A rollback-paused feature does nothing.
+ * - A feature that keeps the body (a boolean's kept operand, a Split with
+ *   "Keep original", a mirror, a copy) leaves the piece under its own id. The
+ *   result holds a copy of the material, which is not followed, as a mirrored
+ *   or transformed copy is not.
+ * - A Split that consumes the body yields two pieces, one per half.
+ * - A union or an intersect carries every operand it consumes into its
+ *   result, so one body can hold several pieces. A subtract's consumed tool
+ *   ends: its material is no longer in the model.
+ * - An in-place transform is recorded on each piece under its target; a
+ *   direct edit changes the body under the same id and is not recorded.
+ * - A feature that combines the body with other material marks every piece
+ *   it carries ({@link BodyPiece.merge}): a boolean with a body that is not
+ *   wholly this origin's own (a union of the two halves a Split made of it is
+ *   not one), an add extrude, a rib, an embossed wrap, a pattern that repeats
+ *   the body or an add extrude, and a custom feature, whose script may do any
+ *   of these. Suppressed, failed or switched off, it combines nothing.
+ *   Features that reshape the body's own faces (a hole, a cut, a fillet, a
+ *   shell) do not mark it.
+ *
+ * A step that builds on a body an earlier one already replaced (a history
+ * fork) works on a stale copy and is not followed either.
+ */
+export function bodyPiecesAfter(
+  document: ProjectDocument,
+  origin: FeatureNode,
+  outcomes: BodyPieceOutcomes
+): BodyPiece[] {
+  if (!origin.bodyId) return [];
+  const features = listFeaturesInOrder(document);
+  const live = new Map<BodyId, TrackedPiece[]>([
+    [origin.bodyId, [{ transforms: [], merge: null }]]
+  ]);
+  const ended: BodyPiece[] = [];
+  const take = (bodyId: BodyId): TrackedPiece[] | undefined => {
+    const pieces = live.get(bodyId);
+    live.delete(bodyId);
+    return pieces;
+  };
+  const give = (bodyId: BodyId, pieces: TrackedPiece[]) =>
+    live.set(bodyId, [...(live.get(bodyId) ?? []), ...pieces]);
+  /** The body holds this origin's material and nothing else. */
+  const ownMaterialOnly = (bodyId: BodyId) =>
+    live.get(bodyId)?.every((piece) => piece.merge === null) ?? false;
+  let reached = false;
+  for (const feature of features) {
+    if (feature.featureId === origin.featureId) {
+      reached = true;
+      continue;
+    }
+    if (!reached || isFeatureRollbackSuppressed(feature)) continue;
+    const data = feature.data;
+    const replaced = featureReplacedInputBody(feature);
+    if (isFeatureManuallySuppressed(feature) || outcomes.failed(feature)) {
+      // Pass-through: the input stands, unchanged, under the result id.
+      const pieces = replaced === null ? undefined : take(replaced);
+      if (pieces && feature.bodyId) give(feature.bodyId, pieces);
+      continue;
+    }
+    if (isInPlaceTransform(data)) {
+      for (const piece of live.get(data.targetBodyId) ?? []) {
+        piece.transforms.push(feature);
+      }
+      continue;
+    }
+    const inactive =
+      data.featureKind === 'boolean' && outcomes.inactive(feature);
+    // Read before the operands are taken: a boolean merges when any of its
+    // operands, kept or consumed, is not wholly this origin's material.
+    const merges =
+      data.featureKind === 'boolean'
+        ? !inactive &&
+          data.targetBodyIds.some((bodyId) => !ownMaterialOnly(bodyId))
+        : addsOtherMaterial(data, features);
+    for (const bodyId of featureConsumedBodyIds(feature)) {
+      const pieces = take(bodyId);
+      if (!pieces) continue;
+      if (bodyId === replaced && feature.bodyId) {
+        give(feature.bodyId, pieces);
+      } else if (data.featureKind === 'split' && feature.bodyId) {
+        give(feature.bodyId, pieces);
+        give(
+          data.secondBodyId,
+          pieces.map((piece) => ({
+            ...piece,
+            transforms: [...piece.transforms]
+          }))
+        );
+      } else if (
+        data.featureKind === 'boolean' &&
+        data.operation !== 'subtract' &&
+        feature.bodyId &&
+        !inactive
+      ) {
+        give(feature.bodyId, pieces);
+      } else {
+        ended.push(
+          ...pieces.map((piece) => ({ ...piece, bodyId, live: false }))
+        );
+      }
+    }
+    // The pieces now under the result id (its own, for a feature that edits
+    // in place) are the ones the feature combined with the other material.
+    if (merges && feature.bodyId) {
+      for (const piece of live.get(feature.bodyId) ?? []) {
+        piece.merge ??= {
+          feature,
+          transformsBefore: piece.transforms.length
+        };
+      }
+    }
+  }
+  return [
+    ...ended,
+    ...[...live].flatMap(([bodyId, pieces]) =>
+      pieces.map((piece) => ({ ...piece, bodyId, live: true }))
+    )
+  ];
+}
+
+/**
  * One branch in the feature history: `featureId` builds on, or edits in
  * place, `bodyId` after the earlier feature `consumerFeatureId` already
  * replaced it. Both run, so both results are on screen: the history has

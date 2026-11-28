@@ -5887,7 +5887,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         getParameterScope(document).scope,
         build,
         featureId,
-        millimetresPerUnit(document.units)
+        millimetresPerUnit(document.units),
+        {
+          // A later feature the build refused: a Scale scaled nothing, an
+          // edit handed its input through.
+          failed: (id) =>
+            build.featureWarnings.some(
+              (entry) => entry.featureId === id && entry.kind === 'build-failed'
+            ),
+          live: (bodyId) =>
+            build.shapes.has(bodyId) && !build.consumed.has(bodyId)
+        }
       );
     });
   }
