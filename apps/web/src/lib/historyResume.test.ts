@@ -28,6 +28,7 @@ import {
   rollbackMarkerMove,
   rowResume,
   rowResumeAlreadyFailing,
+  withFeatureAttribution,
   validateHistoryResume
 } from './historyResume';
 
@@ -266,6 +267,65 @@ describe('resume preflight decision', () => {
     expect(resumeFailures(resumed, derived, before)).toEqual([]);
   });
 
+  // A committed document's rebuild keeps only the warning strings, which
+  // name a feature by its `Feature "<name>":` lead and nothing else.
+  it('blames an untyped warning only on the one feature its lead names', () => {
+    const { features, derived } = rolledBackChain();
+    const resumed = rollbackMarkerMove(features, null).resumed;
+    const untyped = { ...derived, featureWarnings: undefined };
+    const roster = features.map((feature) => feature.name);
+    // "Copy" is not blamed for a "Copy 10" warning.
+    untyped.warnings = ['Feature "Copy 10": Target is unavailable.'];
+    expect(failingFeatureIds(resumed, untyped, roster)).toEqual([]);
+    // Its own lead still names it.
+    untyped.warnings = ['Feature "Copy": Target is unavailable.'];
+    expect(failingFeatureIds(resumed, untyped, roster)).toEqual([
+      features[1]!.featureId
+    ]);
+    // A rename that gives two features that name leaves the lead to neither.
+    expect(failingFeatureIds(resumed, untyped, [...roster, 'Copy'])).toEqual(
+      []
+    );
+    expect(
+      resumeFailures(resumed, untyped, new Set(), [...roster, 'Copy'])
+    ).toEqual([]);
+  });
+
+  // Two features share a name. The baseline reads the committed rebuild's
+  // typed records, so an old failure stays with its own feature: it is not
+  // reported again, and it does not hide a new failure of its namesake.
+  it('tells namesakes apart by id in the baseline the candidate is checked against', () => {
+    const { features, derived } = rolledBackChain();
+    const [first, second] = rollbackMarkerMove(features, null).resumed.map(
+      (feature) => ({ ...feature, name: 'Copy' })
+    );
+    const resumed = [first!, second!];
+    const roster = resumed.map((feature) => feature.name);
+    const committed = {
+      ...derived,
+      warnings: ['Feature "Copy": Target is unavailable.'],
+      featureWarnings: [failed(first!, 'Target is unavailable.')]
+    };
+    const before = new Set(failingFeatureIds(resumed, committed, roster));
+    expect([...before]).toEqual([first!.featureId]);
+    const candidate = {
+      ...derived,
+      featureWarnings: [
+        failed(first!, 'Target is unavailable.'),
+        failed(second!, 'Edge is unavailable.')
+      ]
+    };
+    expect(
+      resumeFailures(resumed, candidate, before, roster).map(
+        (failure) => failure.featureId
+      )
+    ).toEqual([second!.featureId]);
+    // Without typed records the shared lead is pinned on neither, so the
+    // resume asks rather than pass a failure it cannot place.
+    const untyped = { ...committed, featureWarnings: undefined };
+    expect(failingFeatureIds(resumed, untyped, roster)).toEqual([]);
+  });
+
   it('refuses with a plain sentence, not a feature build error', () => {
     const { features, derived } = rolledBackChain();
     const resumed = rollbackMarkerMove(features, null).resumed;
@@ -442,6 +502,94 @@ describe('row resume preflight decision', () => {
     expect(resumeFailures(resume.checked, derived, alreadyFailing)).toEqual([]);
     // Before the rebuild of the current version is in, none is known.
     expect([...rowResumeAlreadyFailing(resume, null)]).toEqual([]);
+  });
+
+  // A row's baseline tells an earlier namesake's failure from a later
+  // feature's new one by the typed records' ids.
+  it("does not let a namesake's old failure hide a later feature's new one", () => {
+    const { features: built, derived } = suppressedRow(1);
+    const features = built.map((feature, index) =>
+      index === 0 || index === 2 ? { ...feature, name: 'Twin' } : feature
+    );
+    const resume = rowResume(features, features[1]!.featureId)!;
+    const roster = features.map((feature) => feature.name);
+    // As committed, the rebuild keeps only the string; this session's
+    // rebuild recorded which feature it was.
+    const committed = {
+      ...derived,
+      featureWarnings: undefined,
+      warnings: ['Feature "Twin": Target is unavailable.']
+    };
+    const attribution = {
+      derived: committed,
+      featureWarnings: [failed(features[0]!, 'Target is unavailable.')]
+    };
+    // A later revision that kept the geometry copies the container (a
+    // display-unit change rebinding sketch geometry) but not the rebuild.
+    const retained = { ...committed, sketchGeometry: undefined };
+    const alreadyFailing = rowResumeAlreadyFailing(
+      resume,
+      withFeatureAttribution(retained, attribution),
+      undefined,
+      roster
+    );
+    expect([...alreadyFailing]).toEqual([]);
+    // Records of another rebuild are not read as this one's.
+    expect(
+      withFeatureAttribution(
+        { ...committed, warnings: [...committed.warnings] },
+        attribution
+      ).featureWarnings
+    ).toBeUndefined();
+    const candidate = {
+      ...derived,
+      featureWarnings: [
+        failed(features[0]!, 'Target is unavailable.'),
+        failed(features[2]!, 'Edge is unavailable.')
+      ]
+    };
+    expect(
+      resumeFailures(resume.checked, candidate, alreadyFailing, roster).map(
+        (failure) => failure.featureId
+      )
+    ).toEqual([features[2]!.featureId]);
+  });
+
+  // The later feature is the one already failing: the records keep it in
+  // the baseline, where the shared lead alone would pin it on neither.
+  it("keeps a later feature's old failure in the baseline though a namesake shares its lead", () => {
+    const { features: built, derived } = suppressedRow(1);
+    const features = built.map((feature, index) =>
+      index === 0 || index === 2 ? { ...feature, name: 'Twin' } : feature
+    );
+    const resume = rowResume(features, features[1]!.featureId)!;
+    const roster = features.map((feature) => feature.name);
+    const committed = {
+      ...derived,
+      featureWarnings: undefined,
+      warnings: ['Feature "Twin": Edge is unavailable.']
+    };
+    const attribution = {
+      derived: committed,
+      featureWarnings: [failed(features[2]!, 'Edge is unavailable.')]
+    };
+    expect([
+      ...rowResumeAlreadyFailing(resume, committed, undefined, roster)
+    ]).toEqual([]);
+    const alreadyFailing = rowResumeAlreadyFailing(
+      resume,
+      withFeatureAttribution({ ...committed }, attribution),
+      undefined,
+      roster
+    );
+    expect([...alreadyFailing]).toEqual([features[2]!.featureId]);
+    const candidate = {
+      ...derived,
+      featureWarnings: [failed(features[2]!, 'Edge is unavailable.')]
+    };
+    expect(() =>
+      validateHistoryResume(resume.checked, candidate, alreadyFailing, roster)
+    ).not.toThrow();
   });
 
   it('takes the row as already failing only when a rollback paused it so', () => {

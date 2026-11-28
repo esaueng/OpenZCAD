@@ -30,6 +30,7 @@ import {
   listLocalSaveStateCheckpoints,
   onLocalSaveStatesChanged,
   loadLocalSaveState,
+  copyProjectMeasurements,
   loadProjectMeasurements,
   loadProjectThumbnail,
   localDeletionFence,
@@ -1017,6 +1018,72 @@ describe('project measurements', () => {
         (store) => store.get(projectId) as IDBRequest<Record<string, unknown>>
       )
     ).toEqual(future);
+  });
+
+  it('copies every kept row to a duplicate, under its id (#2363)', async () => {
+    const source = {
+      ...record(3),
+      display: {
+        unit: 'mm' as const,
+        precision: 6,
+        radialDisplay: 'radius' as const
+      }
+    };
+    source.measurements[1] = {
+      ...source.measurements[1]!,
+      status: 'unresolved' as const,
+      reason: 'not-found',
+      checkedRevision: 4
+    } as unknown as (typeof source.measurements)[number];
+    await saveProjectMeasurements(source);
+
+    expect(
+      await copyProjectMeasurements(
+        projectId,
+        'project_copy',
+        '2026-11-28T00:00:00.000Z'
+      )
+    ).toBe(true);
+    const copied = await loadProjectMeasurements('project_copy');
+    expect(copied).toEqual({
+      ...source,
+      projectId: 'project_copy',
+      updatedAt: '2026-11-28T00:00:00.000Z'
+    });
+    // The source keeps its own.
+    expect(await loadProjectMeasurements(projectId)).toEqual(source);
+    // Nothing to copy is not a failure, and writes nothing.
+    expect(
+      await copyProjectMeasurements('project_never', 'project_copy_2')
+    ).toBe(false);
+    expect(await loadProjectMeasurements('project_copy_2')).toBeNull();
+  });
+
+  it('copies a record this build cannot read without dropping it', async () => {
+    const future = { ...record(2), version: 2, futureField: 'keep me' };
+    expect(await ensureLocalProjectStorage()).toBe('ready');
+    await withStore(MEASUREMENT_STORE, 'readwrite', (store) =>
+      store.put(future)
+    );
+    await copyProjectMeasurements(
+      projectId,
+      'project_future_copy',
+      '2026-11-28T00:00:00.000Z'
+    );
+    expect(
+      await withStore<Record<string, unknown>>(
+        MEASUREMENT_STORE,
+        'readonly',
+        (store) =>
+          store.get('project_future_copy') as IDBRequest<
+            Record<string, unknown>
+          >
+      )
+    ).toEqual({
+      ...future,
+      projectId: 'project_future_copy',
+      updatedAt: '2026-11-28T00:00:00.000Z'
+    });
   });
 
   it('replaces rather than appending on a second write', async () => {

@@ -171,6 +171,21 @@ export const MIRROR_SOURCE_UNAVAILABLE =
  */
 export const TARGET_BODY_UNAVAILABLE =
   "A body this feature uses isn't built at this point in the history. It may be suppressed, or its feature may have failed.";
+/**
+ * An edit opened on a feature whose own rebuild refused for want of its
+ * target body (`target_body_unavailable`), for a feature whose picks all lie
+ * on that one body (a fillet's edges, a hole's face): there is nothing in the
+ * viewport to pick, so the edit says why and how to recover instead of
+ * asking for picks. `what` is the feature's kind in lower case ("chamfer").
+ * Null for any other code: the edit opens as usual.
+ */
+export function editTargetMissingSentence(
+  typed: Pick<RefusalClassification, 'code'>,
+  what: string
+): string | null {
+  if (typed.code !== 'target_body_unavailable') return null;
+  return `This ${what}'s body isn't built at this point in the history, so there is nothing to pick. Its feature may be suppressed or may have failed: fix or restore that feature in History, or delete this ${what}.`;
+}
 const FILLETS_NOT_REBUILT =
   "The fillets around this wall can't be rebuilt at that diameter. Change or remove those fillets in History, then resize the wall.";
 

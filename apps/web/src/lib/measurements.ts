@@ -12,6 +12,11 @@ import type {
 } from '@openzcad/shared';
 import { millimetresPerUnit } from '@openzcad/shared';
 import {
+  matchScaledTopology,
+  scaledEdgeGeometryMatches,
+  scaledFaceGeometryMatches
+} from '@openzcad/kernel-adapter/units-witness-match';
+import {
   centralDistance,
   maximumDistance,
   parallelDistance,
@@ -141,6 +146,16 @@ export interface MeasurementTarget {
   topologyId?: string;
   hash?: number;
   reference?: TopologyReferenceV5;
+  /**
+   * The stored unit `topologyId`, `hash` and `reference` were captured in,
+   * when it is not the row's `sourceUnit` (#2433). ADR-011 hashes quantized
+   * DOCUMENT-unit geometry, so an identity names its entity only in the unit
+   * it was taken in: a rescaled row keeps it, with that unit, and resolves
+   * by it again once the document is back in that unit. Absent, the
+   * identity is in `sourceUnit`: every target captured or re-attached in the
+   * row's own unit, and every row stored before this field.
+   */
+  identityUnit?: UnitSystem;
   label: string;
   point?: Vector3;
   direction?: Vector3;
@@ -271,7 +286,19 @@ export interface Measurement {
    * from the vertex pick, so the corner is well defined over the full 0-180.
    */
   angleConvention?: AngleConvention;
+  /**
+   * The document revision whose geometry produced `result`. A refresh that
+   * cannot re-measure the row (it went stale or unresolved) keeps it, so a
+   * retained number always names the model it was read from, never a later
+   * revision that has no such geometry (#2360).
+   */
   sourceRevision: number;
+  /**
+   * The revision the row was last re-resolved against, when that attempt
+   * did not produce `result` (status `stale` or `unresolved`). Absent on
+   * a current row, whose `sourceRevision` is also the revision checked.
+   */
+  checkedRevision?: number;
   sourceUnit: UnitSystem;
   visible: boolean;
   annotation?: MeasurementAnnotation;
@@ -1964,6 +1991,7 @@ function hasValidTargetArity(measurement: Measurement): boolean {
  */
 export const MEASUREMENT_UNIT_FREE_FIELDS: readonly string[] = [
   'sourceRevision',
+  'checkedRevision',
   'targets.*.hash',
   'targets.*.reference',
   'targets.*.direction'
@@ -1975,6 +2003,30 @@ function scaledVector(vector: Vector3, factor: number): Vector3 {
     y: vector.y * factor,
     z: vector.z * factor
   };
+}
+
+/** Whether `target` names an entity, by topology id, hash or reference. */
+function hasIdentity(target: MeasurementTarget): boolean {
+  return (
+    target.topologyId !== undefined ||
+    target.hash !== undefined ||
+    target.reference !== undefined
+  );
+}
+
+/**
+ * `target` with its identity recorded as captured in `identityUnit`, in a
+ * row stored in `rowUnit`: the field only says so when the two differ.
+ */
+function withIdentityUnit(
+  target: MeasurementTarget,
+  identityUnit: UnitSystem,
+  rowUnit: UnitSystem
+): MeasurementTarget {
+  const { identityUnit: _identityUnit, ...rest } = target;
+  return identityUnit === rowUnit || !hasIdentity(target)
+    ? rest
+    : { ...rest, identityUnit };
 }
 
 /**
@@ -2014,7 +2066,11 @@ export function measurementInUnit(
         : {})
     },
     targets: measurement.targets.map((target) => ({
-      ...target,
+      ...withIdentityUnit(
+        target,
+        target.identityUnit ?? measurement.sourceUnit,
+        unit
+      ),
       ...(target.point ? { point: scaledVector(target.point, k) } : {}),
       ...(target.endpoints
         ? {
@@ -2039,48 +2095,323 @@ export function measurementInUnit(
   };
 }
 
+/** The face or edge entries of `body` a target of `kind` can name. */
+function topologyEntries(
+  body: BodyRepresentation,
+  kind: 'face' | 'edge'
+): readonly (FaceTopology | EdgeTopology)[] {
+  return (kind === 'face' ? body.topology?.faces : body.topology?.edges) ?? [];
+}
+
+/** The size the geometry oracle scales its position allowances by. */
+function bodyScale(body: BodyRepresentation): number {
+  const { min, max } = body.bbox;
+  return Math.max(
+    1,
+    ...[min.x, min.y, min.z, max.x, max.y, max.z].map((value) =>
+      Math.abs(value)
+    )
+  );
+}
+
+/** The bodies a row was last measured on, in the unit they are stored in. */
+export interface MeasurementSourceBodies {
+  unit: UnitSystem;
+  bodies: readonly BodyRepresentation[];
+}
+
+/**
+ * I03 (#2361, #2433): a kept target whose identity was captured in another
+ * stored unit than the one `bodies` are in.
+ *
+ * Every ADR-011 hash, and the lineage name of an imported face, is a
+ * fingerprint of geometry quantized in DOCUMENT units, so converting the
+ * document gives those faces and edges new identities. The document's own
+ * references are re-captured by the kernel for exactly this reason; a kept
+ * measurement lives beside the document and never reached that map, so its
+ * rows on a Boolean result came back `not-found` on the same solid, scaled.
+ *
+ * The old identity is never trusted on its own across the conversion: a
+ * hash quantized in the old unit can land on a DIFFERENT entity in the new
+ * one (an edge at X = 100–200 mm becomes 10–20 cm, the numbers a 10–20 mm
+ * edge was hashed from). So a target is re-attached only to the ONE entity
+ * of the converted body that is the entity it named, scaled by `factor`,
+ * by the evidence the conversion itself verified:
+ *
+ * 1. the target's own stored witness, by the kernel re-capture's rule
+ *    (`matchScaledTopology`, lineage family included);
+ * 2. failing that, what its identity resolves to on `previous`, the bodies
+ *    last seen in the identity's unit: a named entity by the same witness
+ *    rule, an unnamed one by the geometry oracle's rule for its surface or
+ *    curve (`scaledFaceGeometryMatches`, `scaledEdgeGeometryMatches`).
+ *
+ * The target's own witness goes first because it is what the row measured;
+ * the cached bodies can be newer than the row (it was still loading while
+ * the model changed). An ambiguous own witness is final: the cached bodies
+ * cannot choose between candidates it already fits.
+ *
+ * Null when there is no such entity: the caller keeps the target's identity
+ * with its unit (it still names its entity there, for an undo or a body that
+ * returns in that unit) and the row reports itself unresolved. It is not
+ * proximity rebinding: it needs a unique match under the conversion's exact
+ * scale.
+ */
+function reattachedAcrossUnits(
+  target: MeasurementTarget,
+  bodies: readonly BodyRepresentation[],
+  factor: number,
+  previous: readonly BodyRepresentation[] | undefined
+): MeasurementTarget | null {
+  if (target.kind === 'body') return target;
+  const kind = target.kind;
+  const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
+  if (!body) return null;
+  const entries = topologyEntries(body, kind);
+  const byWitness = (named: TopologyReferenceV5) =>
+    matchScaledTopology(
+      {
+        kind,
+        witness: named.witness,
+        lineage: {
+          producingFeatureId: named.producingFeatureId,
+          lineageName: named.lineageName
+        }
+      },
+      entries.flatMap((candidate) =>
+        candidate.reference?.kind === kind
+          ? [
+              {
+                kind,
+                witness: candidate.reference.witness,
+                lineage: {
+                  producingFeatureId: candidate.reference.producingFeatureId,
+                  lineageName: candidate.reference.lineageName
+                },
+                entry: candidate
+              }
+            ]
+          : []
+      ),
+      factor
+    );
+  const attached = (entry: FaceTopology | EdgeTopology): MeasurementTarget => {
+    const {
+      topologyId: _topologyId,
+      hash: _hash,
+      reference: _reference,
+      identityUnit: _identityUnit,
+      ...unidentified
+    } = target;
+    return {
+      ...unidentified,
+      topologyId: entry.topologyId,
+      hash: entry.hash,
+      ...(entry.reference ? { reference: entry.reference } : {})
+    };
+  };
+  if (target.reference?.kind === kind) {
+    const own = byWitness(target.reference);
+    if (own.status === 'matched') return attached(own.candidate.entry);
+    if (own.status === 'ambiguous') return null;
+  }
+  const before = previous?.find(
+    (candidate) => candidate.bodyId === target.bodyId
+  );
+  if (!before) return null;
+  const selection = selectionForTarget(target);
+  const was =
+    kind === 'edge'
+      ? resolveEdge(before, selection)
+      : resolveFace(before, selection);
+  if (!was.ok) return null;
+  const source: FaceTopology | EdgeTopology = was.entry;
+  if (source.reference?.kind === kind) {
+    const cached = byWitness(source.reference);
+    return cached.status === 'matched'
+      ? attached(cached.candidate.entry)
+      : null;
+  }
+  const scale = bodyScale(body);
+  const matches = entries.filter(
+    (candidate) =>
+      !candidate.reference &&
+      (kind === 'face'
+        ? (source as FaceTopology).geometry !== undefined &&
+          (candidate as FaceTopology).geometry !== undefined &&
+          scaledFaceGeometryMatches(
+            (source as FaceTopology).geometry!,
+            (candidate as FaceTopology).geometry!,
+            factor,
+            scale
+          )
+        : scaledEdgeGeometryMatches(
+            source as EdgeTopology,
+            candidate as EdgeTopology,
+            factor,
+            scale
+          ))
+  );
+  return matches.length === 1 ? attached(matches[0]!) : null;
+}
+
+/**
+ * A row's targets for one refresh against `bodies`, stored in `unit`.
+ * `stored` is what the row keeps: a target captured in another unit is
+ * re-attached when {@link reattachedAcrossUnits} finds its scaled entity, and
+ * otherwise kept as it is, identity and unit both. `resolvable` is what this
+ * refresh resolves by: such a kept target with no identity at all, since its
+ * hash names nothing (or the wrong thing) in `unit`.
+ */
+function targetsInUnit(
+  measurement: Measurement,
+  bodies: readonly BodyRepresentation[],
+  unit: UnitSystem,
+  previous: readonly MeasurementSourceBodies[] | undefined
+): { stored: MeasurementTarget[]; resolvable: MeasurementTarget[] } {
+  const stored: MeasurementTarget[] = [];
+  const resolvable: MeasurementTarget[] = [];
+  for (const target of measurement.targets) {
+    const identityUnit = target.identityUnit ?? measurement.sourceUnit;
+    if (identityUnit === unit || !hasIdentity(target)) {
+      stored.push(target);
+      resolvable.push(target);
+      continue;
+    }
+    const attached = reattachedAcrossUnits(
+      target,
+      bodies,
+      millimetresPerUnit(identityUnit) / millimetresPerUnit(unit),
+      previous?.find((evidence) => evidence.unit === identityUnit)?.bodies
+    );
+    if (attached) {
+      stored.push(attached);
+      resolvable.push(attached);
+      continue;
+    }
+    stored.push(target);
+    const {
+      topologyId: _topologyId,
+      hash: _hash,
+      reference: _reference,
+      identityUnit: _identityUnit,
+      ...unidentified
+    } = target;
+    resolvable.push(unidentified);
+  }
+  return { stored, resolvable };
+}
+
+/** The revision a row was last judged against, re-measured or not. */
+function checkedRevisionOf(measurement: Measurement): number {
+  return measurement.checkedRevision ?? measurement.sourceRevision;
+}
+
+/**
+ * A row this refresh could not re-measure. Its number and `sourceRevision`
+ * stay the receipt of the model that produced them; `checkedRevision`
+ * records the revision that was tried (#2360). Its annotation goes: that is
+ * world-space geometry of the model that produced the number, and drawing it
+ * over a model that no longer has that geometry (a suppressed body, say) put
+ * witness lines over empty space. A reopened project never has it to draw,
+ * so dropping it here is what makes the two agree (#2359).
+ */
+function unmeasuredRow(
+  measurement: Measurement,
+  status: 'stale' | 'unresolved',
+  reason: TopologyResolutionReason | undefined,
+  checkedRevision: number
+): Measurement {
+  const {
+    annotation: _annotation,
+    reason: _reason,
+    checkedRevision: _checked,
+    ...rest
+  } = measurement;
+  return {
+    ...rest,
+    status,
+    ...(reason ? { reason } : {}),
+    checkedRevision
+  };
+}
+
+/** Whether `measurement` already is {@link unmeasuredRow}'s answer. */
+function isUnmeasuredRow(
+  measurement: Measurement,
+  status: 'stale' | 'unresolved',
+  reason: TopologyResolutionReason | undefined,
+  checkedRevision: number
+): boolean {
+  return (
+    measurement.status === status &&
+    measurement.reason === reason &&
+    checkedRevisionOf(measurement) === checkedRevision &&
+    measurement.annotation === undefined
+  );
+}
+
 /**
  * Re-resolve only by authoritative body/topology identity; never proximity.
  *
  * `options.unit` is the unit `bodies` are stored in (the document's
  * `units`). A row kept in another unit is first rescaled to it
  * ({@link measurementInUnit}) and then re-measured, whatever its revision.
+ * A target whose identity was captured in another unit resolves only by a
+ * scaled re-attach ({@link targetsInUnit}; `options.previous` holds, for
+ * each other stored unit, the bodies last seen in it); without one the row
+ * is unresolved and keeps that identity, with its unit, for later.
  */
 export function refreshMeasurements(
   list: readonly Measurement[],
   bodies: readonly BodyRepresentation[],
   sourceRevision: number,
-  options: { force?: boolean; unit?: UnitSystem } = {}
+  options: {
+    force?: boolean;
+    unit?: UnitSystem;
+    previous?: readonly MeasurementSourceBodies[];
+  } = {}
 ): Measurement[] {
   let changed = false;
   const refreshedList = list.map((original) => {
-    const measurement =
+    const rescaled =
       options.unit === undefined
         ? original
         : measurementInUnit(original, options.unit);
+    // A target captured in another unit than `options.unit` resolves only
+    // by a scaled re-attach; otherwise it keeps its identity, unresolved.
+    const inUnit =
+      options.unit === undefined || !hasValidTargetArity(rescaled)
+        ? null
+        : targetsInUnit(rescaled, bodies, options.unit, options.previous);
+    const measurement =
+      inUnit &&
+      inUnit.stored.some((target, index) => target !== rescaled.targets[index])
+        ? { ...rescaled, targets: inUnit.stored }
+        : rescaled;
+    const resolvable = inUnit
+      ? { ...measurement, targets: inUnit.resolvable }
+      : measurement;
     if (measurement !== original) changed = true;
     if (
       !options.force &&
       measurement === original &&
-      measurement.sourceRevision === sourceRevision
+      checkedRevisionOf(measurement) === sourceRevision
     ) {
       return measurement;
     }
     if (!hasValidTargetArity(measurement)) {
       if (
-        measurement.status === 'unresolved' &&
-        measurement.reason === 'not-found' &&
-        measurement.sourceRevision === sourceRevision
+        isUnmeasuredRow(measurement, 'unresolved', 'not-found', sourceRevision)
       ) {
         return measurement;
       }
       changed = true;
-      return {
-        ...measurement,
-        status: 'unresolved' as const,
-        sourceRevision,
-        reason: 'not-found' as const
-      };
+      return unmeasuredRow(
+        measurement,
+        'unresolved',
+        'not-found',
+        sourceRevision
+      );
     }
     const purpose: MeasurementMode =
       measurement.kind === 'distance' ||
@@ -2093,7 +2424,7 @@ export function refreshMeasurements(
     // M13: an entity distance reads its geometry from the topology itself,
     // so its picks need only resolve by identity: a raw surface point that
     // a resize moved does not make the face it was on stale.
-    const targets = measurement.targets.map((target) =>
+    const targets = resolvable.targets.map((target) =>
       isEntityDistanceKind(measurement.kind)
         ? resolvedEntityTarget(target, bodies)
         : resolvedTarget(target, bodies, purpose)
@@ -2101,27 +2432,20 @@ export function refreshMeasurements(
     if (targets.some((target) => target === null)) {
       // The topology may still be there and merely unusable for this kind of
       // measurement (`stale`), or genuinely gone/ambiguous (`unresolved`).
-      const failure = firstTargetFailure(measurement, bodies);
-      const status: MeasurementStatus = failure ? 'unresolved' : 'stale';
-      // `sourceRevision` advances even though no value was recomputed. Without
-      // this the row never matches the short-circuit at the top of the loop, so
-      // it re-evaluates on EVERY refresh — including the ones triggered by
-      // merely hiding a body, which is how a once-stale row could go on to
-      // demote itself against a body list it was never meant to be judged by.
-      if (
-        measurement.status === status &&
-        measurement.reason === (failure ?? undefined) &&
-        measurement.sourceRevision === sourceRevision
-      ) {
+      const failure = firstTargetFailure(resolvable, bodies) ?? undefined;
+      const status = failure ? 'unresolved' : 'stale';
+      // `checkedRevision` advances even though no value was recomputed.
+      // Without this the row never matches the short-circuit at the top of the
+      // loop, so it re-evaluates on EVERY refresh — including the ones
+      // triggered by merely hiding a body, which is how a once-stale row could
+      // go on to demote itself against a body list it was never meant to be
+      // judged by. `sourceRevision` does not: it names the model the retained
+      // number was read from.
+      if (isUnmeasuredRow(measurement, status, failure, sourceRevision)) {
         return measurement;
       }
       changed = true;
-      return {
-        ...measurement,
-        status,
-        sourceRevision,
-        reason: failure ?? undefined
-      };
+      return unmeasuredRow(measurement, status, failure, sourceRevision);
     }
     const resolved = targets as MeasurementTarget[];
     let refreshed: Measurement | null = null;
@@ -2189,22 +2513,13 @@ export function refreshMeasurements(
       // number.
       return retainRowState(measurement, refreshed);
     }
-    if (
-      measurement.status === 'stale' &&
-      measurement.reason === undefined &&
-      measurement.sourceRevision === sourceRevision
-    ) {
+    if (isUnmeasuredRow(measurement, 'stale', undefined, sourceRevision)) {
       return measurement;
     }
     changed = true;
     // Every target resolved, yet no measurement could be rebuilt from them —
     // the topology is present but no longer supports this kind of figure.
-    return {
-      ...measurement,
-      status: 'stale' as const,
-      sourceRevision,
-      reason: undefined
-    };
+    return unmeasuredRow(measurement, 'stale', undefined, sourceRevision);
   });
   return changed ? refreshedList : (list as Measurement[]);
 }
@@ -2479,7 +2794,13 @@ export function measurementToViewportAnnotation(
   selected: boolean,
   bodies: readonly BodyRepresentation[] = []
 ): MeasurementViewportAnnotation | null {
-  if (!measurement.visible || !measurement.annotation) {
+  // An unresolved row's number belongs to geometry the model no longer
+  // has, so nothing is drawn for it, whatever it still carries (#2359).
+  if (
+    !measurement.visible ||
+    !measurement.annotation ||
+    measurement.status === 'unresolved'
+  ) {
     return null;
   }
   const formatted = formatMeasurement(measurement, options);
@@ -2535,10 +2856,13 @@ export function measurementsToCsv(
 ): string {
   const rows = list.map((entry) => {
     const resultUnit = unitLabel(entry.result.dimension, options.unit);
+    // #2356: the number and the kind it is filed under agree. A circle read
+    // as a radius exports `radius`, so a sheet that groups rows by kind
+    // never reads half a diameter as one.
+    const asRadius =
+      entry.kind === 'diameter' && options.radialDisplay === 'radius';
     const value = convertedValue(
-      entry.kind === 'diameter' && options.radialDisplay === 'radius'
-        ? entry.result.value / 2
-        : entry.result.value,
+      asRadius ? entry.result.value / 2 : entry.result.value,
       entry.result.dimension,
       entry.sourceUnit,
       options.unit
@@ -2550,7 +2874,7 @@ export function measurementsToCsv(
         : convertedValue(value, 'length', entry.sourceUnit, options.unit);
     const secondary = entry.result.secondary;
     return [
-      entry.kind,
+      asRadius ? 'radius' : entry.kind,
       entry.label,
       entry.targets[0]?.label ?? '',
       entry.targets[1]?.label ?? '',
@@ -2571,13 +2895,14 @@ export function measurementsToCsv(
       entry.quality,
       entry.status,
       entry.sourceRevision,
+      entry.checkedRevision ?? entry.sourceRevision,
       entry.note ?? ''
     ]
       .map((value) => delimitedCell(value, ','))
       .join(',');
   });
   return [
-    'kind,label,target_a,target_b,value,unit,delta_x,delta_y,delta_z,secondary_value,secondary_unit,quality,status,source_revision,note',
+    'kind,label,target_a,target_b,value,unit,delta_x,delta_y,delta_z,secondary_value,secondary_unit,quality,status,source_revision,checked_revision,note',
     ...rows
   ].join('\n');
 }

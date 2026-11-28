@@ -10,6 +10,7 @@
     "./sketch-2d-ops": "./src/sketch-2d-ops.ts",
     "./face-attachment": "./src/face-attachment.ts",
     "./topology-lineage": "./src/topology-lineage.ts",
+    "./units-witness-match": "./src/units-witness-match.ts",
     "./extrude-inference": "./src/extrude-inference.ts",
     "./mesh-import-formats": "./src/mesh-import-formats.ts",
     "./sheet-metal-flat-pattern": "./src/sheet-metal-flat-pattern.ts"

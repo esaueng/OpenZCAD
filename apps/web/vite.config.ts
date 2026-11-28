@@ -528,6 +528,14 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             import.meta.url
           )
         ),
+        // The scaled-witness matcher a kept measurement is re-attached by
+        // after a stored-unit conversion: pure, so a leaf module too.
+        '@openzcad/kernel-adapter/units-witness-match': fileURLToPath(
+          new URL(
+            '../../packages/kernel-adapter/src/units-witness-match.ts',
+            import.meta.url
+          )
+        ),
         '@openzcad/kernel-adapter/face-attachment': fileURLToPath(
           new URL(
             '../../packages/kernel-adapter/src/face-attachment.ts',

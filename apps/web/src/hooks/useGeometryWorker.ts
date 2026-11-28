@@ -330,6 +330,8 @@ export interface GeometryWorkerApi {
       objMaterials?: { stem: string };
       /** 'step' only: the application protocol to state; AP214 when unset. */
       stepProtocol?: StepProtocol;
+      /** 'step' only: `bodyIds` is the user's selection (#2258). */
+      bodySelection?: boolean;
       /** F06: write every body the document shows, ignoring `bodyIds`. */
       allShownBodies?: boolean;
       signal?: AbortSignal;
@@ -1764,6 +1766,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           ...(options?.stepProtocol !== undefined
             ? { stepProtocol: options.stepProtocol }
             : {}),
+          ...(options?.bodySelection ? { bodySelection: true } : {}),
           ...(options?.allShownBodies ? { allShownBodies: true } : {})
         });
       });
