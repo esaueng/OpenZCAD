@@ -3360,9 +3360,12 @@ export function StartScreen({
   // The empty Projects shelf of a library with nothing in it: the shelf
   // itself offers "Create your first project", the page's primary action
   // for as long as it is showing.
+  // Only unfiltered: the Shared tab of an empty library is about sharing,
+  // not a second copy of the Projects tab (the phone review).
   const firstProjectPrompt =
     !loading &&
     shelf === 'active' &&
+    activeFilter === 'all' &&
     shelfProjects.length === 0 &&
     partsElsewhere === null;
 
@@ -4349,6 +4352,19 @@ export function StartScreen({
                         Create your first project
                       </button>
                     </div>
+                  </>
+                ) : shelf === 'active' && activeFilter === 'shared' ? (
+                  <>
+                    <strong>Nothing shared yet</strong>
+                    <span>
+                      Projects shared with you, and the ones you share, show up
+                      here.
+                    </span>
+                  </>
+                ) : shelf === 'active' ? (
+                  <>
+                    <strong>No projects here yet</strong>
+                    <span>Projects you create show up under Projects.</span>
                   </>
                 ) : shelf === 'archived' ? (
                   <>

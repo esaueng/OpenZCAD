@@ -29,7 +29,7 @@ import {
   buildModelingOperationSubmission,
   modelingFaceOptions
 } from '../apps/web/src/lib/modelingOperations';
-import { buildDemoDocument, DEMO_DEFINITIONS } from '../apps/web/src/lib/demos';
+import { legacyFlange } from './support/legacy-flange';
 import { topologyReferenceRepairCommand } from '../apps/web/src/lib/topologyReferenceRepairs';
 import { suppressionRefusal } from '../apps/web/src/lib/featureSuppression';
 
@@ -591,19 +591,15 @@ describe('a suppressed feature passes its input body through', () => {
   }, 300_000);
 
   it('writes no reference repair learned while a step is suppressed', async () => {
-    // The flange's rim chamfer is a legacy hash-only selection. With the bolt
-    // circle drill suppressed it resolves on the undrilled blank, whose
+    // The legacy flange's rim chamfer is a hash-only selection. With the
+    // bolt circle drill suppressed it resolves on the undrilled blank, whose
     // lineage names the rim edges — and persisting those names (the app
     // writes every repair the build offers) left the chamfer stale the moment
-    // the drill was resumed.
-    const definition = DEMO_DEFINITIONS.find(
-      (candidate) => candidate.key === 'flange'
-    )!;
+    // the drill was resumed. (Today's demo chamfers before it drills, by
+    // reference; saved copies of the old one still exist.)
     const manager = new CommandManager(
-      await buildDemoDocument(
-        definition,
-        toUserId('user_suppress_repair'),
-        (candidate) => adapter.syncDocument(candidate)
+      await legacyFlange(toUserId('user_suppress_repair'), (candidate) =>
+        adapter.syncDocument(candidate)
       )
     );
     const featureNamed = (name: string) =>

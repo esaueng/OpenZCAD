@@ -174,6 +174,27 @@ describe('the compact library', () => {
     expect(screen.getByRole('button', { name: /^Gear,/ })).toBeVisible();
   });
 
+  it("says what Shared holds on an empty library, not Projects' first-run prompt", async () => {
+    // The phone review: Shared highlighted while the body still read "No
+    // projects yet" and offered "Create your first project".
+    await renderCompact({ projects: [] });
+    expect(screen.getByText('No projects yet')).toBeVisible();
+    const shelves = within(screen.getByRole('group', { name: 'Shelves' }));
+    fireEvent.click(shelves.getByRole('button', { name: 'Shared' }));
+    expect(screen.getByText('Nothing shared yet')).toBeVisible();
+    expect(screen.queryByText('No projects yet')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Create your first project' })
+    ).toBeNull();
+    // With its own prompt gone, New project leads the page again.
+    expect(screen.getByRole('button', { name: 'New project' })).toHaveClass(
+      'primary'
+    );
+
+    fireEvent.click(shelves.getByRole('button', { name: 'Projects' }));
+    expect(screen.getByText('No projects yet')).toBeVisible();
+  });
+
   it('searches from the field on top', async () => {
     await renderCompact();
     const search = screen.getByRole('searchbox', { name: 'Search projects' });

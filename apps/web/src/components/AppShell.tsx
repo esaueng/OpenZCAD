@@ -172,8 +172,15 @@ interface AppShellProps {
    * the regular chrome, and the command card, the inspector, the in-place
    * command bar and the phone lane's panel go into that sheet. Every slot is
    * filled exactly as for the regular workspace.
+   *
+   * `commandOnStage`: the command card's work is a handle on the model (a
+   * sketch region's Extrude arrow and its value). The sheet then comes up at
+   * peek, as for a running tool's row alone, so the handle it asks to be
+   * dragged is in view rather than under the card; the card is a drag up.
    */
-  compact?: (CompactChromeProps & { sheetKey: string }) | null;
+  compact?:
+    | (CompactChromeProps & { sheetKey: string; commandOnStage?: boolean })
+    | null;
   /**
    * The compact workspace's tray for the mode (U12 slice 7: View's and
    * Tweak's), drawn as the sheet's row at peek with its pages over it.
@@ -337,7 +344,7 @@ function CompactAppShell({
     }),
     [commandRowHost]
   );
-  const { sheetKey, ...chrome } = compact;
+  const { sheetKey, commandOnStage = false, ...chrome } = compact;
   const assistantDocked = Boolean(
     assistant && !assistantHidden && !assistantCollapsed
   );
@@ -401,8 +408,8 @@ function CompactAppShell({
                       hasSheetContent={hasSheetContent}
                       commandRowPresent={commandRowPresent}
                       rowOnly={
-                        commandRowPresent &&
-                        !command &&
+                        (commandOnStage ||
+                          (commandRowPresent && !command)) &&
                         !inspector &&
                         !panelLane
                       }

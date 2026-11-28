@@ -18,6 +18,22 @@ final class WorkspaceIdiomTests: XCTestCase {
         XCTAssertEqual(WorkspaceIdiom.tablet.documentStartScripts, [])
     }
 
+    func testPageZoomFollowsTheTextSize() {
+        // The default size is the page as built; smaller sizes keep it.
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .large, shortSide: 420), 1)
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .extraSmall, shortSide: 420), 1)
+        // Larger sizes zoom by their body size over 17 pt.
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(bodyPointSize: 19, shortSide: 420), 1.12)
+        XCTAssertGreaterThan(WorkspaceIdiom.pageZoom(for: .extraExtraLarge, shortSide: 420), 1)
+        // The largest sizes stop where the page would be under 320 CSS px wide,
+        // and at 1.5 however wide the device is.
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .accessibilityExtraExtraExtraLarge, shortSide: 420), 1.31)
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .accessibilityExtraExtraExtraLarge, shortSide: 375), 1.17)
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .accessibilityExtraExtraExtraLarge, shortSide: 1024), 1.5)
+        // A device narrower than the floor is never zoomed out.
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(bodyPointSize: 40, shortSide: 300), 1)
+    }
+
     func testWorkspaceFollowsTheHostDevice() {
         let phone = UIDevice.current.userInterfaceIdiom == .phone
         let controller = WorkspaceViewController()

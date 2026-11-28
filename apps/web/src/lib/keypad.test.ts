@@ -279,6 +279,18 @@ describe('appendKeypadKey', () => {
     expect(appendKeypadKey('12', '±')).toBe('-12');
     expect(appendKeypadKey('-12', '±')).toBe('12');
   });
+
+  it('replaces a selected run, as typing does', () => {
+    // The field opens with its value selected: 5 over a selected 45 is 5.
+    expect(appendKeypadKey('45', '5', { start: 0, end: 2 })).toBe('5');
+    expect(appendKeypadKey('45', '⌫', { start: 0, end: 2 })).toBe('');
+    expect(appendKeypadKey('125', '7', { start: 1, end: 2 })).toBe('175');
+    // A caret alone appends, and ± flips the whole value.
+    expect(appendKeypadKey('45', '5', { start: 1, end: 1 })).toBe('455');
+    expect(appendKeypadKey('45', '±', { start: 0, end: 2 })).toBe('-45');
+    // A selection past the value (a stale read) is ignored.
+    expect(appendKeypadKey('45', '5', { start: 0, end: 9 })).toBe('455');
+  });
 });
 
 describe('typedUnitValue', () => {

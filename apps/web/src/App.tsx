@@ -41887,7 +41887,13 @@ export function App() {
                   : null,
               sheetKey: `${commandCardKey}|${inspectorKey}|${inPlaceKey}|${
                 phonePanel ?? ''
-              }`
+              }`,
+              // A region's Extrude asks for its arrow to be dragged: the
+              // sheet stays at peek so the arrow and its value are in view.
+              commandOnStage:
+                interaction.mode === 'region' &&
+                commandCard !== null &&
+                !measurementDock
             }
           : null
       }

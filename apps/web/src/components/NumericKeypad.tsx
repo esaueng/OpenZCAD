@@ -921,6 +921,19 @@ function NumericKeypadControl({
   // Closed, it leaves nothing pending.
   useEffect(() => () => onEntryError?.(null), [onEntryError]);
 
+  // The field's selected run, which a key on the pad replaces. The field
+  // opens with its value selected: a tap on 5 over a selected 45 is 5, not
+  // 455 (the phone review).
+  const fieldSelection = () => {
+    const input = inputRef.current;
+    return input &&
+      input.selectionStart !== null &&
+      input.selectionEnd !== null &&
+      input.value === value
+      ? { start: input.selectionStart, end: input.selectionEnd }
+      : null;
+  };
+
   const previewIfValid = (next: string, requestedMode = dimensionMode) => {
     if (next !== value) {
       untouchedPrefill.current = false;
@@ -1457,7 +1470,9 @@ function NumericKeypadControl({
                 key={key}
                 type="button"
                 className="keypad-key"
-                onClick={() => previewIfValid(appendKeypadKey(value, key))}
+                onClick={() =>
+                  previewIfValid(appendKeypadKey(value, key, fieldSelection()))
+                }
               >
                 {key === '*' ? '×' : key === '/' ? '÷' : key}
               </button>
@@ -1466,7 +1481,9 @@ function NumericKeypadControl({
               type="button"
               className="keypad-key"
               aria-label="Backspace"
-              onClick={() => previewIfValid(appendKeypadKey(value, '⌫'))}
+              onClick={() =>
+                previewIfValid(appendKeypadKey(value, '⌫', fieldSelection()))
+              }
             >
               <Delete size={14} aria-hidden="true" />
             </button>

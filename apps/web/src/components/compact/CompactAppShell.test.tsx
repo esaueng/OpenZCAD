@@ -21,7 +21,9 @@ import {
 import { COMPACT_PANEL_ORDER } from './panelSheet';
 
 function chrome(
-  overrides: Partial<CompactChromeProps & { sheetKey: string }> = {}
+  overrides: Partial<
+    CompactChromeProps & { sheetKey: string; commandOnStage: boolean }
+  > = {}
 ) {
   return {
     projectName: 'Bracket',
@@ -194,6 +196,19 @@ describe('AppShell in the compact workspace', () => {
     const sheet = container.querySelector('.compact-sheet')!;
     expect(sheet).toContainElement(screen.getByText('Box card'));
     expect(sheet).toContainElement(screen.getByText('Inspector form'));
+  });
+
+  it('rests at peek under a card whose handle is on the model', async () => {
+    // A region's Extrude asks for its arrow to be dragged: at half, the
+    // card covered the arrow and its value while Done stayed disabled.
+    const { container } = render(
+      shell(chrome({ sheetKey: 'card:region:extrude', commandOnStage: true }), {
+        command: <div>Extrude card</div>
+      })
+    );
+    const sheet = () => container.querySelector('.compact-sheet')!;
+    await waitFor(() => expect(sheet()).toHaveAttribute('data-detent', 'peek'));
+    expect(sheet()).toContainElement(screen.getByText('Extrude card'));
   });
 
   it('opens the overflow menu as a sheet page with a File drill-in', async () => {

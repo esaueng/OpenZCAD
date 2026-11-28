@@ -738,6 +738,9 @@ describe('CommandBar', () => {
     // One command, so the slash draft below opens a list with a row in it.
     const commands = [command('fillet', 'Fillet', 'Modify')];
     const { rerender } = render(
+      <Bar commands={commands} onAsk={onAsk} draft={null} />
+    );
+    rerender(
       <Bar
         commands={commands}
         onAsk={onAsk}
@@ -765,6 +768,37 @@ describe('CommandBar', () => {
     );
     expect(search).toHaveValue('/');
     expect(search).toHaveAttribute('aria-expanded', 'true');
+  });
+});
+
+describe('CommandBar mounted with an earlier draft', () => {
+  it('stays closed until a new draft arrives', () => {
+    // The phone review: the search button's empty draft outlived the
+    // workspace, and the next project opened (or imported) came up under
+    // the full-screen command list.
+    const commands = [command('fillet', 'Fillet', 'Modify')];
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
+      <Bar
+        commands={commands}
+        onOpenChange={onOpenChange}
+        draft={{ id: 3, text: '' }}
+      />
+    );
+    const search = searchField();
+    expect(search).not.toHaveFocus();
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    rerender(
+      <Bar
+        commands={commands}
+        onOpenChange={onOpenChange}
+        draft={{ id: 4, text: '' }}
+      />
+    );
+    expect(search).toHaveFocus();
+    expect(onOpenChange).toHaveBeenLastCalledWith(true);
   });
 });
 

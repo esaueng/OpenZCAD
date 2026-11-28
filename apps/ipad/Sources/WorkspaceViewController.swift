@@ -67,12 +67,25 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
         webView.isInspectable = true
         #endif
         view.addSubview(webView)
+        // The workspace ends at the keyboard's top. Left full height, the
+        // keyboard covered its lower half and WebKit scrolled the whole page
+        // up to show a focused field: the header went offscreen and Undo and
+        // Redo slid under the status bar. Resized instead, the page lays out
+        // above the keyboard and nothing scrolls. Without a keyboard the
+        // guide sits at the view's bottom edge, under the home indicator,
+        // which the page clears with its own safe-area insets.
+        view.keyboardLayoutGuide.usesBottomSafeArea = false
         NSLayoutConstraint.activate([
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             webView.topAnchor.constraint(equalTo: view.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            webView.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
         ])
+        // The person's text size, now and whenever it changes in Settings.
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) {
+            (controller: WorkspaceViewController, _: UITraitCollection) in
+            controller.applyTextSize()
+        }
         if UserDefaults.standard.bool(forKey: migrationDefaultsKey) {
             webView.load(URLRequest(url: BundleServer.origin))
         } else {
@@ -82,6 +95,22 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
             // request or accepting any content from a loopback process.
             webView.loadHTMLString("<!doctype html><html><body></body></html>", baseURL: PrototypeStorage.legacyOrigin)
         }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        applyTextSize()
+    }
+
+    /// Zooms the workspace for the iOS text size (`WorkspaceIdiom.pageZoom`).
+    /// The shorter side keeps the zoom the same in both orientations.
+    private func applyTextSize() {
+        guard let webView, view.bounds.width > 0 else { return }
+        let zoom = WorkspaceIdiom.pageZoom(
+            for: traitCollection.preferredContentSizeCategory,
+            shortSide: min(view.bounds.width, view.bounds.height)
+        )
+        if webView.pageZoom != zoom { webView.pageZoom = zoom }
     }
 
     private func showFailure(_ message: String) {

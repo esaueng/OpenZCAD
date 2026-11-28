@@ -612,10 +612,53 @@ async function buildFlange(
     })
   ]);
 
+  const blankDerived = await syncExact(builder.document);
+  // The three edges wanted here are all circles lying flat in a Z plane: the
+  // rim's top and bottom rims (r=45) and the hub lip (r=24, z=26). The radial
+  // predicate alone also matches the r=45 cylinder's vertical SEAM, which runs
+  // z=0→10 at the same radius and is not a design edge at all. Pinning the Z
+  // span to zero is what separates them — and it only started mattering once
+  // the kernel returned an analytic blank, because a tessellated rim has no
+  // seam edge to pick up.
+  //
+  // They are picked by lineage reference as well as hash, as the bracket's
+  // edge break is (ZCAD-001): a hash encodes the edge's position, so a
+  // hash-only pick stopped resolving the moment `rim_r` moved, and Tweak's
+  // one-step + on Rim r was refused with "A selected edge no longer exists".
+  // That is also why the chamfer comes before the bolt circle: subtracting
+  // the patterned tool (one body of `bolt_count` solids) reduces its
+  // operands in sequence and publishes no lineage, so the drilled flange has
+  // no reference to pick by. The bolt holes never reach the chamfered rims.
+  const rimEdges = requireReferencedEdges(
+    pickEdges(
+      blankDerived,
+      blank.bodyId,
+      (p) => {
+        const radial = Math.hypot(p.x, p.y);
+        return near(radial, 45) || (near(radial, 24) && p.z >= 25.5);
+      },
+      (span) => span.z <= 0.5
+    ),
+    'rim + hub lip',
+    { count: 3 }
+  );
+
+  const chamfer = createBodyFeatureIds();
+  builder.stage('Rev B — Rim chamfer', 'Rev B — Rim chamfer', [
+    commandFactories.chamferEdges({
+      name: 'Rim chamfer',
+      targetBodyId: blank.bodyId,
+      edgeHashes: rimEdges.hashes,
+      edgeReferences: rimEdges.references,
+      size: 'chamfer_d',
+      ids: chamfer
+    })
+  ]);
+
   const bolt = createBodyFeatureIds();
   const boltCircle = createBodyFeatureIds();
   const drilled = createBodyFeatureIds();
-  builder.stage('Rev B — Bolt circle', 'Rev B — Bolt circle', [
+  builder.stage('Rev C — Bolt circle', 'Rev C — Bolt circle', [
     commandFactories.addPrimitive({
       name: 'Bolt hole tool',
       primitiveKind: 'cylinder',
@@ -639,49 +682,16 @@ async function buildFlange(
     commandFactories.booleanBodies({
       name: 'Drill bolt circle',
       operation: 'subtract',
-      targetBodyIds: [blank.bodyId, boltCircle.bodyId],
+      targetBodyIds: [chamfer.bodyId, boltCircle.bodyId],
       ids: drilled
-    })
-  ]);
-
-  const revBDerived = await syncExact(builder.document);
-  // The three edges wanted here are all circles lying flat in a Z plane: the
-  // rim's top and bottom rims (r=45) and the hub lip (r=24, z=26). The radial
-  // predicate alone also matches the r=45 cylinder's vertical SEAM, which runs
-  // z=0→10 at the same radius and is not a design edge at all. Pinning the Z
-  // span to zero is what separates them — and it only started mattering once
-  // the kernel returned an analytic blank, because a tessellated rim has no
-  // seam edge to pick up.
-  const rimHashes = requireHashes(
-    pickEdgeHashes(
-      revBDerived,
-      drilled.bodyId,
-      (p) => {
-        const radial = Math.hypot(p.x, p.y);
-        return near(radial, 45) || (near(radial, 24) && p.z >= 25.5);
-      },
-      (span) => span.z <= 0.5
-    ),
-    'rim + hub lip',
-    { count: 3 }
-  );
-
-  const chamfer = createBodyFeatureIds();
-  builder.stage('Rev C — Rim chamfer', 'Rev C — Rim chamfer', [
-    commandFactories.chamferEdges({
-      name: 'Rim chamfer',
-      targetBodyId: drilled.bodyId,
-      edgeHashes: rimHashes,
-      size: 'chamfer_d',
-      ids: chamfer
     }),
     commandFactories.renameNode({
-      nodeId: chamfer.bodyNodeId,
+      nodeId: drilled.bodyNodeId,
       name: 'Pipe Flange'
     }),
     commandFactories.setNodeMetadata(
       {
-        nodeId: chamfer.bodyNodeId,
+        nodeId: drilled.bodyNodeId,
         metadata: { color: '#e1a948' }
       },
       'Flange gold finish'

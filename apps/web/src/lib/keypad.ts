@@ -443,8 +443,29 @@ export function convertDimensionInput(
   return to === 'diameter' ? `2 * (${value})` : `(${value}) / 2`;
 }
 
-/** Keys the on-screen pad may append to the value field. */
-export function appendKeypadKey(current: string, key: string): string {
+/**
+ * Keys the on-screen pad may append to the value field. A key replaces a
+ * selected run of the value, as typing does (the field opens with its value
+ * selected, so the first key starts a new entry), and Backspace deletes it;
+ * with no selection a key appends and Backspace takes the last character.
+ * ± always flips the whole value's sign.
+ */
+export function appendKeypadKey(
+  current: string,
+  key: string,
+  selection?: { start: number; end: number } | null
+): string {
+  if (
+    selection &&
+    key !== '±' &&
+    selection.start >= 0 &&
+    selection.end > selection.start &&
+    selection.end <= current.length
+  ) {
+    const before = current.slice(0, selection.start);
+    const after = current.slice(selection.end);
+    return key === '⌫' ? before + after : before + key + after;
+  }
   if (key === '⌫') {
     return current.slice(0, -1);
   }
