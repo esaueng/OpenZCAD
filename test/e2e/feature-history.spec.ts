@@ -294,9 +294,9 @@ test('asks before resuming a suppressed row that an edit since breaks', async ({
  * F1 follow-up from the 1 October 2026 design review: suppressing a feature
  * that replaces its body used to take the body away from everything built on
  * it, so every later row read "needs repair · … target is unavailable". A
- * suppressed subtract now hands its target through: the bracket rebuilds
- * without its second mounting hole, the edge break after it keeps building,
- * and the hole tool the subtract no longer consumes is back on screen.
+ * suppressed boolean now hands its target through: the heat sink rebuilds
+ * as its base, the corner fillets after it keep building, and the fin field
+ * the union no longer consumes is back on screen.
  */
 test('a suppressed feature passes its body through to the features after it', async ({
   page
@@ -306,28 +306,28 @@ test('a suppressed feature passes its body through to the features after it', as
   page.on('pageerror', (error) => errors.push(error.message));
   await stubApi(page);
   await page.goto('/');
-  await page.getByRole('button', { name: /Mounting Bracket/ }).click();
+  await page.getByRole('button', { name: /Heat Sink/ }).click();
   await expectBodyCount(page, 1);
 
   const drill = page.locator('.feature-row', {
-    hasText: /^Mounting holes/
+    hasText: /^Union fin field/
   });
   const fillet = page.locator('.feature-row', {
-    hasText: /^Wall top edge break/
+    hasText: /^Base corner fillets/
   });
   await drill.hover();
   await drill
-    .getByRole('button', { name: 'Suppress Mounting holes', exact: true })
+    .getByRole('button', { name: 'Suppress Union fin field', exact: true })
     .click();
   await expect(drill).toContainText('suppressed');
-  // The bracket and the hole tool it no longer cuts: the rebuild has landed.
+  // The base and the fin field it no longer joins: the rebuild has landed.
   await expectBodyCount(page, 2);
   await expect(fillet).not.toContainText('needs repair');
   await expect(fillet).not.toHaveClass(/\bfailed\b/);
 
   await drill.hover();
   await drill
-    .getByRole('button', { name: 'Resume Mounting holes', exact: true })
+    .getByRole('button', { name: 'Resume Union fin field', exact: true })
     .click();
   await expect(drill).not.toContainText('suppressed');
   await expectBodyCount(page, 1);
