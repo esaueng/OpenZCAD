@@ -23,6 +23,7 @@ import {
   createStarterSheet,
   drawingSourceFingerprint
 } from '../../apps/web/src/lib/drawing/sheetSources';
+import { rowFencedFingerprint } from '../../apps/web/src/lib/drawing/viewConfigurations';
 import { expect, stubApi, test } from './openzcad-fixtures';
 
 async function readDownload(download: Download): Promise<Buffer> {
@@ -253,6 +254,10 @@ test(
     await expect(drawings.getByText(/no longer exists as a body/)).toHaveCount(
       0
     );
+    // Nothing Large builds changed with the switch, so the sheet, fenced to
+    // Large's content when its views were set to draw it, is still current.
+    await expect(drawings.getByText('Drawing up to date')).toBeVisible();
+    await expect(drawings.getByText('Model changed')).toHaveCount(0);
     expect(errors).toEqual([]);
   }
 );
@@ -304,17 +309,26 @@ test(
         }
       }
       expect(annotation).toBeDefined();
+      const views = sheet.views.map((view) =>
+        view.viewId === front.viewId
+          ? { ...view, configurationId: 'large' }
+          : view
+      );
       document = {
         ...document,
         drawings: {
           sheets: [
             {
               ...sheet,
-              views: sheet.views.map((view) =>
-                view.viewId === front.viewId
-                  ? { ...view, configurationId: 'large' }
-                  : view
-              ),
+              // Saved as drawn: fenced to what Large builds as well.
+              source: {
+                fingerprint: rowFencedFingerprint(
+                  sheet.source.fingerprint,
+                  { views },
+                  document
+                )
+              },
+              views,
               annotations: [annotation!]
             }
           ]

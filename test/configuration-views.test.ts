@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   DRAWING_VIEW_CONFIGURATION_SCHEMA_VERSION,
+  activateConfiguration,
   addConfigurationColumn,
   addConfigurationRow,
   addDrawingSheet,
@@ -11,9 +12,11 @@ import {
   createProjectDocument,
   deleteConfigurationRow,
   deleteConfigurations,
+  duplicateProjectDocument,
   holeBody,
   listFeaturesInOrder,
   listParameters,
+  renameConfigurationRow,
   setConfigurationCell,
   setParameter,
   updateDrawingView
@@ -37,8 +40,16 @@ import {
   rowBodyKey,
   rowContentKey,
   rowDocument,
+  rowFenceKey,
+  rowFencedFingerprint,
+  rowSheetFingerprint,
+  sheetNamedRows,
   viewConfigurationRows
 } from '../apps/web/src/lib/drawing/viewConfigurations';
+import {
+  sheetFenceParts,
+  storedSheetFence
+} from '../apps/web/src/lib/drawing/sheetSources';
 import {
   holeCalloutLookup,
   holeCalloutSnapshot,
@@ -474,5 +485,250 @@ describe('which row each view draws', () => {
     expect(
       auditDrawingDimensions(sheet, bodies, 'mm', new Map()).uncheckedViews
     ).toBeUndefined();
+  });
+});
+
+/**
+ * Re-check of #2426: a sheet is fenced to what each row its views name
+ * builds, so it is stale by a row's own content and not by which row the
+ * model happens to be on.
+ */
+describe('the rows a sheet is fenced to', () => {
+  const column = (document: ProjectDocument) =>
+    document.configurations!.columns[0]!;
+  const withThird = () =>
+    addConfigurationRow(model(), { rowId: 'third', name: 'Third' });
+
+  it('keys a row by what it builds, whichever row is active', () => {
+    const small = withThird();
+    const large = activateConfiguration(small, { rowId: 'large' });
+    const third = activateConfiguration(small, { rowId: 'third' });
+    for (const rowId of ['small', 'large', 'third']) {
+      const key = rowFenceKey(small, rowId);
+      expect(rowFenceKey(large, rowId)).toBe(key);
+      expect(rowFenceKey(third, rowId)).toBe(key);
+      expect(rowFenceKey(activateConfiguration(large, { rowId }), rowId)).toBe(
+        key
+      );
+    }
+    expect(rowFenceKey(small, 'small')).not.toBe(rowFenceKey(small, 'large'));
+    // An edit made while a row is active is that row's, before the table
+    // has taken it and after another row is made active.
+    const live = setParameter(small, { name: 'width', expression: '25' });
+    expect(rowFenceKey(live, 'small')).not.toBe(rowFenceKey(small, 'small'));
+    expect(rowFenceKey(live, 'large')).toBe(rowFenceKey(small, 'large'));
+    expect(
+      rowFenceKey(activateConfiguration(live, { rowId: 'third' }), 'small')
+    ).toBe(rowFenceKey(live, 'small'));
+  });
+
+  it('keys a row that suppresses a feature the same after the model leaves it and returns', () => {
+    // Large has a Boss that Small suppresses.
+    let base = addPrimitiveFeature(model(), {
+      name: 'Boss',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 5 }
+    });
+    const boss = listFeaturesInOrder(base).at(-1)!.featureId;
+    const suppression = { kind: 'suppression' as const, featureId: boss };
+    base = addConfigurationColumn(base, { column: suppression });
+    base = setConfigurationCell(base, {
+      rowId: 'small',
+      column: suppression,
+      value: true
+    });
+    const large = activateConfiguration(base, { rowId: 'large' });
+    const back = activateConfiguration(large, { rowId: 'small' });
+    for (const rowId of ['small', 'large']) {
+      const key = rowFenceKey(base, rowId);
+      expect(rowFenceKey(large, rowId)).toBe(key);
+      expect(rowFenceKey(back, rowId)).toBe(key);
+    }
+    expect(rowFenceKey(base, 'small')).not.toBe(rowFenceKey(base, 'large'));
+    // What a row suppresses is its content.
+    const released = setConfigurationCell(base, {
+      rowId: 'large',
+      column: suppression,
+      value: true
+    });
+    expect(rowFenceKey(released, 'large')).not.toBe(
+      rowFenceKey(base, 'large')
+    );
+    expect(rowFenceKey(released, 'small')).toBe(rowFenceKey(base, 'small'));
+  });
+
+  it('changes a row’s key with what its rebuild reads, and with nothing else', () => {
+    const base = withThird();
+    const key = rowFenceKey(base, 'large');
+    // Its own cell, and the model every row shares.
+    const resized = setConfigurationCell(base, {
+      rowId: 'large',
+      column: column(base),
+      value: '50'
+    });
+    expect(rowFenceKey(resized, 'large')).not.toBe(key);
+    const grown = addPrimitiveFeature(base, {
+      name: 'Boss',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 5 }
+    });
+    expect(rowFenceKey(grown, 'large')).not.toBe(key);
+    expect(
+      rowFenceKey(
+        { ...grown, featureOrder: [...grown.featureOrder].reverse() },
+        'large'
+      )
+    ).not.toBe(rowFenceKey(grown, 'large'));
+    // Another row's cell, a row's name, a drawing edit: not its build.
+    const other = setConfigurationCell(base, {
+      rowId: 'third',
+      column: column(base),
+      value: '33'
+    });
+    expect(rowFenceKey(other, 'large')).toBe(key);
+    expect(rowFenceKey(other, 'third')).not.toBe(rowFenceKey(base, 'third'));
+    expect(
+      rowFenceKey(
+        renameConfigurationRow(base, { rowId: 'large', name: 'Big' }),
+        'large'
+      )
+    ).toBe(key);
+    const moved = updateDrawingView(base, {
+      sheetId,
+      viewId: frontId,
+      centerMm: { x: 120, y: 150 }
+    });
+    expect(rowFenceKey(moved, 'large')).toBe(key);
+    // Saved with the sheet: a copy of the project, a rename or a newer
+    // schema is the same row.
+    expect(
+      rowFenceKey(
+        {
+          ...base,
+          projectId: 'proj_copy' as ProjectDocument['projectId'],
+          ownerUserId: toUserId('user_other'),
+          name: 'Copy of Bracket',
+          schemaVersion: (base.schemaVersion +
+            1) as ProjectDocument['schemaVersion']
+        },
+        'large'
+      )
+    ).toBe(key);
+    const copy = duplicateProjectDocument(base, 'Copy', toUserId('user_other'));
+    expect(copy.projectId).not.toBe(base.projectId);
+    for (const rowId of ['small', 'large', 'third'])
+      expect(rowFenceKey(copy, rowId)).toBe(rowFenceKey(base, rowId));
+  });
+
+  it('keys a row the model cannot take by its refusal', () => {
+    const base = model();
+    const set = base.configurations!;
+    const width = (column(base) as { parameterId: string }).parameterId;
+    const broken: ProjectDocument = {
+      ...base,
+      configurations: {
+        ...set,
+        rows: set.rows.map((row) =>
+          row.id === 'large'
+            ? { ...row, parameters: { [width]: 'deleted_name * 2' } }
+            : row
+        )
+      }
+    };
+    expect(rowDocument(broken, 'large').ok).toBe(false);
+    const key = rowFenceKey(broken, 'large');
+    expect(key.startsWith('!')).toBe(true);
+    expect(key).not.toBe(rowFenceKey(base, 'large'));
+    expect(rowFenceKey(broken, 'small')).toBe(rowFenceKey(base, 'small'));
+  });
+
+  it('fences a sheet to every row its views name, the active one included', () => {
+    const base = withThird();
+    const named = updateDrawingView(base, {
+      sheetId,
+      viewId: frontId,
+      configurationId: 'small'
+    });
+    const sheet = named.drawings!.sheets[0]!;
+    // Small is active: no view is on another row, yet the sheet names it.
+    expect(viewConfigurationRows(sheet, named).size).toBe(0);
+    expect(sheetNamedRows(sheet, named)).toEqual(['small']);
+    expect(sheetNamedRows(base.drawings!.sheets[0]!, base)).toEqual([]);
+    const gone = structuredClone(named);
+    gone.drawings!.sheets[0]!.views[0]!.configurationId = 'gone';
+    expect(sheetNamedRows(gone.drawings!.sheets[0]!, gone)).toEqual([]);
+
+    // No row named: the model fingerprint alone.
+    expect(rowFencedFingerprint('v1:m', base.drawings!.sheets[0]!, base)).toBe(
+      'v1:m'
+    );
+    const fence = rowFencedFingerprint('v1:m', sheet, named);
+    const parts = sheetFenceParts(fence);
+    expect(parts).toMatchObject({ base: 'v1:m', exploded: '' });
+    expect(parts.rows).toMatch(/^[0-9a-f]{16}$/);
+    // Another row made active keeps it; the row resized does not, and it
+    // stays changed whichever row is active then.
+    const large = activateConfiguration(named, { rowId: 'large' });
+    expect(rowFencedFingerprint('v1:m', sheet, large)).toBe(fence);
+    const resized = setParameter(named, { name: 'width', expression: '25' });
+    expect(rowFencedFingerprint('v1:m', sheet, resized)).not.toBe(fence);
+    expect(
+      rowFencedFingerprint(
+        'v1:m',
+        sheet,
+        activateConfiguration(resized, { rowId: 'third' })
+      )
+    ).toBe(rowFencedFingerprint('v1:m', sheet, resized));
+    // By row, not by the order the views name them.
+    const keys: Record<string, string> = { a: '1', b: '2' };
+    const keyOf = (rowId: string) => keys[rowId]!;
+    expect(rowSheetFingerprint('v1:m', ['b', 'a', 'b'], keyOf)).toBe(
+      rowSheetFingerprint('v1:m', ['a', 'b'], keyOf)
+    );
+    expect(rowSheetFingerprint('v1:m', ['a'], keyOf)).not.toBe(
+      rowSheetFingerprint('v1:m', ['a', 'b'], keyOf)
+    );
+  });
+
+  it('reads a saved fence in its parts, and as the sheet’s views now read it', () => {
+    expect(sheetFenceParts('v1:m')).toEqual({
+      base: 'v1:m',
+      exploded: '',
+      rows: ''
+    });
+    expect(sheetFenceParts('v1:m|x:aa')).toEqual({
+      base: 'v1:m',
+      exploded: 'aa',
+      rows: ''
+    });
+    expect(sheetFenceParts('v1:m|r:bb')).toEqual({
+      base: 'v1:m',
+      exploded: '',
+      rows: 'bb'
+    });
+    expect(sheetFenceParts('v1:m|x:aa|r:bb')).toEqual({
+      base: 'v1:m',
+      exploded: 'aa',
+      rows: 'bb'
+    });
+    const sheet = model().drawings!.sheets[0]!;
+    const saved = (fingerprint: string, exploded = false): DrawingSheet => ({
+      ...sheet,
+      source: { fingerprint },
+      views: sheet.views.map((view, index) =>
+        index === 0 && exploded ? { ...view, exploded: true } : view
+      )
+    });
+    // A part counts only while a view of the sheet still reads it.
+    expect(storedSheetFence(saved('v1:m|x:aa|r:bb', true), true)).toBe(
+      'v1:m|x:aa|r:bb'
+    );
+    expect(storedSheetFence(saved('v1:m|x:aa|r:bb'), true)).toBe('v1:m|r:bb');
+    expect(storedSheetFence(saved('v1:m|x:aa|r:bb', true), false)).toBe(
+      'v1:m|x:aa'
+    );
+    expect(storedSheetFence(saved('v1:m|x:aa|r:bb'), false)).toBe('v1:m');
+    // Saved before rows were fenced: nothing to compare a row with.
+    expect(storedSheetFence(saved('v1:m'), true)).toBe('v1:m');
   });
 });

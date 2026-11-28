@@ -46,7 +46,10 @@ import {
 import { ANNOTATION_TOOL_LABELS } from '../lib/drawing/annotationPicking';
 import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
 import { WHEEL_DEVICE_STORAGE_KEY } from '../lib/wheelDeviceMemory';
-import { viewConfigurationRows } from '../lib/drawing/viewConfigurations';
+import {
+  rowFencedFingerprint,
+  viewConfigurationRows
+} from '../lib/drawing/viewConfigurations';
 import {
   createStarterSheet,
   drawingSourceFingerprint,
@@ -1238,9 +1241,18 @@ describe('DrawingWorkspace', () => {
     const sheet = starter(fingerprint);
     // The first view draws Large, which a sketch leaves unsolvable.
     const [first, ...rest] = sheet.views;
+    const views = [{ ...first!, configurationId: 'row_large' }, ...rest];
     const rowSheet: DrawingSheet = {
       ...sheet,
-      views: [{ ...first!, configurationId: 'row_large' }, ...rest]
+      // Saved as drawn: fenced to what Large builds.
+      source: {
+        fingerprint: rowFencedFingerprint(
+          fingerprint,
+          { views },
+          { ...base, bodyOrder: [bodyId] }
+        )
+      },
+      views
     };
     const bodies = { [bodyId]: cube() };
     const mesh = displayTessellation(bodies);
@@ -1305,9 +1317,18 @@ describe('DrawingWorkspace', () => {
     // The first view draws Large; the rest draw the active Small, which
     // cannot be meshed.
     const [first, ...rest] = sheet.views;
+    const views = [{ ...first!, configurationId: 'row_large' }, ...rest];
     const rowSheet: DrawingSheet = {
       ...sheet,
-      views: [{ ...first!, configurationId: 'row_large' }, ...rest]
+      // Saved as drawn: fenced to what Large builds.
+      source: {
+        fingerprint: rowFencedFingerprint(
+          fingerprint,
+          { views },
+          { ...base, bodyOrder: [bodyId] }
+        )
+      },
+      views
     };
     const bodies = { [bodyId]: cube() };
     const mesh = displayTessellation(bodies);

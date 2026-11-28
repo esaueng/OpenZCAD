@@ -20,3 +20,14 @@ model cannot take fails its own views instead of Draw, Dimension Check lists
 a view whose row is still building as not checked, and only the bodies a
 row's views draw are kept of its build, within a byte budget for sheets not
 on screen (`rowBodies.test.ts`, `configuration-views.test.ts`).
+
+Re-check: a sheet is fenced to what each configuration row its views name
+builds, beside its model fingerprint, so a sheet left stale by a row's edit
+stays stale whichever row is made active and never exports that row as
+current; setting a view's Configuration rebinds a current sheet in the same
+step, and a sheet saved without the rows' part asks for an Update. A row
+build that lands after its sheet left the screen is counted against the
+byte budget, a body no view of a row draws any more is let go, and
+Dimension Check lists a view whose row does not build its body as not
+checked (`DrawingWorkspace.pinnedRows.test.tsx`,
+`configuration-views.test.ts`).
