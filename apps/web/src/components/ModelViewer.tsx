@@ -19414,6 +19414,12 @@ export function ModelViewer({
     };
   }, [analysisOverlay]);
 
+  // The count of Fit requests when this viewer (one per project) mounted.
+  // Only a request made since is this project's: the last project's count
+  // fitted the next one's model as it mounted, before its panels were
+  // drawn, and the camera that move took ended its opening fit (the preview
+  // check on #2451), so the Mounting Bracket opened behind History.
+  const fitSignalAtMount = useRef(fitSignal);
   useEffect(() => {
     const context = contextRef.current;
     // Fit has to include the sketch layer, not just the solids. While a
@@ -19421,7 +19427,7 @@ export function ModelViewer({
     // has not framed — the camera sits on the model, and a sketch drawn away
     // from it can be off-screen entirely — so fitting to bodies alone answers
     // the wrong question at the one moment fit is most needed.
-    if (!context || fitSignal === 0) {
+    if (!context || fitSignal === fitSignalAtMount.current) {
       return;
     }
     const fitTargets = [
