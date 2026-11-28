@@ -63,7 +63,10 @@ import {
   type PlaneEdgePick,
   type PlaneEdgeState
 } from '../lib/inPlace/splitEdgePlane';
-import { SPLIT_EDGE_PLANE_SENTENCES } from '../lib/refusalLanguage';
+import {
+  SPLIT_EDGE_PLANE_SENTENCES,
+  editTargetMissingSentence
+} from '../lib/refusalLanguage';
 
 /**
  * Runs whichever in-place command (U09) is active.
@@ -711,6 +714,19 @@ export function useInPlaceCommand(
   const specRef = useRef(spec);
   specRef.current = spec;
   const editSeed = session?.edit ?? null;
+  /**
+   * An edit of a feature whose target body is not built (its typed
+   * `target_body_unavailable`): it takes no picks and builds nothing, and
+   * this sentence, read from the code, stands in the bar instead of a pick
+   * prompt.
+   */
+  const targetMissingSentence =
+    editSeed?.targetMissing && spec
+      ? editTargetMissingSentence(
+          editSeed.targetMissing,
+          (spec.featureName ?? spec.title).toLowerCase()
+        )
+      : null;
   const editRef = useRef(editSeed);
   editRef.current = editSeed;
   const sessionTouched = session?.touched ?? EMPTY_TOUCHED;
@@ -949,10 +965,10 @@ export function useInPlaceCommand(
   const chosen = useMemo(() => session?.options ?? {}, [session?.options]);
   const request = useMemo(
     () =>
-      spec && spec.ready(slots, chosen, ctx)
+      spec && !targetMissingSentence && spec.ready(slots, chosen, ctx)
         ? spec.request(slots, paramValues, chosen, ctx, numbers)
         : null,
-    [spec, slots, paramValues, chosen, ctx, numbers]
+    [spec, targetMissingSentence, slots, paramValues, chosen, ctx, numbers]
   );
   const requestRef = useRef(request);
   requestRef.current = request;
@@ -2035,6 +2051,8 @@ export function useInPlaceCommand(
   sessionRef.current = session;
   const pickFace = useCallback((face: FacePick) => {
     if (committingRef.current) return false;
+    // An edit whose target body is not built has nothing to pick on it.
+    if (sessionRef.current?.edit?.targetMissing) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     const faceMode = inPlaceFaceMode(toolSpec, current?.options);
@@ -2115,6 +2133,7 @@ export function useInPlaceCommand(
 
   const addFaces = useCallback((faces: readonly FacePick[]) => {
     if (committingRef.current) return null;
+    if (sessionRef.current?.edit?.targetMissing) return null;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     // A sweep's faces name no feature, so a feature pattern takes none.
@@ -2132,6 +2151,8 @@ export function useInPlaceCommand(
 
   const pickBody = useCallback((body: BodyPick) => {
     if (committingRef.current) return false;
+    // An edit whose target body is not built has nothing to pick on it.
+    if (sessionRef.current?.edit?.targetMissing) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     const bodyMode = inPlaceBodyMode(
@@ -2167,6 +2188,8 @@ export function useInPlaceCommand(
 
   const pickEdge = useCallback((edge: EdgePick) => {
     if (committingRef.current) return false;
+    // An edit whose target body is not built has nothing to pick on it.
+    if (sessionRef.current?.edit?.targetMissing) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.edgeMode) return false;
@@ -2189,6 +2212,8 @@ export function useInPlaceCommand(
 
   const setEdges = useCallback((edges: readonly EdgePick[]) => {
     if (committingRef.current) return false;
+    // An edit whose target body is not built has nothing to pick on it.
+    if (sessionRef.current?.edit?.targetMissing) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.edgeMode) return false;
@@ -2777,11 +2802,25 @@ export function useInPlaceCommand(
     [spec, editSeed]
   );
 
+  // An edit with no target body to pick on shows no pick mode: the viewer
+  // neither offers its edges or faces nor sweeps them into the command.
+  const shownSpec = useMemo((): InPlaceToolSpec | null => {
+    if (!spec || !targetMissingSentence) return spec;
+    const {
+      edgeMode: _edges,
+      faceMode: _faces,
+      bodyMode: _bodies,
+      editBodyMode: _editBodies,
+      ...picksNothing
+    } = spec;
+    return picksNothing;
+  }, [spec, targetMissingSentence]);
+
   return {
     active: session !== null,
     sessionId: session?.id ?? null,
     tool: session?.tool ?? null,
-    spec,
+    spec: shownSpec,
     slots,
     axisCandidates,
     handles,
@@ -2801,7 +2840,11 @@ export function useInPlaceCommand(
           .filter(Boolean)
           .join(' · ')
       : '',
-    refusal: entryRefusal?.message ?? planeEdgeRefusal ?? refusal,
+    refusal:
+      targetMissingSentence ??
+      entryRefusal?.message ??
+      planeEdgeRefusal ??
+      refusal,
     refusalClassification:
       !entryRefusal &&
       !planeEdgeRefusal &&

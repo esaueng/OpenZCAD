@@ -15,6 +15,7 @@
   "chamfer-fillet-corner.spec.ts": 49,
   "chamfer-freeform.spec.ts": 146,
   "chamfer-rounded-block.spec.ts": 153,
+  "chamfer-missing-body-edit.spec.ts": 60,
   "chamfer-rounded-edge.spec.ts": 52,
   "cloud-sync.spec.ts": 39,
   "cnc-layout.spec.ts": 18,

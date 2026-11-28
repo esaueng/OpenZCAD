@@ -2100,6 +2100,117 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(armed.seed.notice).toMatch(/no longer resolves/);
   });
 
+  describe('a feature whose target body is not built', () => {
+    const missing = {
+      family: 'reference' as const,
+      category: 'invalid_input',
+      code: 'target_body_unavailable'
+    };
+    const gone: InPlaceEditContext = {
+      ...EDIT_CTX,
+      face: () => null,
+      anyFace: () => null,
+      edge: () => null,
+      body: () => null,
+      ownRefusal: missing
+    };
+    const chamfer: FeatureData = {
+      featureKind: 'chamfer',
+      targetBodyId: BODY,
+      edgeHashes: [21, 22],
+      distance: 1.5
+    };
+
+    it('chamfer: opens with its typed refusal and no pick to make', () => {
+      const armed = inPlaceEditSeed(feature(chamfer, BODY), gone)!;
+      expect(armed.tool).toBe('chamfer');
+      expect(armed.seed.targetMissing).toEqual(missing);
+      expect(armed.seed.slots.edges).toEqual([]);
+      // No "pick it again" over a body that is not there.
+      expect(armed.seed.notice).toBeNull();
+      // The stored size still seeds its value.
+      expect(armed.seed.values.distance).toBe(1.5);
+    });
+
+    it.each<[string, FeatureData]>([
+      [
+        'fillet',
+        {
+          featureKind: 'fillet',
+          targetBodyId: BODY,
+          edgeHashes: [21],
+          radius: 1
+        }
+      ],
+      [
+        'hole',
+        {
+          featureKind: 'hole',
+          targetBodyId: BODY,
+          faceHash: 11,
+          style: 'simple',
+          diameter: 4,
+          depthMode: 'through',
+          position: { u: 0, v: 0 }
+        }
+      ],
+      [
+        'thread',
+        {
+          featureKind: 'thread',
+          targetBodyId: BODY,
+          faceHash: 31,
+          profile: 'printable',
+          clearance: 0.1
+        }
+      ],
+      [
+        'shell',
+        {
+          featureKind: 'shell',
+          targetBodyId: BODY,
+          openingFaceHashes: [11],
+          thickness: 1
+        }
+      ],
+      [
+        'draft',
+        {
+          featureKind: 'draft',
+          targetBodyId: BODY,
+          faceHashes: [11],
+          angleDeg: 3,
+          pullDirection: { x: 0, y: 0, z: 1 },
+          neutralPoint: { x: 0, y: 0, z: 0 }
+        }
+      ]
+    ])('%s: is blocked the same way', (_kind, data) => {
+      const armed = inPlaceEditSeed(feature(data, BODY), gone)!;
+      expect(armed.seed.targetMissing).toEqual(missing);
+      expect(armed.seed.slots.faces).toEqual([]);
+      expect(armed.seed.slots.edges).toEqual([]);
+      expect(armed.seed.notice).toBeNull();
+    });
+
+    it('chamfer: another refusal code edits as before', () => {
+      const armed = inPlaceEditSeed(feature(chamfer, BODY), {
+        ...EDIT_CTX,
+        ownRefusal: { ...missing, code: 'blend_failed' }
+      })!;
+      expect(armed.seed.targetMissing).toBeUndefined();
+      expect(armed.seed.slots.edges.map((edge) => edge.hash)).toEqual([21, 22]);
+    });
+
+    it('chamfer: with no typed refusal a lost edge still asks for a pick', () => {
+      const armed = inPlaceEditSeed(feature(chamfer, BODY), {
+        ...gone,
+        ownRefusal: null
+      })!;
+      expect(armed.seed.targetMissing).toBeUndefined();
+      expect(armed.seed.notice).toMatch(/no longer resolves/);
+    });
+  });
+
   it('chamfer: a stored second distance is its shape', () => {
     const data: FeatureData = {
       featureKind: 'chamfer',
