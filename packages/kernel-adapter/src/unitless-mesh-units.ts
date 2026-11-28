@@ -32,8 +32,10 @@
  * finished file is then read back a second, independent way, and refused
  * unless that count and extent are the ones the rewrite produced.
  *
- * Only vertex positions change, and a PLY position stored as an integer —
- * which cannot hold its own value times 25.4 — becomes a double. Everything
+ * Only vertex positions change. A PLY position is written as a double
+ * whatever it was stored as: neither an integer nor a `float` can hold its
+ * own value times 25.4, and two floats one step apart in metres can round to
+ * one float in millimetres, which the translator would then weld. Everything
  * else — faces, normals, texture coordinates, colours, comments, element
  * order — is copied byte for byte.
  */
@@ -135,6 +137,98 @@ function finiteDecimal(token: string, what: string, refuse: Refuse): number {
   return Number.isFinite(value)
     ? value
     : refuse(`${what} that is not a finite number (${quoted(token)})`);
+}
+
+const doubleBits = new DataView(new ArrayBuffer(8));
+
+/**
+ * A positive finite double as `0.<digits>` times `10^exponent`, exactly:
+ * every double is a whole number of 2^-1074ths, so it has a last digit.
+ */
+function exactDecimal(value: number): { digits: string; exponent: number } {
+  doubleBits.setFloat64(0, value);
+  const high = doubleBits.getUint32(0);
+  const biased = (high >>> 20) & 0x7ff;
+  let mantissa =
+    (BigInt(high & 0xfffff) << 32n) | BigInt(doubleBits.getUint32(4));
+  let power = -1074;
+  if (biased !== 0) {
+    mantissa |= 1n << 52n;
+    power = biased - 1075;
+  }
+  // m / 2^k is m * 5^k over 10^k.
+  const digits = (
+    power >= 0 ? mantissa << BigInt(power) : mantissa * 5n ** BigInt(-power)
+  ).toString();
+  return { digits, exponent: digits.length + Math.min(power, 0) };
+}
+
+const DECIMAL_PARTS = /^[+-]?(\d*)\.?(\d*)(?:[eE]([+-]?\d+))?$/;
+
+/**
+ * Whether the magnitude of a decimal `token` is below (-1), equal to (0) or
+ * above (1) a positive finite double — decided on the digits, not on the
+ * double the token rounds to. Costs the token's length and no more: its
+ * digits are compared where they stand, never raised to a power.
+ */
+function compareDecimal(token: string, value: number): number {
+  const parts = DECIMAL_PARTS.exec(token)!;
+  const digits = parts[1]! + parts[2]!;
+  let lead = 0;
+  while (lead < digits.length && digits.charCodeAt(lead) === 0x30) lead += 1;
+  if (lead === digits.length) return -1;
+  const exponent = parts[1]!.length - lead + Number(parts[3] ?? 0);
+  const exact = exactDecimal(value);
+  if (exponent !== exact.exponent) return exponent < exact.exponent ? -1 : 1;
+  const length = Math.max(digits.length - lead, exact.digits.length);
+  for (let index = 0; index < length; index += 1) {
+    const ours =
+      lead + index < digits.length ? digits.charCodeAt(lead + index) : 0x30;
+    const theirs =
+      index < exact.digits.length ? exact.digits.charCodeAt(index) : 0x30;
+    if (ours !== theirs) return ours < theirs ? -1 : 1;
+  }
+  return 0;
+}
+
+const floatBits = new DataView(new ArrayBuffer(4));
+/** Where single precision overflows, which a double can still name. */
+const FLOAT_OVERFLOW = 2 ** 128;
+
+/**
+ * A decimal as Rust's `f32::from_str` reads it: the nearest single-precision
+ * number to the decimal itself, ties to even, infinite past the largest.
+ * `nearest` is `Number(token)`, which must be finite.
+ *
+ * `Math.fround(Number(token))` rounds twice, and the two disagree in exactly
+ * one case: the double lies midway between two floats and the decimal does
+ * not. Rounding is monotonic, so a double on one side of the midpoint has
+ * its decimal on the same side; only on the midpoint itself is the decimal's
+ * side unknown, and there the digits decide.
+ */
+function rustFloat32(token: string, nearest: number): number {
+  const magnitude = Math.abs(nearest);
+  const rounded = Math.fround(magnitude);
+  if (rounded === magnitude) return Math.fround(nearest);
+  // The float on the other side of the double from the one it rounded to.
+  floatBits.setFloat32(0, rounded);
+  floatBits.setUint32(
+    0,
+    floatBits.getUint32(0) + (rounded < magnitude ? 1 : -1)
+  );
+  const other = floatBits.getFloat32(0);
+  const low = Math.min(rounded, other);
+  const high = Math.max(rounded, other);
+  // Both differences are exact: the three are within one float step.
+  if (
+    magnitude - low !==
+    (high === Infinity ? FLOAT_OVERFLOW : high) - magnitude
+  ) {
+    return Math.fround(nearest);
+  }
+  const side = compareDecimal(token, magnitude);
+  const single = side < 0 ? low : side > 0 ? high : rounded;
+  return nearest < 0 ? -single : single;
 }
 
 /** The bounding box and count of the positions a scan visited. */
@@ -304,15 +398,13 @@ class BoundedWriter {
     this.length += text.length;
   }
 
-  float(value: number, double: boolean, littleEndian: boolean): void {
-    const size = double ? 8 : 4;
-    if (double) this.scratch.setFloat64(0, value, littleEndian);
-    else this.scratch.setFloat32(0, value, littleEndian);
-    this.reserve(size);
-    for (let index = 0; index < size; index += 1) {
+  double(value: number, littleEndian: boolean): void {
+    this.scratch.setFloat64(0, value, littleEndian);
+    this.reserve(8);
+    for (let index = 0; index < 8; index += 1) {
       this.bytes[this.length + index] = this.scratch.getUint8(index);
     }
-    this.length += size;
+    this.length += 8;
   }
 
   finish(): Uint8Array {
@@ -521,24 +613,33 @@ function recountObjVertices(data: Uint8Array, refuse: Refuse): Extent {
 type PlyScalar =
   'char' | 'uchar' | 'short' | 'ushort' | 'int' | 'uint' | 'float' | 'double';
 
-const PLY_TYPE_ALIASES: Record<string, PlyScalar> = {
-  char: 'char',
-  int8: 'char',
-  uchar: 'uchar',
-  uint8: 'uchar',
-  short: 'short',
-  int16: 'short',
-  ushort: 'ushort',
-  uint16: 'ushort',
-  int: 'int',
-  int32: 'int',
-  uint: 'uint',
-  uint32: 'uint',
-  float: 'float',
-  float32: 'float',
-  double: 'double',
-  float64: 'double'
-};
+/**
+ * The sixteen names the translator knows a type by, and no others. A map,
+ * because the name comes from the file: looked up on a plain object,
+ * `constructor` and `toString` are found too.
+ */
+const PLY_TYPE_ALIASES: ReadonlyMap<string, PlyScalar> = new Map([
+  ['char', 'char'],
+  ['int8', 'char'],
+  ['uchar', 'uchar'],
+  ['uint8', 'uchar'],
+  ['short', 'short'],
+  ['int16', 'short'],
+  ['ushort', 'ushort'],
+  ['uint16', 'ushort'],
+  ['int', 'int'],
+  ['int32', 'int'],
+  ['uint', 'uint'],
+  ['uint32', 'uint'],
+  ['float', 'float'],
+  ['float32', 'float'],
+  ['double', 'double'],
+  ['float64', 'double']
+]);
+
+function plyType(name: string | undefined): PlyScalar | undefined {
+  return name === undefined ? undefined : PLY_TYPE_ALIASES.get(name);
+}
 
 const PLY_SIZES: Record<PlyScalar, number> = {
   char: 1,
@@ -562,10 +663,6 @@ const PLY_INTEGER_RANGES: Partial<
   int: [-2147483648, 2147483647],
   uint: [0, 4294967295]
 };
-
-function isFloatType(type: PlyScalar): boolean {
-  return type === 'float' || type === 'double';
-}
 
 type PlyProperty =
   | {
@@ -602,8 +699,59 @@ const MAX_PLY_COUNT = 4294967295;
 const END_HEADER = [0x65, 0x6e, 0x64, 0x5f, 0x68, 0x65, 0x61, 0x64, 0x65, 0x72];
 
 /**
- * The words of one header line, or null for a comment — decided from the
- * line's first bytes, so a comment of any length costs nothing to pass.
+ * The longest declaration is `property list <count> <item> <name>`: five
+ * words. A sixth is read only so that one too many can be told from five.
+ */
+const MAX_PLY_HEADER_WORDS = 6;
+const FIRST_HEADER_WINDOW = 256;
+
+/**
+ * The first few words of a line, split as the translator splits them, read
+ * from a window that grows only until it holds them. The translator ignores
+ * what follows a format line's second word, so a line may be megabytes of
+ * words it never looks at; splitting all of it held every one of them.
+ */
+function leadingWords(
+  data: Uint8Array,
+  start: number,
+  end: number,
+  refuse: Refuse
+): string[] {
+  for (let size = FIRST_HEADER_WINDOW; ; size *= 4) {
+    const stop = Math.min(end, start + size);
+    const whole = stop === end;
+    let text: string;
+    if (whole) {
+      text = decodeLine(data, start, end, refuse);
+    } else {
+      try {
+        // Streaming, so a character cut by the window's edge is held back
+        // rather than refused.
+        text = new TextDecoder('utf-8', {
+          fatal: true,
+          ignoreBOM: true
+        }).decode(data.subarray(start, stop), { stream: true });
+      } catch {
+        return refuse('it is not UTF-8 text');
+      }
+    }
+    const words: string[] = [];
+    TOKEN.lastIndex = 0;
+    while (words.length < MAX_PLY_HEADER_WORDS) {
+      const word = TOKEN.exec(text);
+      // A word that runs to the edge of a window may run on past it.
+      if (!word || (!whole && TOKEN.lastIndex === text.length)) break;
+      words.push(word[0]);
+    }
+    if (whole || words.length === MAX_PLY_HEADER_WORDS) return words;
+  }
+}
+
+/**
+ * The leading words of one header line — at most {@link MAX_PLY_HEADER_WORDS}
+ * — or null for a comment. The usual comment is known from the line's first
+ * bytes, so one of any length costs nothing to pass; one set off by white
+ * space that is not ASCII is known from its first word, like any other line.
  */
 function plyHeaderWords(
   data: Uint8Array,
@@ -629,7 +777,10 @@ function plyHeaderWords(
   ) {
     return null;
   }
-  return decodeLine(data, start, end, refuse).match(TOKEN) ?? [];
+  const words = leadingWords(data, start, end, refuse);
+  // As the translator: the line trimmed of Unicode white space, and its
+  // first word taken off at any.
+  return words[0] === 'comment' || words[0] === 'obj_info' ? null : words;
 }
 
 /**
@@ -638,11 +789,12 @@ function plyHeaderWords(
  * The header ends at the first `end_header` + line feed anywhere in the file
  * — inside a comment if that is where it is, and not at an `end_header`
  * followed by a space or a carriage return. Its lines are then read in
- * order: `ply` first; `comment` and `obj_info` skipped; `format`, `element`
- * and `property` exactly as declared; an `end_header` line stops the
- * reading (the body still starts where the header ended); anything else is
- * not a header the translator accepts. No length limit: the declarations
- * are bounded, the comments between them are not.
+ * order: `ply` first; `comment` and `obj_info` skipped; `format` for its
+ * second word, whatever follows it; `element` and `property` exactly as
+ * declared; an `end_header` line stops the reading (the body still starts
+ * where the header ended); anything else is not a header the translator
+ * accepts. No length limit: the declarations are bounded, the comments
+ * between them are not.
  */
 function readPlyLayout(data: Uint8Array, refuse: Refuse): PlyLayout {
   let encoding: PlyLayout['encoding'] | null = null;
@@ -709,14 +861,14 @@ function readPlyLayout(data: Uint8Array, refuse: Refuse): PlyLayout {
           }
           const list = words[1] === 'list';
           const name = words[list ? 4 : 2];
-          const type = PLY_TYPE_ALIASES[words[list ? 3 : 1] ?? ''];
-          const countType = list ? PLY_TYPE_ALIASES[words[2] ?? ''] : 'uchar';
+          const type = plyType(words[list ? 3 : 1]);
+          const countType = list ? plyType(words[2]) : 'uchar';
           if (
             name === undefined ||
             words.length !== (list ? 5 : 3) ||
             !type ||
             !countType ||
-            isFloatType(countType)
+            !PLY_INTEGER_RANGES[countType]
           ) {
             return refuse('its header has a property line it cannot read');
           }
@@ -982,8 +1134,8 @@ function walkAsciiPly(
 
 /**
  * One ASCII coordinate as the translator reads it for its declared type: an
- * integer within the type's range, or a number — single precision for a
- * `float`, which is refused when it overflows one.
+ * integer within the type's range, or a number — for a `float`, the decimal
+ * rounded once to single precision, and refused when it overflows one.
  */
 function plyAsciiValue(
   token: string,
@@ -1002,7 +1154,7 @@ function plyAsciiValue(
   }
   const value = finiteDecimal(token, `${where} has a coordinate`, refuse);
   if (type === 'double') return value;
-  const single = Math.fround(value);
+  const single = rustFloat32(token, value);
   return Number.isFinite(single) ? single : cannotHold();
 }
 
@@ -1023,10 +1175,11 @@ function scalePly(
     if (property.kind !== 'scalar') return refuse(UNCONVERTED);
     return property;
   });
-  // A `float` stays single precision, as a millimetre file of the same
-  // precision would be. An integer cannot hold its value in another unit, so
-  // it is declared and written as a double instead.
-  const double = properties.map((property) => property.type !== 'float');
+  // Every position is declared and written as a double. An integer cannot
+  // hold its value in another unit, and neither can a `float`: rounded back
+  // to single precision, two positions a float step apart in metres can
+  // land on one float in millimetres, and the translator welds what
+  // coincides. The double is the stored value times the factor, in full.
   const sizes = properties.map((property) => PLY_SIZES[property.type]);
   // Axes in the order their values are stored, which need not be x, y, z.
   const order = [0, 1, 2].sort((a, b) => layout.axes![a]! - layout.axes![b]!);
@@ -1034,7 +1187,7 @@ function scalePly(
   const writer = new BoundedWriter(data.length, budget);
   let copied = 0;
   for (const property of properties
-    .filter((candidate) => !isFloatType(candidate.type))
+    .filter((candidate) => candidate.type !== 'double')
     .sort((a, b) => a.lineStart - b.lineStart)) {
     const text = decodeLine(data, property.lineStart, property.lineEnd, refuse);
     TOKEN.lastIndex = 0;
@@ -1055,8 +1208,7 @@ function scalePly(
   const scaled = [0, 0, 0];
   walkPlyVertices(data, layout, refuse, (vertex) => {
     for (let axis = 0; axis < 3; axis += 1) {
-      const value = vertex.values[axis]! * factor;
-      scaled[axis] = double[axis] ? value : Math.fround(value);
+      scaled[axis] = vertex.values[axis]! * factor;
       if (!Number.isFinite(scaled[axis])) throw new Error(OUT_OF_RANGE);
     }
     written.add(scaled);
@@ -1071,7 +1223,7 @@ function scalePly(
     }
     for (const axis of order) {
       writer.copy(data, copied, vertex.offsets[axis]!);
-      writer.float(scaled[axis]!, double[axis]!, littleEndian);
+      writer.double(scaled[axis]!, littleEndian);
       copied = vertex.offsets[axis]! + sizes[axis]!;
     }
   });
@@ -1079,7 +1231,8 @@ function scalePly(
   const out = writer.finish();
 
   // Read the finished file back from its own header: as many vertices as it
-  // declares, every position a float type now, at the values just written.
+  // declares, every position a double now, at the products themselves — not
+  // at what some narrower type would have made of them.
   const check = readPlyLayout(out, refuse);
   const read = new Extent();
   walkPlyVertices(out, check, refuse, (vertex) => read.add(vertex.values));
@@ -1088,7 +1241,7 @@ function scalePly(
     check.vertex?.count !== layout.vertex.count ||
     !check.axes?.every((index) => {
       const property = check.vertex!.properties[index]!;
-      return property.kind === 'scalar' && isFloatType(property.type);
+      return property.kind === 'scalar' && property.type === 'double';
     }) ||
     !read.matches(written)
   ) {

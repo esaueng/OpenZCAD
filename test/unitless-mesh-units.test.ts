@@ -416,16 +416,24 @@ describe(
 
     it('imports an inch binary PLY read as inches to the millimetre PLY’s geometry', async () => {
       const inchFile = binaryPly(inchVertices, spindle.indices);
-      // A millimetre PLY of the same float32 inch numbers, multiplied out the
-      // way a writer would store them.
-      const view = new DataView(inchFile.buffer);
-      const headerLength =
-        decoder.decode(inchFile).indexOf('end_header\n') + 11;
-      const control = binaryPly(
-        inchVertices.map((_value, index) =>
-          Math.fround(view.getFloat32(headerLength + index * 4, true) * INCH)
-        ),
-        spindle.indices
+      // A millimetre PLY of the same float32 inch numbers, each multiplied
+      // out in full: a float cannot hold its own value times 25.4, so the
+      // millimetre file is one of doubles.
+      const control = mixedBinaryPly(
+        {
+          points: Array.from(
+            { length: inchVertices.length / 3 },
+            (_unused, row) =>
+              [0, 1, 2].map(
+                (axis) => Math.fround(inchVertices[row * 3 + axis]!) * INCH
+              )
+          ),
+          faces: Array.from(
+            { length: spindle.indices.length / 3 },
+            (_unused, row) => spindle.indices.slice(row * 3, row * 3 + 3)
+          )
+        },
+        ['double', 'double', 'double']
       );
       const read = await importMeshFile('ply', inchFile, 'mm', 'inch');
       const controlled = await importMeshFile('ply', control, 'mm');
@@ -617,7 +625,19 @@ describe(
       [
         'an obj_info line that mentions end_header',
         ['obj_info end_header\tsoon']
-      ]
+      ],
+      // Re-check P2: the translator takes a line's first word off at any
+      // Unicode white space, and trims the line of it first.
+      [
+        'a comment set off by a non-breaking space',
+        ['comment\u00a0made in inches']
+      ],
+      [
+        'an obj_info line behind a non-breaking space',
+        ['\u00a0obj_info made in inches', '\u3000comment\u2003too']
+      ],
+      // Re-check P2: nor does it read past a format line's second word.
+      ['words after the format', ['format ascii 1.0 and nothing more']]
     ])('reads a PLY with %s in the chosen unit', async (_name, headerLines) => {
       const cube = fanBox(1, 0.5);
       const inches = await importMeshFile(
@@ -628,14 +648,10 @@ describe(
       );
       const millimetres = await importMeshFile(
         'ply',
-        asciiPly(scaledShape(cube, INCH), ['float', 'float', 'float']),
+        asciiPly(scaledShape(cube, INCH)),
         'mm'
       );
-      expect(bounds(inches).max).toEqual([
-        Math.fround(INCH),
-        Math.fround(INCH),
-        Math.fround(INCH)
-      ]);
+      expect(bounds(inches).max).toEqual([INCH, INCH, INCH]);
       expect(inches).toEqual(millimetres);
     });
 
@@ -789,6 +805,129 @@ describe(
     });
 
     /**
+     * Re-check P2: a `float` position was written back as a `float`. Two
+     * neighbouring single-precision numbers in metres are 1.2e-4 mm apart,
+     * but 1500.0025 mm has coarser neighbours than 1.5000025 m: both rounded
+     * to one float and the translator welded them, 12 triangles from the
+     * metre file against 14 from its millimetre copy in doubles. The
+     * read-back compared against the rounded values, so it passed. Every
+     * position is written as a double now.
+     */
+    it.each([
+      ['binary', mixedBinaryPly],
+      ['ASCII', asciiPly]
+    ] as const)(
+      'keeps two float positions of a %s PLY apart that one float cannot hold in millimetres',
+      async (_encoding, write) => {
+        const near = 1.5000025033950806;
+        const next = 1.5000026226043701;
+        expect([Math.fround(near), Math.fround(next)]).toEqual([near, next]);
+        expect(Math.fround(near * 1000)).toBe(Math.fround(next * 1000));
+        // A box from `near` to 2 whose top is fanned around the point one
+        // float along from its corner.
+        const place = [near, next, 2];
+        const shape: Shape = {
+          points: fanBox(2, 1).points.map(([x, y, z]) => [
+            place[x!]!,
+            place[y!]!,
+            z!
+          ]),
+          faces: fanBox(2, 1).faces
+        };
+        const millimetres = await importMeshFile(
+          'ply',
+          mixedBinaryPly(scaledShape(shape, 1000), [
+            'double',
+            'double',
+            'double'
+          ]),
+          'mm'
+        );
+        expect(millimetres.triangleCount).toBe(14);
+        const metres = await importMeshFile(
+          'ply',
+          write(shape, ['float', 'float', 'float']),
+          'mm',
+          'm'
+        );
+        expect(metres).toEqual(millimetres);
+      }
+    );
+
+    /**
+     * Re-check P2: an ASCII `float` was read with `Number()` and then rounded
+     * to single precision — two roundings, where the translator's parser
+     * makes one from the decimal itself. A number whose double lands exactly
+     * between two floats went to the even one, whichever side the decimal
+     * was on, and the position scaled was not the one the translator reads.
+     */
+    it.each([
+      ['above a tie, where two roundings went down', '1.0000000596046448'],
+      ['below a tie, where two roundings went up', '1.0000001788139343']
+    ])(
+      'scales the float the translator reads from an ASCII number just %s',
+      async (_name, token) => {
+        const single = 1.0000001192092896;
+        const cube = fanBox(1, 0.5);
+        const file = encoder.encode(
+          [
+            'ply',
+            'format ascii 1.0',
+            `element vertex ${cube.points.length}`,
+            'property float x',
+            'property float y',
+            'property float z',
+            `element face ${cube.faces.length}`,
+            'property list uchar int vertex_indices',
+            'end_header',
+            ...cube.points.map((point) =>
+              point.map((value) => (value === 1 ? token : value)).join(' ')
+            ),
+            ...cube.faces.map((face) => `3 ${face.join(' ')}`),
+            ''
+          ].join('\n')
+        );
+        // What the translator makes of the number, left as written.
+        expect(bounds(await importMeshFile('ply', file, 'mm')).max).toEqual([
+          single,
+          single,
+          single
+        ]);
+        const inches = await importMeshFile('ply', file, 'mm', 'inch');
+        expect(bounds(inches).max).toEqual([
+          single * INCH,
+          single * INCH,
+          single * INCH
+        ]);
+        expect(inches).toEqual(
+          await importMeshFile(
+            'ply',
+            asciiPly(scaledShape(fanBox(single, 0.5), INCH)),
+            'mm'
+          )
+        );
+      }
+    );
+
+    /**
+     * Re-check P3: a type was looked up as a key of a plain object, so
+     * `constructor` found `Object.prototype`'s and passed for a scalar — and
+     * the rewrite then respelt it `double`, handing the translator a file it
+     * accepts in place of one it refuses.
+     */
+    it('refuses a property type the translator does not know, whatever JavaScript finds under its name', async () => {
+      const file = asciiPly(fanBox(1, 0.5), [
+        'constructor',
+        'double',
+        'double'
+      ]);
+      await expect(importMeshFile('ply', file, 'mm')).rejects.toThrow();
+      await expect(importMeshFile('ply', file, 'mm', 'inch')).rejects.toThrow(
+        'This PLY file cannot be read in the chosen unit: its header has a property line it cannot read.'
+      );
+    });
+
+    /**
      * Review P2: the vertex budget was the translator's to enforce, after the
      * rewrite had already walked — and allocated for — every vertex.
      */
@@ -932,6 +1071,45 @@ describe('scaleUnitlessMeshFile', () => {
     ).toThrow(
       'This PLY file cannot be read in the chosen unit: its header declares property x twice.'
     );
+    // Re-check P3: a type is one of the sixteen names, not anything an
+    // object happens to answer to.
+    for (const type of ['constructor', 'toString', '__proto__', 'valueOf']) {
+      for (const line of [
+        `property ${type} x`,
+        `property list ${type} int x`,
+        `property list uchar ${type} x`
+      ]) {
+        expect(
+          refusal(
+            'ply',
+            plyOf(
+              'element vertex 1',
+              line,
+              ...xyz.slice(1),
+              'end_header',
+              '0 0 0'
+            )
+          )
+        ).toThrow(
+          'This PLY file cannot be read in the chosen unit: its header has a property line it cannot read.'
+        );
+      }
+    }
+    // Re-check P2: exactly where single precision overflows, as the
+    // translator rounds it; one less is the largest float (below).
+    expect(
+      refusal(
+        'ply',
+        plyOf(
+          'element vertex 1',
+          ...xyz,
+          'end_header',
+          '340282356779733661637539395458142568448 0 0'
+        )
+      )
+    ).toThrow(
+      'vertex 1 of 1 has a coordinate its float type cannot hold ("3402823567797336616375393954581425684'
+    );
     expect(refusal('obj', 'v 1 2\n')).toThrow(
       'This OBJ file cannot be read in the chosen unit: line 1 does not give its vertex three coordinates.'
     );
@@ -1047,7 +1225,7 @@ describe('scaleUnitlessMeshFile', () => {
     }
   );
 
-  it('promotes an integer axis of a binary PLY to a double and leaves the rest of each record alone', () => {
+  it('writes every position of a binary PLY as a double and leaves the rest of each record alone', () => {
     const shape = {
       points: [
         [1.5, -2, 3],
@@ -1065,15 +1243,130 @@ describe('scaleUnitlessMeshFile', () => {
       mixedBinaryPly(
         {
           points: [
-            [1.5 * INCH, Math.fround(-2 * INCH), 3 * INCH],
-            [0.25 * INCH, Math.fround(4 * INCH), -7 * INCH]
+            [1.5 * INCH, -2 * INCH, 3 * INCH],
+            [0.25 * INCH, 4 * INCH, -7 * INCH]
           ],
           faces: shape.faces
         },
-        ['double', 'float', 'double']
+        ['double', 'double', 'double']
       )
     );
   });
+
+  /**
+   * Re-check P2: Rust rounds a decimal to single precision once. `Number()`
+   * followed by `Math.fround` rounds twice, and differs wherever the double
+   * falls exactly between two floats and the decimal does not.
+   */
+  it('reads an ASCII float as one rounding of its decimal to single precision', () => {
+    const read = (token: string) => {
+      const scaled = decoder
+        .decode(
+          scaleUnitlessMeshFile(
+            'ply',
+            encoder.encode(
+              [
+                'ply',
+                'format ascii 1.0',
+                'element vertex 1',
+                'property float x',
+                'property float32 y',
+                'property float z',
+                'end_header',
+                `${token} 0 0`,
+                ''
+              ].join('\n')
+            ),
+            2
+          )
+        )
+        .split('\n');
+      expect(scaled.slice(3, 6)).toEqual([
+        'property double x',
+        'property double y',
+        'property double z'
+      ]);
+      // Doubling is exact, so this is the number that was scaled.
+      return Number(scaled[7]!.split(' ')[0]) / 2;
+    };
+    const ulp = 2 ** -23;
+    const largest = 3.4028234663852886e38;
+    const smallest = 2 ** -149;
+    for (const [token, single] of [
+      ['0.1', Math.fround(0.1)],
+      // Between 1 and its neighbour: 1.000000059604644775390625.
+      ['1.0000000596046447', 1],
+      ['1.000000059604644775390625', 1],
+      ['1.000000059604644775390625000000000000000000000000001', 1 + ulp],
+      ['1.0000000596046448', 1 + ulp],
+      ['-1.0000000596046448', -(1 + ulp)],
+      ['100000005960464.48e-14', 1 + ulp],
+      ['0.000000000000010000000596046448E+14', 1 + ulp],
+      // Between the next two: 1.000000178813934326171875.
+      ['1.0000001788139343', 1 + ulp],
+      ['1.000000178813934326171875', 1 + 2 * ulp],
+      ['1.0000001788139344', 1 + 2 * ulp],
+      // Below the point where single precision overflows.
+      ['340282356779733661637539395458142568447', largest],
+      ['3.4028235677973366e38', largest],
+      // Around half the smallest float, and half as much again.
+      ['7.006492321624085e-46', 0],
+      ['7.006492321624086e-46', smallest],
+      ['2.1019476964872256e-45', smallest],
+      ['2.1019476964872257e-45', 2 * smallest]
+    ] as const) {
+      expect([token, read(token)]).toEqual([token, single]);
+    }
+  });
+
+  /**
+   * Re-check P2: the translator reads two words of a format line and no
+   * more. Splitting the whole line held every word of an 8 MB one at once.
+   */
+  it(
+    'reads no more words of a header line than the translator does',
+    { timeout: 30_000 },
+    () => {
+      const file = encoder.encode(
+        [
+          'ply',
+          `format ascii 1.0 ${'abc '.repeat(2_000_000)}`,
+          'element vertex 1',
+          'property double x',
+          'property double y',
+          'property double z',
+          'end_header',
+          '1 2 3',
+          ''
+        ].join('\n')
+      );
+      const held = () => {
+        const usage = process.memoryUsage();
+        return usage.heapUsed + usage.external;
+      };
+      const before = held();
+      const scaled = scaleUnitlessMeshFile('ply', file, 10);
+      const grown = held() - before;
+      expect(decoder.decode(scaled.subarray(scaled.length - 20))).toBe(
+        'end_header\n10 20 30\n'
+      );
+      expect(scaled).toHaveLength(file.length + 3);
+      // The rewritten file, and nothing else the size of the line.
+      expect(grown).toBeLessThan(32 * 1024 * 1024);
+      // Too many words is still too many where the translator counts them.
+      expect(() =>
+        scaleUnitlessMeshFile(
+          'ply',
+          encoder.encode(
+            `ply\nformat ascii 1.0\nelement vertex 1 ${'abc '.repeat(100_000)}\nend_header\n`
+          ),
+          10
+        )
+      ).toThrow(
+        'This PLY file cannot be read in the chosen unit: its header has an element line it cannot read.'
+      );
+    }
+  );
 });
 
 describe('unitlessMeshExtent', () => {
