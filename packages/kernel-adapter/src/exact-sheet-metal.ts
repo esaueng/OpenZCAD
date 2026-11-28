@@ -29,6 +29,7 @@ import {
   composeAffine,
   isFeatureManuallySuppressed,
   isFeatureRollbackSuppressed,
+  isInPlaceTransform,
   minimumFlangeLength,
   minimumHoleToBendDistance,
   minimumReliefWidth,
@@ -2296,6 +2297,135 @@ export function featuresChangingBodyAfter(
   return changed;
 }
 
+/**
+ * #2122: the uniform scales later in-place Scale features (a Move with a
+ * factor) apply to the sheet's own body, following it through each feature
+ * that rewrites it. A copy or a mirror leaves the sheet as built and is not
+ * followed, nor is a body the sheet went into as a tool. A uniform scale
+ * develops exactly: thickness, radii, allowances and bend lines all grow by
+ * the factor and angles and K-factors stay, so the scaled part's blank is
+ * the sheet's blank scaled. `built` says whether a feature built; one the
+ * build refused scaled nothing.
+ */
+export function sheetScalesAfter(
+  document: ProjectDocument,
+  scope: Record<string, number>,
+  feature: FeatureNode,
+  built: (featureId: FeatureId) => boolean
+): { featureId: FeatureId; name: string; factor: number }[] {
+  if (!feature.bodyId) return [];
+  let body: BodyId = feature.bodyId;
+  const scales: { featureId: FeatureId; name: string; factor: number }[] = [];
+  let reached = false;
+  for (const later of listFeaturesInOrder(document)) {
+    if (later.featureId === feature.featureId) {
+      reached = true;
+      continue;
+    }
+    if (
+      !reached ||
+      isFeatureManuallySuppressed(later) ||
+      isFeatureRollbackSuppressed(later)
+    ) {
+      continue;
+    }
+    const data = later.data;
+    if (isInPlaceTransform(data)) {
+      if (
+        data.targetBodyId !== body ||
+        data.transform.scale === undefined ||
+        !built(later.featureId)
+      ) {
+        continue;
+      }
+      let factor: number;
+      try {
+        factor = resolveParamValue(
+          data.transform.scale,
+          scope,
+          'scale',
+          document.units
+        );
+      } catch {
+        continue;
+      }
+      if (Number.isFinite(factor) && factor > 0 && factor !== 1) {
+        scales.push({ featureId: later.featureId, name: later.name, factor });
+      }
+      continue;
+    }
+    // A copy or a mirror: the sheet itself stays as built.
+    if (later.featureKind === 'transform' || later.featureKind === 'mirror') {
+      continue;
+    }
+    const record = data as unknown as Record<string, unknown>;
+    const targets: unknown[] = [
+      record.targetBodyId,
+      ...(Array.isArray(record.targetBodyIds)
+        ? (record.targetBodyIds as unknown[])
+        : [])
+    ];
+    if (later.bodyId && targets.includes(body)) body = later.bodyId;
+  }
+  return scales;
+}
+
+type Point2 = readonly [number, number];
+
+function scalePoint(point: Point2, factor: number): [number, number] {
+  return [point[0] * factor, point[1] * factor];
+}
+
+/** One outline entity, uniformly scaled about the sketch origin. */
+function scaleDxfEntity(entity: DxfEntity, factor: number): DxfEntity {
+  switch (entity.kind) {
+    case 'line':
+      return {
+        ...entity,
+        start: scalePoint(entity.start, factor),
+        end: scalePoint(entity.end, factor)
+      };
+    case 'circle':
+    case 'arc':
+      return {
+        ...entity,
+        center: scalePoint(entity.center, factor),
+        radius: entity.radius * factor
+      };
+    case 'polyline':
+      return {
+        ...entity,
+        points: entity.points.map((point) => scalePoint(point, factor))
+      };
+    case 'ellipse':
+      return {
+        ...entity,
+        center: scalePoint(entity.center, factor),
+        majorAxis: scalePoint(entity.majorAxis, factor)
+      };
+    case 'spline':
+      return {
+        ...entity,
+        controls: entity.controls.map((point) => scalePoint(point, factor))
+      };
+    case 'text':
+      return {
+        ...entity,
+        position: scalePoint(entity.position, factor),
+        height: entity.height * factor
+      };
+    case 'solid':
+      return {
+        ...entity,
+        points: entity.points.map((point) => scalePoint(point, factor)) as [
+          [number, number],
+          [number, number],
+          [number, number]
+        ]
+      };
+  }
+}
+
 export function buildSheetMetalFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
@@ -2352,8 +2482,10 @@ export interface SheetMetalFlatPattern {
   featureId: FeatureId;
   thickness: number;
   /**
-   * The blank's sketch frame in the world: a 2D point `(x, y)` here is
-   * `origin + x·u + y·v`.
+   * The blank's sketch frame in the world at the sheet-metal feature, before
+   * later features move or scale the body: a 2D point `(x, y)` here is
+   * `origin + (x·u + y·v) / s`, where `s` is the product of the
+   * {@link scaledBy} factors (1 when there are none).
    */
   frame: {
     origin: [number, number, number];
@@ -2373,6 +2505,13 @@ export interface SheetMetalFlatPattern {
    * not in this pattern.
    */
   changedBy: { featureId: FeatureId; name: string }[];
+  /**
+   * Later in-place Scale features on the folded body, in history order
+   * (#2122). Their factors are already in this pattern: every length here
+   * (outline, bend lines, thickness, radii, allowances) is the scaled
+   * part's, so a file never carries the pre-scale blank.
+   */
+  scaledBy: { featureId: FeatureId; name: string; factor: number }[];
 }
 
 function requireSheetMetal(
@@ -2431,11 +2570,14 @@ export function sheetMetalFlatPattern(
   scope: Record<string, number>,
   build: SheetMetalBuildState,
   featureId: FeatureId,
-  modelUnitMm: number
+  modelUnitMm: number,
+  built: (featureId: FeatureId) => boolean = () => true
 ): SheetMetalFlatPattern {
   const input = rebuildInput(kernel, document, scope, build, featureId);
   const { feature } = input;
   const plan = planSheetMetal(input);
+  const scaledBy = sheetScalesAfter(document, scope, feature, built);
+  const s = scaledBy.reduce((product, entry) => product * entry.factor, 1);
   const top = Array.from(kernel.getSolidFaces(plan.flat)).find((face) => {
     if (kernel.getSurfaceType(face) !== 'plane') return false;
     const normal = kernel.getFaceNormal(face);
@@ -2460,9 +2602,9 @@ export function sheetMetalFlatPattern(
   const loops = [outer, ...wires.filter((wire) => wire !== outer)].map(
     (wire) => ({
       outer: wire === outer,
-      entities: Array.from(kernel.getWireEdges(wire)).flatMap((edge) =>
-        edgeDxfEntities(kernel, edge, dxfFrame)
-      )
+      entities: Array.from(kernel.getWireEdges(wire))
+        .flatMap((edge) => edgeDxfEntities(kernel, edge, dxfFrame))
+        .map((entity) => (s === 1 ? entity : scaleDxfEntity(entity, s)))
     })
   );
   const { basis } = plan.frame;
@@ -2470,7 +2612,7 @@ export function sheetMetalFlatPattern(
     [v.x, v.y, v.z] as [number, number, number];
   return {
     featureId,
-    thickness: plan.thickness,
+    thickness: plan.thickness * s,
     frame: {
       origin: triple(basis.origin),
       u: triple(basis.u),
@@ -2488,24 +2630,25 @@ export function sheetMetalFlatPattern(
         bendId: bend.bend.id,
         piece: piece.index,
         segment: [
-          [a[0], a[1]],
-          [b[0], b[1]]
+          [a[0] * s, a[1] * s],
+          [b[0] * s, b[1] * s]
         ],
         direction: bend.bend.direction,
         angleDeg: bend.metrics.angle / DEG,
-        insideRadius: bend.metrics.insideRadius,
+        insideRadius: bend.metrics.insideRadius * s,
         kFactor: bend.metrics.kFactor,
-        bendAllowance: bend.metrics.bendAllowance,
+        bendAllowance: bend.metrics.bendAllowance * s,
         bendDeduction: Number.isFinite(bend.metrics.bendDeduction)
-          ? bend.metrics.bendDeduction
+          ? bend.metrics.bendDeduction * s
           : null,
-        lineLength: piece.to - piece.from
+        lineLength: (piece.to - piece.from) * s
       };
     }),
     changedBy: featuresChangingBodyAfter(document, feature).map((entry) => ({
       featureId: entry.featureId,
       name: entry.name
-    }))
+    })),
+    scaledBy
   };
 }
 
