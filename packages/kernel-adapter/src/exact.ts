@@ -98,6 +98,7 @@ import {
   documentForConfiguration,
   findSketch,
   isLiveAssemblyBody,
+  modelContentHash,
   getParameterScope,
   resolveParamValue,
   getParameterHiddenBodyIds,
@@ -1085,7 +1086,11 @@ export interface ExactKernelAdapter {
    * A sweep is several requests (the even positions, then each refinement
    * round). `sweep` names the one they belong to: the rows its parts name
    * are built for the first request and reused by the rest. Without it,
-   * each request builds them again.
+   * each request builds them again. The name only groups requests. A built
+   * row is reused when the model's content is the same as when it was
+   * built, never because the name is: a request with an edited model builds
+   * again. A request of another sweep drops what the last one held before
+   * building, and what is held stays within a byte budget.
    */
   assemblyInterferenceSweep(
     document: ProjectDocument,
@@ -1647,6 +1652,41 @@ interface AssemblyCheckRowPart {
   componentName: string;
   built: boolean;
   solids: Uint8Array | null;
+}
+
+/** A part that names another configuration row than the active one. */
+type AssemblyRowNamedPart = ReturnType<typeof assemblyRowDrawnParts>[number];
+
+/**
+ * AS04: the serialized row solids one sweep may hold between its requests
+ * (64 MiB). The solids of an assembly's pinned rows are a few megabytes at
+ * most in ordinary models; past this a row is built again per request
+ * instead of being held.
+ */
+const SWEEP_ROW_BYTE_LIMIT = 64 * 1024 * 1024;
+
+/**
+ * AS04: the parts among `componentIds` that name another configuration row
+ * than the active one, by row, in the order the rows are first named; empty
+ * when none does. No row is built to tell: `assemblyRowDrawnParts` with no
+ * row to read is every part that names one.
+ */
+function assemblyCheckNamedRows(
+  document: ProjectDocument,
+  componentIds: ReadonlySet<string>
+): Map<string, AssemblyRowNamedPart[]> {
+  const rows = new Map<string, AssemblyRowNamedPart[]>();
+  for (const part of assemblyRowDrawnParts(
+    document,
+    () => undefined,
+    () => true
+  )) {
+    if (!componentIds.has(part.componentId)) continue;
+    const parts = rows.get(part.rowId) ?? [];
+    parts.push(part);
+    rows.set(part.rowId, parts);
+  }
+  return rows;
 }
 
 /**
@@ -5939,87 +5979,124 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     componentIds: ReadonlySet<string>
   ): Promise<Map<string, AssemblyCheckRowPart>> {
     const out = new Map<string, AssemblyCheckRowPart>();
-    // With no row built, this is every part that names another row.
-    const named = assemblyRowDrawnParts(
-      document,
-      () => undefined,
-      () => true
-    ).filter((part) => componentIds.has(part.componentId));
-    for (const rowId of new Set(named.map((part) => part.rowId))) {
-      const parts = named.filter((part) => part.rowId === rowId);
-      const set = (
-        part: (typeof parts)[number],
-        built: boolean,
-        solids: Uint8Array | null
-      ) =>
-        out.set(part.componentId, {
-          rowId,
-          rowName: part.rowName,
-          componentName: part.componentName,
-          built,
-          solids
-        });
-      let row: ProjectDocument;
-      try {
-        row = documentForConfiguration(document, rowId);
-      } catch {
-        for (const part of parts) set(part, false, null);
-        continue;
-      }
-      try {
-        const drawn = await this.withExportBuild(
-          row,
-          (kernel, build) => {
-            const holds = exportBuiltBody(build);
-            return assemblyRowDrawnParts(
-              document,
-              (id) => (id === rowId ? row : undefined),
-              (built, bodyId) => (built === row ? holds(bodyId) : true)
-            )
-              .filter(
-                (part) =>
-                  part.rowId === rowId && componentIds.has(part.componentId)
-              )
-              .map((part) => {
-                const shape =
-                  part.rowBodyId === null
-                    ? undefined
-                    : build.shapes.get(part.rowBodyId);
-                return {
-                  part,
-                  solids:
-                    shape && shape.solids.length > 0
-                      ? kernel.serializeSolids(Uint32Array.from(shape.solids))
-                      : null
-                };
-              });
-          },
-          []
-        );
-        for (const { part, solids } of drawn) set(part, true, solids);
-      } catch (error) {
-        if (isBuildCancelled(error)) throw error;
-        for (const part of parts) set(part, false, null);
-      }
-    }
+    for (const [rowId, parts] of assemblyCheckNamedRows(document, componentIds))
+      for (const [componentId, part] of await this.assemblyCheckRow(
+        document,
+        rowId,
+        parts
+      ))
+        out.set(componentId, part);
     return out;
   }
 
   /**
-   * The rows built for the sweep in progress, so its refinement requests do
-   * not build each of them again. One sweep at a time: the next sweep's
-   * first request replaces it. It holds serialized solids only, no kernel
-   * handle, so nothing in the kernel outlives a request.
+   * One row of `assemblyCheckRowParts`: `rowId` built exactly on its own,
+   * and what its build shows for each of `parts`, the components that name
+   * it. Each comes back, built or not.
    */
-  private sweepRowParts: {
-    key: string;
-    rows: Map<string, AssemblyCheckRowPart>;
+  private async assemblyCheckRow(
+    document: ProjectDocument,
+    rowId: string,
+    parts: readonly AssemblyRowNamedPart[]
+  ): Promise<[string, AssemblyCheckRowPart][]> {
+    const componentIds = new Set(parts.map((part) => part.componentId));
+    const entry = (
+      part: AssemblyRowNamedPart,
+      built: boolean,
+      solids: Uint8Array | null
+    ): [string, AssemblyCheckRowPart] => [
+      part.componentId,
+      {
+        rowId,
+        rowName: part.rowName,
+        componentName: part.componentName,
+        built,
+        solids
+      }
+    ];
+    let row: ProjectDocument;
+    try {
+      row = documentForConfiguration(document, rowId);
+    } catch {
+      return parts.map((part) => entry(part, false, null));
+    }
+    try {
+      const drawn = await this.withExportBuild(
+        row,
+        (kernel, build) => {
+          const holds = exportBuiltBody(build);
+          return assemblyRowDrawnParts(
+            document,
+            (id) => (id === rowId ? row : undefined),
+            (built, bodyId) => (built === row ? holds(bodyId) : true)
+          )
+            .filter(
+              (part) =>
+                part.rowId === rowId && componentIds.has(part.componentId)
+            )
+            .map((part) => {
+              const shape =
+                part.rowBodyId === null
+                  ? undefined
+                  : build.shapes.get(part.rowBodyId);
+              return {
+                part,
+                solids:
+                  shape && shape.solids.length > 0
+                    ? kernel.serializeSolids(Uint32Array.from(shape.solids))
+                    : null
+              };
+            });
+        },
+        []
+      );
+      return drawn.map(({ part, solids }) => entry(part, true, solids));
+    } catch (error) {
+      if (isBuildCancelled(error)) throw error;
+      return parts.map((part) => entry(part, false, null));
+    }
+  }
+
+  /**
+   * The rows built for the sweep in progress, so its refinement requests do
+   * not build each of them again. One sweep at a time: a request of any
+   * other sweep drops these before it builds anything, so two sweeps'
+   * solids are never held at once. It holds serialized solids only, no
+   * kernel handle, so nothing in the kernel outlives a request.
+   *
+   * A row is held under a hash of everything its build reads
+   * (`key`), never under the sweep's name: a row is served only to a
+   * request whose model hashes the same. `bytes` is what the solids weigh,
+   * and stays within `sweepRowByteLimit`.
+   */
+  private sweepRows: {
+    sweep: string;
+    bytes: number;
+    rows: Map<
+      string,
+      { key: string; bytes: number; parts: [string, AssemblyCheckRowPart][] }
+    >;
   } | null = null;
 
   /**
-   * `assemblyCheckRowParts` for one request of the sweep `sweep` names. A
-   * row that failed to build stays failed for the whole sweep, so a pair is
-   * never decided at some positions on geometry it lacked at others.
+   * The most serialized row solids held between a sweep's requests. A row
+   * that would pass it is checked all the same and not kept: its next
+   * request builds it again.
+   */
+  private sweepRowByteLimit = SWEEP_ROW_BYTE_LIMIT;
+
+  /**
+   * `assemblyCheckRowParts` for one request of the sweep `sweep` names,
+   * with the rows that sweep already built taken from `sweepRows`.
+   *
+   * A held row is used only when its key matches: the hash of the model the
+   * request carries (`modelContentHash`: features, parameters and the
+   * configuration table, whatever the document's version), the row and the
+   * parts that name it. So an edit between two requests, or a caller using
+   * a sweep's name again for another model, builds the row again instead of
+   * checking what it used to be. A row that failed to build is held too (it
+   * weighs nothing), so within one model a pair is never decided at some
+   * positions on geometry it lacked at others.
    */
   private async assemblySweepRowParts(
     document: ProjectDocument,
@@ -6028,17 +6105,55 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   ): Promise<Map<string, AssemblyCheckRowPart>> {
     if (sweep === undefined)
       return this.assemblyCheckRowParts(document, componentIds);
-    // The id alone names the sweep; the rest refuses a caller reusing one.
-    const key = JSON.stringify([
-      sweep,
-      document.projectId,
-      document.version,
-      [...componentIds].sort()
-    ]);
-    if (this.sweepRowParts?.key === key) return this.sweepRowParts.rows;
-    const rows = await this.assemblyCheckRowParts(document, componentIds);
-    this.sweepRowParts = { key, rows };
-    return rows;
+    // Before any build: the last sweep's solids are not kept through it.
+    if (this.sweepRows?.sweep !== sweep)
+      this.sweepRows = { sweep, bytes: 0, rows: new Map() };
+    const held = this.sweepRows;
+    const named = assemblyCheckNamedRows(document, componentIds);
+    const out = new Map<string, AssemblyCheckRowPart>();
+    if (named.size === 0) {
+      held.rows.clear();
+      held.bytes = 0;
+      return out;
+    }
+    const content = modelContentHash(document);
+    const keyOf = (rowId: string, parts: readonly AssemblyRowNamedPart[]) =>
+      JSON.stringify([
+        document.projectId,
+        content,
+        rowId,
+        parts.map((part) => part.componentId).sort()
+      ]);
+    // What this request cannot use goes first, to make room.
+    for (const [rowId, row] of held.rows) {
+      const parts = named.get(rowId);
+      if (parts && row.key === keyOf(rowId, parts)) continue;
+      held.rows.delete(rowId);
+      held.bytes -= row.bytes;
+    }
+    for (const [rowId, parts] of named) {
+      let row = held.rows.get(rowId);
+      if (!row) {
+        const built = await this.assemblyCheckRow(document, rowId, parts);
+        const bytes = built.reduce(
+          (sum, [, part]) => sum + (part.solids?.byteLength ?? 0),
+          0
+        );
+        row = { key: keyOf(rowId, parts), bytes, parts: built };
+        // Kept only within the budget, and only by the sweep still held:
+        // another sweep's request may have replaced it during the build.
+        if (
+          this.sweepRows === held &&
+          !held.rows.has(rowId) &&
+          held.bytes + bytes <= this.sweepRowByteLimit
+        ) {
+          held.rows.set(rowId, row);
+          held.bytes += bytes;
+        }
+      }
+      for (const [componentId, part] of row.parts) out.set(componentId, part);
+    }
+    return out;
   }
 
   private exportSolidsFor(
@@ -7580,7 +7695,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // Export and solve methods own short-lived kernels, but the history
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
-    this.sweepRowParts = null;
+    this.sweepRows = null;
     this.importedSteps.clear();
     this.edgeSelections.clear();
     this.meshPayloads.clear();

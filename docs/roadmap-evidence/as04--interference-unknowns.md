@@ -34,6 +34,18 @@ Unknown (the configuration row and part that could not be built); a check
 that returns after its inputs changed posts that it is out of date instead
 of its summary; and one sweep's requests share its builds of the named
 configuration rows (one build per row, not one per request).
+Whether a pair is held is read from the motion's definition (the swept
+joint, each study track whose keys differ, and what is coupled to them),
+never from sampled poses or a pose tolerance, so a study that enters and
+leaves a clash between two samples, or moves a part 0.0008 mm at
+1,000,010 mm, is swept at every position. The sweep accounts for every
+pair: one the motion leaves at rest takes a current static result's verdict
+and is otherwise listed as not checked, never summed up as "No overlap". A
+result's staleness key carries a hash of the model's content, so a model
+replaced at the same document version marks it out of date, and a check
+that returns after Assemble was left posts nothing. The adapter holds a
+sweep's row solids under that content hash, drops them before another
+sweep builds, and keeps them within 64 MiB.
 Regression: `test/assembly-interference-configurations.test.ts` (real
 kernel: both false-result controls, the suppressed and unbuildable rows, the
 sweep, one row build across five requests, the unbuilt row's reason),

@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import {
   assemblyInterferenceOperands,
+  modelContentHash,
   sortInterferencePairs,
   summarizeInterference
 } from '@openzcad/document-core';
@@ -54,7 +55,10 @@ function plural(count: number, one: string, many = `${one}s`) {
  * else (#2154).
  *
  * A check that returns after its inputs changed is shown as out of date,
- * and its summary is not posted to the workspace status as if current.
+ * and its summary is not posted to the workspace status as if current. Its
+ * inputs are the model's content (`modelContentHash`), not only the
+ * document version: a model can be replaced at the same version. A check
+ * that returns after this section is gone (Assemble was left) posts nothing.
  */
 export function AssemblyInterferenceSection({
   document,
@@ -88,10 +92,25 @@ export function AssemblyInterferenceSection({
     () => assemblyInterferenceOperands(document),
     [document]
   );
-  const key = `${document.version}:${JSON.stringify(operands)}`;
+  // The model a result is of: its content, whatever its version says.
+  const model = useMemo(
+    () =>
+      `${document.projectId}:${document.version}:${modelContentHash(document)}`,
+    [document]
+  );
+  const key = `${model}:${JSON.stringify(operands)}`;
   // What a check that is still running is compared with when it returns.
+  // Read only while mounted: once the section is gone nothing is current,
+  // and this would only ever hold what was current when it went.
   const current = useRef(key);
   current.current = key;
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const names = new Map(set?.components.map((c) => [c.id, c.name]) ?? []);
   const enough = operands.length >= 2;
 
@@ -101,7 +120,7 @@ export function AssemblyInterferenceSection({
     setOpenPair(null);
     check(document, operands).then(
       (report) => {
-        if (run.current !== token) return;
+        if (!mounted.current || run.current !== token) return;
         // Components the main thread could not resolve are missing too.
         const merged = {
           ...report,
@@ -116,7 +135,7 @@ export function AssemblyInterferenceSection({
         );
       },
       (error: unknown) => {
-        if (run.current !== token) return;
+        if (!mounted.current || run.current !== token) return;
         const message =
           error instanceof Error ? error.message : 'The check failed.';
         setState({ kind: 'failed', key, message });
@@ -127,6 +146,9 @@ export function AssemblyInterferenceSection({
 
   const stale = state.kind !== 'idle' && state.key !== key;
   const report = state.kind === 'done' ? state.report : null;
+  // What a sweep may take for the pairs its motion leaves at rest: a result
+  // of the model and the positions as they are now, and no other.
+  const currentRest = report && !stale ? report : null;
   const summary = report ? summarizeInterference(report) : null;
   // As checked: a part in another configuration row is named with its row.
   const name = (id: string) =>
@@ -242,6 +264,8 @@ export function AssemblyInterferenceSection({
       {checkSweep ? (
         <AssemblyMotionInterference
           document={document}
+          model={model}
+          rest={currentRest}
           check={checkSweep}
           onStatus={onStatus}
         />

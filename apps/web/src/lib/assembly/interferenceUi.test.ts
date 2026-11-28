@@ -119,8 +119,29 @@ describe('interference summaries (AS04)', () => {
     unknown: 0,
     unknownEverywhere: 0,
     onlyUnknown: null,
-    missing: 0
+    missing: 0,
+    unchecked: 0
   };
+
+  it('never calls a sweep clear while a pair left at rest was not checked', () => {
+    expect(
+      describeSweepSummary({ ...swept, unchecked: 1 }, 25, 'Hold')
+    ).toEqual({
+      headline:
+        'No overlap found at the 25 positions checked, but 1 pair the motion leaves at rest was not checked.',
+      status:
+        'Interference through motion: no overlap found at 25 positions checked along Hold, but 1 pair the motion leaves at rest was not checked.'
+    });
+    expect(
+      describeSweepSummary(
+        { ...swept, overlapping: 1, unchecked: 3, missing: 1 },
+        25,
+        'Hold'
+      ).headline
+    ).toBe(
+      '1 pair overlaps along the motion; 1 part had no geometry to check and 3 pairs the motion leaves at rest were not checked.'
+    );
+  });
 
   it('counts an undecided pair in the sweep summary beside the positions (#2183)', () => {
     // The issue's rack and pinion: 37 samples, one pair unknown at each.

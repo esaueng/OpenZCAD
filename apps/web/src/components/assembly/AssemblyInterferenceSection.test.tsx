@@ -4,7 +4,8 @@ import { commandFactories } from '@openzcad/command-system';
 import {
   IDENTITY_PLACEMENT,
   type AssemblyInterferenceReport,
-  type BodyClashVerdict
+  type BodyClashVerdict,
+  type ProjectDocument
 } from '@openzcad/shared';
 import { recordingExecute, scissorsManager } from '../../test/assemblyFixture';
 import {
@@ -693,6 +694,326 @@ describe('Interference through motion (AS04)', () => {
     });
     expect(section()).toHaveTextContent(
       'No overlap found at the 37 positions checked, but 1 pair could not be checked exactly at any of its 37 positions.'
+    );
+  });
+});
+
+const clearVerdict: BodyClashVerdict = {
+  kind: 'clear',
+  touching: false,
+  distance: null,
+  closest: null,
+  atLeast: null
+};
+
+/** Every pair asked is clear at every position. */
+const clearSweep: AssemblySweepCheck = async (
+  _document,
+  _parts,
+  positions
+) => ({
+  positions: positions.map((position) => ({
+    at: position.at,
+    pairs: position.pairs.map(([a, b]) => ({ a, b, verdict: clearVerdict }))
+  })),
+  missing: []
+});
+
+describe('Interference results of a model that is no longer the one shown (AS04)', () => {
+  /** The same document version, with the first box 45 wide. */
+  const widened = (document: ProjectDocument): ProjectDocument => {
+    const [key, node] = Object.entries(document.nodes).find(
+      ([, entry]) =>
+        entry.kind === 'feature' && entry.data.featureKind === 'primitive'
+    )!;
+    if (node.kind !== 'feature' || node.data.featureKind !== 'primitive')
+      throw new Error('no primitive');
+    return {
+      ...document,
+      nodes: {
+        ...document.nodes,
+        [key]: {
+          ...node,
+          data: {
+            ...node.data,
+            dimensions: { ...node.data.dimensions, width: 45 }
+          }
+        }
+      }
+    };
+  };
+
+  function renderModel(
+    check: CheckInterference,
+    checkSweep: AssemblySweepCheck = clearSweep
+  ) {
+    const fixture = scissorsManager({ joint: true });
+    const recorder = recordingExecute(fixture.manager);
+    const onStatus = vi.fn();
+    let document = fixture.live();
+    const element = () => (
+      <AssemblyPanel
+        document={document}
+        execute={recorder.execute}
+        onStatus={onStatus}
+        checkInterference={check}
+        checkInterferenceSweep={checkSweep}
+      />
+    );
+    const view = render(element());
+    return {
+      onStatus,
+      unmount: () => view.unmount(),
+      /** The room's version taken, or a dimension edited: same version. */
+      replaceModel: () => {
+        const version = document.version;
+        document = widened(document);
+        expect(document.version).toBe(version);
+        view.rerender(element());
+      },
+      section: () => screen.getByRole('region', { name: 'Interference' })
+    };
+  }
+
+  const clearReport: AssemblyInterferenceReport = {
+    pairs: [{ a: 'comp_a', b: 'comp_b', verdict: clearVerdict }],
+    missing: []
+  };
+
+  type Answer = Awaited<ReturnType<AssemblySweepCheck>>;
+  const answerClear = (asked: Parameters<AssemblySweepCheck>[2]): Answer => ({
+    positions: asked.map((position) => ({
+      at: position.at,
+      pairs: position.pairs.map(([a, b]) => ({ a, b, verdict: clearVerdict }))
+    })),
+    missing: []
+  });
+
+  it('does not post a static all-clear for a model replaced at the same version', async () => {
+    let finish: (report: AssemblyInterferenceReport) => void = () => {};
+    const { section, onStatus, replaceModel } = renderModel(
+      () =>
+        new Promise<AssemblyInterferenceReport>((resolve) => {
+          finish = resolve;
+        })
+    );
+    fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
+    replaceModel();
+    await act(async () => {
+      finish(clearReport);
+    });
+    expect(within(section()).getByText(/Out of date/)).toBeInTheDocument();
+    expect(onStatus).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenCalledWith(
+      'Interference: the parts or their positions changed during the check. Check again.'
+    );
+  });
+
+  it('marks a finished static result out of date when the model changes at the same version', async () => {
+    const { section, replaceModel } = renderModel(async () => clearReport);
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
+    });
+    expect(within(section()).queryByText(/Out of date/)).toBeNull();
+    replaceModel();
+    expect(within(section()).getByText(/Out of date/)).toBeInTheDocument();
+  });
+
+  it('does not post a sweep all-clear for a model replaced at the same version', async () => {
+    let finish: (answer: Answer) => void = () => {};
+    let asked: Parameters<AssemblySweepCheck>[2] = [];
+    const { section, onStatus, replaceModel } = renderModel(
+      async () => clearReport,
+      (_document, _parts, positions) => {
+        asked = positions;
+        return new Promise<Answer>((resolve) => {
+          finish = resolve;
+        });
+      }
+    );
+    fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
+    replaceModel();
+    await act(async () => {
+      finish(answerClear(asked));
+    });
+    expect(within(section()).getByText(/Out of date/)).toBeInTheDocument();
+    expect(onStatus).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenCalledWith(
+      'Interference through motion: the parts, their motion or the model changed during the check. Sweep again.'
+    );
+  });
+
+  it('posts nothing for a static check that returns after Assemble is left', async () => {
+    let finish: (report: AssemblyInterferenceReport) => void = () => {};
+    const { section, onStatus, unmount } = renderModel(
+      () =>
+        new Promise<AssemblyInterferenceReport>((resolve) => {
+          finish = resolve;
+        })
+    );
+    fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
+    unmount();
+    await act(async () => {
+      finish(clearReport);
+    });
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+
+  it('posts nothing for a failed check or a sweep that returns after Assemble is left', async () => {
+    let fail: (error: Error) => void = () => {};
+    let finish: (answer: Answer) => void = () => {};
+    let asked: Parameters<AssemblySweepCheck>[2] = [];
+    const { section, onStatus, unmount } = renderModel(
+      () =>
+        new Promise<AssemblyInterferenceReport>((_resolve, reject) => {
+          fail = reject;
+        }),
+      (_document, _parts, positions) => {
+        asked = positions;
+        return new Promise<Answer>((resolve) => {
+          finish = resolve;
+        });
+      }
+    );
+    fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
+    fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
+    unmount();
+    await act(async () => {
+      fail(new Error('Geometry worker is unavailable.'));
+      finish(answerClear(asked));
+    });
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('Interference through motion accounts for every pair (AS04)', () => {
+  const overlap: BodyClashVerdict = {
+    kind: 'interference',
+    volume: 60,
+    proof: 'intersect',
+    point: null,
+    bounds: null,
+    complete: true
+  };
+
+  /**
+   * Blade B turns on Blade A, and a grounded screw stands beside Blade A.
+   * The sweep of the pivot moves Blade B against both, and leaves the blade
+   * and the screw where they rest.
+   */
+  function renderThree(rest: AssemblyInterferenceReport) {
+    const fixture = scissorsManager({ joint: true, screw: true });
+    const recorder = recordingExecute(fixture.manager);
+    recorder.execute(
+      commandFactories.addAssemblyComponents({
+        components: [
+          {
+            componentId: 'comp_s',
+            name: 'Pivot screw',
+            bodyId: fixture.screw!,
+            grounded: true
+          }
+        ]
+      })
+    );
+    const onStatus = vi.fn();
+    const element = () => (
+      <AssemblyPanel
+        document={fixture.live()}
+        execute={recorder.execute}
+        onStatus={onStatus}
+        checkInterference={async () => rest}
+        checkInterferenceSweep={clearSweep}
+      />
+    );
+    const view = render(element());
+    return {
+      execute: recorder.execute,
+      onStatus,
+      rerender: () => view.rerender(element()),
+      section: () => screen.getByRole('region', { name: 'Interference' })
+    };
+  }
+
+  const restReport = (
+    bladeAndScrew: BodyClashVerdict
+  ): AssemblyInterferenceReport => ({
+    pairs: [
+      { a: 'comp_a', b: 'comp_b', verdict: clearVerdict },
+      { a: 'comp_a', b: 'comp_s', verdict: bladeAndScrew },
+      { a: 'comp_b', b: 'comp_s', verdict: clearVerdict }
+    ],
+    missing: []
+  });
+
+  it('says a pair the motion leaves at rest was not checked, until the rest check covers it', async () => {
+    const { section, onStatus } = renderThree(restReport(overlap));
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
+    });
+    // Both of Blade B's pairs are clear along the pivot. The blade and the
+    // screw were never checked: that is said, and it is not "no overlap".
+    const unchecked = 'but 1 pair the motion leaves at rest was not checked.';
+    expect(section()).toHaveTextContent(
+      `No overlap found at the 37 positions checked, ${unchecked}`
+    );
+    expect(onStatus).toHaveBeenLastCalledWith(
+      `Interference through motion: no overlap found at 37 positions checked along Pivot (0.0° to 360.0°), ${unchecked}`
+    );
+    expect(section()).not.toHaveTextContent('No overlap at the');
+    expect(section()).toHaveTextContent(
+      '1 pair left at rest, not checked: run Check above'
+    );
+    // The rest check finds them overlapping: so they do along the motion.
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
+    });
+    expect(section()).toHaveTextContent('1 pair overlaps along the motion.');
+    fireEvent.click(
+      within(section()).getByRole('button', {
+        name: 'Blade A and Pivot screw: 0.0° to 360.0°'
+      })
+    );
+    expect(section()).toHaveTextContent(
+      'The motion leaves these parts where they rest. This result is from the check of the rest position above, and stands for the whole motion.'
+    );
+  });
+
+  it('gives the all-clear once a current rest check covers the pair left at rest, and takes it back when that check goes out of date', async () => {
+    const { section, onStatus, execute, rerender } = renderThree(
+      restReport(clearVerdict)
+    );
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
+    });
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
+    });
+    expect(section()).toHaveTextContent(
+      'No overlap at the 37 positions checked.'
+    );
+    expect(onStatus).toHaveBeenLastCalledWith(
+      'Interference through motion: no overlap at 37 positions checked along Pivot (0.0° to 360.0°).'
+    );
+    expect(section()).toHaveTextContent(
+      '1 pair left at rest, clear in the check above'
+    );
+    // The screw moves: neither result is of this model any more.
+    act(() => {
+      execute(
+        commandFactories.updateAssemblyComponent({
+          componentId: 'comp_s',
+          placement: {
+            ...IDENTITY_PLACEMENT,
+            translation: { x: 40, y: 0, z: 0 }
+          }
+        })
+      );
+    });
+    rerender();
+    expect(section()).not.toHaveTextContent('No overlap at the');
+    expect(section()).toHaveTextContent(
+      'No overlap found at the 37 positions checked, but 1 pair the motion leaves at rest was not checked.'
     );
   });
 });

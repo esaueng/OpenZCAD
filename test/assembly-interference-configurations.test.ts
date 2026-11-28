@@ -426,4 +426,126 @@ describe('AS04 interference of parts in another configuration (#2388)', () => {
       'the Wide configuration of Plate could not be built'
     ]);
   }, 240_000);
+
+  /** The plate checked as its own row, whose width is `width`. */
+  const pinnedTo = (base: ProjectDocument, width: string) =>
+    updateAssemblyComponent(
+      setConfigurationCell(base, {
+        rowId: 'wide',
+        column: {
+          kind: 'parameter',
+          parameterId: listParameters(base)[0]!.parameterId
+        },
+        value: width
+      }),
+      { componentId: 'c_plate', configurationId: 'wide' }
+    );
+
+  /** One sweep request: the plate and the stop where they rest. */
+  async function request(document: ProjectDocument, sweep: string) {
+    const live = await synced(document);
+    const { operands } = assemblyInterferenceOperands(live);
+    const report = await adapter.assemblyInterferenceSweep(
+      live,
+      operands.map(({ componentId, bodyId }) => ({ componentId, bodyId })),
+      [
+        {
+          at: 0,
+          matrices: Object.fromEntries(
+            operands.map((operand) => [operand.componentId, operand.matrix])
+          ),
+          pairs: [['c_plate', 'c_stop']]
+        }
+      ],
+      sweep
+    );
+    return report.positions[0]!.pairs[0]!.verdict;
+  }
+
+  it('never checks a row as it was built before an edit, whatever the sweep is called', async () => {
+    const base = fixture();
+    // The pinned row is 20 wide: 10 mm clear of the stop.
+    const before = pinnedTo(base, '20');
+    expect(await request(before, 'sweep-reused')).toMatchObject({
+      kind: 'clear',
+      distance: 10
+    });
+    // The row becomes 45 wide. Same project, same version, same sweep id.
+    const after = { ...pinnedTo(base, '45'), version: before.version };
+    expect(after.projectId).toBe(before.projectId);
+    expect(await request(after, 'sweep-reused')).toMatchObject({
+      kind: 'interference',
+      volume: 72
+    });
+    // And back: the wider row's solids are not kept for the narrower one.
+    expect(await request(before, 'sweep-reused')).toMatchObject({
+      kind: 'clear',
+      distance: 10
+    });
+  }, 240_000);
+
+  it('keeps row solids only within a byte budget, and none of the last sweep while the next builds', async () => {
+    const internals = adapter as unknown as {
+      sweepRowByteLimit: number;
+      sweepRows: {
+        sweep: string;
+        bytes: number;
+        rows: Map<string, unknown>;
+      } | null;
+      withExportBuild(document: ProjectDocument): Promise<unknown>;
+    };
+    const document = pinnedTo(fixture(), '45');
+    await request(document, 'sweep-a');
+    expect(internals.sweepRows).toMatchObject({ sweep: 'sweep-a' });
+    expect(internals.sweepRows!.rows.size).toBe(1);
+    const kept = internals.sweepRows!.bytes;
+    expect(kept).toBeGreaterThan(0);
+    expect(kept).toBeLessThanOrEqual(internals.sweepRowByteLimit);
+
+    // What the adapter holds each time a build of the Wide row starts.
+    const held: { sweep: string | undefined; rows: number; bytes: number }[] =
+      [];
+    const build = internals.withExportBuild.bind(adapter);
+    const builds = vi
+      .spyOn(internals, 'withExportBuild')
+      .mockImplementation((...args: [ProjectDocument]) => {
+        if (args[0].configurations?.activeRowId === 'wide')
+          held.push({
+            sweep: internals.sweepRows?.sweep,
+            rows: internals.sweepRows?.rows.size ?? 0,
+            bytes: internals.sweepRows?.bytes ?? 0
+          });
+        return build(...args);
+      });
+    const limit = internals.sweepRowByteLimit;
+    try {
+      // The same request of the same sweep: served from what is held.
+      await request(document, 'sweep-a');
+      expect(held).toEqual([]);
+      // Another sweep: the last one's solids are gone before it builds.
+      await request(document, 'sweep-b');
+      expect(held).toEqual([{ sweep: 'sweep-b', rows: 0, bytes: 0 }]);
+      expect(internals.sweepRows).toMatchObject({
+        sweep: 'sweep-b',
+        bytes: kept
+      });
+      // A row larger than the budget is checked, and not kept.
+      internals.sweepRowByteLimit = kept - 1;
+      held.length = 0;
+      expect(await request(document, 'sweep-c')).toMatchObject({
+        kind: 'interference',
+        volume: 72
+      });
+      expect(await request(document, 'sweep-c')).toMatchObject({
+        kind: 'interference',
+        volume: 72
+      });
+      expect(held).toHaveLength(2);
+      expect(internals.sweepRows).toMatchObject({ sweep: 'sweep-c', bytes: 0 });
+      expect(internals.sweepRows!.rows.size).toBe(0);
+    } finally {
+      internals.sweepRowByteLimit = limit;
+      builds.mockRestore();
+    }
+  }, 240_000);
 });

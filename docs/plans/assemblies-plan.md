@@ -252,8 +252,13 @@ A component whose body is gone is listed as having no geometry to check.
 
 The list leads with overlaps (largest first), then unknown pairs and
 contact; clear pairs are counted. Picking a pair picks both parts and shows
-its witness. A result is tied to the model version and poses it checked and
-says "Out of date" once either changes.
+its witness. A result is tied to the model and poses it checked and says
+"Out of date" once either changes. The model is named by a hash of its
+content (`modelContentHash`: features, parameters, configuration rows, the
+assembly), not by the document version alone, since a model can be replaced
+at the same version (a room's document adopted in place). A check that
+returns after its model changed posts that it is out of date, and one that
+returns after Assemble was left posts nothing.
 
 ### Interference through motion (AS04, no schema change)
 
@@ -262,13 +267,22 @@ positions along one motion: a joint's Animate sweep (its limits, or a full
 turn for an unlimited angle, a coupled joint only as far as its mates
 allow) or a motion study's timeline, couplings followed as in playback. It is read-only and stores nothing.
 
-- **Pairs.** Pairs whose relative pose changes along the motion are checked
-  at every position. A pair the motion holds in one relative pose is left to
-  the static check (and counted) only when that pose is its rest pose; a
-  pair held anywhere else, as by a study that keys two parts to one place
-  for its whole length, is checked there once, and that verdict stands for
-  the whole motion. More than 4000 pair checks in one sweep is refused by
-  name.
+- **Pairs.** Every pair of parts with geometry is accounted for. A pair the
+  motion can move is checked at every position. A pair it holds in one
+  relative pose away from its rest pose, as by a study that keys two parts
+  to one place for its whole length, is checked there once, and that
+  verdict stands for the whole motion. A pair it holds in its rest pose is
+  not checked by the sweep: it takes the static check's verdict while that
+  result is current, and is otherwise listed as not checked, so the summary
+  never says "No overlap" over it. More than 4000 pair checks in one sweep
+  is refused by name.
+- **Held.** Whether a pair is held is read from the motion's definition,
+  never from sampled poses or a tolerance on them: a joint sweep moves the
+  swept motion, a study every motion whose track's keys do not all hold one
+  value, and whatever is coupled to either. A pair is held exactly when no
+  such joint lies between its two parts in the solve's tree, and held at
+  rest when every joint between them stands at its saved value. A track a
+  limit clamps to one value still counts as moving, and is swept.
 - **Positions.** 37 evenly spaced positions along a joint's sweep (36
   steps), or 8 per second of a study (24 to 120 steps), ends included, all
   in one geometry-worker job on one build: each position poses copies of
@@ -278,7 +292,10 @@ allow) or a motion study's timeline, couplings followed as in playback. It is re
   between the two decided positions around it is halved instead. A
   refinement the check does not answer is recorded as unknown, so it is
   counted and never asked for again. The requests of one sweep share its
-  builds of the configuration rows the parts name. Each
+  builds of the configuration rows the parts name: a built row is held
+  under a hash of the model's content, so an edit builds it again whatever
+  the sweep is called, another sweep's request drops what was held before
+  it builds, and what is held stays within 64 MiB. Each
   start and end is found to within 1/16 of a step; where undecided
   positions stay beside a turn, the pair says how far from it the turn
   can lie.

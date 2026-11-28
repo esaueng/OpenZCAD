@@ -180,6 +180,10 @@ export const SWEEP_OUTDATED_STATUS =
 export const SWEEP_HELD_NOTE =
   'The motion holds these parts in one position, away from where they rest. It was checked once, and the result stands for the whole motion.';
 
+/** Said under a pair the motion leaves at rest, decided by the static check. */
+export const SWEEP_REST_NOTE =
+  'The motion leaves these parts where they rest. This result is from the check of the rest position above, and stands for the whole motion.';
+
 /**
  * A swept pair's undecided positions, for its details: where (the first few,
  * already formatted) and why, in the check's own words, so a configuration
@@ -204,10 +208,12 @@ export function describeSweepUnknown(
 
 /**
  * AS04 one-line summary of a sweep. "No overlap at the positions checked"
- * is a claim about every moving pair at every one of them, so it is made
+ * is a claim about every pair of parts at every one of them, so it is made
  * only when each was decided: a pair unknown somewhere (at every position,
- * for a pair the kernel cannot intersect) or a part with no geometry is
- * counted in the same line, never left to the rows below it (#2183).
+ * for a pair the kernel cannot intersect), a part with no geometry, or a
+ * pair the motion leaves at rest that no current static check covers
+ * (`unchecked`) is counted in the same line, never left to the rows below
+ * it (#2183).
  */
 export function describeSweepSummary(
   counts: {
@@ -216,6 +222,7 @@ export function describeSweepSummary(
     unknownEverywhere: number;
     onlyUnknown: { positions: number; checked: number } | null;
     missing: number;
+    unchecked: number;
   },
   /** Positions checked, refinements included. */
   checked: number,
@@ -238,6 +245,11 @@ export function describeSweepSummary(
     undecided,
     counts.missing > 0
       ? `${plural(counts.missing, 'part')} had no geometry to check`
+      : '',
+    counts.unchecked > 0
+      ? `${plural(counts.unchecked, 'pair')} the motion leaves at rest ${
+          counts.unchecked === 1 ? 'was' : 'were'
+        } not checked`
       : ''
   ]
     .filter(Boolean)
