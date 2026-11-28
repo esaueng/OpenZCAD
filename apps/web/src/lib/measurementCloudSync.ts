@@ -285,15 +285,54 @@ export interface AccountCopyMeasurementOptions {
 export type AccountCopyMeasurementResult = 'none' | 'account' | 'device';
 
 /**
+ * Writes `record` as the account's measurement record for its project only
+ * when the account holds none: a compare-and-set on the revision the read
+ * saw, so a record another device created meanwhile is never replaced.
+ * Resolves the record the account ends up holding.
+ */
+async function createProjectMeasurementsIfAbsent(
+  api: ProjectMeasurementCloudApi,
+  record: StoredMeasurementRecord
+): Promise<StoredMeasurementRecord> {
+  for (let attempt = 0; attempt < MAX_CONFLICT_RETRIES; attempt += 1) {
+    const remote = await api.loadProjectMeasurements(record.projectId);
+    if (remote.record) return remote.record;
+    try {
+      const saved = await api.saveProjectMeasurements({
+        projectId: record.projectId,
+        expectedRevision: remote.revision,
+        record
+      });
+      return saved.record ?? record;
+    } catch (error) {
+      if (
+        !error ||
+        typeof error !== 'object' ||
+        !('code' in error) ||
+        error.code !== 'MEASUREMENT_REVISION_CONFLICT'
+      ) {
+        throw error;
+      }
+      // Someone wrote the copy's record first: the next read adopts it.
+    }
+  }
+  const settled = await api.loadProjectMeasurements(record.projectId);
+  if (settled.record) return settled.record;
+  throw new Error("The account kept changing the copy's measurements.");
+}
+
+/**
  * #2363, #2433: gives an account copy its source's kept measurements, on
  * this device and in the account, before the copy is reported ready.
  *
  * This device's source record first; the account's when this device has
  * none. The account record is then seeded through the copy's own route (an
  * encrypted copy's is the encrypted store), so another device opening the
- * copy reads the copied list. Left to this device's first open of the copy,
- * that device would find no account record, keep a reading, and its newer
- * timestamp would later replace the whole copied list.
+ * copy reads the copied list. The seed only ever CREATES that record: the
+ * copy is in the account before it is seeded, so another device may open it
+ * and keep a reading first, and the seed's later timestamp would win the
+ * whole-list reconciliation and replace that reading. A record the account
+ * already holds for the copy wins, and this device takes it.
  *
  * Rejects when the copy could not be given them at all.
  */
@@ -314,11 +353,11 @@ export async function copyMeasurementsToAccountCopy({
   try {
     const seeded = await loadLocal(copyProjectId);
     if (!seeded) return 'none';
-    const result = await syncProjectMeasurements(api, copyProjectId, seeded);
-    // A record the account already held for the copy wins, as it would on
-    // open, and this device keeps that one.
-    if (result.source === 'cloud' && result.record)
-      await saveLocal(result.record);
+    const held = await createProjectMeasurementsIfAbsent(api, seeded);
+    if (
+      measurementRecordContentKey(held) !== measurementRecordContentKey(seeded)
+    )
+      await saveLocal(held);
     return 'account';
   } catch {
     return 'device';

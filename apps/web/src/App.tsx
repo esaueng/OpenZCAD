@@ -19498,17 +19498,22 @@ export function App() {
    * this device has none (a project measured elsewhere), and the copy's
    * account record is seeded too before the copy is reported ready, so
    * another device opening it reads them (#2433). Resolves the sentence to
-   * add to the status when they could not be copied, or null.
+   * add to the status when they could not be copied, or null. `flushed`
+   * false (the source's latest measurement change did not reach this
+   * device's record before the copy read it) is said too (#2433).
    */
   async function copyDuplicateMeasurements(
     sourceProjectId: string,
     copyProjectId: string,
-    toAccount = false
+    { toAccount = false, flushed = true } = {}
   ): Promise<string | null> {
+    const unflushed = flushed
+      ? null
+      : 'Its latest measurement change could not be saved first, so the copy may not have it.';
     try {
       if (!toAccount) {
         await copyProjectMeasurements(sourceProjectId, copyProjectId);
-        return null;
+        return unflushed;
       }
       const { copyMeasurementsToAccountCopy, projectMeasurementCloudApi } =
         await import('./lib/measurementCloudSync');
@@ -19520,9 +19525,16 @@ export function App() {
         loadLocal: loadProjectMeasurements,
         saveLocal: saveProjectMeasurements
       });
-      return where === 'device'
-        ? 'Its kept measurements are on this device only until the copy is opened here.'
-        : null;
+      return (
+        [
+          unflushed,
+          where === 'device'
+            ? 'Its kept measurements are on this device only until the copy is opened here.'
+            : null
+        ]
+          .filter(Boolean)
+          .join(' ') || null
+      );
     } catch {
       return 'Its kept measurements could not be copied; they are still in the original.';
     }
@@ -19667,7 +19679,9 @@ export function App() {
       await flushPendingLocalSave();
       // A reading kept a moment ago may still be waiting on the workbench's
       // debounce; the copy reads the device record (#2433).
-      await flushMeasurementPersistence(project.projectId);
+      const measurementsFlushed = await flushMeasurementPersistence(
+        project.projectId
+      );
       const openDocument = managerRef.current?.document;
       const deviceOnlySaveState = Boolean(
         saveState &&
@@ -19772,7 +19786,7 @@ export function App() {
             : await copyDuplicateMeasurements(
                 project.projectId,
                 localCopy.projectId,
-                true
+                { toAccount: true, flushed: measurementsFlushed }
               );
           if (measurementWarning)
             options.onMeasurementWarning?.(measurementWarning);
@@ -19894,7 +19908,9 @@ export function App() {
       await saveLocalProject(copy);
       const measurementWarning = saveState
         ? null
-        : await copyDuplicateMeasurements(project.projectId, copy.projectId);
+        : await copyDuplicateMeasurements(project.projectId, copy.projectId, {
+            flushed: measurementsFlushed
+          });
       if (measurementWarning)
         options.onMeasurementWarning?.(measurementWarning);
       // The copy lists the source's saves; store their documents with it, so

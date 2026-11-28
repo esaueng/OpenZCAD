@@ -646,6 +646,71 @@ describe('an account copy of a measured project (#2433)', () => {
     expect(device.store.get('project_copy')?.measurements).toHaveLength(1);
   });
 
+  it('never replaces a reading another device kept on the copy first', async () => {
+    // Another device opened the copy before the seed and kept a reading.
+    // Its record is older than this device's seed, which would win the
+    // whole-list timestamp rule; the seed only creates a missing record.
+    const theirs = {
+      ...record('2026-11-28T09:30:00.000Z', 'Their reading'),
+      projectId: 'project_copy'
+    };
+    const account = accountOf({ project_copy: theirs });
+    const device = deviceOf({ project_sync: kept });
+    await expect(
+      copyMeasurementsToAccountCopy({
+        api: account.cloud,
+        sourceProjectId: 'project_sync',
+        copyProjectId: 'project_copy',
+        ...device
+      })
+    ).resolves.toBe('account');
+    expect(account.cloud.saveProjectMeasurements).not.toHaveBeenCalled();
+    expect(
+      account.read('project_copy').record?.measurements.map((row) => row.label)
+    ).toEqual(['Their reading']);
+    // This device takes the account's record, as it would on open.
+    expect(
+      device.store.get('project_copy')?.measurements.map((row) => row.label)
+    ).toEqual(['Their reading']);
+  });
+
+  it('yields to a reading kept on the copy while the seed was in flight', async () => {
+    const theirs = {
+      ...record('2026-11-28T09:30:00.000Z', 'Their reading'),
+      projectId: 'project_copy'
+    };
+    const account = accountOf({});
+    const save = account.cloud.saveProjectMeasurements;
+    // The other device's write lands between the seed's read and its write.
+    let raced = false;
+    account.cloud.saveProjectMeasurements = vi.fn(async (input: SaveInput) => {
+      if (!raced) {
+        raced = true;
+        await save({
+          projectId: 'project_copy',
+          expectedRevision: 0,
+          record: theirs
+        });
+      }
+      return save(input);
+    });
+    const device = deviceOf({ project_sync: kept });
+    await expect(
+      copyMeasurementsToAccountCopy({
+        api: account.cloud,
+        sourceProjectId: 'project_sync',
+        copyProjectId: 'project_copy',
+        ...device
+      })
+    ).resolves.toBe('account');
+    expect(
+      account.read('project_copy').record?.measurements.map((row) => row.label)
+    ).toEqual(['Their reading']);
+    expect(
+      device.store.get('project_copy')?.measurements.map((row) => row.label)
+    ).toEqual(['Their reading']);
+  });
+
   it('has nothing to seed when neither holds a record', async () => {
     const account = accountOf({});
     const device = deviceOf({});

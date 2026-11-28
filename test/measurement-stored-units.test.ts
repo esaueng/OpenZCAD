@@ -615,3 +615,223 @@ describe('an old hash that a different entity carries after the conversion', () 
     expect(later!.result.value).toBeCloseTo(1, 12);
   });
 });
+
+/**
+ * #2433 re-check: a target's identity is a (hash, unit) pair. Its hash
+ * matches directly only in the unit it was captured in, so an undo back to
+ * that unit, or a body that returns in it, resolves by hash again. Across a
+ * unit change it rebinds only by a unique scaled match, the row's own
+ * witness first; otherwise the row is unresolved and keeps its identity.
+ */
+describe('a target identity kept with the unit it was captured in', () => {
+  const BOOLEAN_ID = 'body-boolean' as BodyId;
+  const fingerprint = (from: number, to: number) =>
+    Math.round(from * 1000 + to);
+
+  function collinear(unit: 'mm' | 'cm'): BodyRepresentation {
+    const k = unit === 'cm' ? 0.1 : 1;
+    const edge = (from: number, to: number): EdgeTopology => {
+      const hash = fingerprint(from * k, to * k);
+      return {
+        topologyId: `edge:${hash}`,
+        hash,
+        length: (to - from) * k,
+        curve: { type: 'LINE' },
+        points: [from * k, 0, 0, to * k, 0, 0]
+      };
+    };
+    return {
+      ...box(k),
+      bodyId: BOOLEAN_ID,
+      name: 'Boolean',
+      bbox: {
+        min: { x: 10 * k, y: 0, z: 0 },
+        max: { x: 200 * k, y: 0, z: 0 }
+      },
+      topology: { faces: [], edges: [edge(10, 20), edge(100, 200)] }
+    };
+  }
+
+  function keptShortEdge(): Measurement {
+    return createSmartMeasurement(
+      collinear('mm'),
+      { bodyId: BOOLEAN_ID, kind: 'edge', hash: fingerprint(10, 20) },
+      undefined,
+      1,
+      'mm'
+    )!;
+  }
+
+  it('recovers by hash after the body returns in the unit it was kept in', () => {
+    // Kept, then its body suppressed.
+    let rows = refreshMeasurements([keptShortEdge()], [], 2, {
+      force: true,
+      unit: 'mm'
+    });
+    expect(rows[0]!.status).toBe('unresolved');
+    // Converted to cm with the body still suppressed: nothing to match.
+    rows = refreshMeasurements(rows, [], 3, {
+      force: true,
+      unit: 'cm',
+      previous: [{ unit: 'mm', bodies: [] }]
+    });
+    expect(rows[0]!.status).toBe('unresolved');
+    expect(rows[0]!.sourceUnit).toBe('cm');
+    // The identity is the millimetre one, and says so.
+    expect(rows[0]!.targets[0]!.hash).toBe(fingerprint(10, 20));
+    expect(rows[0]!.targets[0]!.identityUnit).toBe('mm');
+    // Undo the conversion, then restore the body.
+    rows = refreshMeasurements(rows, [], 4, {
+      force: true,
+      unit: 'mm',
+      previous: [{ unit: 'cm', bodies: [] }]
+    });
+    expect(rows[0]!.status).toBe('unresolved');
+    expect(rows[0]!.targets[0]!.identityUnit).toBeUndefined();
+    rows = refreshMeasurements(rows, [collinear('mm')], 5, {
+      force: true,
+      unit: 'mm',
+      previous: [{ unit: 'cm', bodies: [] }]
+    });
+    expect(rows[0]!.status).toBe('current');
+    expect(rows[0]!.result.value).toBeCloseTo(10, 12);
+    expect(rows[0]!.targets[0]!.hash).toBe(fingerprint(10, 20));
+  });
+
+  it('never resolves a hash in another unit, even later', () => {
+    // Restored while the document is in cm, with no mm bodies to compare:
+    // the old hash names the 10–20 cm edge there, so the row stays
+    // unresolved rather than reading 10 cm...
+    let rows = refreshMeasurements([keptShortEdge()], [collinear('cm')], 2, {
+      force: true,
+      unit: 'cm'
+    });
+    rows = refreshMeasurements(rows, [collinear('cm')], 3, {
+      force: true,
+      unit: 'cm'
+    });
+    expect(rows[0]!.status).toBe('unresolved');
+    expect(rows[0]!.result.value).toBeCloseTo(1, 12);
+    // ...and an undo back to mm resolves it by its own hash.
+    rows = refreshMeasurements(rows, [collinear('mm')], 4, {
+      force: true,
+      unit: 'mm'
+    });
+    expect(rows[0]!.status).toBe('current');
+    expect(rows[0]!.result.value).toBeCloseTo(10, 12);
+  });
+
+  it('rebinds once the scaled body returns in the new unit', () => {
+    let rows = refreshMeasurements([keptShortEdge()], [], 2, {
+      force: true,
+      unit: 'cm',
+      previous: [{ unit: 'mm', bodies: [collinear('mm')] }]
+    });
+    expect(rows[0]!.status).toBe('unresolved');
+    rows = refreshMeasurements(rows, [collinear('cm')], 3, {
+      force: true,
+      unit: 'cm',
+      previous: [{ unit: 'mm', bodies: [collinear('mm')] }]
+    });
+    expect(rows[0]!.status).toBe('current');
+    expect(rows[0]!.result.value).toBeCloseTo(1, 12);
+    expect(rows[0]!.targets[0]!.hash).toBe(fingerprint(1, 2));
+    expect(rows[0]!.targets[0]!.identityUnit).toBeUndefined();
+  });
+
+  /** One named edge along X, `length` millimetres long, stored in `unit`. */
+  function namedEdge(unit: 'mm' | 'cm', length: number): BodyRepresentation {
+    const k = unit === 'cm' ? 0.1 : 1;
+    const quantum = (value: number) => Math.round(value / 1e-6);
+    const to = length * k;
+    const hash = Math.round(to * 1000) + (unit === 'cm' ? 500_000 : 0);
+    const reference: EdgeTopologyReferenceV5 = {
+      kind: 'edge',
+      producingFeatureId: 'feat_extrude' as FeatureId,
+      lineageName: 'extrude.edge.side',
+      currentHash: hash,
+      witnessVersion: 1,
+      witness: {
+        curveType: 'LINE',
+        length: quantum(to),
+        closed: false,
+        endpoints: [
+          [0, 0, 0],
+          [quantum(to), 0, 0]
+        ],
+        midpoint: [quantum(to / 2), 0, 0]
+      }
+    };
+    return {
+      ...box(k),
+      bodyId: BOOLEAN_ID,
+      name: 'Extrude',
+      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: to, y: 0, z: 0 } },
+      topology: {
+        faces: [],
+        edges: [
+          {
+            topologyId: `edge:${hash}`,
+            hash,
+            reference,
+            length: to,
+            curve: { type: 'LINE' },
+            points: [0, 0, 0, to, 0, 0]
+          }
+        ]
+      }
+    };
+  }
+
+  function keptNamedEdge(): Measurement {
+    const kept = createSmartMeasurement(
+      namedEdge('mm', 10),
+      { bodyId: BOOLEAN_ID, kind: 'edge', hash: 10_000 },
+      undefined,
+      1,
+      'mm'
+    )!;
+    expect(kept.targets[0]!.reference).toBeDefined();
+    return kept;
+  }
+
+  it('prefers the own witness of a row to a cached body that changed since', () => {
+    // Kept on a 10 mm edge. While the list was still loading the edge was
+    // resized to 20 mm (the bodies the workbench cached in mm), the
+    // document converted to cm, and the edge resized back to 1 cm.
+    const [converted] = refreshMeasurements(
+      [keptNamedEdge()],
+      [namedEdge('cm', 10)],
+      5,
+      {
+        force: true,
+        unit: 'cm',
+        previous: [{ unit: 'mm', bodies: [namedEdge('mm', 20)] }]
+      }
+    );
+    expect(converted!.status).toBe('current');
+    expect(converted!.result.value).toBeCloseTo(1, 9);
+    expect(converted!.targets[0]!.hash).toBe(
+      namedEdge('cm', 10).topology!.edges[0]!.hash
+    );
+  });
+
+  it('keeps the identity of a row that neither its witness nor a cached body can carry', () => {
+    // Converted and resized to 3 cm: neither its witness nor the cached
+    // 20 mm body is that edge scaled.
+    const [converted] = refreshMeasurements(
+      [keptNamedEdge()],
+      [namedEdge('cm', 30)],
+      5,
+      {
+        force: true,
+        unit: 'cm',
+        previous: [{ unit: 'mm', bodies: [namedEdge('mm', 20)] }]
+      }
+    );
+    expect(converted!.status).toBe('unresolved');
+    expect(converted!.targets[0]!.hash).toBe(10_000);
+    expect(converted!.targets[0]!.reference?.currentHash).toBe(10_000);
+    expect(converted!.targets[0]!.identityUnit).toBe('mm');
+  });
+});

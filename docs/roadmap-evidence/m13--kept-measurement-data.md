@@ -13,7 +13,11 @@ per-face rule and its edge counterpart, now shared from
 `packages/kernel-adapter/src/units-witness-match.ts`
 (`test/measurement-stored-units.test.ts` covers a face pair, a snapped edge
 midpoint and a maximum distance on a Boolean result;
-`apps/web/src/hooks/useMeasurementWorkbench.test.tsx`). A row that cannot be
+`apps/web/src/hooks/useMeasurementWorkbench.test.tsx`). Each target keeps
+its identity with the unit it was captured in (`identityUnit`): a hash
+resolves directly only in that unit, so an undo or a body that returns in
+it recovers the row, and across units a target rebinds only by a unique
+scaled match, its own witness first. A row that cannot be
 re-measured keeps `sourceRevision`, the revision that produced its number,
 and records the attempt in `checkedRevision` (CSV `checked_revision`); it
 drops its viewport callout at once, as a reopened project already did

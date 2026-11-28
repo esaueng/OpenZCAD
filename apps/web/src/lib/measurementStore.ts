@@ -167,6 +167,12 @@ function parseTarget(value: unknown): MeasurementTarget | null {
     target.reference =
       value.reference as unknown as MeasurementTarget['reference'];
   }
+  // #2433: optional, so a record from before it reads as captured in the
+  // row's own unit, which is what such a row's identity was.
+  if (value.identityUnit !== undefined) {
+    if (!isOneOf(value.identityUnit, UNITS)) return null;
+    target.identityUnit = value.identityUnit;
+  }
   for (const field of ['point', 'direction'] as const) {
     if (value[field] === undefined) continue;
     const vector = parseVector(value[field]);

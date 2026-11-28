@@ -99,6 +99,32 @@ describe('what gets read back', () => {
     expect(parsed?.measurements[0]?.result.value).toBe(10);
   });
 
+  it('keeps the unit a target identity was captured in (#2433)', () => {
+    const rescaled: Measurement = {
+      ...measurement(1),
+      sourceUnit: 'cm',
+      targets: [{ ...measurement(1).targets[0]!, identityUnit: 'mm' }]
+    };
+    const parsed = parseStoredMeasurements(record([rescaled]));
+    expect(parsed?.measurements[0]?.targets[0]?.identityUnit).toBe('mm');
+    // A record from before the field reads as captured in the row's unit.
+    const older = parseStoredMeasurements(record([measurement(2)]));
+    expect(older?.measurements[0]?.targets[0]).not.toHaveProperty(
+      'identityUnit'
+    );
+    // A unit this build does not know drops the row, like any bad field.
+    const unknown = parseStoredMeasurements({
+      ...record([rescaled]),
+      measurements: [
+        {
+          ...persistableMeasurement(rescaled),
+          targets: [{ ...rescaled.targets[0], identityUnit: 'furlong' }]
+        }
+      ]
+    });
+    expect(unknown?.measurements).toHaveLength(0);
+  });
+
   it('sanitizes stored rows instead of casting them into the renderer', () => {
     const unsafe = {
       ...record([measurement(1)]),

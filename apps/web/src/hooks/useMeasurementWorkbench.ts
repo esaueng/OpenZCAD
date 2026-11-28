@@ -214,25 +214,32 @@ export function useMeasurementWorkbench({
   const pendingMeasurementWriteRef = useRef<{
     projectId: string;
     timeout: number;
-    write(): Promise<void>;
+    write(): Promise<boolean>;
   } | null>(null);
-  /** Device writes started and not yet settled. */
-  const measurementWritesRef = useRef(new Set<Promise<void>>());
+  /**
+   * Device writes started and not yet settled, each with its project. Each
+   * resolves whether the record reached the device.
+   */
+  const measurementWritesRef = useRef(new Map<Promise<boolean>, string>());
 
   /**
    * Writes `projectId`'s pending measurement list now and waits for every
-   * device write already started, so a reader of the device record (a
-   * Duplicate copying it, #2433) sees a reading kept a moment before. Never
-   * rejects: a failed write is the same best effort as the debounced one.
+   * device write of it already started, so a reader of the device record (a
+   * Duplicate copying it, #2433) sees a reading kept a moment before.
+   * Resolves false when one of those writes failed, so that reader can say
+   * its copy may miss the latest change; never rejects.
    */
   const flushMeasurementPersistence = useCallback(
-    async (projectId: string): Promise<void> => {
+    async (projectId: string): Promise<boolean> => {
       const pending = pendingMeasurementWriteRef.current;
+      const flushed: Promise<boolean>[] = [];
       if (pending?.projectId === projectId) {
         window.clearTimeout(pending.timeout);
-        await pending.write();
+        flushed.push(pending.write());
       }
-      await Promise.all([...measurementWritesRef.current]);
+      for (const [saving, of] of measurementWritesRef.current)
+        if (of === projectId) flushed.push(saving);
+      return (await Promise.all(flushed)).every(Boolean);
     },
     []
   );
@@ -253,7 +260,7 @@ export function useMeasurementWorkbench({
       return;
     }
     const projectId = doc.projectId;
-    const write = (): Promise<void> => {
+    const write = (): Promise<boolean> => {
       if (pendingMeasurementWriteRef.current?.write === write)
         pendingMeasurementWriteRef.current = null;
       const record = buildMeasurementRecord(
@@ -268,20 +275,24 @@ export function useMeasurementWorkbench({
         previous?.projectId === projectId &&
         previous.contentKey === contentKey
       ) {
-        return Promise.resolve();
+        return Promise.resolve(true);
       }
       measurementPersistedContentRef.current = { projectId, contentKey };
-      const saving = saveProjectMeasurements(record).catch(() => {
-        if (
-          measurementPersistedContentRef.current?.projectId === projectId &&
-          measurementPersistedContentRef.current.contentKey === contentKey
-        ) {
-          measurementPersistedContentRef.current = previous;
+      const saving = saveProjectMeasurements(record).then(
+        () => true,
+        () => {
+          if (
+            measurementPersistedContentRef.current?.projectId === projectId &&
+            measurementPersistedContentRef.current.contentKey === contentKey
+          ) {
+            measurementPersistedContentRef.current = previous;
+          }
+          // Same as the read: a device that cannot store them still measures.
+          return false;
         }
-        // Same as the read: a device that cannot store them still measures.
-      });
+      );
       const writes = measurementWritesRef.current;
-      writes.add(saving);
+      writes.set(saving, projectId);
       void saving.finally(() => writes.delete(saving));
       return saving;
     };

@@ -146,6 +146,16 @@ export interface MeasurementTarget {
   topologyId?: string;
   hash?: number;
   reference?: TopologyReferenceV5;
+  /**
+   * The stored unit `topologyId`, `hash` and `reference` were captured in,
+   * when it is not the row's `sourceUnit` (#2433). ADR-011 hashes quantized
+   * DOCUMENT-unit geometry, so an identity names its entity only in the unit
+   * it was taken in: a rescaled row keeps it, with that unit, and resolves
+   * by it again once the document is back in that unit. Absent, the
+   * identity is in `sourceUnit`: every target captured or re-attached in the
+   * row's own unit, and every row stored before this field.
+   */
+  identityUnit?: UnitSystem;
   label: string;
   point?: Vector3;
   direction?: Vector3;
@@ -1995,6 +2005,30 @@ function scaledVector(vector: Vector3, factor: number): Vector3 {
   };
 }
 
+/** Whether `target` names an entity, by topology id, hash or reference. */
+function hasIdentity(target: MeasurementTarget): boolean {
+  return (
+    target.topologyId !== undefined ||
+    target.hash !== undefined ||
+    target.reference !== undefined
+  );
+}
+
+/**
+ * `target` with its identity recorded as captured in `identityUnit`, in a
+ * row stored in `rowUnit`: the field only says so when the two differ.
+ */
+function withIdentityUnit(
+  target: MeasurementTarget,
+  identityUnit: UnitSystem,
+  rowUnit: UnitSystem
+): MeasurementTarget {
+  const { identityUnit: _identityUnit, ...rest } = target;
+  return identityUnit === rowUnit || !hasIdentity(target)
+    ? rest
+    : { ...rest, identityUnit };
+}
+
 /**
  * I03: a kept measurement re-expressed in another stored unit, every length,
  * area and volume it carries scaled to `unit` (k, k², k³) and `sourceUnit`
@@ -2032,7 +2066,11 @@ export function measurementInUnit(
         : {})
     },
     targets: measurement.targets.map((target) => ({
-      ...target,
+      ...withIdentityUnit(
+        target,
+        target.identityUnit ?? measurement.sourceUnit,
+        unit
+      ),
       ...(target.point ? { point: scaledVector(target.point, k) } : {}),
       ...(target.endpoints
         ? {
@@ -2083,7 +2121,8 @@ export interface MeasurementSourceBodies {
 }
 
 /**
- * I03 (#2361): a kept target carried across a stored-unit conversion.
+ * I03 (#2361, #2433): a kept target whose identity was captured in another
+ * stored unit than the one `bodies` are in.
  *
  * Every ADR-011 hash, and the lineage name of an imported face, is a
  * fingerprint of geometry quantized in DOCUMENT units, so converting the
@@ -2092,55 +2131,44 @@ export interface MeasurementSourceBodies {
  * measurement lives beside the document and never reached that map, so its
  * rows on a Boolean result came back `not-found` on the same solid, scaled.
  *
- * This re-attaches the target to the one entity of the converted body that
- * is the entity it named before, scaled by `factor`, by the evidence the
- * conversion itself verified: a named entity by the kernel re-capture's
- * witness rule (`matchScaledTopology`, lineage family included), an
- * unnamed one by the geometry oracle's rule for its surface or curve
- * (`scaledFaceGeometryMatches`, `scaledEdgeGeometryMatches`). What it was
- * before comes from `previous`, the bodies the row was last measured on in
- * its old unit; without them (a row first refreshed after a reload), only a
- * stored witness can carry it. It is not proximity rebinding: it runs only in
- * the refresh that rescales the row to a new stored unit, under that
- * conversion's exact scale.
- *
  * The old identity is never trusted on its own across the conversion: a
  * hash quantized in the old unit can land on a DIFFERENT entity in the new
  * one (an edge at X = 100–200 mm becomes 10–20 cm, the numbers a 10–20 mm
- * edge was hashed from). So anything but exactly one scaled match, an
- * old-hash hit included, drops the target's old-unit identity and the row
- * reports itself unresolved; no later refresh can resolve it by that
- * coincidence either.
+ * edge was hashed from). So a target is re-attached only to the ONE entity
+ * of the converted body that is the entity it named, scaled by `factor`,
+ * by the evidence the conversion itself verified:
+ *
+ * 1. the target's own stored witness, by the kernel re-capture's rule
+ *    (`matchScaledTopology`, lineage family included);
+ * 2. failing that, what its identity resolves to on `previous`, the bodies
+ *    last seen in the identity's unit: a named entity by the same witness
+ *    rule, an unnamed one by the geometry oracle's rule for its surface or
+ *    curve (`scaledFaceGeometryMatches`, `scaledEdgeGeometryMatches`).
+ *
+ * The target's own witness goes first because it is what the row measured;
+ * the cached bodies can be newer than the row (it was still loading while
+ * the model changed). An ambiguous own witness is final: the cached bodies
+ * cannot choose between candidates it already fits.
+ *
+ * Null when there is no such entity: the caller keeps the target's identity
+ * with its unit (it still names its entity there, for an undo or a body that
+ * returns in that unit) and the row reports itself unresolved. It is not
+ * proximity rebinding: it needs a unique match under the conversion's exact
+ * scale.
  */
 function reattachedAcrossUnits(
   target: MeasurementTarget,
   bodies: readonly BodyRepresentation[],
   factor: number,
   previous: readonly BodyRepresentation[] | undefined
-): MeasurementTarget {
+): MeasurementTarget | null {
   if (target.kind === 'body') return target;
   const kind = target.kind;
-  const {
-    topologyId: _topologyId,
-    hash: _hash,
-    reference: _reference,
-    ...unidentified
-  } = target;
   const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
-  if (!body) return unidentified;
-  const selection = selectionForTarget(target);
-  const lookup = (on: BodyRepresentation) =>
-    kind === 'edge' ? resolveEdge(on, selection) : resolveFace(on, selection);
-  const before = previous?.find(
-    (candidate) => candidate.bodyId === target.bodyId
-  );
-  const was = before ? lookup(before) : null;
-  const source = was?.ok ? was.entry : null;
-  const named = source ? source.reference : target.reference;
+  if (!body) return null;
   const entries = topologyEntries(body, kind);
-  let entry: FaceTopology | EdgeTopology | null = null;
-  if (named?.kind === kind) {
-    const match = matchScaledTopology(
+  const byWitness = (named: TopologyReferenceV5) =>
+    matchScaledTopology(
       {
         kind,
         witness: named.witness,
@@ -2166,37 +2194,111 @@ function reattachedAcrossUnits(
       ),
       factor
     );
-    if (match.status === 'matched') entry = match.candidate.entry;
-  } else if (source) {
-    const scale = bodyScale(body);
-    const matches = entries.filter(
-      (candidate) =>
-        !candidate.reference &&
-        (kind === 'face'
-          ? (source as FaceTopology).geometry !== undefined &&
-            (candidate as FaceTopology).geometry !== undefined &&
-            scaledFaceGeometryMatches(
-              (source as FaceTopology).geometry!,
-              (candidate as FaceTopology).geometry!,
-              factor,
-              scale
-            )
-          : scaledEdgeGeometryMatches(
-              source as EdgeTopology,
-              candidate as EdgeTopology,
-              factor,
-              scale
-            ))
-    );
-    if (matches.length === 1) entry = matches[0]!;
-  }
-  if (!entry) return unidentified;
-  return {
-    ...unidentified,
-    topologyId: entry.topologyId,
-    hash: entry.hash,
-    ...(entry.reference ? { reference: entry.reference } : {})
+  const attached = (entry: FaceTopology | EdgeTopology): MeasurementTarget => {
+    const {
+      topologyId: _topologyId,
+      hash: _hash,
+      reference: _reference,
+      identityUnit: _identityUnit,
+      ...unidentified
+    } = target;
+    return {
+      ...unidentified,
+      topologyId: entry.topologyId,
+      hash: entry.hash,
+      ...(entry.reference ? { reference: entry.reference } : {})
+    };
   };
+  if (target.reference?.kind === kind) {
+    const own = byWitness(target.reference);
+    if (own.status === 'matched') return attached(own.candidate.entry);
+    if (own.status === 'ambiguous') return null;
+  }
+  const before = previous?.find(
+    (candidate) => candidate.bodyId === target.bodyId
+  );
+  if (!before) return null;
+  const selection = selectionForTarget(target);
+  const was =
+    kind === 'edge'
+      ? resolveEdge(before, selection)
+      : resolveFace(before, selection);
+  if (!was.ok) return null;
+  const source: FaceTopology | EdgeTopology = was.entry;
+  if (source.reference?.kind === kind) {
+    const cached = byWitness(source.reference);
+    return cached.status === 'matched'
+      ? attached(cached.candidate.entry)
+      : null;
+  }
+  const scale = bodyScale(body);
+  const matches = entries.filter(
+    (candidate) =>
+      !candidate.reference &&
+      (kind === 'face'
+        ? (source as FaceTopology).geometry !== undefined &&
+          (candidate as FaceTopology).geometry !== undefined &&
+          scaledFaceGeometryMatches(
+            (source as FaceTopology).geometry!,
+            (candidate as FaceTopology).geometry!,
+            factor,
+            scale
+          )
+        : scaledEdgeGeometryMatches(
+            source as EdgeTopology,
+            candidate as EdgeTopology,
+            factor,
+            scale
+          ))
+  );
+  return matches.length === 1 ? attached(matches[0]!) : null;
+}
+
+/**
+ * A row's targets for one refresh against `bodies`, stored in `unit`.
+ * `stored` is what the row keeps: a target captured in another unit is
+ * re-attached when {@link reattachedAcrossUnits} finds its scaled entity, and
+ * otherwise kept as it is, identity and unit both. `resolvable` is what this
+ * refresh resolves by: such a kept target with no identity at all, since its
+ * hash names nothing (or the wrong thing) in `unit`.
+ */
+function targetsInUnit(
+  measurement: Measurement,
+  bodies: readonly BodyRepresentation[],
+  unit: UnitSystem,
+  previous: readonly MeasurementSourceBodies[] | undefined
+): { stored: MeasurementTarget[]; resolvable: MeasurementTarget[] } {
+  const stored: MeasurementTarget[] = [];
+  const resolvable: MeasurementTarget[] = [];
+  for (const target of measurement.targets) {
+    const identityUnit = target.identityUnit ?? measurement.sourceUnit;
+    if (identityUnit === unit || !hasIdentity(target)) {
+      stored.push(target);
+      resolvable.push(target);
+      continue;
+    }
+    const attached = reattachedAcrossUnits(
+      target,
+      bodies,
+      millimetresPerUnit(identityUnit) / millimetresPerUnit(unit),
+      previous?.find((evidence) => evidence.unit === identityUnit)?.bodies
+    );
+    if (attached) {
+      stored.push(attached);
+      resolvable.push(attached);
+      continue;
+    }
+    stored.push(target);
+    const {
+      topologyId: _topologyId,
+      hash: _hash,
+      reference: _reference,
+      identityUnit: _identityUnit,
+      ...unidentified
+    } = target;
+    resolvable.push(unidentified);
+  }
+  return { stored, resolvable };
 }
 
 /** The revision a row was last judged against, re-measured or not. */
@@ -2253,10 +2355,11 @@ function isUnmeasuredRow(
  *
  * `options.unit` is the unit `bodies` are stored in (the document's
  * `units`). A row kept in another unit is first rescaled to it
- * ({@link measurementInUnit}), its targets re-attached across the conversion
- * ({@link reattachedAcrossUnits}; `options.previous` holds, for each other
- * stored unit, the bodies last seen in it), and
- * then re-measured, whatever its revision.
+ * ({@link measurementInUnit}) and then re-measured, whatever its revision.
+ * A target whose identity was captured in another unit resolves only by a
+ * scaled re-attach ({@link targetsInUnit}; `options.previous` holds, for
+ * each other stored unit, the bodies last seen in it); without one the row
+ * is unresolved and keeps that identity, with its unit, for later.
  */
 export function refreshMeasurements(
   list: readonly Measurement[],
@@ -2274,23 +2377,20 @@ export function refreshMeasurements(
       options.unit === undefined
         ? original
         : measurementInUnit(original, options.unit);
+    // A target captured in another unit than `options.unit` resolves only
+    // by a scaled re-attach; otherwise it keeps its identity, unresolved.
+    const inUnit =
+      options.unit === undefined || !hasValidTargetArity(rescaled)
+        ? null
+        : targetsInUnit(rescaled, bodies, options.unit, options.previous);
     const measurement =
-      rescaled === original || !hasValidTargetArity(rescaled)
-        ? rescaled
-        : {
-            ...rescaled,
-            targets: rescaled.targets.map((target) =>
-              reattachedAcrossUnits(
-                target,
-                bodies,
-                millimetresPerUnit(original.sourceUnit) /
-                  millimetresPerUnit(rescaled.sourceUnit),
-                options.previous?.find(
-                  (evidence) => evidence.unit === original.sourceUnit
-                )?.bodies
-              )
-            )
-          };
+      inUnit &&
+      inUnit.stored.some((target, index) => target !== rescaled.targets[index])
+        ? { ...rescaled, targets: inUnit.stored }
+        : rescaled;
+    const resolvable = inUnit
+      ? { ...measurement, targets: inUnit.resolvable }
+      : measurement;
     if (measurement !== original) changed = true;
     if (
       !options.force &&
@@ -2324,7 +2424,7 @@ export function refreshMeasurements(
     // M13: an entity distance reads its geometry from the topology itself,
     // so its picks need only resolve by identity: a raw surface point that
     // a resize moved does not make the face it was on stale.
-    const targets = measurement.targets.map((target) =>
+    const targets = resolvable.targets.map((target) =>
       isEntityDistanceKind(measurement.kind)
         ? resolvedEntityTarget(target, bodies)
         : resolvedTarget(target, bodies, purpose)
@@ -2332,7 +2432,7 @@ export function refreshMeasurements(
     if (targets.some((target) => target === null)) {
       // The topology may still be there and merely unusable for this kind of
       // measurement (`stale`), or genuinely gone/ambiguous (`unresolved`).
-      const failure = firstTargetFailure(measurement, bodies) ?? undefined;
+      const failure = firstTargetFailure(resolvable, bodies) ?? undefined;
       const status = failure ? 'unresolved' : 'stale';
       // `checkedRevision` advances even though no value was recomputed.
       // Without this the row never matches the short-circuit at the top of the

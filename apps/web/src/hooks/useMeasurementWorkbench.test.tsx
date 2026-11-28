@@ -1071,7 +1071,11 @@ describe('flushing the measurement write', () => {
       result.current.setMeasurements([measurement('kept', false)]);
     });
     expect(save).not.toHaveBeenCalled();
-    await act(() => result.current.flushMeasurementPersistence(doc.projectId));
+    await act(async () => {
+      await expect(
+        result.current.flushMeasurementPersistence(doc.projectId)
+      ).resolves.toBe(true);
+    });
     expect(save).toHaveBeenCalledTimes(1);
     expect(save.mock.calls[0]![0]).toMatchObject({
       projectId: doc.projectId,
@@ -1080,6 +1084,26 @@ describe('flushing the measurement write', () => {
     // The debounced timer that would have written it is gone.
     await new Promise((resolve) => setTimeout(resolve, 450));
     expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a write that failed, so Duplicate can say so (#2433)', async () => {
+    const doc = createProjectDocument('Refused', toUserId('user_measure'));
+    const { result } = renderHook(() =>
+      useMeasurementWorkbench(input({ doc }))
+    );
+    await waitFor(() =>
+      expect(result.current.measurementHydratedProjectId).toBe(doc.projectId)
+    );
+    save.mockRejectedValueOnce(new Error('quota'));
+    act(() => {
+      result.current.setMeasurements([measurement('kept', false)]);
+    });
+    let flushed: boolean | undefined;
+    await act(async () => {
+      flushed = await result.current.flushMeasurementPersistence(doc.projectId);
+    });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(flushed).toBe(false);
   });
 
   it('waits for a write already in flight', async () => {
