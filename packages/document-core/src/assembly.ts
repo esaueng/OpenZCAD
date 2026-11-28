@@ -734,3 +734,39 @@ export function assemblyComponentBodies(
   for (const c of set.components) result.set(c.id, resolve(c.bodyId));
   return result;
 }
+
+/** F06: a part that shows a configuration other than the document's active one. */
+export interface AssemblyConfigurationOverride {
+  componentId: string;
+  componentName: string;
+  rowId: string;
+  rowName: string;
+}
+
+/**
+ * F06: the parts, in display order, whose own configuration differs from
+ * the document's active row: Assemble draws each from that row, while
+ * anything built from the document alone (an export, for one) has only the
+ * active row's geometry for it. A part naming the active row, or a row no
+ * longer in the table (which Assemble draws as the active row), is left out.
+ */
+export function assemblyConfigurationOverrides(
+  document: ProjectDocument
+): AssemblyConfigurationOverride[] {
+  const set = document.assembly;
+  const table = document.configurations;
+  if (!set || !table) return [];
+  const rows = new Map(table.rows.map((row) => [row.id, row]));
+  const overrides: AssemblyConfigurationOverride[] = [];
+  for (const c of set.components) {
+    const row = c.configurationId ? rows.get(c.configurationId) : undefined;
+    if (!row || row.id === table.activeRowId) continue;
+    overrides.push({
+      componentId: c.id,
+      componentName: c.name,
+      rowId: row.id,
+      rowName: row.name
+    });
+  }
+  return overrides;
+}

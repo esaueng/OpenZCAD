@@ -91,6 +91,7 @@ export type {
 } from './sketch-2d-ops';
 import {
   assemblyComponentBodies,
+  assemblyConfigurationOverrides,
   findSketch,
   isLiveAssemblyBody,
   getParameterScope,
@@ -1456,6 +1457,104 @@ function exportAssemblyPlacements(
 }
 
 /**
+ * Whether the model shows a body, as Assemble resolves its parts: from the
+ * exact build when there is one (built, not consumed, not hidden by a
+ * parameter), else from the document's own representations.
+ */
+function exportLiveBody(
+  document: ProjectDocument,
+  build?: ExactBuildResult
+): (bodyId: BodyId) => boolean {
+  if (!build) return (bodyId) => isLiveAssemblyBody(document, bodyId);
+  const hidden = getParameterHiddenBodyIds(document);
+  return (bodyId) =>
+    (build.shapes.get(bodyId)?.solids.length ?? 0) > 0 &&
+    !build.consumed.has(bodyId) &&
+    !hidden.has(bodyId);
+}
+
+/** Whether a column-major 4×4 is exactly the identity. */
+function isIdentityMatrix(matrix: readonly number[]): boolean {
+  return matrix.every((value, index) => value === (index % 5 === 0 ? 1 : 0));
+}
+
+/**
+ * AS04: each written body's assembly placement (`exportAssemblyPlacements`)
+ * where it moves the body at all, for a writer with no product structure
+ * to carry it. IGES and the mesh formats bake it into the geometry, so the
+ * file holds every part where the assembly solved it, as the STEP
+ * occurrences place it.
+ */
+function bakedExportPlacements(
+  document: ProjectDocument,
+  bodies: readonly { bodyId: BodyId }[],
+  scale: number,
+  build: ExactBuildResult
+): Map<BodyId, number[]> {
+  const placements = exportAssemblyPlacements(
+    document,
+    bodies,
+    scale,
+    exportLiveBody(document, build)
+  );
+  for (const [bodyId, matrix] of placements)
+    if (isIdentityMatrix(matrix)) placements.delete(bodyId);
+  return placements;
+}
+
+/** Points (x, y, z triples) carried by a column-major 4×4. */
+function transformedPoints(
+  points: ArrayLike<number>,
+  matrix: readonly number[]
+): Float64Array {
+  const out = new Float64Array(points.length);
+  for (let i = 0; i + 2 < points.length; i += 3) {
+    const x = points[i]!;
+    const y = points[i + 1]!;
+    const z = points[i + 2]!;
+    for (let r = 0; r < 3; r += 1)
+      out[i + r] =
+        matrix[r]! * x +
+        matrix[4 + r]! * y +
+        matrix[8 + r]! * z +
+        matrix[12 + r]!;
+  }
+  return out;
+}
+
+/**
+ * F06: refuses an export while an assembly part shows a configuration other
+ * than the active one. Assemble draws that part from its own row, but an
+ * export builds the document once, in its active row, so the file would
+ * hold a different part (or none, where the active row suppresses it)
+ * without saying so.
+ */
+function refuseConfiguredAssemblyExport(document: ProjectDocument): void {
+  const overrides = assemblyConfigurationOverrides(document);
+  if (overrides.length === 0) return;
+  const table = document.configurations!;
+  const active =
+    table.rows.find((row) => row.id === table.activeRowId)?.name ??
+    'the active one';
+  const shown = overrides.map(
+    (entry) => `${entry.componentName} in ${entry.rowName}`
+  );
+  const list =
+    shown.length === 1
+      ? shown[0]!
+      : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)!}`;
+  const rows = [...new Set(overrides.map((entry) => entry.rowName))];
+  const own = shown.length === 1 ? 'its' : 'their';
+  const fix =
+    rows.length === 1
+      ? `Set ${own} Configuration to follow the model, or make ${rows[0]!} the active configuration, then export again.`
+      : `Set ${own} Configuration to follow the model, then export again.`;
+  throw new Error(
+    `Export refused: Assemble shows ${list}, but an export writes every part in the active configuration, ${active}. ${fix}`
+  );
+}
+
+/**
  * I02: the Objects folders holding the written bodies, as the STEP product
  * tree; null when no written body sits in a folder and no assembly part
  * shows one. AS04: a body an assembly part shows is placed at that part's
@@ -1467,17 +1566,11 @@ function exportAssembly(
   scale = 1,
   build?: ExactBuildResult
 ): StepExportAssembly | null {
-  const hidden = getParameterHiddenBodyIds(document);
   const placements = exportAssemblyPlacements(
     document,
     bodies,
     scale,
-    build
-      ? (bodyId) =>
-          (build.shapes.get(bodyId)?.solids.length ?? 0) > 0 &&
-          !build.consumed.has(bodyId) &&
-          !hidden.has(bodyId)
-      : (bodyId) => isLiveAssemblyBody(document, bodyId)
+    exportLiveBody(document, build)
   );
   const all = new Map(
     listObjectFolders(document).map((folder) => [folder.id, folder])
@@ -5643,14 +5736,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     build: ExactBuildResult,
     document: ProjectDocument,
     bodyIds: BodyId[],
-    exportUnits: UnitSystem = 'mm'
+    exportUnits: UnitSystem = 'mm',
+    posed = false
   ): number[] {
     return this.exportBodySolidsFor(
       kernel,
       build,
       document,
       bodyIds,
-      exportUnits
+      exportUnits,
+      posed
     ).flatMap(({ solids }) => solids);
   }
 
@@ -5660,7 +5755,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     build: ExactBuildResult,
     document: ProjectDocument,
     bodyIds: BodyId[],
-    exportUnits: UnitSystem = 'mm'
+    exportUnits: UnitSystem = 'mm',
+    /**
+     * AS04: bake each body's assembly placement into its solids, for a
+     * writer with no product structure to place it (everything but STEP).
+     */
+    posed = false
   ): { bodyId: BodyId; solids: number[] }[] {
     const hidden = getParameterHiddenBodyIds(document);
     // Consumed operands keep their retained shapes in the build, but they are
@@ -5687,14 +5787,31 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       throw new Error('Select at least one body to export.');
     }
     const scale = exportLengthScale(document.units, exportUnits);
-    return scale === 1
-      ? bodies
-      : bodies.map(({ bodyId, solids }) => ({
-          bodyId,
-          solids: solids.map((solid) =>
-            kernel.copyAndTransformSolid(solid, uniformScaleMatrix(scale))
-          )
-        }));
+    const scaled =
+      scale === 1
+        ? bodies
+        : bodies.map(({ bodyId, solids }) => ({
+            bodyId,
+            solids: solids.map((solid) =>
+              kernel.copyAndTransformSolid(solid, uniformScaleMatrix(scale))
+            )
+          }));
+    if (!posed) return scaled;
+    const placements = bakedExportPlacements(document, scaled, scale, build);
+    if (placements.size === 0) return scaled;
+    // Like the unit-scaled copies, these are retired when the export build
+    // is restored.
+    return scaled.map(({ bodyId, solids }) => {
+      const placement = placements.get(bodyId);
+      if (!placement) return { bodyId, solids };
+      const matrix = rowMajorMatrix(placement);
+      return {
+        bodyId,
+        solids: solids.map((solid) =>
+          kernel.copyAndTransformSolid(solid, matrix)
+        )
+      };
+    });
   }
 
   /**
@@ -5730,15 +5847,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     options: ExportUnitOptions & { fileName?: string } = {}
   ): Promise<string> {
+    refuseConfiguredAssemblyExport(document);
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
+      // IGES has no product structure: each part is written where it sits.
       const bodies = this.exportBodySolidsFor(
         kernel,
         build,
         document,
         bodyIds,
-        units
+        units,
+        true
       );
       const unit = { mm: 'MM', cm: 'CM', m: 'M', inch: 'IN' }[units];
       const stamp = new Date()
@@ -5776,6 +5896,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     options: StepExportOptions = {}
   ): Promise<string> {
+    refuseConfiguredAssemblyExport(document);
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) =>
@@ -5833,6 +5954,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     options: StepExportOptions = {}
   ): Promise<StepBodiesExport> {
+    refuseConfiguredAssemblyExport(document);
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
@@ -6315,6 +6437,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     if (!selected.some((id) => build.shapes.get(id)?.referenceMesh))
       return null;
     const scale = exportLengthScale(document.units, units);
+    // AS04: every part where the assembly solved it, as the solids are.
+    const placements = bakedExportPlacements(
+      document,
+      selected.map((bodyId) => ({ bodyId })),
+      scale,
+      build
+    );
+    const placed = (id: BodyId, vertices: Float64Array) => {
+      const placement = placements.get(id);
+      return placement ? transformedPoints(vertices, placement) : vertices;
+    };
     return selected.flatMap((id) => {
       const shape = build.shapes.get(id);
       if (!shape) throw new Error(`Body ${id} has no geometry to export.`);
@@ -6322,8 +6455,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         return [
           {
             name: id,
-            vertices: shape.referenceMesh.vertices.map(
-              (value) => value * scale
+            vertices: placed(
+              id,
+              shape.referenceMesh.vertices.map((value) => value * scale)
             ),
             indices: shape.referenceMesh.indices
           }
@@ -6338,9 +6472,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         try {
           return {
             name: id,
-            vertices: Float64Array.from(
-              mesh.positions,
-              (value) => value * scale
+            vertices: placed(
+              id,
+              Float64Array.from(mesh.positions, (value) => value * scale)
             ),
             indices: mesh.indices.slice()
           };
@@ -6357,6 +6491,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     deflection: number = STL_EXPORT_DEFLECTION,
     options: MeshExportTolerances = {}
   ): Promise<string> {
+    refuseConfiguredAssemblyExport(document);
     const units = options.units ?? 'mm';
     const angular = explicitAngularTolerance(options.angularTolerance);
     // The deflection is physical millimetres; the solids are in `units`.
@@ -6376,12 +6511,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         return writeAsciiStl(document.name, referenceMeshes, {
           preserveDegenerate: true
         });
+      // No mesh format carries an assembly: each part is written posed.
       const scaled = this.exportSolidsFor(
         kernel,
         build,
         document,
         bodyIds,
-        units
+        units,
+        true
       );
       const exportSolids =
         angular === null
@@ -6436,6 +6573,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     if (!Number.isFinite(deflection) || deflection <= 0) {
       throw new Error('Mesh export deflection must be a positive number.');
     }
+    refuseConfiguredAssemblyExport(document);
     // glTF defines metres, which the root node states over a millimetre
     // tessellation (glb-scene.ts); no other unit can be written into it.
     const units = format === 'glb' ? 'mm' : (options.units ?? 'mm');
@@ -6464,12 +6602,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             )
           : null;
       if (meshes && format === 'stl-binary') return writeBinaryStl(meshes);
+      // No mesh format carries an assembly: each part is written posed.
       const scaled = this.exportBodySolidsFor(
         kernel,
         build,
         document,
         bodyIds,
-        units
+        units,
+        true
       );
       // Re-meshed per body, so each solid still knows the body it labels.
       const grouped =
