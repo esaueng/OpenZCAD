@@ -222,6 +222,19 @@ describe('kernel sync', { timeout: 30_000 }, () => {
     expect(derived.warnings).toContain(
       'Feature "Move ghost": Transform target is unavailable.'
     );
+    // Typed (K10), so History, Resume and the bar word it from the code.
+    expect(
+      derived.featureWarnings?.find(
+        (warning) => warning.featureName === 'Move ghost'
+      )
+    ).toMatchObject({
+      kind: 'build-failed',
+      kernelRefusal: {
+        family: 'reference',
+        category: 'invalid_input',
+        code: 'target_body_unavailable'
+      }
+    });
   });
 
   it('recovers when a feature is deleted out from under a dependent', async () => {

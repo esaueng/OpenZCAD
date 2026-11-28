@@ -6,6 +6,7 @@ import {
   type TopologyView
 } from '@openzcad/scripting';
 import type { BodyId, FeatureNode } from '@openzcad/shared';
+import { targetBodyUnavailable } from './adapter-refusal';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 import {
   edgeWitnessOf,
@@ -65,7 +66,7 @@ export function buildCustomFeature(
   const script = compileScript(data.script.source).script!;
   const { result, kernel } = ctx;
   if (!result.shapes.get(data.targetBodyId)) {
-    throw new Error('Custom feature target is unavailable.');
+    throw targetBodyUnavailable('Custom feature target is unavailable.');
   }
   // A step never offers a reference repair or carries a hash selection: its
   // picks are re-derived from the script on every build, and a repair would

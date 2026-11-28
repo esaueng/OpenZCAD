@@ -1,6 +1,6 @@
 import { FeatureBuildError } from '../lib/featureValidation';
 import { useRef } from 'react';
-import { ownEntry } from '@openzcad/shared';
+import { displayLengthName, ownEntry } from '@openzcad/shared';
 import type { FeatureId, BodyId, ProjectDocument } from '@openzcad/shared';
 import { CommandManager, type AnyCommand } from '@openzcad/command-system';
 import { errorMessage } from '../lib/errors';
@@ -406,7 +406,8 @@ export function useValidatedFeatureCommit(
           bodyPresent: Boolean(
             ownEntry(derived.bodyRepresentations, target.resultBodyId)
           ),
-          documentMoved
+          documentMoved,
+          unit: displayLengthName(current.units)
         });
         if (rejection) {
           throw new FeatureBuildError(

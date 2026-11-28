@@ -1,5 +1,6 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  displayLengthName,
   transformStampBodyIds,
   ownEntry,
   datumAxisPlaneSources,
@@ -580,7 +581,8 @@ export function reorderRefusal(
       bodyPresent: (bodies.get(feature.featureId) ?? []).every((bodyId) =>
         Boolean(ownEntry(derived.bodyRepresentations, bodyId))
       ),
-      documentMoved: false
+      documentMoved: false,
+      unit: displayLengthName(document.units)
     });
     if (rejection && !failedBefore(feature)) {
       return new FeatureBuildError(

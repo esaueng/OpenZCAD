@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import { CirclePlay } from 'lucide-react';
 import { useModalFocus } from '../lib/useModalFocus';
 import {
-  plainRefusal,
+  plainRefusalSentence,
   type RefusalClassification
 } from '../lib/refusalLanguage';
 
@@ -27,6 +27,12 @@ export interface ResumeHistoryDialogProps {
     reason: string;
     kernelRefusal?: RefusalClassification;
   }[];
+  /**
+   * The document's length unit as shown (`displayLengthName`), put after
+   * every size a fillet or chamfer refusal quotes, as the command bar does.
+   * Absent, sizes are shown bare.
+   */
+  unitLabel?: string | null;
   /** Keep the rollback, or the row, paused. Nothing changes. */
   onKeep(): void;
   /** Commit the move as one undoable step, failures and all. */
@@ -50,6 +56,7 @@ export function ResumeHistoryDialog({
   action,
   row,
   failures,
+  unitLabel = null,
   onKeep,
   onResume
 }: ResumeHistoryDialogProps) {
@@ -91,7 +98,11 @@ export function ResumeHistoryDialog({
             {named.map((failure, index) => (
               <li key={`${index}-${failure.name}`}>
                 <strong>{failure.name}</strong>:{' '}
-                {plainRefusal(failure.reason, failure.kernelRefusal).message}
+                {plainRefusalSentence(
+                  failure.reason,
+                  failure.kernelRefusal,
+                  unitLabel
+                )}
               </li>
             ))}
             {unnamed > 0 && <li>and {unnamed} more</li>}

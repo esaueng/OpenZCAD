@@ -21252,7 +21252,17 @@ export function App() {
       setPreviewDoc(null);
       const reason = errorMessage(error, 'Patch preview failed.');
       setStatus(reason);
-      return { ok: false, reason };
+      return {
+        ok: false,
+        reason,
+        // `PreflightWarningError` (read by shape: the preflight module loads
+        // lazily) names the feature its refusal's lead names.
+        ...(error instanceof Error &&
+        'featureName' in error &&
+        typeof error.featureName === 'string'
+          ? { featureName: error.featureName }
+          : {})
+      };
     }
   }
 
@@ -44190,6 +44200,7 @@ export function App() {
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
                   refusalClassification={inPlace.refusalClassification}
+                  refusalFeatureName={inPlace.refusalFeatureName}
                   // U11: a kernel refusal says the input it is about; the
                   // last request that built stays on screen meanwhile.
                   refusalInput={inPlace.refusalInput}
@@ -45051,6 +45062,7 @@ export function App() {
               action={pendingResume.label}
               {...(pendingResume.row ? { row: pendingResume.row } : {})}
               failures={pendingResume.failures}
+              unitLabel={doc ? displayLengthName(doc.units) : null}
               onKeep={() => {
                 setPendingResume(null);
                 setStatus(

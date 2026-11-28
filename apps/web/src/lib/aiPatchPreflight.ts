@@ -25,7 +25,11 @@ import type {
 import { ownEntry, isFeatureSuppressed } from '@openzcad/shared';
 import { affectedFeatureTargets } from './affectedFeatureTargets';
 import { validatedFeatureRejection } from './featureValidation';
-import { exactWarningBaseline, newExactWarnings } from './exactWarnings';
+import {
+  exactWarningBaseline,
+  newBlockingFeatureWarnings,
+  newExactWarnings
+} from './exactWarnings';
 import {
   resolveSketchesForValueChange,
   type SolveSketch
@@ -191,13 +195,37 @@ async function datumPatchTargets(
   });
 }
 
-function exactWarningsError(warnings: readonly string[]): Error {
-  return new Error(
-    warnings.length === 1
-      ? warnings[0]
-      : `Exact geometry preflight failed:\n${warnings
-          .map((warning) => `- ${warning}`)
-          .join('\n')}`
+/**
+ * A preflight refusal, with the name of the feature its one warning was
+ * attributed to, when the rebuild attributed it. The message still opens
+ * with `Feature "<name>": `; a reader removes that lead as this name,
+ * exactly, before it writes units into the sizes (`withoutFeatureLead`).
+ */
+export class PreflightWarningError extends Error {
+  constructor(
+    message: string,
+    readonly featureName: string | null
+  ) {
+    super(message);
+    this.name = 'PreflightWarningError';
+  }
+}
+
+function exactWarningsError(
+  warnings: readonly string[],
+  attributed: readonly { featureName: string; message: string }[] | undefined
+): Error {
+  const only = warnings.length === 1 ? warnings[0]! : null;
+  const named =
+    only !== null && attributed?.length === 1 && attributed[0]!.message === only
+      ? attributed[0]!.featureName
+      : null;
+  return new PreflightWarningError(
+    only ??
+      `Exact geometry preflight failed:\n${warnings
+        .map((warning) => `- ${warning}`)
+        .join('\n')}`,
+    named
   );
 }
 
@@ -456,7 +484,10 @@ async function materializePatchCommands(
   const prefixDerived = await derive(prefixCandidate);
   const prefixWarnings = newExactWarnings(base, prefixDerived);
   if (prefixWarnings.length > 0) {
-    throw exactWarningsError(prefixWarnings);
+    throw exactWarningsError(
+      prefixWarnings,
+      newBlockingFeatureWarnings(base, prefixDerived)
+    );
   }
   const exactPrefix = { ...prefixCandidate, derived: prefixDerived };
   const edges = selectedExactEdges(exactPrefix, targetBodyId, staged.operation);
@@ -536,7 +567,10 @@ export async function preflightCadPatch(
   const derived = await derive(candidate);
   const warnings = newExactWarnings(base, derived);
   if (warnings.length > 0) {
-    throw exactWarningsError(warnings);
+    throw exactWarningsError(
+      warnings,
+      newBlockingFeatureWarnings(base, derived)
+    );
   }
   const targets = [
     ...exactPatchTargets(commands),
