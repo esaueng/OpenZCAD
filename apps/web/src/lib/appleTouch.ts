@@ -34,9 +34,55 @@ export function fileAccept(
   return isAppleTouchDevice(nav) ? undefined : accept;
 }
 
-/** Every CAD format the import picker offers. */
-export const CAD_IMPORT_ACCEPT =
-  '.shapr,.stl,.step,.stp,.igs,.iges,.3mf,.obj,.glb,.ply,.dxf';
+/**
+ * The single-file formats Import CAD files reads, in the order the menu names
+ * them. The picker's `accept` and the visible hints are both derived from
+ * this, so a format the picker takes cannot drop out of the menu's list: IGES
+ * was accepted for months while the File menu still listed only STEP, the
+ * meshes and DXF (#2381).
+ */
+export const CAD_IMPORT_FORMATS: readonly {
+  label: string;
+  extensions: readonly string[];
+}[] = [
+  { label: 'STEP', extensions: ['.step', '.stp'] },
+  { label: 'IGES', extensions: ['.igs', '.iges'] },
+  { label: 'STL', extensions: ['.stl'] },
+  { label: '3MF', extensions: ['.3mf'] },
+  { label: 'OBJ', extensions: ['.obj'] },
+  { label: 'GLB', extensions: ['.glb'] },
+  { label: 'PLY', extensions: ['.ply'] },
+  { label: 'DXF', extensions: ['.dxf'] }
+];
+
+/** Every CAD format the import picker offers, the Shapr3D pair's half too. */
+export const CAD_IMPORT_ACCEPT = [
+  '.shapr',
+  ...CAD_IMPORT_FORMATS.flatMap((format) => format.extensions)
+].join(',');
+
+/** The menu's one-line format list: "STEP · IGES · STL · …". */
+export const CAD_IMPORT_FORMAT_LINE = CAD_IMPORT_FORMATS.map(
+  (format) => format.label
+).join(' · ');
+
+const MESH_IMPORT_LABELS = ['STL', '3MF', 'OBJ', 'GLB', 'PLY'];
+
+/**
+ * The import action's tooltip, naming the same formats. IGES is qualified:
+ * only its exact B-rep solids import; a surface model is refused by name.
+ */
+export function cadImportTitle(options: { shaprPair: boolean }): string {
+  const meshes = CAD_IMPORT_FORMATS.filter((format) =>
+    MESH_IMPORT_LABELS.includes(format.label)
+  ).map((format) => format.label);
+  return (
+    `Import STEP, IGES (exact B-rep solids), a mesh file (${meshes.join(', ')}), ` +
+    (options.shaprPair
+      ? 'a DXF drawing as a sketch, or a paired Shapr3D project and STEP'
+      : 'or a DXF drawing')
+  );
+}
 
 /** Running as an installed app (Home Screen, or a desktop PWA window). */
 export function isStandaloneApp(win: Window = window): boolean {

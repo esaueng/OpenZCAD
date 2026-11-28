@@ -43,3 +43,21 @@ export function hasValidImportedStepSources(
   }
   return true;
 }
+
+/** True for an `.igs` / `.iges` file name. */
+export function isIgesFileName(name: string): boolean {
+  return /\.(?:igs|iges)$/i.test(name);
+}
+
+/**
+ * The format of the file an `imported-step` feature was imported from.
+ *
+ * Its stored, archived, backed-up and replayed source is always STEP: an IGES
+ * B-rep is restated as exact STEP when it is imported (I06), and only that
+ * translation is kept, under the IGES file's name. The name alone therefore
+ * says IGES while the bytes say ISO-10303-21 (#2380). Anything that names,
+ * labels or archives the source asks this instead of trusting the extension.
+ */
+export function importedStepSourceFormat(sourceName: string): 'step' | 'iges' {
+  return isIgesFileName(sourceName) ? 'iges' : 'step';
+}

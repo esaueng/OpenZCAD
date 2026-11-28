@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Upload } from 'lucide-react';
+import { cadImportTitle } from '../lib/appleTouch';
 import { labelWithKey } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 
@@ -84,7 +85,7 @@ export function WorkspaceEmptyState({
           type="button"
           className="stage-empty-action"
           aria-label="Import CAD files to start from"
-          title="Import STEP, a mesh file (STL, 3MF, OBJ, GLB, PLY) or a DXF drawing"
+          title={cadImportTitle({ shaprPair: false })}
           onClick={onImport}
         >
           <Upload size={16} aria-hidden="true" />

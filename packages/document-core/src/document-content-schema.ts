@@ -783,6 +783,43 @@ export function hasDrawingFit(value: unknown): boolean {
   return false;
 }
 
+/**
+ * D02/D07 tolerance units (schema v156): a length tolerance or a feature
+ * control frame that states its units, or a sheet update that states them
+ * on its sheet's tolerances. An older reader would read the amounts in the
+ * sheet's printed units instead.
+ */
+export function assertDrawingToleranceUnitsSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 156, 'Drawing tolerance units');
+}
+
+/** Whether `value` holds a v156 tolerance or frame with stated units. */
+export function hasDrawingToleranceUnits(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      (typeof entry.sheetId === 'string' &&
+        entry.pinToleranceUnits !== undefined) ||
+      (typeof entry.annotationId === 'string' &&
+        ((entry.kind === 'feature-control-frame' &&
+          entry.units !== undefined) ||
+          (record(entry.tolerance) && entry.tolerance.units !== undefined)))
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 /** D03 auxiliary views (schema v81). */
 export function assertDrawingAuxiliarySchema(version: unknown): void {
   assertMinimumProjectSchema(version, 81, 'Auxiliary views');
@@ -1225,6 +1262,12 @@ export function assertDocumentContentCommandSchema(
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
+      hasDrawingToleranceUnits(command.payload)
+    )
+      assertDrawingToleranceUnitsSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
       hasDrawingAuxiliary(command.payload)
     )
       assertDrawingAuxiliarySchema(document.schemaVersion);
@@ -1631,6 +1674,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (hasDrawingFit(change.before) || hasDrawingFit(change.after))
       )
         assertDrawingFitSchema(document.schemaVersion);
+  if (hasDrawingToleranceUnits(document.drawings))
+    assertDrawingToleranceUnitsSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingToleranceUnits(change.before) ||
+          hasDrawingToleranceUnits(change.after))
+      )
+        assertDrawingToleranceUnitsSchema(document.schemaVersion);
   if (hasDrawingAuxiliary(document.drawings))
     assertDrawingAuxiliarySchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])

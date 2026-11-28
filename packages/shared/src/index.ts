@@ -606,12 +606,20 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // unknown command on replay and rebuild every later edit in the old unit,
 // so it must refuse the document. Builds on v153.
 // v155 records how an Offset Face edit resolves a history-free rim.
+// v156 adds D02/D07 tolerance units (`units` on a drawing dimension's length
+// tolerance and on a feature control frame, and `pinToleranceUnits` or
+// `derivePinToleranceUnits` on a drawing.sheet.update, the second set on
+// every format change a v156 client builds): the unit a stored amount is in,
+// so changing a
+// sheet's dimension units converts it rather than reinterpreting it. An
+// older client would read a stated inch tolerance as a millimetre one, 25.4x
+// off, so it must refuse the document. Absent keeps the pre-v156 meaning
+// (the sheet's printed units). Builds on v155.
 // v157 adds `followReferences` on a `pmi.update` (#2375): renaming a model
 // datum feature carries its new letter to every frame that names it, in the
 // same command. An older client would replay only the datum and leave those
 // frames naming a datum the model no longer declares, so it must refuse the
-// document. Additive: earlier documents open unchanged. Builds on v155; v156
-// is claimed by #2425.
+// document. Additive: earlier documents open unchanged. Builds on v156.
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 157 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =

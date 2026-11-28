@@ -31,6 +31,7 @@ import { edgeTopologyWitnessHash, toUserId } from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
 import { BodyStats, Inspector } from './Inspector';
+import { DisplayUnitsProvider } from '../lib/displayUnits';
 import {
   createPrimitiveCommand,
   primitivePlacement
@@ -1091,6 +1092,64 @@ describe('mass properties tensor, axes and density', () => {
     expect(screen.getByText('0.709 · 1.418 · 1.843 lb·in²')).toBeVisible();
     expect(screen.getByText('0 0 0.709 lb·in²')).toBeVisible();
     expect(screen.getByText('0.5, 1, 1.5 in')).toBeVisible();
+  });
+});
+
+describe('a saved version previewed under a feature of the project (#2422)', () => {
+  // The project stores inches and shows inches; the version on screen was
+  // saved in millimetres. Its one-inch cube holds 25.4 in every length.
+  const versionBody = {
+    ...body,
+    volume: 25.4 ** 3,
+    bbox: {
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 25.4, y: 25.4, z: 25.4 }
+    }
+  };
+  const live = createProjectDocument('Inch part', toUserId('preview'), 'inch');
+  const version = createProjectDocument('Inch part', toUserId('preview'), 'mm');
+
+  function shown(overrides: Partial<ComponentProps<typeof Inspector>>) {
+    render(
+      <DisplayUnitsProvider units="inch">
+        <Inspector
+          {...makeProps({
+            units: 'inch',
+            selectedBody: versionBody,
+            massPropertiesDocument: version,
+            ...overrides
+          })}
+        />
+      </DisplayUnitsProvider>
+    );
+    return screen.getByRole('region', { name: 'Feature inspector' });
+  }
+
+  it('measures the version’s body in the version’s unit with a History feature selected', () => {
+    const inspector = shown({
+      featureSelectionSource: 'pinned',
+      commandSession: null,
+      selectedTopology: null
+    });
+    expect(inspector).toHaveTextContent('1 × 1 × 1 in');
+    expect(inspector).not.toHaveTextContent('25.4 × 25.4 × 25.4 in');
+  });
+
+  it('measures a picked face of the version in the version’s unit', () => {
+    const inspector = shown({});
+    expect(inspector).toHaveTextContent('1 × 1 × 1 in');
+    expect(inspector).not.toHaveTextContent('25.4 × 25.4 × 25.4 in');
+  });
+
+  it('reads the project’s own body in the project’s unit', () => {
+    const inspector = shown({
+      selectedBody: {
+        ...body,
+        bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } }
+      },
+      massPropertiesDocument: live
+    });
+    expect(inspector).toHaveTextContent('1 × 1 × 1 in');
   });
 });
 

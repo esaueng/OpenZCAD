@@ -414,7 +414,9 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   });
   // Hide both references, then reload with no document edit in between.
   await objects.getByRole('button', { name: 'Hide plane Plane 1' }).click();
-  await objects.getByRole('button', { name: 'Hide image Bracket plan' }).click();
+  await objects
+    .getByRole('button', { name: 'Hide image Bracket plan' })
+    .click();
   await page.reload();
   const showPlane = objects.getByRole('button', { name: 'Show plane Plane 1' });
   const showImage = objects.getByRole('button', {
@@ -537,3 +539,50 @@ test('an image canceled while it is placed adds nothing', async ({ page }) => {
       .getByRole('button', { name: /^Bracket plan/ })
   ).toHaveCount(0);
 });
+
+test(
+  'a previewed version shows no picture the project added after it',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    // #2422: the save has no reference image; the project adds one. Over
+    // the version the viewport draws the version's pictures, on screen and
+    // in a PNG of the view.
+    test.setTimeout(180_000);
+    await stubApi(page);
+    await stubImageArchive(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Preview Pictures');
+    await page.getByRole('button', { name: 'New project' }).click();
+    const canvas = page.locator('.viewer-host canvas');
+    await createPrimitiveInPlace(page, 'box', {
+      sizes: { width: '20', depth: '20', height: '20' }
+    });
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('ControlOrMeta+s');
+    await revealModelPanel(page, 'Revisions');
+    const saved = page.locator('.revision-row', {
+      has: page.locator('.revision-reason', { hasText: 'Manual save' })
+    });
+    await expect(saved).toBeVisible();
+
+    await insertImage(page);
+    const imageBar = page.getByRole('group', { name: 'Image command' });
+    await expect(imageBar).toContainText('Pick a plane or flat face');
+    await clickGhostPlane(page, 'XY');
+    await expect(imageBar).toContainText('Click to move it');
+    await finishInPlaceCommand(page, 'Image');
+    await expect.poll(async () => (await drawnImages(canvas)).length).toBe(1);
+
+    await revealModelPanel(page, 'Revisions');
+    await saved.hover();
+    await saved.getByRole('button', { name: 'Preview Manual save' }).click();
+    const notice = page.getByRole('region', { name: 'Save preview' });
+    await expect(notice).toContainText('Previewing “Manual save”');
+    await expect.poll(async () => drawnImages(canvas)).toEqual([]);
+
+    await notice.getByRole('button', { name: 'Close preview' }).click();
+    await expect(notice).toHaveCount(0);
+    await expect.poll(async () => (await drawnImages(canvas)).length).toBe(1);
+  }
+);

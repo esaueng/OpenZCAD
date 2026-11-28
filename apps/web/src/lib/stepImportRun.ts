@@ -1,4 +1,8 @@
-import { boundedName, MAX_SOURCE_IMPORT_BYTES } from '@openzcad/shared';
+import {
+  boundedName,
+  importedStepSourceFormat,
+  MAX_SOURCE_IMPORT_BYTES
+} from '@openzcad/shared';
 /**
  * One STEP import, from the file the user chose to the fate of its source bytes.
  *
@@ -53,6 +57,7 @@ import {
 import { stepStructureLayout } from './stepStructureLayout';
 import {
   settleImportSource,
+  stepSourceArchive,
   type InFlightImportChecksums
 } from './importArchival';
 import type {
@@ -375,6 +380,36 @@ function importRunOutcome(input: {
     default:
       return { tone: 'error', message: input.thrown ?? 'the import failed' };
   }
+}
+
+/**
+ * The status line for a landed import. It names the format of the file the
+ * user chose: an IGES import read "Imported editable STEP solid from
+ * plate.igs" (#2103). An IGES import also says what was kept, because it is
+ * not the file that was chosen: its source is the exact STEP the IGES was
+ * restated as, and the IGES bytes themselves are not stored (#2380).
+ */
+export function importSuccessMessage(input: {
+  fileName: string;
+  archived: boolean;
+  bodies: number;
+}): string {
+  const iges = importedStepSourceFormat(input.fileName) === 'iges';
+  const format = iges ? 'IGES' : 'STEP';
+  const one = input.bodies === 1;
+  const bodies = one ? 'body' : 'bodies';
+  const source = iges ? 'STEP translation' : 'source';
+  return (
+    (one
+      ? `Imported editable ${format} solid from ${input.fileName}: `
+      : `Imported ${input.bodies} editable ${format} bodies from ${input.fileName}: `) +
+    (input.archived
+      ? `exact ${bodies} rebuilt, ${source} archived.`
+      : `exact ${bodies} rebuilt (cloud archive unavailable; ${source} saved locally).`) +
+    (iges
+      ? ' The original IGES file is not stored; its STEP translation is what saves, backs up and rebuilds.'
+      : '')
+  );
 }
 
 /** Turned away before anything was written, so there is nothing to report. */
@@ -789,7 +824,9 @@ export async function runStepImport(
         try {
           progress?.update({ phase: 'archiving', fraction: 0 });
           artifactId = await deps.archive({
-            fileName: file.name,
+            // An IGES import's bytes are its STEP translation, and the
+            // archive is named for what it holds (#2380).
+            fileName: stepSourceArchive(file.name).fileName,
             contentType: deps.contentType,
             kind: 'step-import',
             body: file,
@@ -822,12 +859,11 @@ export async function runStepImport(
           archived,
           bodies: payloads.length
         }) ??
-        (payloads.length === 1
-          ? `Imported editable STEP solid from ${file.name}: `
-          : `Imported ${payloads.length} editable STEP bodies from ${file.name}: `) +
-          (archived
-            ? `exact ${payloads.length === 1 ? 'body' : 'bodies'} rebuilt, source archived.`
-            : `exact ${payloads.length === 1 ? 'body' : 'bodies'} rebuilt (cloud archive unavailable; source saved locally).`) +
+        importSuccessMessage({
+          fileName: file.name,
+          archived,
+          bodies: payloads.length
+        }) +
           // I02: the flat reader stood in, so an assembly's parts sit at their
           // own origins, without names or colours from the file.
           (structureRefusal !== undefined

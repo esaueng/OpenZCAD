@@ -1240,6 +1240,11 @@ export function Inspector(props: InspectorProps) {
   const panelRef = useRef<HTMLElement | null>(null);
   // I03: read-only lengths in the display unit (before any early return).
   const readout = useLengthReadout(units);
+  // #2422: `units` is the project's, which a feature's values are in. A
+  // body, face or edge is read in the stored unit of the document its
+  // geometry is from: a saved version previewed in place of the project
+  // keeps its own, also while a feature of the project is selected.
+  const geometryUnits = props.massPropertiesDocument?.units ?? units;
   const editPanelKey =
     tool === null
       ? (selectedFeature?.featureId ??
@@ -1700,6 +1705,7 @@ export function Inspector(props: InspectorProps) {
             selectedBody.bodyId
           ) ?? null)
         : selectedBody;
+    const statsUnits = statsDocument?.units ?? units;
     const splitHalf =
       data.featureKind === 'split'
         ? (statsDocument?.derived.bodyRepresentations[data.secondBodyId] ??
@@ -1781,7 +1787,7 @@ export function Inspector(props: InspectorProps) {
               body={selectedBody}
               selection={selectedTopology}
               scope={scope}
-              units={units}
+              units={geometryUnits}
               onResizeThroughHole={props.onResizeThroughHole}
               onRemoveFaceFeature={props.onRemoveFaceFeature}
               recognition={props.recognition}
@@ -1798,7 +1804,7 @@ export function Inspector(props: InspectorProps) {
             {splitHalf && <h3 className="section-title">{statsBody.name}</h3>}
             <BodyStats
               body={statsBody}
-              units={units}
+              units={statsUnits}
               document={statsDocument}
               worker={props.massPropertiesWorker}
               lastApplied={measureLastApplied}
@@ -1811,7 +1817,7 @@ export function Inspector(props: InspectorProps) {
             <h3 className="section-title">{splitHalf.name}</h3>
             <BodyStats
               body={splitHalf}
-              units={units}
+              units={statsUnits}
               document={statsDocument}
               worker={props.massPropertiesWorker}
               lastApplied={measureLastApplied}
@@ -1837,7 +1843,7 @@ export function Inspector(props: InspectorProps) {
             <TopologyMeasurements
               body={selectedBody ?? undefined}
               selection={selectedTopology}
-              units={units}
+              units={geometryUnits}
             />
           </div>
         )}
@@ -1850,7 +1856,7 @@ export function Inspector(props: InspectorProps) {
           <TopologyMeasurements
             body={selectedBody ?? undefined}
             selection={selectedTopology}
-            units={units}
+            units={geometryUnits}
           />
         ) : null}
         {/* Opened by the rail's Edit face: the imported face's own
@@ -1864,7 +1870,7 @@ export function Inspector(props: InspectorProps) {
               body={selectedBody}
               selection={selectedTopology}
               scope={scope}
-              units={units}
+              units={geometryUnits}
               onResizeThroughHole={props.onResizeThroughHole}
               onRemoveFaceFeature={props.onRemoveFaceFeature}
               recognition={props.recognition}
@@ -1879,7 +1885,7 @@ export function Inspector(props: InspectorProps) {
         {statsBody && (
           <BodyStats
             body={statsBody}
-            units={units}
+            units={statsUnits}
             document={statsDocument}
             worker={props.massPropertiesWorker}
             lastApplied={measureLastApplied}
@@ -1958,7 +1964,7 @@ export function Inspector(props: InspectorProps) {
               body={selectedBody}
               selection={selectedTopology}
               scope={scope}
-              units={units}
+              units={geometryUnits}
               onResizeThroughHole={props.onResizeThroughHole}
               onRemoveFaceFeature={props.onRemoveFaceFeature}
               recognition={props.recognition}
@@ -1972,7 +1978,7 @@ export function Inspector(props: InspectorProps) {
           )}
         <BodyStats
           body={selectedBody}
-          units={units}
+          units={geometryUnits}
           document={props.massPropertiesDocument}
           worker={props.massPropertiesWorker}
         />

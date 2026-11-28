@@ -62,7 +62,13 @@ import {
   createDrawingViewId,
   MAX_DRAWING_DIMENSION_AFFIX_LENGTH,
   MAX_DRAWING_DIMENSION_COUNT,
+  drawingAnnotationToleranceFloorError,
   drawingToleranceError,
+  drawingToleranceFloorError,
+  drawingToleranceUnits,
+  DRAWING_ANGLE_DIMENSION_KINDS,
+  storedDrawingToleranceAmount,
+  pinDrawingToleranceUnits,
   MAX_DRAWING_DIMENSION_DECIMALS,
   MAX_DRAWING_TOLERANCE,
   MAX_DRAWING_IMAGE_WIDTH_MM,
@@ -212,6 +218,9 @@ import {
   DEFAULT_BOM_COLUMNS,
   sheetMarkLookup,
   sheetNumberFormat,
+  toleranceUnitFactor,
+  printedToleranceAmount,
+  formatDrawingNumber,
   type DrawingNumberFormat,
   markHiddenLeaders,
   markBrokenHosts,
@@ -2164,6 +2173,7 @@ function AnnotationProperties(props: {
         <DimensionFormat
           selected={selected}
           editable={editable}
+          units={props.numberFormat.units}
           onUpdate={props.onUpdate}
         />
       )}
@@ -2364,12 +2374,35 @@ function ToleranceAnnotationFields(props: {
         </select>
       </label>
       <FrameAmountField
-        value={frame.amount}
+        key={frame.annotationId}
+        value={printedToleranceAmount(
+          frame.amount,
+          toleranceUnitFactor(frame, props.numberFormat.units)
+        )}
         units={props.numberFormat.units}
         disabled={!editable}
-        onCommit={(amount) =>
-          update({ ...frame, amount }, 'Change frame tolerance')
-        }
+        onCommit={(typed) => {
+          // v156: a typed amount is in the printed units, stored without
+          // rounding in the units the frame is in, else in those.
+          const printed = props.numberFormat.units;
+          const stored = storedTypedAmount(
+            typed,
+            toleranceUnitFactor(frame, printed),
+            drawingToleranceUnits(frame, printed),
+            printed
+          );
+          if (!stored) return roundingRefusal(typed, unitLabel(printed));
+          const next = { ...frame, ...stored };
+          if (next.amount <= 0) return 'A frame’s tolerance is more than 0.';
+          const floor = drawingAnnotationToleranceFloorError(
+            next,
+            printed,
+            frame
+          );
+          if (floor) return floor;
+          update(next, 'Change frame tolerance');
+          return null;
+        }}
       />
       <label className="drawing-check">
         <input
@@ -2511,15 +2544,56 @@ function ToleranceAnnotationFields(props: {
   );
 }
 
-/** D07 (v98): a frame's tolerance, positive, in the sheet's printed units. */
+/**
+ * A tolerance amount as a field shows it: in plain decimals, where
+ * `String` would write a converted 0.00000039 as 3.9e-7.
+ */
+function amountText(value: number): string {
+  const text = String(value);
+  return /e/i.test(text) ? formatDrawingNumber(value, 12) : text;
+}
+
+/** v156: how the editor writes a unit after an amount. */
+function unitLabel(units: UnitSystem): string {
+  return units === 'inch' ? 'in' : units;
+}
+
+/**
+ * v156: an amount typed in the printed units as a tolerance stores it,
+ * never rounded: in `units`, the units the tolerance is in (`factor`
+ * converts them to the printed units), when that states it exactly, else
+ * in the printed units; null when neither does.
+ */
+function storedTypedAmount(
+  typed: number,
+  factor: number,
+  units: UnitSystem,
+  printed: UnitSystem
+): { amount: number; units: UnitSystem } | null {
+  const kept = storedDrawingToleranceAmount(typed / factor);
+  if (kept !== null) return { amount: kept, units };
+  const restated = storedDrawingToleranceAmount(typed);
+  return restated === null ? null : { amount: restated, units: printed };
+}
+
+/** v156: why a typed amount (`unit` its label) is refused, not rounded. */
+function roundingRefusal(typed: number, unit: string): string {
+  return `${amountText(typed)}${unit === '°' ? '' : ' '}${unit} would round: a tolerance stores at most ${MAX_DRAWING_DIMENSION_DECIMALS} decimals.`;
+}
+
+/**
+ * D07 (v98): a frame's tolerance, positive, in the sheet's printed units.
+ * `onCommit` returns why it refused the amount, shown under the field.
+ */
 function FrameAmountField(props: {
   value: number;
   units: UnitSystem;
   disabled: boolean;
-  onCommit: (value: number) => void;
+  onCommit: (value: number) => string | null;
 }) {
-  const [draft, setDraft] = useState(String(props.value));
-  useEffect(() => setDraft(String(props.value)), [props.value]);
+  const [draft, setDraft] = useState(amountText(props.value));
+  const [refusal, setRefusal] = useState<string | null>(null);
+  useEffect(() => setDraft(amountText(props.value)), [props.value]);
   const commit = () => {
     const value = Number(draft);
     if (
@@ -2527,31 +2601,37 @@ function FrameAmountField(props: {
       Number.isFinite(value) &&
       value > 0 &&
       value <= MAX_DRAWING_TOLERANCE &&
-      Number(value.toFixed(MAX_DRAWING_DIMENSION_DECIMALS)) === value &&
       value !== props.value
     )
-      props.onCommit(value);
-    setDraft(String(props.value));
+      setRefusal(props.onCommit(value));
+    setDraft(amountText(props.value));
   };
   return (
-    <label className="drawing-field">
-      <span>Tolerance ({props.units === 'inch' ? 'in' : props.units})</span>
-      <input
-        type="number"
-        step="any"
-        min={0}
-        value={draft}
-        disabled={props.disabled}
-        aria-label="Frame tolerance"
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') commit();
-          if (event.key === 'Escape')
-            resetDraft(event, draft, String(props.value), setDraft);
-        }}
-      />
-    </label>
+    <>
+      <label className="drawing-field">
+        <span>Tolerance ({props.units === 'inch' ? 'in' : props.units})</span>
+        <input
+          type="number"
+          step="any"
+          min={0}
+          value={draft}
+          disabled={props.disabled}
+          aria-label="Frame tolerance"
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') commit();
+            if (event.key === 'Escape')
+              resetDraft(event, draft, amountText(props.value), setDraft);
+          }}
+        />
+      </label>
+      {refusal && (
+        <p className="drawing-hint" role="alert">
+          {refusal}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -2562,6 +2642,8 @@ function FrameAmountField(props: {
 function DimensionFormat(props: {
   selected: DrawingDimension;
   editable: boolean;
+  /** The units the sheet prints lengths in. */
+  units: UnitSystem;
   onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
 }) {
   const { selected, editable } = props;
@@ -2715,6 +2797,7 @@ function DimensionFormat(props: {
       <ToleranceFields
         selected={selected}
         editable={editable}
+        units={props.units}
         onUpdate={props.onUpdate}
       />
     </>
@@ -3037,21 +3120,82 @@ const TOLERANCE_LABELS: Readonly<Record<DrawingToleranceKind, string>> = {
 
 /**
  * v68: a dimension's tolerance. Amounts are deviations from the measured
- * value in the sheet's printed units (degrees on an angle), so Limits print the
- * value plus each and follow the model through every Update.
+ * value, so Limits print the value plus each and follow the model through
+ * every Update. The fields show and take them in the sheet's printed units
+ * (degrees on an angle); v156 stores a length's with its units, so a later
+ * change of the sheet's units converts them. A typed amount is never
+ * rounded: it is stored in the units the tolerance is in when they state it
+ * exactly, else in the printed units, else refused with a message, as is
+ * one finer than the v156 floor (see `setBound`).
  */
 function ToleranceFields(props: {
   selected: DrawingDimension;
   editable: boolean;
+  /** The units the sheet prints lengths in. */
+  units: UnitSystem;
   onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
 }) {
   const { selected, editable } = props;
+  // v156: why the last typed amount was refused, until another is taken.
+  const [refusal, setRefusal] = useState<string | null>(null);
+  useEffect(() => setRefusal(null), [selected.annotationId]);
+  const angular = (
+    DRAWING_ANGLE_DIMENSION_KINDS as readonly DrawingDimension['kind'][]
+  ).includes(selected.kind);
+  /** v156: a new or retyped length tolerance is in the printed units. */
+  const printed = angular ? {} : { units: props.units };
   const callout =
     selected.kind === 'chamfer' ||
     ('counterbore' in selected && selected.counterbore !== undefined) ||
     ('countersink' in selected && selected.countersink !== undefined);
   if (callout) return null;
   const tolerance = selected.tolerance;
+  // v156: what a stored amount reads in the printed units, and the units a
+  // kept amount stays in.
+  const factor =
+    !angular && tolerance && tolerance.kind !== 'basic'
+      ? toleranceUnitFactor(tolerance, props.units)
+      : 1;
+  const shown = (amount: number) => printedToleranceAmount(amount, factor);
+  const kept =
+    angular || !tolerance || tolerance.kind === 'basic'
+      ? printed
+      : { units: drawingToleranceUnits(tolerance, props.units) };
+  const pairUnits = 'units' in kept ? kept.units : undefined;
+  const typedUnit = angular ? '°' : unitLabel(props.units);
+  /**
+   * One bound of a pair, typed in the printed units: the pair is kept in
+   * the units it is in when they state the typed bound exactly (0.005 in is
+   * 0.127 mm), else restated in the printed units when both bounds are
+   * exact in them, else refused, so neither bound is ever rounded.
+   */
+  const setBound = (
+    pair: Extract<DrawingTolerance, { upper: number }>,
+    edited: 'upper' | 'lower',
+    value: number
+  ) => {
+    const join = (typed: number, other: number) =>
+      edited === 'upper'
+        ? { upper: typed, lower: other }
+        : { upper: other, lower: typed };
+    const inPair = storedDrawingToleranceAmount(value / factor);
+    if (inPair !== null)
+      return set({
+        kind: pair.kind,
+        ...join(inPair, edited === 'upper' ? pair.lower : pair.upper),
+        ...(pairUnits === undefined ? {} : { units: pairUnits })
+      });
+    const typed = storedDrawingToleranceAmount(value);
+    if (typed === null) return setRefusal(roundingRefusal(value, typedUnit));
+    const other = storedDrawingToleranceAmount(
+      (edited === 'upper' ? pair.lower : pair.upper) * factor
+    );
+    if (other === null)
+      return setRefusal(
+        `${amountText(value)} ${typedUnit} would round in ${UNIT_NAMES[pairUnits ?? props.units].toLowerCase()}, the units this tolerance is in, and its other bound would round in ${UNIT_NAMES[props.units].toLowerCase()}.`
+      );
+    set({ kind: pair.kind, ...join(typed, other), ...printed });
+  };
   const set = (next: DrawingTolerance | null) => {
     // v105: a toleranced diameter states its diameter, not a hole's
     // callout, so a thread class goes with the callout.
@@ -3061,6 +3205,14 @@ function ToleranceFields(props: {
         ? (({ threadClass: _thread, ...other }) => other)(kept)
         : kept;
     if (next && drawingToleranceError(next)) return;
+    // v156: a new tolerance is at least the floor; what this one already
+    // states keeps its meaning.
+    const floor =
+      next && !angular
+        ? drawingToleranceFloorError(next, props.units, tolerance)
+        : null;
+    setRefusal(floor);
+    if (floor) return;
     props.onUpdate(
       next ? { ...rest, tolerance: next } : rest,
       'Tolerance dimension'
@@ -3089,25 +3241,36 @@ function ToleranceFields(props: {
             if (kind === '') set(null);
             else if (kind === 'basic') set({ kind });
             else if (kind === 'symmetric')
-              set({
-                kind,
-                value:
-                  tolerance && 'upper' in tolerance
-                    ? Math.max(
+              set(
+                tolerance && 'upper' in tolerance
+                  ? {
+                      kind,
+                      value: Math.max(
                         Math.abs(tolerance.upper),
                         Math.abs(tolerance.lower)
-                      )
-                    : step
-              });
+                      ),
+                      ...kept
+                    }
+                  : { kind, value: step, ...printed }
+              );
             else
-              set({
-                kind,
-                ...(tolerance && 'upper' in tolerance
-                  ? { upper: tolerance.upper, lower: tolerance.lower }
+              set(
+                tolerance && 'upper' in tolerance
+                  ? {
+                      kind,
+                      upper: tolerance.upper,
+                      lower: tolerance.lower,
+                      ...kept
+                    }
                   : tolerance?.kind === 'symmetric'
-                    ? { upper: tolerance.value, lower: -tolerance.value }
-                    : { upper: step, lower: -step })
-              });
+                    ? {
+                        kind,
+                        upper: tolerance.value,
+                        lower: -tolerance.value,
+                        ...kept
+                      }
+                    : { kind, upper: step, lower: -step, ...printed }
+              );
           }}
         >
           <option value="">None</option>
@@ -3123,24 +3286,38 @@ function ToleranceFields(props: {
       {tolerance?.kind === 'symmetric' && (
         <AmountField
           label="±"
-          value={tolerance.value}
+          value={shown(tolerance.value)}
           disabled={!editable}
-          onCommit={(value) => set({ kind: 'symmetric', value })}
+          onCommit={(value) => {
+            const stored = storedTypedAmount(
+              value,
+              factor,
+              pairUnits ?? props.units,
+              props.units
+            );
+            if (!stored) setRefusal(roundingRefusal(value, typedUnit));
+            else
+              set({
+                kind: 'symmetric',
+                value: stored.amount,
+                ...(angular ? {} : { units: stored.units })
+              });
+          }}
         />
       )}
       {(tolerance?.kind === 'deviation' || tolerance?.kind === 'limits') && (
         <div className="drawing-field-row">
           <AmountField
             label="Upper"
-            value={tolerance.upper}
+            value={shown(tolerance.upper)}
             disabled={!editable}
-            onCommit={(upper) => set({ ...tolerance, upper })}
+            onCommit={(upper) => setBound(tolerance, 'upper', upper)}
           />
           <AmountField
             label="Lower"
-            value={tolerance.lower}
+            value={shown(tolerance.lower)}
             disabled={!editable}
-            onCommit={(lower) => set({ ...tolerance, lower })}
+            onCommit={(lower) => setBound(tolerance, 'lower', lower)}
           />
         </div>
       )}
@@ -3155,6 +3332,11 @@ function ToleranceFields(props: {
                 : 'The measured value plus each deviation, upper over lower.'}
           </p>
         )}
+      {refusal && (
+        <p className="drawing-hint" role="alert">
+          {refusal}
+        </p>
+      )}
     </>
   );
 }
@@ -3170,15 +3352,15 @@ function AmountField(props: {
   disabled: boolean;
   onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(String(props.value));
-  useEffect(() => setDraft(String(props.value)), [props.value]);
+  const [draft, setDraft] = useState(amountText(props.value));
+  useEffect(() => setDraft(amountText(props.value)), [props.value]);
   const commit = () => {
     const value = Number(draft);
     if (draft.trim() !== '' && Number.isFinite(value) && value !== props.value)
       props.onCommit(value);
     // Accepted, the new value replaces this on its way back; refused, the
     // stored one does.
-    setDraft(String(props.value));
+    setDraft(amountText(props.value));
   };
   return (
     <label className="drawing-field">
@@ -3194,7 +3376,7 @@ function AmountField(props: {
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit();
           if (event.key === 'Escape')
-            resetDraft(event, draft, String(props.value), setDraft);
+            resetDraft(event, draft, amountText(props.value), setDraft);
         }}
       />
     </label>
@@ -5543,11 +5725,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
    * v98: a new datum symbol takes the drawing's next free letter, and a new
    * frame about a tenth of a millimetre in the sheet's printed units.
    */
-  const toleranceDefaults = () => ({
-    letter: nextDatumLetter(datumLetters.keys()),
-    amount:
-      DEFAULT_FRAME_AMOUNT[sheetNumberFormat(sheet ?? {}, document.units).units]
-  });
+  const toleranceDefaults = () => {
+    const units = sheetNumberFormat(sheet ?? {}, document.units).units;
+    return {
+      letter: nextDatumLetter(datumLetters.keys()),
+      amount: DEFAULT_FRAME_AMOUNT[units],
+      // v156: a new frame states the units its amount is in.
+      units
+    };
+  };
   const commitAnnotation = (finished: AnnotationTool, at: [number, number]) => {
     if (!sheet) return;
     const view = finished.viewId
@@ -7382,9 +7568,30 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       format={sheet.format}
       documentUnits={document.units}
       editable={editable}
-      onChange={(format) =>
-        updateSheet({ format }, 'Change drawing properties')
-      }
+      onChange={(format) => {
+        // v156: a change of the printed units first states the old ones on
+        // every tolerance that states none, so each keeps its meaning and
+        // prints converted (#2162, #2238).
+        const before = sheetNumberFormat(sheet, document.units).units;
+        const after = sheetNumberFormat(
+          format ? { format } : {},
+          document.units
+        ).units;
+        const annotations = sheet.annotations ?? [];
+        const pinned = pinDrawingToleranceUnits(annotations, before);
+        updateSheet(
+          {
+            format,
+            ...(before !== after &&
+            pinned.some(
+              (annotation, index) => annotation !== annotations[index]
+            )
+              ? { pinToleranceUnits: before }
+              : {})
+          },
+          'Change drawing properties'
+        );
+      }}
     />
   );
   const generalTolerances = (
