@@ -17,6 +17,7 @@ import {
   type DrawingView,
   type DrawingViewId,
   DRAWING_EXPLODED_VIEW_ANNOTATIONS,
+  drawingAnnotationToleranceFloorError,
   pinDrawingToleranceUnits,
   type ProjectDocument,
   type UnitSystem
@@ -717,6 +718,35 @@ function assertAnnotationEdgesInView(
     if (!view.bodyIds.includes(edge.bodyId))
       throw new Error(`Body ${edge.bodyId} is not drawn in that view.`);
   }
+}
+
+/**
+ * v156: refuses a new edit's tolerance finer than
+ * `MIN_DRAWING_TOLERANCE_MM` (see `drawingAnnotationToleranceFloorError`).
+ * `commandFactories` checks every fresh annotation add and update; a
+ * logged one replays as it was recorded, and loading never checks it, so a
+ * document stored before the floor still opens unchanged.
+ */
+export function assertDrawingAnnotationToleranceFloor(
+  document: ProjectDocument,
+  input: DrawingAnnotationAddInput | DrawingAnnotationUpdateInput
+): void {
+  const sheet = document.drawings?.sheets.find(
+    (entry) => entry.sheetId === input.sheetId
+  );
+  if (!sheet) return;
+  const previous = sheet.annotations?.find(
+    (entry) => entry.annotationId === input.annotation.annotationId
+  );
+  const error = drawingAnnotationToleranceFloorError(
+    input.annotation,
+    sheet.format?.units ?? document.units,
+    previous
+  );
+  if (error)
+    throw new Error(
+      `Drawing annotation ${input.annotation.annotationId}: ${error}`
+    );
 }
 
 export function addDrawingAnnotation(

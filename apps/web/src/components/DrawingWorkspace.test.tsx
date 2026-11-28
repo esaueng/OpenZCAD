@@ -33,6 +33,9 @@ import {
   type DrawingLinearDimension,
   type DrawingEdgeRef,
   type DrawingSheet,
+  type DrawingTolerance,
+  type DrawingFeatureControlFrame,
+  type UnitSystem,
   type ProjectDocument
 } from '@openzcad/shared';
 import { DrawingWorkspace, resetRetainedProjections } from './DrawingWorkspace';
@@ -1977,7 +1980,7 @@ describe('DrawingWorkspace', () => {
       });
     });
 
-    it('shows a millimetre tolerance in inches and restates an edit in inches (v156)', async () => {
+    it('shows a millimetre tolerance in inches and keeps an exact edit in millimetres (v156)', async () => {
       const sheet: DrawingSheet = {
         ...dimensioned(),
         format: { units: 'inch' }
@@ -2033,10 +2036,11 @@ describe('DrawingWorkspace', () => {
         (command.payload as { annotation: DrawingLinearDimension }).annotation
           .tolerance
       ).toEqual({
+        // 0.005 in is exactly 0.127 mm, so neither bound is rounded.
         kind: 'deviation',
-        upper: 0.005,
-        lower: -0.001969,
-        units: 'inch'
+        upper: 0.127,
+        lower: -0.05,
+        units: 'mm'
       });
     });
 
@@ -2109,6 +2113,190 @@ describe('DrawingWorkspace', () => {
           name: 'Frame tolerance'
         }).value
       ).toBe('0.00000039');
+    });
+
+    /** v156: `dimensioned()` on a `units` sheet with `tolerance`, selected. */
+    async function tolerancedOn(
+      units: UnitSystem,
+      tolerance: DrawingTolerance
+    ) {
+      const sheet: DrawingSheet = { ...dimensioned(), format: { units } };
+      const linear = sheet.annotations![0] as DrawingLinearDimension;
+      sheet.annotations = [{ ...linear, tolerance }];
+      const { onCommand } = setup({ sheet });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      await userEvent.click(
+        await within(canvas).findByRole('button', {
+          name: /^Horizontal dimension/
+        })
+      );
+      const field = (name: 'upper' | 'lower') =>
+        screen.getByRole<HTMLInputElement>('spinbutton', {
+          name: `Tolerance ${name}`
+        });
+      const type = async (name: 'upper' | 'lower', text: string) => {
+        await userEvent.clear(field(name));
+        await userEvent.type(field(name), `${text}{Enter}`);
+      };
+      const updates = () =>
+        onCommand.mock.calls
+          .map(([command]) => command)
+          .filter((command) => command.kind === 'drawing.annotation.update');
+      return { field, type, updates };
+    }
+
+    it('keeps a typed bound in the pair’s units when they state it exactly (re-check P2)', async () => {
+      // 0.0000003 m has seven decimals in metres but is 0.0003 mm.
+      const { type, updates } = await tolerancedOn('m', {
+        kind: 'deviation',
+        upper: 0.0002,
+        lower: 0,
+        units: 'mm'
+      });
+      await type('upper', '0.0000003');
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(
+        (updates().at(-1)!.payload as { annotation: DrawingLinearDimension })
+          .annotation.tolerance
+      ).toEqual({ kind: 'deviation', upper: 0.0003, lower: 0, units: 'mm' });
+    });
+
+    it('refuses a typed bound finer than the floor with a message, never silently (re-check P2)', async () => {
+      // 0.000000004 m is 0.000004 mm, exact in the pair's millimetres but
+      // finer than 0.0001 mm.
+      const { field, type, updates } = await tolerancedOn('m', {
+        kind: 'deviation',
+        upper: 0.000002,
+        lower: 0,
+        units: 'mm'
+      });
+      expect(field('upper').value).toBe('0.000000002');
+      await type('upper', '0.000000004');
+      expect(updates()).toHaveLength(0);
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'A tolerance is at least 0.0001 mm.'
+      );
+      // The field shows the stored bound again, beside the message.
+      expect(Number(field('upper').value)).toBe(0.000000002);
+    });
+
+    it('refuses a typed bound neither units store exactly, never rounding it (re-check P2)', async () => {
+      // 0.00000004 m is 0.0000015748 in: neither inches nor metres store it.
+      const { type, updates } = await tolerancedOn('m', {
+        kind: 'deviation',
+        upper: 0.000003,
+        lower: -0.000001,
+        units: 'inch'
+      });
+      await type('upper', '0.00000004');
+      expect(updates()).toHaveLength(0);
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        '0.00000004 m would round: a tolerance stores at most 6 decimals.'
+      );
+    });
+
+    it('restates the pair in the sheet’s units when both bounds are exact there (re-check P2)', async () => {
+      // 0.0008 mm is 0.0000315 in, so the pair moves to millimetres, where
+      // its lower bound, 0.00001 in, would be 0.000254 mm, exact, while
+      // 0.000013 in would be 0.0003302 mm.
+      const exact = await tolerancedOn('mm', {
+        kind: 'deviation',
+        upper: 0.00003,
+        lower: -0.00001,
+        units: 'inch'
+      });
+      await exact.type('upper', '0.0008');
+      expect(
+        (
+          exact.updates().at(-1)!.payload as {
+            annotation: DrawingLinearDimension;
+          }
+        ).annotation.tolerance
+      ).toEqual({
+        kind: 'deviation',
+        upper: 0.0008,
+        lower: -0.000254,
+        units: 'mm'
+      });
+    });
+
+    it('refuses a typed bound when the other bound is not exact in the sheet’s units (re-check P2)', async () => {
+      const { type, updates } = await tolerancedOn('mm', {
+        kind: 'deviation',
+        upper: 0.00003,
+        lower: -0.000013,
+        units: 'inch'
+      });
+      await type('upper', '0.0008');
+      expect(updates()).toHaveLength(0);
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        '0.0008 mm would round in inches, the units this tolerance is in, and its other bound would round in millimetres.'
+      );
+    });
+
+    it('stores a frame amount without rounding it, or says why not (re-check P2)', async () => {
+      const sheet: DrawingSheet = {
+        ...dimensioned(),
+        format: { units: 'inch' }
+      };
+      const linear = sheet.annotations![0] as DrawingLinearDimension;
+      sheet.annotations = [
+        linear,
+        {
+          annotationId: 'dann_f' as DrawingAnnotationId,
+          kind: 'feature-control-frame',
+          viewId: linear.viewId,
+          attachedTo: linear.annotationId,
+          characteristic: 'flatness',
+          amount: 0.1,
+          units: 'mm',
+          placementMm: { x: 0, y: 0 }
+        }
+      ];
+      const { onCommand } = setup({ sheet });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      await userEvent.click(
+        await within(canvas).findByRole('button', {
+          name: /^Feature control frame/
+        })
+      );
+      const amount = () =>
+        screen.getByRole<HTMLInputElement>('spinbutton', {
+          name: 'Frame tolerance'
+        });
+      const type = async (text: string) => {
+        await userEvent.clear(amount());
+        await userEvent.type(amount(), `${text}{Enter}`);
+      };
+      const frames = () =>
+        onCommand.mock.calls
+          .map(([command]) => command)
+          .filter((command) => command.kind === 'drawing.annotation.update')
+          .map(
+            (command) =>
+              (command.payload as { annotation: DrawingFeatureControlFrame })
+                .annotation
+          );
+      // 0.0000001 in is neither stored in inches nor exact in millimetres.
+      await type('0.0000001');
+      expect(frames()).toHaveLength(0);
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        '0.0000001 in would round: a tolerance stores at most 6 decimals.'
+      );
+      // 0.000002 in is 0.0000508 mm, finer than the floor.
+      await type('0.000002');
+      expect(frames()).toHaveLength(0);
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'A tolerance is at least 0.0001 mm.'
+      );
+      // 0.002 in is exactly 0.0508 mm, kept in the frame's millimetres.
+      await type('0.002');
+      expect(frames().at(-1)).toMatchObject({ amount: 0.0508, units: 'mm' });
+      expect(screen.queryByRole('alert')).toBeNull();
     });
 
     it('states a frame’s characteristic, tolerance and datums (D07 v98)', async () => {

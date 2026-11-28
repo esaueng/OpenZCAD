@@ -1084,6 +1084,115 @@ export function pinDrawingToleranceUnits(
   });
 }
 
+/**
+ * v156: the smallest physical tolerance a new edit may state, in
+ * millimetres: each nonzero amount, and the gap between two limits, is at
+ * least this in whatever units it is stored in. With it, a tolerance never
+ * needs more than 12 decimals to print distinct limits in any units.
+ */
+export const MIN_DRAWING_TOLERANCE_MM = 0.0001;
+
+/** Millimetres per tolerance unit (kept local: `index` imports this file). */
+const TOLERANCE_UNIT_MM: Readonly<Record<UnitSystem, number>> = {
+  mm: 1,
+  cm: 10,
+  m: 1000,
+  inch: 25.4
+};
+
+/**
+ * v156: `value` as a tolerance stores it (at most
+ * {@link MAX_DRAWING_DIMENSION_DECIMALS} decimals, bounded), or null when
+ * storing it would round it. Float noise (0.005 in is 0.12699999… mm) is
+ * not rounding.
+ */
+export function storedDrawingToleranceAmount(value: number): number | null {
+  if (!Number.isFinite(value) || Math.abs(value) > MAX_DRAWING_TOLERANCE)
+    return null;
+  const stored = Number(value.toFixed(MAX_DRAWING_DIMENSION_DECIMALS));
+  return Math.abs(stored - value) <= 1e-9 * Math.abs(value)
+    ? stored || 0
+    : null;
+}
+
+/**
+ * v156: why a new edit's length tolerance (or a frame's amount, as
+ * `{ kind: 'symmetric', value: amount, units }`) is finer than
+ * {@link MIN_DRAWING_TOLERANCE_MM}, or null. `printed` is the sheet's
+ * printed units (an unstated tolerance's). An amount `previous`, the
+ * tolerance the edit replaces, already states keeps its meaning, so a
+ * document stored before the floor still opens and can be edited.
+ */
+export function drawingToleranceFloorError(
+  next: DrawingTolerance,
+  printed: UnitSystem,
+  previous?: DrawingTolerance
+): string | null {
+  if (next.kind === 'basic') return null;
+  const mm = (tolerance: { units?: UnitSystem }, amount: number) =>
+    amount * TOLERANCE_UNIT_MM[drawingToleranceUnits(tolerance, printed)];
+  const before =
+    previous === undefined || previous.kind === 'basic'
+      ? []
+      : (previous.kind === 'symmetric'
+          ? [previous.value, -previous.value]
+          : [previous.upper, previous.lower]
+        ).map((amount) => mm(previous, amount));
+  const kept = (amount: number) =>
+    before.some(
+      (stated) =>
+        Math.abs(stated - amount) <= 1e-9 * Math.max(Math.abs(amount), 1e-9)
+    );
+  const fine = (amount: number) =>
+    Math.abs(amount) < MIN_DRAWING_TOLERANCE_MM * (1 - 1e-9);
+  const amounts =
+    next.kind === 'symmetric' ? [next.value] : [next.upper, next.lower];
+  for (const amount of amounts.map((stated) => mm(next, stated)))
+    if (amount !== 0 && fine(amount) && !kept(amount))
+      return `A tolerance is at least ${MIN_DRAWING_TOLERANCE_MM} mm.`;
+  if (next.kind !== 'symmetric') {
+    const [upper, lower] = [mm(next, next.upper), mm(next, next.lower)];
+    if (fine(upper - lower) && !(kept(upper) && kept(lower)))
+      return `Limits are at least ${MIN_DRAWING_TOLERANCE_MM} mm apart.`;
+  }
+  return null;
+}
+
+/**
+ * v156: {@link drawingToleranceFloorError} for an annotation a new edit
+ * states, replacing `previous` (absent when it is added): a length
+ * dimension's tolerance, or a frame's amount. Angles are in degrees.
+ */
+export function drawingAnnotationToleranceFloorError(
+  next: DrawingAnnotation,
+  printed: UnitSystem,
+  previous?: DrawingAnnotation
+): string | null {
+  const stated = (
+    annotation: DrawingAnnotation | undefined
+  ): DrawingTolerance | undefined => {
+    if (annotation === undefined) return undefined;
+    if (annotation.kind === 'feature-control-frame')
+      return {
+        kind: 'symmetric',
+        value: annotation.amount,
+        ...(annotation.units === undefined ? {} : { units: annotation.units })
+      };
+    if (
+      !('tolerance' in annotation) ||
+      (DRAWING_ANGLE_DIMENSION_KINDS as readonly string[]).includes(
+        annotation.kind
+      )
+    )
+      return undefined;
+    return annotation.tolerance;
+  };
+  const tolerance = stated(next);
+  return tolerance === undefined
+    ? null
+    : drawingToleranceFloorError(tolerance, printed, stated(previous));
+}
+
 /** Why `value` is not a stored {@link DrawingTolerance}, or null. */
 export function drawingToleranceError(value: unknown): string | null {
   if (!isRecord(value)) return 'has a tolerance that is not a record';

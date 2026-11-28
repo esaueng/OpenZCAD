@@ -12,3 +12,8 @@ Every format change a v156 client builds works out its own pin, while a
 pre-v156 log entry replays as recorded. A tiny converted amount still prints
 nonzero (0.00001 mm is 0.00000039 in), and a pre-v156 document refuses edits
 that state units.
+A new edit's tolerance is at least 0.0001 mm (each nonzero amount, and the
+gap between two limits) in whatever units it is stored in; a stored one
+below that still opens and prints. Limits print with enough decimals (at
+most 12) to stay distinct, and the editor stores a typed amount without
+rounding it, in the tolerance's own units or the sheet's, or says why not.

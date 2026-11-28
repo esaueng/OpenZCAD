@@ -306,6 +306,7 @@ import {
   type ObjectFolderDeleteInput,
   type ObjectFolderMoveInput,
   addDrawingAnnotation,
+  assertDrawingAnnotationToleranceFloor,
   updateDrawingAnnotation,
   deleteDrawingAnnotation,
   type DrawingAnnotationAddInput,
@@ -4040,7 +4041,10 @@ export const commandFactories = {
           ? 'Add mark'
           : 'Add dimension',
       payload,
-      (document) => addDrawingAnnotation(document, payload)
+      (document) => addDrawingAnnotation(document, payload),
+      // v156: a fresh edit states no tolerance finer than the floor; a
+      // logged one replays as it was recorded.
+      (document) => assertDrawingAnnotationToleranceFloor(document, payload)
     );
   },
   updateDrawingAnnotation(
@@ -4051,7 +4055,8 @@ export const commandFactories = {
       'drawing.annotation.update',
       label,
       payload,
-      (document) => updateDrawingAnnotation(document, payload)
+      (document) => updateDrawingAnnotation(document, payload),
+      (document) => assertDrawingAnnotationToleranceFloor(document, payload)
     );
   },
   deleteDrawingAnnotation(

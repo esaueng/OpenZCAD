@@ -14,6 +14,7 @@ import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   drawingAnnotationError,
   drawingToleranceError,
+  MIN_DRAWING_TOLERANCE_MM,
   pinDrawingToleranceUnits,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
@@ -44,6 +45,7 @@ import {
   drawingNumberFormat,
   formatDimension,
   formatFrameTolerance,
+  MAX_CONVERTED_TOLERANCE_DECIMALS,
   resolveSheetAnnotations
 } from '../apps/web/src/lib/drawing/annotations';
 
@@ -641,5 +643,203 @@ describe('D02/D07 tolerance units (schema v156)', () => {
       commandFactories.updateDrawingSheet({ sheetId, format: { decimals: 4 } })
     );
     expect(() => assertStorableDocument(manager.document)).not.toThrow();
+  });
+
+  it('prints distinct limits distinct, from the gap between them (re-check P2)', () => {
+    const ref: DrawingEdgeRef = { bodyId: 'b' as BodyId, hash: 7 };
+    const inch = drawingNumberFormat({ units: 'inch' }, 'mm');
+    const nominal = {
+      symbol: '',
+      value: 1.4,
+      decimals: 3,
+      kind: 'length' as const
+    };
+    const print = (tolerance: DrawingDimension['tolerance']) =>
+      formatDimension(width(ref, { tolerance }), nominal, inch).text?.stack;
+    // 500.000001 and 500 mm differ by 0.000001 mm, 0.00000004 in.
+    const limits = print({
+      kind: 'limits',
+      upper: 500.000001,
+      lower: 500,
+      units: 'mm'
+    })!;
+    expect(limits[0]).not.toBe(limits[1]);
+    expect(limits).toEqual(['21.08503941', '21.08503937']);
+    expect(
+      print({ kind: 'deviation', upper: 500.000001, lower: 500, units: 'mm' })
+    ).toEqual(['+19.68503941', '+19.68503937']);
+    // Ordinary tolerances keep the decimals they had.
+    expect(
+      print({ kind: 'deviation', upper: 0.1, lower: -0.05, units: 'mm' })
+    ).toEqual(['+0.0039', '-0.0020']);
+  });
+
+  it('prints every pair at least the floor apart distinct within the cap', () => {
+    const ref: DrawingEdgeRef = { bodyId: 'b' as BodyId, hash: 7 };
+    const units = ['mm', 'cm', 'm', 'inch'] as const;
+    const perMm = { mm: 1, cm: 10, m: 1000, inch: 25.4 };
+    for (const stored of units) {
+      // The floor's gap, as the stored units state it to six decimals.
+      const gap =
+        Math.ceil((MIN_DRAWING_TOLERANCE_MM / perMm[stored]) * 1e6) / 1e6;
+      for (const printed of units) {
+        const format = drawingNumberFormat({ units: printed }, 'mm');
+        for (const value of [0.001, 1.4, 987.654321])
+          for (const lower of [-0.000001, 0, 0.3, 499.999999]) {
+            const upper = Number((lower + gap).toFixed(6));
+            for (const kind of ['limits', 'deviation'] as const) {
+              const tolerance = { kind, upper, lower, units: stored };
+              expect(drawingToleranceError(tolerance)).toBeNull();
+              const stack = formatDimension(
+                width(ref, { tolerance }),
+                { symbol: '', value, decimals: 3, kind: 'length' },
+                format
+              ).text!.stack!;
+              const what = `${kind} ${upper}/${lower} ${stored} on ${printed}`;
+              expect(stack[0], what).not.toBe(stack[1]);
+              // Distinct below the cap, so the cap never decides it.
+              for (const text of stack)
+                expect((text.split('.')[1] ?? '').length, what).toBeLessThan(
+                  MAX_CONVERTED_TOLERANCE_DECIMALS
+                );
+            }
+          }
+      }
+    }
+  });
+
+  it('refuses a new tolerance finer than 0.0001 mm, and keeps a stored one (re-check P2)', async () => {
+    const { document, bodies, bodyId, ref } = await boxModel();
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.addDrawingSheet({
+        sheet: { ...sheetOf([bodyId], []), format: { units: 'inch' } }
+      })
+    );
+    const before = manager.document;
+    const add = (annotation: DrawingAnnotation) =>
+      commandFactories.addDrawingAnnotation({ sheetId, annotation });
+    const fine = /A tolerance is at least 0\.0001 mm/;
+    const apart = /Limits are at least 0\.0001 mm apart/;
+    const refusals: [DrawingAnnotation, RegExp][] = [
+      // 0.000000001 mm slips past the six-decimal check, not the floor.
+      [
+        width(ref, {
+          tolerance: { kind: 'symmetric', value: 0.000000001, units: 'mm' }
+        }),
+        fine
+      ],
+      [
+        width(ref, {
+          tolerance: { kind: 'symmetric', value: 0.000003, units: 'inch' }
+        }),
+        fine
+      ],
+      [
+        width(ref, {
+          tolerance: {
+            kind: 'limits',
+            upper: 500.000001,
+            lower: 500,
+            units: 'mm'
+          }
+        }),
+        apart
+      ],
+      [
+        width(ref, {
+          tolerance: {
+            kind: 'deviation',
+            upper: 0.1,
+            lower: 0.00005,
+            units: 'mm'
+          }
+        }),
+        fine
+      ],
+      [frame({ amount: 0.00005, units: 'mm' }), fine]
+    ];
+    for (const [annotation, refused] of refusals) {
+      expect(() => manager.execute(add(annotation))).toThrow(refused);
+      expect(manager.document).toBe(before);
+    }
+    // At the floor in any units a tolerance is taken: 0.000004 in is
+    // 0.0001016 mm, and 0.000001 m is 0.001 mm.
+    manager.execute(
+      add(
+        width(ref, {
+          tolerance: {
+            kind: 'deviation',
+            upper: 0.000004,
+            lower: 0,
+            units: 'inch'
+          }
+        })
+      )
+    );
+    manager.execute(add(frame({ amount: 0.000001, units: 'm' })));
+    const atFloor = drawn(sheetIn(manager.document), bodies);
+    expect(atFloor.width).toBe('1 +0.000004/0');
+    expect(atFloor.frame).toMatch(/\| 0\.000039$/);
+
+    // A sheet stored before the floor opens, prints and replays unchanged.
+    const legacy = sheetOf(
+      [bodyId],
+      [
+        width(ref, {
+          tolerance: {
+            kind: 'limits',
+            upper: 0.00001,
+            lower: -0.00001,
+            units: 'mm'
+          }
+        }),
+        frame({ amount: 0.00001, units: 'mm' })
+      ]
+    );
+    const stored = replayCommands(document, [
+      ...document.commandLog,
+      commandFactories.addDrawingSheet({ sheet: legacy }).serialize()
+    ]);
+    expect(() => assertStorableDocument(stored)).not.toThrow();
+    expect(normalizeDocument(stored).drawings).toEqual(stored.drawings);
+    expect(sheetIn(stored).annotations).toEqual(legacy.annotations);
+    expect(drawn(sheetIn(stored), bodies).width).toBe('25.40001/25.39999');
+    // Moved, or with one bound changed, its other amounts keep their
+    // meaning; a new amount finer than the floor is refused.
+    const kept = new CommandManager(stored);
+    const [dimension, oldFrame] = sheetIn(stored).annotations! as [
+      DrawingLinearDimension,
+      DrawingFeatureControlFrame
+    ];
+    const update = (annotation: DrawingAnnotation) =>
+      commandFactories.updateDrawingAnnotation({ sheetId, annotation });
+    kept.execute(update({ ...dimension, placementMm: { x: 0, y: 20 } }));
+    kept.execute(
+      update({
+        ...dimension,
+        placementMm: { x: 0, y: 20 },
+        tolerance: { kind: 'limits', upper: 0.1, lower: -0.00001, units: 'mm' }
+      })
+    );
+    kept.execute(update({ ...oldFrame, characteristic: 'straightness' }));
+    expect(() =>
+      kept.execute(update({ ...oldFrame, amount: 0.00002 }))
+    ).toThrow(fine);
+    // A logged add from before the floor replays as it was recorded.
+    const logged = replayCommands(document, [
+      ...document.commandLog,
+      commandFactories
+        .addDrawingSheet({ sheet: sheetOf([bodyId], []) })
+        .serialize(),
+      add(
+        width(ref, {
+          tolerance: { kind: 'symmetric', value: 0.00001, units: 'mm' }
+        })
+      ).serialize()
+    ]);
+    expect(
+      (sheetIn(logged).annotations![0] as DrawingLinearDimension).tolerance
+    ).toEqual({ kind: 'symmetric', value: 0.00001, units: 'mm' });
   });
 });

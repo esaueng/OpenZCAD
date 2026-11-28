@@ -657,11 +657,12 @@ export function toleranceUnitFactor(
 }
 
 /**
- * The most decimals a converted tolerance amount prints with: the smallest
- * stored amount (0.000001) in the largest ratio (mm to m) is 1e-9, which
- * takes nine, and one significant digit more takes ten.
+ * The most decimals a tolerance prints with: the smallest stored amount
+ * (0.000001) in the largest ratio (mm to m) is 1e-9, which takes nine, and
+ * one significant digit more takes ten. Limits at least the v156 floor
+ * (0.0001 mm) apart print distinct well within it.
  */
-const MAX_CONVERTED_TOLERANCE_DECIMALS = 12;
+export const MAX_CONVERTED_TOLERANCE_DECIMALS = 12;
 
 /**
  * The decimals a tolerance amount prints with once multiplied by `factor`:
@@ -815,33 +816,59 @@ export function formatDimension(
             decimals,
             ...amounts.map((stated) => toleranceDecimals(stated, factor))
           );
+    /**
+     * From `start`, the fewest decimals (at most
+     * {@link MAX_CONVERTED_TOLERANCE_DECIMALS}) at which `legible` holds:
+     * no nonzero amount prints as zero, and two limits print distinct. The
+     * v156 floor (0.0001 mm, and limits as far apart) keeps every new
+     * tolerance inside the cap.
+     */
+    const legible = (start: number, holds: (d: number) => boolean) => {
+      let d = start;
+      while (d < MAX_CONVERTED_TOLERANCE_DECIMALS && !holds(d)) d++;
+      return d;
+    };
+    /** Whether an amount's text states a nonzero digit. */
+    const shown = (text: string) => /[1-9]/.test(text);
     switch (tolerance?.kind) {
       case undefined:
       case 'basic':
         lead = nominal;
         break;
       case 'symmetric': {
-        const d = tolerant(tolerance.value);
-        lead = `${nominal} ±${write(amount(tolerance.value), d, false)}`;
+        const text = (d: number) => write(amount(tolerance.value), d, false);
+        const d = legible(tolerant(tolerance.value), (at) => shown(text(at)));
+        lead = `${nominal} ±${text(d)}`;
         break;
       }
       case 'deviation':
       case 'limits': {
-        const d = tolerant(tolerance.upper, tolerance.lower);
+        const { upper, lower } = tolerance;
+        const pair = (d: number): [string, string] =>
+          tolerance.kind === 'deviation'
+            ? [
+                signedDeviation(amount(upper), d, kind, format),
+                signedDeviation(amount(lower), d, kind, format)
+              ]
+            : [
+                write(value + amount(upper), d, false),
+                write(value + amount(lower), d, false)
+              ];
+        // From each offset, then from the gap between them, so distinct
+        // limits print distinct (500.000001 and 500 mm on an inch sheet).
+        const d = legible(tolerant(upper, lower), (at) => {
+          const [over, under] = pair(at);
+          return (
+            over !== under &&
+            (tolerance.kind === 'limits' ||
+              ((upper === 0 || shown(over)) && (lower === 0 || shown(under))))
+          );
+        });
         if (tolerance.kind === 'deviation') {
           lead = nominal;
           gap = ' ';
-          stack = [
-            signedDeviation(amount(tolerance.upper), d, kind, format),
-            signedDeviation(amount(tolerance.lower), d, kind, format)
-          ];
-        } else {
-          lead = symbol;
-          stack = [
-            write(value + amount(tolerance.upper), d, false),
-            write(value + amount(tolerance.lower), d, false)
-          ];
-        }
+        } else lead = symbol;
+        stack = pair(d);
         break;
       }
     }
