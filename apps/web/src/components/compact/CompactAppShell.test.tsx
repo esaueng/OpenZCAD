@@ -391,9 +391,16 @@ describe('AppShell in the compact workspace', () => {
       return element!;
     });
     const grabber = within(sheet).getByRole('slider', { name: 'Sheet height' });
+    grabber.focus();
     fireEvent.keyDown(grabber, { key: 'ArrowUp' });
     expect(sheet).toHaveAttribute('data-detent', 'half');
     expect(within(sheet).getByRole('heading', { name: 'All tools' }));
+    // Opened by the slider's keys, the slider keeps the focus: its next
+    // key still moves the sheet, and no held Enter lands on a tool.
+    const slider = within(sheet).getByRole('slider', { name: 'Sheet height' });
+    expect(slider).toHaveFocus();
+    fireEvent.keyDown(slider, { key: 'End' });
+    expect(sheet).toHaveAttribute('data-detent', 'full');
     // Back: the tray at its peek, not a row over blank space at half.
     fireEvent.click(within(sheet).getByRole('button', { name: 'Back' }));
     await waitFor(() => expect(sheet).toHaveAttribute('data-detent', 'peek'));

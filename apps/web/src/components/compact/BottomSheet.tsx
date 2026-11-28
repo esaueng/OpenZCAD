@@ -341,6 +341,13 @@ export function BottomSheet({
           opener?.closest<HTMLElement>('[data-sheet-row]')?.dataset.sheetRow ??
           null
       });
+      // Opened from the height slider (Build's tray pulled up by its keys):
+      // focus stays on it, so its keys keep moving the sheet, and a held
+      // Enter's repeat never lands on the page's first tool (the review).
+      if (opener !== null && opener === grabberRef.current) {
+        grabberRef.current.focus({ preventScroll: true });
+        return;
+      }
       const body = sheet.querySelector<HTMLElement>(
         '.compact-sheet-body[data-page]'
       );

@@ -1125,6 +1125,11 @@
   --compact-cube-clear: 96px;
 }
 
+/* Draw's stage has no cube there but its sheet zoom, four 44px buttons. */
+.app-shell[data-shell='compact']:has(.drawing-workspace) {
+  --compact-cube-clear: calc(var(--compact-target) * 4 + var(--sp-2) * 4);
+}
+
 /* The line itself takes no tap, on the stage or on the sheet's layer: over
    the model a tap there picks what is under it, as it would with no status
    up, and over a full sheet it reaches the sheet's content. Its Undo does;
@@ -1188,7 +1193,10 @@
   .app-shell[data-shell='compact']:has(.compact-sheet:not([hidden]))
     .workspace.column-layout
     :is(.workspace-toast, .activity-lane) {
-    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
+    /* The cube moves beside the sheet at half: clear of both. */
+    right: calc(
+      var(--compact-side-sheet-w) + var(--sp-2) + var(--compact-cube-clear)
+    );
   }
 }
 
@@ -2138,31 +2146,12 @@
   color: var(--color-accent);
 }
 
-/* A sketch's notices ("Sketching on the XY plane") stand over the undo
-   pair and a relations row, never under the sheet; the scale bar steps out
-   while the relations row stands where it was. */
-.app-shell[data-shell='compact']:has(.compact-tray.is-sketch)
-  .workspace.column-layout
-  :is(.workspace-toast, .activity-lane) {
-  left: max(var(--sp-2), env(safe-area-inset-left));
-  right: max(var(--sp-2), env(safe-area-inset-right));
-  bottom: calc(
-    var(--compact-sheet-h, 0px) + var(--compact-target) * 2 + var(--sp-2) * 3
-  );
-}
-
+/* A sketch's notices ("Sketching on the XY plane") stand at the stage's
+   top, as every status does; the scale bar steps out while the relations
+   row stands where it was. */
 .app-shell[data-shell='compact']:has(.compact-stage-tray:not(:empty))
   .viewport-scale-indicator {
   visibility: hidden;
-}
-
-@media (orientation: landscape) and (max-height: 500px) {
-  .app-shell[data-shell='compact']:has(.compact-tray.is-sketch)
-    .workspace.column-layout
-    :is(.workspace-toast, .activity-lane) {
-    right: calc(var(--compact-side-sheet-w) + var(--sp-2));
-    bottom: calc(var(--compact-target) * 2 + var(--sp-2) * 3);
-  }
 }
 
 /* ── The sketch's pages ── */

@@ -459,13 +459,16 @@ export default function CompactWorkspace({
   // the sheet comes up to half to show it, and goes back to the height the
   // person chose with it (sheetState's temporary raise), even when All
   // tools opened and closed meanwhile.
+  const trayReasonUp = useRef(false);
   const onTrayReason = useCallback(
-    (shown: boolean) =>
+    (shown: boolean) => {
+      trayReasonUp.current = shown;
       dispatch(
         shown
           ? { type: 'raise', detent: 'half', temporary: true }
           : { type: 'lower' }
-      ),
+      );
+    },
     [dispatch]
   );
 
@@ -497,7 +500,14 @@ export default function CompactWorkspace({
   useEffect(() => {
     const emptied = lastStackDepth.current > 0 && stackDepth === 0;
     lastStackDepth.current = stackDepth;
-    if (emptied && trayOnly && stateRef.current.detent !== 'peek') {
+    // A disabled verb's reason, still up under the tray, keeps its raise
+    // until it goes (it lowers the sheet itself then).
+    if (
+      emptied &&
+      trayOnly &&
+      !trayReasonUp.current &&
+      stateRef.current.detent !== 'peek'
+    ) {
       dispatch({ type: 'set-detent', detent: 'peek' });
     }
   }, [dispatch, stackDepth, trayOnly]);
