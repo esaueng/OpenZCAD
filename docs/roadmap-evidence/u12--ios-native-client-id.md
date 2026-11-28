@@ -8,7 +8,9 @@ authorization at `/api/auth/desktop/*` admits the iPhone and iPad client
 (`NATIVE_CLIENT_IDS` in `apps/web/worker/sessionCredentials.ts`) read by the
 request parser, the access-token validator, the refresh path and the E2EE
 write guard. An attempt or refresh token stays bound to the client that
-started it, and presenting it as another client revokes the session. The
+started it: exchange refuses an attempt presented as another client, and a
+refresh token presented as another client is refused and its session
+revoked. The
 browser approval page and its code messages name "the OpenZCAD app" instead
 of macOS. The passkey `apple-app-site-association` route is left to the
 passkey step. Regression: `test/desktop-auth.test.ts` (iOS sign-in, refresh
