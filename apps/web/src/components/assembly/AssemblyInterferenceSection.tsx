@@ -21,6 +21,7 @@ import {
   describeInterference,
   describeInterferenceSummary,
   INTERFERENCE_OTHER_POSITION,
+  INTERFERENCE_OUTDATED_HEADLINE,
   INTERFERENCE_OUTDATED_STATUS
 } from '../../lib/assembly/interferenceUi';
 import { AssemblyMotionInterference } from './AssemblyMotionInterference';
@@ -173,11 +174,15 @@ export function AssemblyInterferenceSection({
               ? `Checking ${plural((operands.length * (operands.length - 1)) / 2, 'pair')} exactly…`
               : state.kind === 'failed'
                 ? `The check failed: ${state.message}`
-                : summary
-                  ? `${describeInterferenceSummary(summary).headline}${
-                      elsewhere ? ` ${INTERFERENCE_OTHER_POSITION}` : ''
-                    }`
-                  : 'Checks every pair of parts at the rest position, with the exact kernel.'}
+                : // The live region: an old result's clearance is never
+                  // read out as if it held now.
+                  stale
+                  ? INTERFERENCE_OUTDATED_HEADLINE
+                  : summary
+                    ? `${describeInterferenceSummary(summary).headline}${
+                        elsewhere ? ` ${INTERFERENCE_OTHER_POSITION}` : ''
+                      }`
+                    : 'Checks every pair of parts at the rest position, with the exact kernel.'}
         </p>
         <button
           type="button"

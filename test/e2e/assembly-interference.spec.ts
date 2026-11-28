@@ -319,6 +319,11 @@ test(
       .getByRole('combobox', { name: 'Configuration' })
       .selectOption({ label: 'Wide' });
     await expect(interference).toContainText('Out of date');
+    // The live region leads with that and no longer reads the Narrow
+    // result's clearance out as if it held.
+    await expect(status).toHaveText(
+      'Out of date. Check again for the parts as they are now.'
+    );
     await interference.getByRole('button', { name: 'Check again' }).click();
     await expect(status).toHaveText('1 pair overlaps at the rest position.', {
       timeout: 60_000

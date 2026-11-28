@@ -102,7 +102,7 @@ describe('interference summaries (AS04)', () => {
     expect(
       describeInterferenceSummary({ ...none, unknown: 2, missing: 1 }).headline
     ).toBe(
-      'No overlap found at the rest position, but 2 pairs could not be checked exactly and 1 part had no geometry to check.'
+      '2 pairs could not be checked exactly and 1 part had no geometry to check; no overlap found among the other pairs at the rest position.'
     );
     expect(
       describeInterferenceSummary({ interfering: 2, unknown: 1, missing: 0 })
@@ -128,9 +128,9 @@ describe('interference summaries (AS04)', () => {
       describeSweepSummary({ ...swept, unchecked: 1 }, 25, 'Hold')
     ).toEqual({
       headline:
-        'No overlap found at the 25 positions checked, but 1 pair the motion leaves at rest was not checked.',
+        '1 pair the motion leaves at rest was not checked; no overlap found among the other pairs at the 25 positions checked.',
       status:
-        'Interference through motion: no overlap found at 25 positions checked along Hold, but 1 pair the motion leaves at rest was not checked.'
+        'Interference through motion: 1 pair the motion leaves at rest was not checked; no overlap found among the other pairs at 25 positions checked along Hold.'
     });
     expect(
       describeSweepSummary(
@@ -158,9 +158,9 @@ describe('interference summaries (AS04)', () => {
       )
     ).toEqual({
       headline:
-        'No overlap found at the 37 positions checked, but 1 pair could not be checked exactly at any of its 37 positions.',
+        '1 pair could not be checked exactly at any of its 37 positions; no overlap found among the other pairs at the 37 positions checked.',
       status:
-        'Interference through motion: no overlap found at 37 positions checked along Rack slide (−32.4 mm to 43.0 mm), but 1 pair could not be checked exactly at any of its 37 positions.'
+        'Interference through motion: 1 pair could not be checked exactly at any of its 37 positions; no overlap found among the other pairs at 37 positions checked along Rack slide (−32.4 mm to 43.0 mm).'
     });
     // The all-clear control keeps its own wording.
     expect(describeSweepSummary(swept, 37, 'Rack slide')).toEqual({
@@ -168,6 +168,33 @@ describe('interference summaries (AS04)', () => {
       status:
         'Interference through motion: no overlap at 37 positions checked along Rack slide.'
     });
+  });
+
+  it('leads with what was not decided, so a one-line toast keeps it', () => {
+    // The preview's broken row: two pairs Unknown at all 25 positions.
+    const broken = describeSweepSummary(
+      { ...swept, unknown: 2, unknownEverywhere: 2 },
+      25,
+      'Slide (0.0 mm to 80.0 mm)'
+    );
+    expect(broken).toEqual({
+      headline:
+        '2 pairs could not be checked exactly at any position; no overlap found among the other pairs at the 25 positions checked.',
+      status:
+        'Interference through motion: 2 pairs could not be checked exactly at any position; no overlap found among the other pairs at 25 positions checked along Slide (0.0 mm to 80.0 mm).'
+    });
+    // Cut short anywhere after its first clause, neither line reads as a
+    // clearance.
+    for (const line of [broken.headline, broken.status]) {
+      const lead = line.slice(0, line.indexOf(';'));
+      expect(lead).toMatch(/could not be checked/);
+      expect(lead).not.toMatch(/no overlap/i);
+    }
+    const rest = describeInterferenceSummary({ ...none, unknown: 1 });
+    expect(rest.status).toMatch(
+      /^Interference: 1 pair could not be checked exactly; /
+    );
+    expect(rest.headline).toMatch(/^1 pair could not be checked exactly; /);
   });
 
   it('says how much of a sweep was undecided, with overlaps and missing parts', () => {
@@ -182,7 +209,7 @@ describe('interference summaries (AS04)', () => {
         'Slide'
       ).headline
     ).toBe(
-      'No overlap found at the 45 positions checked, but 1 pair could not be checked exactly at 3 of its 41 positions.'
+      '1 pair could not be checked exactly at 3 of its 41 positions; no overlap found among the other pairs at the 45 positions checked.'
     );
     expect(
       describeSweepSummary(
@@ -191,7 +218,7 @@ describe('interference summaries (AS04)', () => {
         'Slide'
       ).headline
     ).toBe(
-      'No overlap found at the 37 positions checked, but 2 pairs could not be checked exactly at some positions and 1 part had no geometry to check.'
+      '2 pairs could not be checked exactly at some positions and 1 part had no geometry to check; no overlap found among the other pairs at the 37 positions checked.'
     );
     expect(
       describeSweepSummary(

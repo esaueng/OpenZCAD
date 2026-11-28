@@ -41,6 +41,30 @@ const overlapping: AssemblyInterferenceReport = {
   missing: []
 };
 
+/**
+ * An out-of-date result's live region leads with that, and reads out no
+ * result as if it held now: a screen reader reads this line, not the
+ * warning under it.
+ */
+function expectOutdatedStatus(section: HTMLElement) {
+  const status = within(section).getByRole('status');
+  expect(status).toHaveTextContent(
+    /^Out of date\. Check again for the parts as they are now\.$/
+  );
+  expect(status).not.toHaveTextContent(/overlap|clear/i);
+}
+
+/** The sweep's own live line, likewise. */
+function expectOutdatedSweepLine(section: HTMLElement) {
+  const line = section.querySelector(
+    '.assembly-interference-motion [aria-live]'
+  );
+  expect(line).toHaveTextContent(
+    /^Out of date\. Sweep again for the motion and parts as they are now\.$/
+  );
+  expect(line).not.toHaveTextContent(/overlap|clear/i);
+}
+
 function renderPanel(check: CheckInterference) {
   const fixture = scissorsManager({ components: true });
   const recorder = recordingExecute(fixture.manager);
@@ -116,7 +140,8 @@ describe('Assembly interference section (AS04)', () => {
       );
     });
     rerender();
-    expect(within(section()).getByText(/Out of date/)).toBeInTheDocument();
+    expect(within(section()).getByText(/Out of date:/)).toBeInTheDocument();
+    expectOutdatedStatus(section());
     expect(
       within(section()).getByRole('button', { name: 'Check again' })
     ).toBeEnabled();
@@ -141,7 +166,7 @@ describe('Assembly interference section (AS04)', () => {
       fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
     });
     expect(within(section()).getByRole('status')).toHaveTextContent(
-      'No overlap found at the rest position, but 1 pair could not be checked exactly.'
+      '1 pair could not be checked exactly; no overlap found among the other pairs at the rest position.'
     );
     expect(section()).toHaveTextContent('1 pair not checked exactly');
     fireEvent.click(
@@ -175,10 +200,10 @@ describe('Assembly interference section (AS04)', () => {
       fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
     });
     expect(within(section()).getByRole('status')).toHaveTextContent(
-      'No overlap found at the rest position, but 1 part had no geometry to check.'
+      '1 part had no geometry to check; no overlap found among the other pairs at the rest position.'
     );
     expect(onStatus).toHaveBeenCalledWith(
-      'Interference: no overlap found at the rest position, but 1 part had no geometry to check.'
+      'Interference: 1 part had no geometry to check; no overlap found among the other pairs at the rest position.'
     );
     expect(section()).not.toHaveTextContent('No parts overlap');
   });
@@ -319,7 +344,8 @@ describe('Assembly interference section (AS04)', () => {
       });
     });
     // The panel shows the result as what it is: of the parts as they were.
-    expect(within(section()).getByText(/Out of date/)).toBeInTheDocument();
+    expect(within(section()).getByText(/Out of date:/)).toBeInTheDocument();
+    expectOutdatedStatus(section());
     expect(onStatus).toHaveBeenCalledTimes(1);
     expect(onStatus).toHaveBeenCalledWith(
       'Interference: the parts or their positions changed during the check. Check again.'
@@ -462,12 +488,10 @@ describe('Interference through motion (AS04)', () => {
       fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
     });
     const summary =
-      'but 1 pair could not be checked exactly at any of its 37 positions.';
-    expect(section()).toHaveTextContent(
-      `No overlap found at the 37 positions checked, ${summary}`
-    );
+      '1 pair could not be checked exactly at any of its 37 positions; no overlap found among the other pairs at';
+    expect(section()).toHaveTextContent(`${summary} the 37 positions checked.`);
     expect(onStatus).toHaveBeenCalledWith(
-      `Interference through motion: no overlap found at 37 positions checked along Pivot (0.0° to 360.0°), ${summary}`
+      `Interference through motion: ${summary} 37 positions checked along Pivot (0.0° to 360.0°).`
     );
     expect(section()).not.toHaveTextContent('No overlap at the');
     // The row still says which pair, and where.
@@ -569,7 +593,8 @@ describe('Interference through motion (AS04)', () => {
         missing: []
       });
     });
-    expect(within(section()).getByText(/Out of date/)).toBeInTheDocument();
+    expect(within(section()).getByText(/Out of date:/)).toBeInTheDocument();
+    expectOutdatedSweepLine(section());
     expect(onStatus).toHaveBeenCalledTimes(1);
     expect(onStatus).toHaveBeenCalledWith(
       'Interference through motion: the parts, their motion or the model changed during the check. Sweep again.'
@@ -693,7 +718,7 @@ describe('Interference through motion (AS04)', () => {
       fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
     });
     expect(section()).toHaveTextContent(
-      'No overlap found at the 37 positions checked, but 1 pair could not be checked exactly at any of its 37 positions.'
+      '1 pair could not be checked exactly at any of its 37 positions; no overlap found among the other pairs at the 37 positions checked.'
     );
   });
 });
@@ -802,7 +827,8 @@ describe('Interference results of a model that is no longer the one shown (AS04)
     await act(async () => {
       finish(clearReport);
     });
-    expect(within(section()).getByText(/Out of date/)).toBeInTheDocument();
+    expect(within(section()).getByText(/Out of date:/)).toBeInTheDocument();
+    expectOutdatedStatus(section());
     expect(onStatus).toHaveBeenCalledTimes(1);
     expect(onStatus).toHaveBeenCalledWith(
       'Interference: the parts or their positions changed during the check. Check again.'
@@ -816,7 +842,8 @@ describe('Interference results of a model that is no longer the one shown (AS04)
     });
     expect(within(section()).queryByText(/Out of date/)).toBeNull();
     replaceModel();
-    expect(within(section()).getByText(/Out of date/)).toBeInTheDocument();
+    expect(within(section()).getByText(/Out of date:/)).toBeInTheDocument();
+    expectOutdatedStatus(section());
   });
 
   it('does not post a sweep all-clear for a model replaced at the same version', async () => {
@@ -836,7 +863,8 @@ describe('Interference results of a model that is no longer the one shown (AS04)
     await act(async () => {
       finish(answerClear(asked));
     });
-    expect(within(section()).getByText(/Out of date/)).toBeInTheDocument();
+    expect(within(section()).getByText(/Out of date:/)).toBeInTheDocument();
+    expectOutdatedSweepLine(section());
     expect(onStatus).toHaveBeenCalledTimes(1);
     expect(onStatus).toHaveBeenCalledWith(
       'Interference through motion: the parts, their motion or the model changed during the check. Sweep again.'
@@ -953,12 +981,13 @@ describe('Interference through motion accounts for every pair (AS04)', () => {
     });
     // Both of Blade B's pairs are clear along the pivot. The blade and the
     // screw were never checked: that is said, and it is not "no overlap".
-    const unchecked = 'but 1 pair the motion leaves at rest was not checked.';
+    const unchecked =
+      '1 pair the motion leaves at rest was not checked; no overlap found among the other pairs at';
     expect(section()).toHaveTextContent(
-      `No overlap found at the 37 positions checked, ${unchecked}`
+      `${unchecked} the 37 positions checked.`
     );
     expect(onStatus).toHaveBeenLastCalledWith(
-      `Interference through motion: no overlap found at 37 positions checked along Pivot (0.0° to 360.0°), ${unchecked}`
+      `Interference through motion: ${unchecked} 37 positions checked along Pivot (0.0° to 360.0°).`
     );
     expect(section()).not.toHaveTextContent('No overlap at the');
     expect(section()).toHaveTextContent(
@@ -1012,8 +1041,12 @@ describe('Interference through motion accounts for every pair (AS04)', () => {
     });
     rerender();
     expect(section()).not.toHaveTextContent('No overlap at the');
+    // Both lines say so first; the sweep's rows no longer take the rest
+    // check's verdict for the pair left at rest.
+    expectOutdatedStatus(section());
+    expectOutdatedSweepLine(section());
     expect(section()).toHaveTextContent(
-      'No overlap found at the 37 positions checked, but 1 pair the motion leaves at rest was not checked.'
+      '1 pair left at rest, not checked: run Check above'
     );
   });
 });

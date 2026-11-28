@@ -29,6 +29,7 @@ import {
   describeSweepSummary,
   describeSweepUnknown,
   SWEEP_HELD_NOTE,
+  SWEEP_OUTDATED_HEADLINE,
   SWEEP_OUTDATED_STATUS,
   SWEEP_REST_NOTE
 } from '../../lib/assembly/interferenceUi';
@@ -323,13 +324,15 @@ export function AssemblyMotionInterference({
                 .join(', and ')}…`
             : state.kind === 'failed'
               ? `The check failed: ${state.message}`
-              : done
-                ? describeSweepSummary(
-                    summarizeSweptPairs(done.report),
-                    done.report.checked,
-                    done.label
-                  ).headline
-                : 'Checks the parts that move against each other, at positions along the motion.'}
+              : stale
+                ? SWEEP_OUTDATED_HEADLINE
+                : done
+                  ? describeSweepSummary(
+                      summarizeSweptPairs(done.report),
+                      done.report.checked,
+                      done.label
+                    ).headline
+                  : 'Checks the parts that move against each other, at positions along the motion.'}
         </p>
         <button
           type="button"

@@ -108,6 +108,11 @@ function plural(count: number, one: string, many = `${one}s`) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+/** Sentence case, for a clause that leads the line. */
+function capitalize(text: string) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** "1 pair overlaps", "3 pairs of parts overlap". */
 function overlapping(count: number, ofParts = false) {
   const noun = `${count === 1 ? 'pair' : 'pairs'}${ofParts ? ' of parts' : ''}`;
@@ -126,8 +131,10 @@ export interface InterferenceSummaryText {
  * values, the rest position, and says so: a study, a scrub or a sweep's
  * "Show" can pose the view somewhere else, where the parts may well clash
  * (#2154). "No parts overlap" is a claim about every pair, so it is made only
- * when every pair was decided: an undecided pair or a part with no geometry
- * leaves it "no overlap found, but …".
+ * when every pair was decided. An undecided pair or a part with no geometry
+ * leads the line, ahead of "no overlap found among the other pairs": a toast
+ * cut short to one line, or a listener who stops early, keeps what was not
+ * decided and never a clearance alone.
  */
 export function describeInterferenceSummary(summary: {
   interfering: number;
@@ -153,14 +160,24 @@ export function describeInterferenceSummary(summary: {
   }
   if (unchecked)
     return {
-      headline: `No overlap found at the rest position, but ${unchecked}.`,
-      status: `Interference: no overlap found at the rest position, but ${unchecked}.`
+      headline: `${capitalize(unchecked)}; no overlap found among the other pairs at the rest position.`,
+      status: `Interference: ${unchecked}; no overlap found among the other pairs at the rest position.`
     };
   return {
     headline: 'No parts overlap at the rest position.',
     status: 'Interference: no parts overlap at the rest position.'
   };
 }
+
+/**
+ * The section's own line while its result is out of date. It is the live
+ * region a screen reader reads, so it leads with that and never repeats the
+ * old result's clearance as if it held now.
+ */
+export const INTERFERENCE_OUTDATED_HEADLINE =
+  'Out of date. Check again for the parts as they are now.';
+export const SWEEP_OUTDATED_HEADLINE =
+  'Out of date. Sweep again for the motion and parts as they are now.';
 
 /** Said beside a static result while the view is posed somewhere else. */
 export const INTERFERENCE_OTHER_POSITION =
@@ -213,7 +230,8 @@ export function describeSweepUnknown(
  * for a pair the kernel cannot intersect), a part with no geometry, or a
  * pair the motion leaves at rest that no current static check covers
  * (`unchecked`) is counted in the same line, never left to the rows below
- * it (#2183).
+ * it (#2183). It leads the line, ahead of "no overlap found among the other
+ * pairs", so a toast cut short to one line still says it.
  */
 export function describeSweepSummary(
   counts: {
@@ -263,8 +281,8 @@ export function describeSweepSummary(
   }
   if (unchecked)
     return {
-      headline: `No overlap found at the ${plural(checked, 'position')} checked, but ${unchecked}.`,
-      status: `Interference through motion: no overlap found at ${plural(checked, 'position')} checked along ${motion}, but ${unchecked}.`
+      headline: `${capitalize(unchecked)}; no overlap found among the other pairs at the ${plural(checked, 'position')} checked.`,
+      status: `Interference through motion: ${unchecked}; no overlap found among the other pairs at ${plural(checked, 'position')} checked along ${motion}.`
     };
   return {
     headline: `No overlap at the ${plural(checked, 'position')} checked.`,
