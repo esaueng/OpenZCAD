@@ -683,8 +683,14 @@ function NumericKeypadControl({
     // Losing the anchor (orbited off screen) docks it once, and it stays.
     let positioned = false;
     let docked = false;
-    // Drawn as the phone's sheet; left again when the window widens.
+    // Drawn as the phone's sheet; left again when the window widens. Whether
+    // it is a sheet is the window's width alone: a place handed on by Tab
+    // from a value that was in the sheet is no place in the stage, so it is
+    // never replayed (the width would then keep the sheet's look while the
+    // command bar went back to the foot).
     let sheet = false;
+    const held =
+      request.heldAt && request.heldAt.side !== 'sheet' ? request.heldAt : null;
     let lastAnchor: { x: number; y: number } | null = null;
     const phone = () =>
       asSheetRef.current ||
@@ -767,26 +773,20 @@ function NumericKeypadControl({
         docked = false;
         point ??= lastAnchor ?? stageAnchor(host);
       }
-      if (request.heldAt) {
+      if (held) {
         // Stepped here by Tab: it stands where the last value's did.
         if (positioned) return;
         const { size, viewport } = measure(host);
         const rect = host.getBoundingClientRect();
         const within = (value: number, room: number) =>
           Math.min(Math.max(value, 0), Math.max(0, room));
-        const left = within(
-          request.heldAt.x - rect.left,
-          viewport.width - size.width
-        );
-        const top = within(
-          request.heldAt.y - rect.top,
-          viewport.height - size.height
-        );
+        const left = within(held.x - rect.left, viewport.width - size.width);
+        const top = within(held.y - rect.top, viewport.height - size.height);
         root.style.visibility = 'visible';
         root.style.left = `${left}px`;
         root.style.top = `${top}px`;
-        root.dataset.placement = request.heldAt.side;
-        setPlacement(request.heldAt.side);
+        root.dataset.placement = held.side;
+        setPlacement(held.side);
         lastAnchor = { x: 0, y: 0 };
         positioned = true;
         return;
@@ -821,7 +821,7 @@ function NumericKeypadControl({
     };
     anchorRef.current = positionAt;
     const host = root.parentElement;
-    if (host && request.heldAt) {
+    if (host && held) {
       positionAt(null);
     } else if (host && request.fixedClientAnchor) {
       const rect = host.getBoundingClientRect();

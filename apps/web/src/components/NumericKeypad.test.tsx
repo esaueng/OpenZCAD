@@ -2042,6 +2042,19 @@ describe('the phone sheet across a change of width', () => {
         fixedClientAnchor: { x: 400, y: 300 }
       } satisfies KeypadRequest,
       false
+    ],
+    [
+      'stepped to by Tab from a value in the sheet',
+      {
+        kind: 'command',
+        commandValueId: 'depth',
+        label: 'Depth',
+        initial: '10',
+        unitKind: 'length',
+        // Tab hands the last value's place on: the sheet, on a phone.
+        heldAt: { x: 0, y: 700, side: 'sheet' }
+      } satisfies KeypadRequest,
+      false
     ]
   ])(
     'leaves the sheet when widened past a phone, %s, and takes it back',
