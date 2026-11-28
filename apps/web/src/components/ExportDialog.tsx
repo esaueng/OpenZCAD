@@ -15,6 +15,11 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
+import {
+  exportUnitsApply,
+  MESH_EXPORT_UNIT_NAMES,
+  meshExportUnitsSentence
+} from '../lib/meshExportUnits';
 import { submitOnEnter } from '../lib/submitOnEnter';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
@@ -84,13 +89,6 @@ type AngleOption = (typeof ANGLE_OPTIONS)[number];
 function angularToleranceFor(angle: AngleOption): number | undefined {
   return angle === 20 ? undefined : (angle * Math.PI) / 180;
 }
-
-const UNIT_NAMES: Record<UnitSystem, string> = {
-  mm: 'millimeters',
-  cm: 'centimeters',
-  m: 'meters',
-  inch: 'inches'
-};
 
 /** Formats whose numbers follow the export unit; glTF is metres by spec. */
 const UNIT_FREE_FORMATS: ReadonlySet<MeshExportDialogFormat> = new Set(['glb']);
@@ -458,9 +456,22 @@ export function ExportDialog({
     extraFormats.some((entry) => entry !== format) ||
     (objMaterials && (format === 'obj' || extraFormats.includes('obj')));
 
-  const writtenUnits = UNIT_FREE_FORMATS.has(format)
-    ? 'm'
-    : resolveExportUnits(exportUnits, documentUnits);
+  // Every format the export writes, the extras included: the Units choice
+  // and the scope line describe the whole package, not only its main file
+  // (#2095, #2369).
+  const packageFormats = stlOnly
+    ? [format]
+    : [format, ...extraFormats.filter((entry) => entry !== format)];
+  const scopeSentence = meshExportUnitsSentence(
+    scopeLabel,
+    packageFormats,
+    resolveExportUnits(exportUnits, documentUnits)
+  );
+  // Over the limit at the precision it is shown: a deviation that reads as
+  // the limit itself is not flagged as above it.
+  const overLimit =
+    report !== null &&
+    Number(formatDeviation(report.result.maxDeviation)) > report.deflection;
 
   return (
     <div className="modal-backdrop">
@@ -491,17 +502,7 @@ export function ExportDialog({
           <Download size={16} aria-hidden="true" />
           Export mesh
         </h2>
-        <p className="export-dialog-scope">
-          {/* glTF fixes its own unit; the size is the same either way. */}
-          Exports {scopeLabel}{' '}
-          {format === 'glb'
-            ? 'in meters, the unit glTF defines.'
-            : writtenUnits === 'mm'
-              ? 'in millimeters, ready for slicing.'
-              : format === '3mf'
-                ? `in ${UNIT_NAMES[writtenUnits]}, declared in the package.`
-                : `in ${UNIT_NAMES[writtenUnits]}. The file does not record its unit.`}
-        </p>
+        <p className="export-dialog-scope">{scopeSentence}</p>
         {configuration && (
           <label className="export-dialog-configuration">
             <span>Configuration</span>
@@ -617,13 +618,13 @@ export function ExportDialog({
                 <span>Units</span>
                 <select
                   value={exportUnits}
-                  disabled={UNIT_FREE_FORMATS.has(format)}
+                  disabled={!exportUnitsApply(packageFormats)}
                   onChange={(event) =>
                     onExportUnitsChange(event.target.value as ExportUnits)
                   }
                 >
                   <option value="document">
-                    Project ({UNIT_NAMES[documentUnits]})
+                    Project ({MESH_EXPORT_UNIT_NAMES[documentUnits]})
                   </option>
                   <option value="mm">Millimeters</option>
                   <option value="cm">Centimeters</option>
@@ -730,7 +731,9 @@ export function ExportDialog({
           )}
           {report && !staleReport ? (
             <p className="export-dialog-measure" role="status">
-              {`${report.result.triangleCount.toLocaleString('en-US')} ${report.result.triangleCount === 1 ? 'triangle' : 'triangles'} · measured deviation ${formatDeviation(report.result.maxDeviation)} mm of ${report.deflection} mm allowed${report.result.sampled ? ' (sampled)' : ''}`}
+              {/* Watertight is not within tolerance (#2080): a mesh over the
+                  chosen limit says so before it is exported. */}
+              {`${report.result.triangleCount.toLocaleString('en-US')} ${report.result.triangleCount === 1 ? 'triangle' : 'triangles'} · measured deviation ${formatDeviation(report.result.maxDeviation)} mm ${overLimit ? 'exceeds' : 'of'} ${overLimit ? 'the ' : ''}${report.deflection} mm allowed${report.result.sampled ? ' (sampled)' : ''}${overLimit ? '. Choose a finer quality and re-check, or export to accept it.' : ''}`}
             </p>
           ) : null}
           {report && !staleReport ? (

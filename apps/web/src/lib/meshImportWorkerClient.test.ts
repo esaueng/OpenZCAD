@@ -4,7 +4,8 @@ import { MAX_SOURCE_IMPORT_BYTES } from '@openzcad/shared';
 
 import {
   importMeshFileInDisposableWorker,
-  importStlInDisposableWorker
+  importStlInDisposableWorker,
+  inspectUnitlessMeshInDisposableWorker
 } from './meshImportWorkerClient';
 import type {
   MeshImportWorkerRequest,
@@ -232,6 +233,74 @@ describe('mesh import worker client', () => {
         'altered geometry.'
     });
     await expect(pending).rejects.toThrow('Sewing this mesh changed its size');
+  });
+
+  /**
+   * #2096: the unit an OBJ or PLY is read in travels with the import, so the
+   * worker applies it before the translator rather than the workspace
+   * enlarging the triangles afterwards.
+   */
+  it('sends the unit a unitless file is read in, and nothing for millimetres', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const inches = importMeshFileInDisposableWorker(
+      new File([new Uint8Array(4)], 'part.ply'),
+      'ply',
+      'mm',
+      undefined,
+      'inch'
+    );
+    expect(FakeWorker.latest!.request).toMatchObject({
+      type: 'import',
+      format: 'ply',
+      units: 'mm',
+      readAs: 'inch'
+    });
+    reply(FakeWorker.latest!, { ok: false, error: 'stop' });
+    await expect(inches).rejects.toThrow('stop');
+
+    const millimetres = importMeshFileInDisposableWorker(
+      new File([new Uint8Array(4)], 'part.obj'),
+      'obj',
+      'mm',
+      undefined,
+      'mm'
+    );
+    expect(FakeWorker.latest!.request).not.toHaveProperty('readAs');
+    reply(FakeWorker.latest!, { ok: false, error: 'stop' });
+    await expect(millimetres).rejects.toThrow('stop');
+  });
+
+  it('sizes the unit prompt from a kernel-free inspection', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const pending = inspectUnitlessMeshInDisposableWorker(
+      new File([new Uint8Array(4)], 'part.obj'),
+      'obj'
+    );
+    const worker = FakeWorker.latest!;
+    expect(worker.request).toMatchObject({
+      type: 'inspect-unitless',
+      format: 'obj'
+    });
+    reply(worker, {
+      ok: true,
+      vertices: new Float64Array(0),
+      indices: new Uint32Array(0),
+      triangleCount: 0,
+      extent: [5.1, 4.9, 2.6]
+    });
+    await expect(pending).resolves.toEqual([5.1, 4.9, 2.6]);
+    expect(worker.terminated).toBe(true);
+  });
+
+  it('refuses an oversized unitless file before inspecting it', async () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    await expect(
+      inspectUnitlessMeshInDisposableWorker(
+        fileOfSize('huge.ply', MESH_IMPORT_POLICIES.ply.maxInputBytes + 1),
+        'ply'
+      )
+    ).rejects.toThrow('PLY import is limited to');
+    expect(FakeWorker.created).toBe(0);
   });
 
   it('reports the refusal the worker sent, and terminates it', async () => {

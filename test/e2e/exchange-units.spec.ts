@@ -7,6 +7,7 @@ import {
   expectBodyCount,
   stubApi
 } from './openzcad-fixtures';
+import { zipTextEntries } from '../support/zip-entries';
 
 /**
  * Units on exchange (ZC-183/185/200/201), end to end: a unitless STL asks
@@ -260,4 +261,121 @@ test('File › STEP states the protocol chosen in Settings', async ({ page }) =>
   expect(text).toContain("'ap242_managed_model_based_3d_engineering', 2014");
   expect(text).not.toContain('AUTOMOTIVE_DESIGN');
   expect(text).toContain('MANIFOLD_SOLID_BREP');
+});
+
+/** A 1 × 2 × 0.5 box, in whatever numbers `scale` makes of it. */
+function boxObj(scale: number): Buffer {
+  const corners = [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 2, 0],
+    [0, 2, 0],
+    [0, 0, 0.5],
+    [1, 0, 0.5],
+    [1, 2, 0.5],
+    [0, 2, 0.5]
+  ];
+  const faces = [
+    [1, 3, 2],
+    [1, 4, 3],
+    [5, 6, 7],
+    [5, 7, 8],
+    [1, 2, 6],
+    [1, 6, 5],
+    [2, 3, 7],
+    [2, 7, 6],
+    [3, 4, 8],
+    [3, 8, 7],
+    [4, 1, 5],
+    [4, 5, 8]
+  ];
+  return Buffer.from(
+    [
+      ...corners.map(
+        (point) => `v ${point.map((value) => value * scale).join(' ')}`
+      ),
+      ...faces.map((face) => `f ${face.join(' ')}`),
+      ''
+    ].join('\n')
+  );
+}
+
+// #2096: the unit is asked before the import runs, from the file's own
+// numbers, and the inch file lands at the size its millimetre copy makes.
+test('an inch OBJ is read in inches before it is imported', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await createProject(page, 'Inch OBJ');
+
+  await page.getByLabel(/^Import STEP or /).setInputFiles({
+    name: 'bracket.obj',
+    mimeType: 'text/plain',
+    buffer: boxObj(1)
+  });
+  const prompt = page.getByRole('dialog', { name: 'Units for bracket.obj' });
+  await expect(prompt).toBeVisible();
+  await expect(
+    prompt.getByRole('radio', { name: 'Inches' })
+  ).toHaveAccessibleDescription('25.4 × 50.8 × 12.7 mm');
+  await prompt.getByRole('radio', { name: 'Inches' }).check();
+  await prompt.getByRole('button', { name: 'Import in inches' }).click();
+  await expectBodyCount(page, 1);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Imported 12 triangles from bracket.obj, converted from inches'
+  );
+  await page
+    .locator('.feature-row', { hasText: 'bracket.obj' })
+    .first()
+    .locator('.feature-row-main')
+    .click();
+  await expect(page.locator('.panel-body')).toContainText('25.4 × 50.8 × 12.7');
+});
+
+// #2095: a glTF-led package still writes its OBJ in the export unit, and
+// says so — in the dialog and in the package's units manifest.
+test('a glTF-led package writes its OBJ in the chosen unit and names it', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  await createProject(page, 'Glb package');
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '10', height: '20' }
+  });
+  await expectBodyCount(page, 1);
+
+  const fileMenu = page.locator('details.file-menu');
+  await fileMenu.locator('summary').click();
+  await fileMenu.getByRole('button', { name: /Export mesh/ }).click();
+  const dialog = page.getByRole('dialog', { name: /Export mesh/ });
+  await dialog.getByRole('radio', { name: 'glTF (GLB)' }).check();
+  const units = dialog.getByRole('combobox', { name: 'Units' });
+  await expect(units).toBeDisabled();
+  await dialog.getByRole('checkbox', { name: 'Also export OBJ' }).check();
+  await expect(units).toBeEnabled();
+  await units.selectOption('inch');
+  await expect(dialog).toContainText(
+    'OBJ in inches, which the file does not record; glTF (GLB) in meters, the unit glTF defines.'
+  );
+
+  const file = await download(page, () =>
+    dialog.getByRole('button', { name: /^Export glTF/ }).click()
+  );
+  expect(file.name).toBe('Glb-package.zip');
+  const entries = zipTextEntries(new Uint8Array(file.bytes));
+  const obj = Object.keys(entries).find((name) => name.endsWith('.obj'))!;
+  const glb = Object.keys(entries).find((name) => name.endsWith('.glb'))!;
+  let maxZ = -Infinity;
+  for (const match of entries[obj]!.matchAll(/^v \S+ \S+ (\S+)/gm)) {
+    maxZ = Math.max(maxZ, Number(match[1]));
+  }
+  expect(maxZ).toBeCloseTo(20 / 25.4, 4);
+  expect(entries['units.txt']).toContain(
+    `${obj}: inches (not recorded in the file)`
+  );
+  expect(entries['units.txt']).toContain(
+    `${glb}: meters (the unit glTF defines)`
+  );
 });
