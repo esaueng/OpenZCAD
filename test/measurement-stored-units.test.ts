@@ -103,10 +103,13 @@ describe('a kept measurement across a stored-unit conversion', () => {
     const kept = keptEdge();
     expect(formatMeasurement(kept, display('inch')).value).toBe('0.709 in');
 
-    // The converted document: the same edge, now stored in inches.
+    // The converted document: the same edge, now stored in inches. The
+    // workbench hands over the millimetre bodies it last saw: an old-unit
+    // hash alone is never trusted across the conversion.
     const converted = refreshMeasurements([kept], [box(1 / INCH)], 2, {
       force: true,
-      unit: 'inch'
+      unit: 'inch',
+      previous: [{ unit: 'mm', bodies: [box(1)] }]
     });
     expect(converted[0]!.status).toBe('current');
     expect(converted[0]!.sourceUnit).toBe('inch');
@@ -121,7 +124,8 @@ describe('a kept measurement across a stored-unit conversion', () => {
     // Undo: the document is back in millimetres.
     const undone = refreshMeasurements(converted, [box(1)], 3, {
       force: true,
-      unit: 'mm'
+      unit: 'mm',
+      previous: [{ unit: 'inch', bodies: [box(1 / INCH)] }]
     });
     expect(undone[0]!.sourceUnit).toBe('mm');
     expect(formatMeasurement(undone[0]!, display('mm')).value).toBe(
@@ -429,7 +433,7 @@ describe('kept rows on a Boolean result across a stored-unit conversion', () => 
     const converted = refreshMeasurements(rows, [inch], 2, {
       force: true,
       unit: 'inch',
-      previous: { unit: 'mm', bodies: [mm] }
+      previous: [{ unit: 'mm', bodies: [mm] }]
     });
     expectCarried(converted, 'inch', 900);
     expect(converted.every((row) => row.sourceRevision === 2)).toBe(true);
@@ -438,7 +442,7 @@ describe('kept rows on a Boolean result across a stored-unit conversion', () => 
     const undone = refreshMeasurements(converted, [union(1, 100)], 3, {
       force: true,
       unit: 'mm',
-      previous: { unit: 'inch', bodies: [inch] }
+      previous: [{ unit: 'inch', bodies: [inch] }]
     });
     expectCarried(undone, 'mm', 100);
   });
@@ -493,7 +497,7 @@ describe('kept rows on a Boolean result across a stored-unit conversion', () => 
     const [facePair] = refreshMeasurements([rows[0]!], [moved], 2, {
       force: true,
       unit: 'inch',
-      previous: { unit: 'mm', bodies: [mm] }
+      previous: [{ unit: 'mm', bodies: [mm] }]
     });
     expect(facePair!.status).toBe('unresolved');
     expect(facePair!.reason).toBe('not-found');
@@ -513,8 +517,101 @@ describe('kept rows on a Boolean result across a stored-unit conversion', () => 
     const [facePair] = refreshMeasurements([rows[0]!], [twin], 2, {
       force: true,
       unit: 'inch',
-      previous: { unit: 'mm', bodies: [mm] }
+      previous: [{ unit: 'mm', bodies: [mm] }]
     });
     expect(facePair!.status).toBe('unresolved');
+  });
+});
+
+/**
+ * #2433 review: across a unit change an old hash names nothing. ADR-011
+ * hashes quantized DOCUMENT-unit geometry, so after mm → cm a different
+ * entity can land on the very numbers another one had: here the edge at
+ * X = 100–200 mm becomes 10–20 cm and takes the hash the 10–20 mm edge had.
+ * The kept reading must follow the scaled geometry, never that hash.
+ */
+describe('an old hash that a different entity carries after the conversion', () => {
+  const BOOLEAN_ID = 'body-boolean' as BodyId;
+  /** A stand-in fingerprint of an edge's ends, in its document's unit. */
+  const fingerprint = (from: number, to: number) =>
+    Math.round(from * 1000 + to);
+
+  /** Two collinear edges, X = 10–20 mm and X = 100–200 mm, stored in `unit`. */
+  function collinear(unit: 'mm' | 'cm'): BodyRepresentation {
+    const k = unit === 'cm' ? 0.1 : 1;
+    const edge = (from: number, to: number): EdgeTopology => {
+      const hash = fingerprint(from * k, to * k);
+      return {
+        topologyId: `edge:${hash}`,
+        hash,
+        length: (to - from) * k,
+        curve: { type: 'LINE' },
+        points: [from * k, 0, 0, to * k, 0, 0]
+      };
+    };
+    return {
+      ...box(k),
+      bodyId: BOOLEAN_ID,
+      name: 'Boolean',
+      bbox: {
+        min: { x: 10 * k, y: 0, z: 0 },
+        max: { x: 200 * k, y: 0, z: 0 }
+      },
+      topology: { faces: [], edges: [edge(10, 20), edge(100, 200)] }
+    };
+  }
+
+  function keptShortEdge(): Measurement {
+    const mm = collinear('mm');
+    const kept = createSmartMeasurement(
+      mm,
+      { bodyId: BOOLEAN_ID, kind: 'edge', hash: fingerprint(10, 20) },
+      undefined,
+      1,
+      'mm'
+    )!;
+    expect(kept.result.value).toBeCloseTo(10, 12);
+    // The collision the fixture is about.
+    expect(collinear('cm').topology!.edges.map((edge) => edge.hash)).toContain(
+      kept.targets[0]!.hash
+    );
+    return kept;
+  }
+
+  it('follows the scaled edge, not the edge that took its hash', () => {
+    const [converted] = refreshMeasurements(
+      [keptShortEdge()],
+      [collinear('cm')],
+      2,
+      {
+        force: true,
+        unit: 'cm',
+        previous: [{ unit: 'mm', bodies: [collinear('mm')] }]
+      }
+    );
+    expect(converted!.status).toBe('current');
+    expect(converted!.sourceUnit).toBe('cm');
+    expect(converted!.result.value).toBeCloseTo(1, 12);
+    expect(converted!.targets[0]!.hash).toBe(fingerprint(1, 2));
+  });
+
+  it('is unresolved, not 10 cm, with no old-unit bodies to compare', () => {
+    const [converted] = refreshMeasurements(
+      [keptShortEdge()],
+      [collinear('cm')],
+      2,
+      { force: true, unit: 'cm' }
+    );
+    expect(converted!.status).toBe('unresolved');
+    expect(converted!.reason).toBe('not-found');
+    // The retained number is the reading it was, in the new unit.
+    expect(converted!.result.value).toBeCloseTo(1, 12);
+    // A later refresh in the same unit cannot land it on the other edge.
+    const [later] = refreshMeasurements([converted!], [collinear('cm')], 3, {
+      force: true,
+      unit: 'cm'
+    });
+    expect(later!.status).toBe('unresolved');
+    expect(later!.result.value).toBeCloseTo(1, 12);
   });
 });

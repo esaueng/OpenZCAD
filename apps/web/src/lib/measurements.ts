@@ -2102,8 +2102,15 @@ export interface MeasurementSourceBodies {
  * its old unit; without them (a row first refreshed after a reload), only a
  * stored witness can carry it. It is not proximity rebinding: it runs only in
  * the refresh that rescales the row to a new stored unit, under that
- * conversion's exact scale, and anything but exactly one match leaves the
- * target as it was, to resolve by identity or report itself unresolved.
+ * conversion's exact scale.
+ *
+ * The old identity is never trusted on its own across the conversion: a
+ * hash quantized in the old unit can land on a DIFFERENT entity in the new
+ * one (an edge at X = 100–200 mm becomes 10–20 cm, the numbers a 10–20 mm
+ * edge was hashed from). So anything but exactly one scaled match, an
+ * old-hash hit included, drops the target's old-unit identity and the row
+ * reports itself unresolved; no later refresh can resolve it by that
+ * coincidence either.
  */
 function reattachedAcrossUnits(
   target: MeasurementTarget,
@@ -2113,14 +2120,17 @@ function reattachedAcrossUnits(
 ): MeasurementTarget {
   if (target.kind === 'body') return target;
   const kind = target.kind;
+  const {
+    topologyId: _topologyId,
+    hash: _hash,
+    reference: _reference,
+    ...unidentified
+  } = target;
   const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
-  if (!body) return target;
+  if (!body) return unidentified;
   const selection = selectionForTarget(target);
   const lookup = (on: BodyRepresentation) =>
     kind === 'edge' ? resolveEdge(on, selection) : resolveFace(on, selection);
-  // Still the same quantized geometry: nothing to re-attach.
-  const direct = lookup(body);
-  if (direct.ok && direct.via === 'hash') return target;
   const before = previous?.find(
     (candidate) => candidate.bodyId === target.bodyId
   );
@@ -2180,10 +2190,9 @@ function reattachedAcrossUnits(
     );
     if (matches.length === 1) entry = matches[0]!;
   }
-  if (!entry) return target;
-  const { reference: _stale, ...rest } = target;
+  if (!entry) return unidentified;
   return {
-    ...rest,
+    ...unidentified,
     topologyId: entry.topologyId,
     hash: entry.hash,
     ...(entry.reference ? { reference: entry.reference } : {})
@@ -2245,8 +2254,8 @@ function isUnmeasuredRow(
  * `options.unit` is the unit `bodies` are stored in (the document's
  * `units`). A row kept in another unit is first rescaled to it
  * ({@link measurementInUnit}), its targets re-attached across the conversion
- * ({@link reattachedAcrossUnits}; `options.previous` are the bodies the list
- * was last refreshed against, when they were stored in another unit), and
+ * ({@link reattachedAcrossUnits}; `options.previous` holds, for each other
+ * stored unit, the bodies last seen in it), and
  * then re-measured, whatever its revision.
  */
 export function refreshMeasurements(
@@ -2256,7 +2265,7 @@ export function refreshMeasurements(
   options: {
     force?: boolean;
     unit?: UnitSystem;
-    previous?: MeasurementSourceBodies;
+    previous?: readonly MeasurementSourceBodies[];
   } = {}
 ): Measurement[] {
   let changed = false;
@@ -2276,9 +2285,9 @@ export function refreshMeasurements(
                 bodies,
                 millimetresPerUnit(original.sourceUnit) /
                   millimetresPerUnit(rescaled.sourceUnit),
-                options.previous?.unit === original.sourceUnit
-                  ? options.previous.bodies
-                  : undefined
+                options.previous?.find(
+                  (evidence) => evidence.unit === original.sourceUnit
+                )?.bodies
               )
             )
           };

@@ -210,6 +210,33 @@ export function useMeasurementWorkbench({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc?.projectId, displayUnits]);
 
+  /** The debounced write still waiting for its timer, if any. */
+  const pendingMeasurementWriteRef = useRef<{
+    projectId: string;
+    timeout: number;
+    write(): Promise<void>;
+  } | null>(null);
+  /** Device writes started and not yet settled. */
+  const measurementWritesRef = useRef(new Set<Promise<void>>());
+
+  /**
+   * Writes `projectId`'s pending measurement list now and waits for every
+   * device write already started, so a reader of the device record (a
+   * Duplicate copying it, #2433) sees a reading kept a moment before. Never
+   * rejects: a failed write is the same best effort as the debounced one.
+   */
+  const flushMeasurementPersistence = useCallback(
+    async (projectId: string): Promise<void> => {
+      const pending = pendingMeasurementWriteRef.current;
+      if (pending?.projectId === projectId) {
+        window.clearTimeout(pending.timeout);
+        await pending.write();
+      }
+      await Promise.all([...measurementWritesRef.current]);
+    },
+    []
+  );
+
   /**
    * Writes the measurement list back, debounced.
    *
@@ -226,7 +253,9 @@ export function useMeasurementWorkbench({
       return;
     }
     const projectId = doc.projectId;
-    const timeout = window.setTimeout(() => {
+    const write = (): Promise<void> => {
+      if (pendingMeasurementWriteRef.current?.write === write)
+        pendingMeasurementWriteRef.current = null;
       const record = buildMeasurementRecord(
         projectId,
         measurements,
@@ -239,10 +268,10 @@ export function useMeasurementWorkbench({
         previous?.projectId === projectId &&
         previous.contentKey === contentKey
       ) {
-        return;
+        return Promise.resolve();
       }
       measurementPersistedContentRef.current = { projectId, contentKey };
-      void saveProjectMeasurements(record).catch(() => {
+      const saving = saveProjectMeasurements(record).catch(() => {
         if (
           measurementPersistedContentRef.current?.projectId === projectId &&
           measurementPersistedContentRef.current.contentKey === contentKey
@@ -251,9 +280,17 @@ export function useMeasurementWorkbench({
         }
         // Same as the read: a device that cannot store them still measures.
       });
-    }, 400);
+      const writes = measurementWritesRef.current;
+      writes.add(saving);
+      void saving.finally(() => writes.delete(saving));
+      return saving;
+    };
+    const timeout = window.setTimeout(() => void write(), 400);
+    pendingMeasurementWriteRef.current = { projectId, timeout, write };
     return () => {
       window.clearTimeout(timeout);
+      if (pendingMeasurementWriteRef.current?.write === write)
+        pendingMeasurementWriteRef.current = null;
     };
   }, [
     doc?.projectId,
@@ -302,15 +339,17 @@ export function useMeasurementWorkbench({
   }, [modelingLocked, measuring, measurementApi]);
 
   /**
-   * The committed exact bodies last seen for the open project, in the unit
-   * they were stored in. A stored-unit conversion (or its undo) gives every
-   * Boolean face and edge a new identity; the first refresh in the new unit
-   * re-attaches each kept target from what it was on these (#2361).
+   * The committed exact bodies last seen for the open project in each unit
+   * it was stored in. A stored-unit conversion (or its undo) gives every
+   * Boolean face and edge a new identity; a refresh in the new unit
+   * re-attaches each kept target from what it was on the bodies of the unit
+   * the row was kept in (#2361). Held for as long as the project stays open,
+   * not just the first new-unit refresh: a row can reach the list after the
+   * conversion (a slow device read, a cloud restore) and still needs them.
    */
   const lastExactBodiesRef = useRef<{
     projectId: string;
-    unit: UnitSystem;
-    bodies: BodyRepresentation[];
+    byUnit: Map<UnitSystem, BodyRepresentation[]>;
   } | null>(null);
 
   useEffect(() => {
@@ -326,30 +365,26 @@ export function useMeasurementWorkbench({
     const bodies = Object.values(representations).filter(
       (body) => !body.consumed
     );
-    const last = lastExactBodiesRef.current;
     // Recorded even before the measurement library loads, so a conversion
     // made before the first Measure still has the bodies it converted from.
-    lastExactBodiesRef.current = {
-      projectId: doc.projectId,
-      unit: doc.units,
-      bodies
-    };
-    const previous =
-      last?.projectId === doc.projectId && last.unit !== doc.units
-        ? { unit: last.unit, bodies: last.bodies }
-        : undefined;
-    if (!measurementApi) {
-      // Keep the old-unit bodies until the library can use them.
-      if (previous) lastExactBodiesRef.current = last;
-      return;
-    }
+    if (lastExactBodiesRef.current?.projectId !== doc.projectId)
+      lastExactBodiesRef.current = {
+        projectId: doc.projectId,
+        byUnit: new Map()
+      };
+    const { byUnit } = lastExactBodiesRef.current;
+    byUnit.set(doc.units, bodies);
+    if (!measurementApi) return;
+    const previous = [...byUnit]
+      .filter(([unit]) => unit !== doc.units)
+      .map(([unit, kept]) => ({ unit, bodies: kept }));
     // I03: rows kept in another stored unit (before a unit conversion, or
     // after its undo) are rescaled to the bodies' unit before re-measuring.
     setMeasurements((current) =>
       measurementApi.refreshMeasurements(current, bodies, doc.version, {
         force: true,
         unit: doc.units,
-        ...(previous ? { previous } : {})
+        ...(previous.length > 0 ? { previous } : {})
       })
     );
   }, [
@@ -790,6 +825,7 @@ export function useMeasurementWorkbench({
     setRadialDisplay,
     measurementHydratedProjectId,
     measurementDisplay,
+    flushMeasurementPersistence,
     measurementApi,
     recordMeasurement,
     previewMeasurement,
