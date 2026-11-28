@@ -89,6 +89,21 @@ export type KernelRefusalFamily =
   /** A saved edge or face selection that no longer resolves (adapter). */
   | 'reference';
 
+/**
+ * The cause recorded on `kernelRefusal.reason` when an operation stopped
+ * because a body has a sealed internal cavity: a second, inner shell that
+ * encloses a void (issues #2383–#2386).
+ *
+ * The category says no more than that the engine would not do it, and the
+ * copy written for the category then advised a smaller angle, a different
+ * plane or a repositioned overlap, none of which can help. Each family
+ * records this only where it is established: a modeling operation where the
+ * kernel names the cavity shells (`remus-operation-refusal.ts`), a boolean
+ * where the same pair builds once the cavities are ignored
+ * (`exact-boolean-refusal.ts`).
+ */
+export const SEALED_CAVITY_REASON = 'sealed_cavity';
+
 export interface KernelRefusalInit {
   family: KernelRefusalFamily;
   category: KernelRefusalCategory;

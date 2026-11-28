@@ -123,7 +123,8 @@ export function splitRefusalReason(
   let faces: FaceRead[];
   const positions = new Map<number, Vector3>();
   try {
-    // A cavity is refused before any contact test; it has no cause here.
+    // A cavity is refused before any contact test, so no contact cause
+    // applies; `modelingOperationRefusal` records `sealed_cavity` instead.
     if (kernel.getSolidShells(solid).length !== 1) return undefined;
     faces = readFaces(kernel, solid);
     for (const face of faces) {

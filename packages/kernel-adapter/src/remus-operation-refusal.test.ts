@@ -3,7 +3,7 @@ import {
   modelingOperationRefusal,
   operationErrorCategory
 } from './remus-operation-refusal';
-import { kernelRefusalRecordOf } from './kernel-refusal';
+import { SEALED_CAVITY_REASON, kernelRefusalRecordOf } from './kernel-refusal';
 
 describe('modeling operation refusals', () => {
   it.each([
@@ -64,5 +64,67 @@ describe('modeling operation refusals', () => {
       code: 'split_refused',
       reason: 'plane_on_face'
     });
+  });
+});
+
+// Issues #2384 and #2386. The kernel text is the pinned Remus's, which
+// `sealed-cavity-refusal.test.ts` reads off the real kernel.
+describe('a refusal for a sealed internal cavity', () => {
+  it.each([
+    [
+      'split',
+      'split: unsupported configuration: solid has 1 cavity shell(s); split only operates on the outer shell'
+    ],
+    [
+      'draft',
+      'draft: unsupported configuration: solid has 2 cavity shell(s); draft only operates on the outer shell'
+    ],
+    [
+      'shell',
+      'shell: unsupported configuration: solid has 1 cavity shell(s); this engine rebuilds only the outer shell'
+    ]
+  ])('records the cause for a refused %s', (operation, message) => {
+    const refusal = modelingOperationRefusal(
+      operation,
+      new Error(message),
+      message
+    );
+    expect(refusal.message).toBe(message);
+    expect(kernelRefusalRecordOf(refusal)).toEqual({
+      family: 'modeling',
+      category: 'unsupported',
+      code: `${operation}_refused`,
+      reason: SEALED_CAVITY_REASON
+    });
+  });
+
+  it('records no cause the kernel did not state', () => {
+    for (const message of [
+      'draft: unsupported configuration: corner 139 of a drafted face also lies on a curved face',
+      'split: unsupported configuration: the cutting plane crosses curved edge 36',
+      'offset of solids with cavity shells requires the cavities to stay disjoint'
+    ]) {
+      expect(
+        kernelRefusalRecordOf(
+          modelingOperationRefusal('draft', new Error(message), message)
+        )?.reason
+      ).toBeUndefined();
+    }
+  });
+
+  it("keeps a cause the caller read over the kernel's sentence", () => {
+    const message =
+      'split: unsupported configuration: solid has 1 cavity shell(s); split only operates on the outer shell';
+    expect(
+      kernelRefusalRecordOf(
+        modelingOperationRefusal(
+          'split',
+          new Error(message),
+          message,
+          'modeling',
+          'plane_on_face'
+        )
+      )?.reason
+    ).toBe('plane_on_face');
   });
 });

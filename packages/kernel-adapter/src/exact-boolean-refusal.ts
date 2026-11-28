@@ -27,6 +27,7 @@
 import type { RemusKernel } from './remus-runtime';
 import {
   KernelRefusal,
+  SEALED_CAVITY_REASON,
   kernelDetailString,
   kernelRefusalIn,
   type KernelRefusalCategory
@@ -91,9 +92,15 @@ function refusalReason(
   operation: ExactBooleanOperation,
   category: BooleanRefusalCategory,
   subject: string,
-  kernelMessage = ''
+  kernelMessage = '',
+  sealedCavity = false
 ): string {
   const verb = OPERATION_PAST_TENSE[operation];
+  // Proven by {@link buildsWithoutSealedCavities}, so it is stated as the
+  // cause; the category sentence below would name none.
+  if (sealedCavity) {
+    return `${subject} could not be ${verb} exactly because a body has a sealed internal cavity: the same ${OPERATION_NOUN[operation].toLowerCase()} builds once the cavity is ignored`;
+  }
   // An empty result is an answer, not a failure: the kernel files it under
   // `internal` (code `operation_failed`), but nothing broke — subtracting a
   // body from an identical one, or from a tool that encloses it, leaves
@@ -149,8 +156,15 @@ function refusalReason(
 function refusalRemedy(
   operation: ExactBooleanOperation,
   category: BooleanRefusalCategory,
-  kernelMessage = ''
+  kernelMessage = '',
+  sealedCavity = false
 ): string | null {
+  // Moving the overlap cannot help a pair the cavity itself blocks (#2385
+  // refuses with the tool 2 mm clear of the cavity), so this states the
+  // limit and offers no move.
+  if (sealedCavity) {
+    return 'The exact modeling engine cannot carry this sealed cavity through the operation yet.';
+  }
   if (EMPTY_RESULT.test(kernelMessage)) {
     if (operation === 'cut') {
       return 'Make the tool smaller or move it so part of the body remains.';
@@ -174,6 +188,11 @@ export interface ExactBooleanRefusalInit {
   kernelCode: string;
   kernelMessage: string;
   operands?: readonly string[];
+  /**
+   * The pair builds once its operands' sealed cavities are ignored
+   * ({@link withSealedCavityCause}); recorded as {@link SEALED_CAVITY_REASON}.
+   */
+  sealedCavity?: boolean;
   cause?: unknown;
 }
 
@@ -195,18 +214,21 @@ export class ExactBooleanRefusal extends KernelRefusal {
       init.operation,
       init.category,
       subject,
-      init.kernelMessage
+      init.kernelMessage,
+      init.sealedCavity
     );
     const remedy = refusalRemedy(
       init.operation,
       init.category,
-      init.kernelMessage
+      init.kernelMessage,
+      init.sealedCavity
     );
     super({
       family: 'boolean',
       category: init.category,
       kernelCode: init.kernelCode,
       kernelMessage: init.kernelMessage,
+      ...(init.sealedCavity ? { kernelReason: SEALED_CAVITY_REASON } : {}),
       reason,
       message:
         `${OPERATION_NOUN[init.operation]} refused: ${reason}.` +
@@ -246,6 +268,20 @@ export type ExactBooleanOutcome =
   | { status: 'ok'; solid: number }
   | { status: 'refused'; refusal: ExactBooleanRefusal };
 
+/** The typed twin for `operation`. */
+function detailedBoolean(
+  kernel: RemusKernel,
+  operation: ExactBooleanOperation,
+  a: number,
+  b: number
+) {
+  return operation === 'cut'
+    ? kernel.cutDetailed(a, b)
+    : operation === 'fuse'
+      ? kernel.fuseDetailed(a, b)
+      : kernel.intersectDetailed(a, b);
+}
+
 /**
  * Run one exact boolean and return the kernel's verdict as data.
  *
@@ -261,12 +297,7 @@ export function exactBooleanOutcome(
   b: number,
   operands?: readonly string[]
 ): ExactBooleanOutcome {
-  const detailed =
-    operation === 'cut'
-      ? kernel.cutDetailed(a, b)
-      : operation === 'fuse'
-        ? kernel.fuseDetailed(a, b)
-        : kernel.intersectDetailed(a, b);
+  const detailed = detailedBoolean(kernel, operation, a, b);
   if (detailed.status === 'ok') {
     return { status: 'ok', solid: detailed.value };
   }
@@ -285,6 +316,106 @@ export function exactBooleanOutcome(
   };
 }
 
+/**
+ * Whether a refused pair builds once every sealed cavity of its operands is
+ * ignored: the test that makes the cavity the stated cause.
+ *
+ * A body with a sealed cavity has an inner shell, and `getSolidShells`
+ * lists the outer one first. Each such operand is deep-copied and the
+ * copy's outer shell is made a solid of its own, which is the same body with
+ * its voids filled; the caller's solids are only read. Everything built here
+ * is scratch and is retired on the way out, newest first, so a stand-in is
+ * gone before the copy whose shell it borrows.
+ *
+ * False for a pair without a cavity, a pair that refuses filled as well, and
+ * a kernel that cannot answer: then no cause is established and none is
+ * stated.
+ */
+function buildsWithoutSealedCavities(
+  kernel: RemusKernel,
+  operation: ExactBooleanOperation,
+  a: number,
+  b: number
+): boolean {
+  const scratch: number[] = [];
+  try {
+    const filled = (solid: number): number | null => {
+      if (kernel.getSolidShells(solid).length <= 1) return null;
+      const copy = kernel.copySolid(solid);
+      scratch.push(copy);
+      const outer = kernel.getSolidShells(copy)[0];
+      if (outer === undefined) {
+        throw new Error('The copied solid has no outer shell.');
+      }
+      const standIn = kernel.solidFromShell(outer);
+      scratch.push(standIn);
+      return standIn;
+    };
+    const filledA = filled(a);
+    const filledB = filled(b);
+    if (filledA === null && filledB === null) return false;
+    const detailed = detailedBoolean(
+      kernel,
+      operation,
+      filledA ?? a,
+      filledB ?? b
+    );
+    if (detailed.status !== 'ok') return false;
+    scratch.push(detailed.value);
+    return true;
+  } catch {
+    // The diagnosis could not run; the refusal it was explaining stands.
+    return false;
+  } finally {
+    for (const solid of scratch.reverse()) {
+      releaseIntermediate(kernel, solid);
+    }
+  }
+}
+
+/**
+ * A refusal with its sealed-cavity cause, where one is proven.
+ *
+ * Measured on the pin (issues #2383 and #2385): the exact pipeline sorts a
+ * result's closed shells into outer and cavity shells by a signed volume
+ * that reads zero for a shell made of a cylinder wall and two round caps, so
+ * a cylindrical cavity the operation leaves whole is filed as a second
+ * outer piece and the result is rejected. An exact boolean that keeps such a
+ * cavity, or cuts one into a body that already has a cavity, then refuses as
+ * `exact_only_unattainable` wherever the tool sits, and the category's
+ * sentence advised repositioning the overlap.
+ *
+ * This reruns the refused pair with the cavities filled, on the failure path
+ * only. It is diagnosis, never a rescue: the filled result is discarded, and
+ * a pair that refuses filled as well keeps the refusal it had. Probes that
+ * read a refusal as an answer call {@link exactBooleanOutcome} and never pay
+ * for it.
+ */
+export function withSealedCavityCause(
+  kernel: RemusKernel,
+  refusal: ExactBooleanRefusal,
+  a: number,
+  b: number
+): ExactBooleanRefusal {
+  if (
+    refusal.category !== 'quality_refused' ||
+    refusal.kernelCode !== 'exact_only_unattainable' ||
+    refusal.kernelReason !== undefined ||
+    !buildsWithoutSealedCavities(kernel, refusal.operation, a, b)
+  ) {
+    return refusal;
+  }
+  return new ExactBooleanRefusal({
+    operation: refusal.operation,
+    category: refusal.category,
+    kernelCode: refusal.kernelCode,
+    kernelMessage: refusal.kernelMessage,
+    operands: refusal.operands,
+    sealedCavity: true,
+    ...(refusal.cause === undefined ? {} : { cause: refusal.cause })
+  });
+}
+
 /** Run one exact boolean, refusing by name rather than by kernel prose. */
 export function exactBoolean(
   kernel: RemusKernel,
@@ -295,7 +426,7 @@ export function exactBoolean(
 ): number {
   const outcome = exactBooleanOutcome(kernel, operation, a, b, operands);
   if (outcome.status === 'refused') {
-    throw outcome.refusal;
+    throw withSealedCavityCause(kernel, outcome.refusal, a, b);
   }
   return outcome.solid;
 }
@@ -426,14 +557,19 @@ function firstRefusedMember(
         return null;
       }
       if (outcome.status === 'refused') {
-        return new ExactBooleanRefusal({
-          operation: 'fuse',
-          category: outcome.refusal.category,
-          kernelCode: outcome.refusal.kernelCode,
-          kernelMessage: outcome.refusal.kernelMessage,
-          operands: memberNames(labels, index),
-          cause
-        });
+        return withSealedCavityCause(
+          kernel,
+          new ExactBooleanRefusal({
+            operation: 'fuse',
+            category: outcome.refusal.category,
+            kernelCode: outcome.refusal.kernelCode,
+            kernelMessage: outcome.refusal.kernelMessage,
+            operands: memberNames(labels, index),
+            cause
+          }),
+          accumulated,
+          solids[index]!
+        );
       }
       if (owned !== null) {
         releaseIntermediate(kernel, owned);
