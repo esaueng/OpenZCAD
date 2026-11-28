@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  createProjectDocument,
+  filletEdges
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
@@ -919,6 +920,118 @@ describe('a dimension that leaves the paper is diagnosed, not dropped (#2166)', 
     // What the composer would print: the value is gone. The workspace
     // refuses this export by the flag above rather than write it.
     expect(svgTexts(sheetPageToSvg(page, 'Integrity'))).not.toContain('54');
+  });
+
+  /**
+   * The e2e drawing-angles sheet in small: a 30 × 20 × 10 block whose top
+   * right edge is rounded R5, at 1:1 on A4, its front view's quarter arc
+   * dimensioned with the Arc angle tool, placed 15 mm from the arc's centre
+   * 60° round from its first end. The dimension's arc spans the whole
+   * quarter, so it reaches 15 mm above the centre, and its extension line
+   * 2 mm more, wherever along the arc it is placed.
+   */
+  async function arcAngleSheet(centerY: number) {
+    let document = addPrimitiveFeature(
+      createProjectDocument('Rounded block', toUserId('test')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 30, height: 20, depth: 10 }
+      }
+    );
+    const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+    const plainId = document.bodyOrder[0]!;
+    const plain = (await adapter.syncDocument(document)).bodyRepresentations[
+      plainId
+    ]!;
+    const corner = plain.topology!.edges.find((edge: EdgeTopology) => {
+      const p = edge.points;
+      return [p.slice(0, 3), p.slice(p.length - 3)].every(
+        (q) => near(q[0]!, plain.bbox.max.x) && near(q[2]!, plain.bbox.max.z)
+      );
+    })!;
+    document = filletEdges(document, {
+      name: 'Round',
+      targetBodyId: plainId,
+      edgeHashes: [corner.hash],
+      size: 5
+    }).document;
+    const bodies = (await adapter.syncDocument(document)).bodyRepresentations;
+    const bodyId =
+      document.bodyOrder.find((entry) => entry !== plainId) ?? plainId;
+    const body = bodies[bodyId]!;
+    // The fillet's arc on the block's front face, seen face-on.
+    const arc = body.topology!.edges.find(
+      (edge: EdgeTopology) =>
+        edge.curve?.circle &&
+        Math.abs(Math.abs(edge.curve.circle.axis.y) - 1) < 1e-9 &&
+        near(edge.curve.circle.center.y, body.bbox.min.y)
+    )!;
+    // The block's front view is 30 × 10 about its centre: the arc's centre
+    // is 10 right of it.
+    const reach = 15;
+    const annotations: DrawingAnnotation[] = [
+      {
+        annotationId: 'dann_arc' as DrawingAnnotationId,
+        kind: 'arc-angle',
+        viewId: frontId,
+        edge: {
+          bodyId,
+          hash: arc.hash,
+          ...(arc.reference ? { reference: arc.reference } : {})
+        },
+        placementMm: {
+          x: 10 + reach * Math.cos(Math.PI / 3),
+          y: reach * Math.sin(Math.PI / 3)
+        }
+      }
+    ];
+    const sheet: DrawingSheet = {
+      ...sheetOf([
+        view(frontId, 'front', {
+          bodyIds: [bodyId],
+          centerMm: { x: 150, y: centerY },
+          hiddenLines: false
+        })
+      ]),
+      paper: { size: 'A4', orientation: 'landscape' },
+      annotations
+    };
+    const views = sheet.views.map((entry) => ({
+      view: entry,
+      projection: projectView({
+        orientation: entry.orientation,
+        hiddenLines: entry.hiddenLines,
+        bodies: entry.bodyIds.map((id) => projectionBodyInput(bodies[id]!)!)
+      })
+    }));
+    const resolutions = resolveSheetAnnotations(sheet, bodies, 'mm');
+    expect(resolutions.get('dann_arc' as DrawingAnnotationId)?.ok).toBe(true);
+    const layer = composeSheetAnnotations(sheet, views, resolutions, 'mm');
+    return { layer, paper: drawingPaperMm(sheet.paper) };
+  }
+
+  it('prints an arc angle whole when its arc is on the paper', async () => {
+    const { layer, paper } = await arcAngleSheet(150);
+    expect(layer.offPaper).toEqual([]);
+    expect(layer.texts.map((text) => text.text)).toContain('90°');
+    const top = Math.max(
+      ...layer.strokes.flatMap((stroke) =>
+        stroke.points.filter((_, index) => index % 2 === 1)
+      )
+    );
+    // The arc's top and its extension line, 15 and 17 above the centre.
+    expect(top).toBeCloseTo(150 + 17, 6);
+    expect(top).toBeLessThan(paper.height);
+  });
+
+  it('flags an arc angle whose arc runs past the edge though its value is on the paper', async () => {
+    // The centre 196 mm up the A4's 210: the value, at 45° round the arc,
+    // and the placement are on the paper; the arc's end and its extension
+    // line reach 211 and 213 mm.
+    const { layer, paper } = await arcAngleSheet(196);
+    expect(sheetMarksOnPaper([], layer.texts, paper)).toBe(true);
+    expect(layer.offPaper).toEqual(['dann_arc']);
   });
 });
 
