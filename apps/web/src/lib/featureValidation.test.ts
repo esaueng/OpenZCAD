@@ -398,3 +398,50 @@ describe('the refusing warning without its feature name', () => {
     ).toBe(sentence);
   });
 });
+
+// Preview check of #2405: a Box edit that broke a downstream chamfer was
+// refused with "0.5" and "0.395" and no unit, in the editor and on
+// History's "Edit not saved" card, where Needs repair and Resume had them.
+describe('a rejected edit in the document unit', () => {
+  const sentence =
+    'Chamfer could not be created on 1 selected edge with distance 0.5. Try a smaller distance: distance 0.395 builds here.';
+  const reject = (name: string, unit: string | null) =>
+    validatedFeatureRejection({
+      featureName: name,
+      featureId: toFeatureId('feat_chamfer'),
+      dependent: true,
+      warnings: [`Feature "${name}": ${sentence}`],
+      featureWarnings: [
+        {
+          featureId: toFeatureId('feat_chamfer'),
+          featureName: name,
+          kind: 'build-failed',
+          message: `Feature "${name}": ${sentence}`
+        }
+      ],
+      bodyPresent: true,
+      documentMoved: false,
+      unit
+    });
+
+  it.each(['mm', 'in'])('writes %s after both sizes', (unit) => {
+    expect(reject('Chamfer 1', unit)?.message).toBe(
+      `Chamfer could not be created on 1 selected edge with distance 0.5 ${unit}. Try a smaller distance: distance 0.395 ${unit} builds here.`
+    );
+  });
+
+  it('writes them after the refused sizes, not in a name that reads like the refusal', () => {
+    expect(
+      reject(
+        'Rough": Chamfer could not be created on 1 selected edge with distance 2.',
+        'mm'
+      )?.message
+    ).toBe(
+      'Chamfer could not be created on 1 selected edge with distance 0.5 mm. Try a smaller distance: distance 0.395 mm builds here.'
+    );
+  });
+
+  it('leaves sizes bare without a unit', () => {
+    expect(reject('Chamfer 1', null)?.message).toBe(sentence);
+  });
+});

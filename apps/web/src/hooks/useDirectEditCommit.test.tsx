@@ -290,8 +290,9 @@ describe('direct manipulation commit', () => {
     // panel can offer to open it rather than describing it in prose.
     expect(onValidationFailed).toHaveBeenCalledWith(
       {
+        // In the document's unit, as the bar and History word it.
         message:
-          'Fillet could not be created on 2 selected edges with radius 1.',
+          'Fillet could not be created on 2 selected edges with radius 1 mm.',
         culprit: {
           featureId: filletFeature.featureId,
           featureName: 'Two rim fillet'
@@ -372,7 +373,9 @@ describe('direct manipulation commit', () => {
     expect(manager.canUndo).toBe(false);
     expect(onValidationFailed).toHaveBeenCalledWith(
       {
-        message: refusal,
+        // In the document's unit, as the bar and History word it.
+        message:
+          'Fillet could not be created on 1 selected edge with radius 1 mm. Try a smaller radius: radius 0.45 mm builds here.',
         culprit: {
           featureId: target.featureId,
           featureName: 'Fillet edges 4'

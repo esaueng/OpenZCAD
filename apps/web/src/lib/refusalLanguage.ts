@@ -13,7 +13,7 @@
  */
 
 import { ownEntry } from '@openzcad/shared';
-import { blendRefusalText } from './inPlace/sizeRefusal';
+import { blendSizesWithUnit, withoutFeatureLead } from './inPlace/sizeRefusal';
 export interface PlainRefusal {
   message: string;
   headline?: string;
@@ -881,14 +881,19 @@ export function plainRefusal(
  * card and the Resume dialog read a refusal through this too, so a size
  * never reaches them without its unit. `unit` is the display name
  * (`displayLengthName`), or null to leave sizes bare.
+ *
+ * Units go only into the adapter's own text: a `Feature "<name>": ` lead is
+ * trusted only when it is removed as `featureName`, exactly. Without the
+ * name, a lead's text is shown with its sizes bare, since a name can hold
+ * `": ` and words that read like the refusal.
  */
 export function plainRefusalSentence(
   text: string,
   classification: string | RefusalClassification | undefined,
-  unit: string | null
+  unit: string | null,
+  featureName?: string | null
 ): string {
-  return blendRefusalText(
-    plainRefusal(blendRefusalText(text, null), classification).message,
-    unit
-  );
+  const lead = withoutFeatureLead(text, featureName);
+  const { message } = plainRefusal(lead.text, classification);
+  return unit && lead.adapterText ? blendSizesWithUnit(message, unit) : message;
 }

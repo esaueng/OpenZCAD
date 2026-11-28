@@ -1251,6 +1251,7 @@ describe('a blend refused at a size another builds at', () => {
         refusal={
           'Feature "Fillet": Fillet could not be created on 12 selected edges with radius 50. Try a smaller radius: radius 6.25 builds here.'
         }
+        refusalFeatureName="Fillet"
         unitLabel="mm"
         onTrySize={onTrySize}
         canFinish={false}
@@ -1263,6 +1264,45 @@ describe('a blend refused at a size another builds at', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Use 6.25 mm' }));
     expect(onTrySize).toHaveBeenCalledWith('radius', 6.25);
+  });
+
+  // Re-check of #2405: a name holding `": ` read like the adapter's
+  // sentence, so the bar's fallback put the unit after the name's size.
+  const SPOOF =
+    'Rough": Chamfer could not be created on 1 selected edge with distance 2.';
+  const SPOOFED = `Feature "${SPOOF}": Chamfer could not be created on 1 selected edge with distance 1.5. Try a smaller distance: distance 0.985 builds here.`;
+
+  it('writes units after the refused size once the attributed name is removed', () => {
+    render(
+      <InPlaceCommandBar
+        title="Edit Chamfer"
+        hint="Drag the distance"
+        refusal={SPOOFED}
+        refusalFeatureName={SPOOF}
+        unitLabel="in"
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('status').textContent).toBe(
+      'Chamfer could not be created on 1 selected edge with distance 1.5 in. Try a smaller distance: distance 0.985 in builds here.'
+    );
+  });
+
+  it("writes no unit into a lead it could not remove as the feature's name", () => {
+    render(
+      <InPlaceCommandBar
+        title="Edit Chamfer"
+        hint="Drag the distance"
+        refusal={SPOOFED}
+        unitLabel="in"
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('status').textContent).not.toMatch(/\d in\b/);
   });
 });
 

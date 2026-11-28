@@ -9,7 +9,7 @@ import type {
   SketchSolveAnchor,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
-import { ownEntry } from '@openzcad/shared';
+import { displayLengthName, ownEntry } from '@openzcad/shared';
 import type {
   EntityId,
   ProjectDocument,
@@ -63,7 +63,8 @@ export async function checkSketchEdit(
       bodyPresent: Boolean(
         ownEntry(derived.bodyRepresentations, target.resultBodyId)
       ),
-      documentMoved: false
+      documentMoved: false,
+      unit: displayLengthName(document.units)
     });
     if (refusal)
       throw new FeatureBuildError(

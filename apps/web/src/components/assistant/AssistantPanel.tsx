@@ -116,6 +116,7 @@ import { useConfirm } from '../ConfirmDialog';
 import { ProposalCard } from './ProposalCard';
 import { RichText } from './RichText';
 import { latestScrollTop } from '../../lib/assistant/threadScroll';
+import { withoutFeatureLead } from '../../lib/inPlace/sizeRefusal';
 import {
   AssistantConsentChip,
   AssistantConsentDialog
@@ -126,7 +127,17 @@ export const ASSISTANT_CONSENT_NOT_GIVEN =
   'Nothing was sent. The assistant reads this encrypted project only once you allow it.';
 
 export type AssistantPreviewOutcome =
-  { ok: true } | { ok: false; reason: string };
+  | { ok: true }
+  | {
+      ok: false;
+      reason: string;
+      /**
+       * The feature the refusal's `Feature "<name>": ` lead names, when the
+       * rebuild attributed it: the lead is removed as this name before the
+       * reason is shown, so its sizes can take the document's unit.
+       */
+      featureName?: string | null;
+    };
 
 /** What the conversation tells the prompt line about itself. */
 export interface AssistantActivity {
@@ -994,7 +1005,7 @@ export function AssistantPanel({
           const preview = await onPreview(proposal);
           if (!preview.ok) {
             throw new Error(
-              `This verified recipe did not pass exact geometry preflight. Nothing was changed.\n\n${preview.reason}`
+              `This verified recipe did not pass exact geometry preflight. Nothing was changed.\n\n${withoutFeatureLead(preview.reason, preview.featureName).text}`
             );
           }
           const entryId = nextEntryId('reply');
@@ -1061,7 +1072,7 @@ export function AssistantPanel({
           const preview = await onPreview(reply.proposal);
           if (!preview.ok) {
             throw new Error(
-              `The proposed change did not pass exact geometry preflight. Nothing was changed.\n\n${preview.reason}`
+              `The proposed change did not pass exact geometry preflight. Nothing was changed.\n\n${withoutFeatureLead(preview.reason, preview.featureName).text}`
             );
           }
         }

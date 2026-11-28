@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { blendRefusalText, smallerSizeIn } from './sizeRefusal';
+import {
+  blendRefusalText,
+  blendSizesWithUnit,
+  smallerSizeIn,
+  withoutFeatureLead
+} from './sizeRefusal';
 
 const REFUSAL =
   'Feature "Chamfer": Chamfer could not be created on 1 selected edge with distance 8. Try a smaller distance: distance 2.5 builds here.';
@@ -16,7 +21,7 @@ describe('a blend refusal as its command bar reads it', () => {
   });
 
   it('drops the feature name and puts the unit after each size', () => {
-    expect(blendRefusalText(REFUSAL, 'in')).toBe(
+    expect(blendRefusalText(REFUSAL, 'in', 'Chamfer')).toBe(
       'Chamfer could not be created on 1 selected edge with distance 8 in. Try a smaller distance: distance 2.5 in builds here.'
     );
     expect(blendRefusalText('Feature "Box": Box failed.', null)).toBe(
@@ -34,7 +39,7 @@ describe('a blend refusal as its command bar reads it', () => {
     ['-3.25e+2', 'radius']
   ] as const)('puts the unit after %s whole', (size, dimension) => {
     const refusal = `Feature "Blend": Blend could not be created on 1 selected edge with ${dimension} ${size}. The kernel could not build this edge with its current neighboring faces.`;
-    expect(blendRefusalText(refusal, 'mm')).toBe(
+    expect(blendRefusalText(refusal, 'mm', 'Blend')).toBe(
       `Blend could not be created on 1 selected edge with ${dimension} ${size} mm. The kernel could not build this edge with its current neighboring faces.`
     );
   });
@@ -65,7 +70,8 @@ describe('a unit only where the adapter quoted a size', () => {
     expect(
       blendRefusalText(
         `Feature "Chamfer with distance 2 "Nominal"": ${SENTENCE}`,
-        'in'
+        'in',
+        'Chamfer with distance 2 "Nominal"'
       )
     ).toBe(formatted('in'));
   });
@@ -78,7 +84,8 @@ describe('a unit only where the adapter quoted a size', () => {
     expect(
       blendRefusalText(
         `Feature "Edge 4 mm with distance 3 mm": ${SENTENCE}`,
-        'mm'
+        'mm',
+        'Edge 4 mm with distance 3 mm'
       )
     ).toBe(formatted('mm'));
   });
@@ -90,6 +97,56 @@ describe('a unit only where the adapter quoted a size', () => {
     expect(blendRefusalText(unstripped, 'in')).not.toMatch(/\d in\b/);
     expect(blendRefusalText('Bevel with distance 2 failed.', 'mm')).toBe(
       'Bevel with distance 2 failed.'
+    );
+  });
+});
+
+// Re-check of #2405: a feature name holding `": ` passes for the adapter's
+// sentence once a lead is stripped up to it. Units are written only after
+// the lead is removed as the known name, exactly; without the name, none.
+describe('units only after the lead is removed as the known name', () => {
+  const SPOOF =
+    'Rough": Chamfer could not be created on 1 selected edge with distance 2.';
+  const SENTENCE =
+    'Chamfer could not be created on 1 selected edge with distance 1.5. Try a smaller distance: distance 0.985 builds here.';
+  const SPOOFED = `Feature "${SPOOF}": ${SENTENCE}`;
+
+  it('removes the lead as the name and writes the unit after the refused size', () => {
+    expect(withoutFeatureLead(SPOOFED, SPOOF)).toEqual({
+      text: SENTENCE,
+      adapterText: true
+    });
+    expect(blendRefusalText(SPOOFED, 'in', SPOOF)).toBe(
+      'Chamfer could not be created on 1 selected edge with distance 1.5 in. Try a smaller distance: distance 0.985 in builds here.'
+    );
+  });
+
+  it('writes no unit when the name is not known, or is another', () => {
+    for (const name of [undefined, null, 'Smooth']) {
+      expect(withoutFeatureLead(SPOOFED, name).adapterText).toBe(false);
+      expect(blendRefusalText(SPOOFED, 'in', name)).not.toMatch(/\d in\b/);
+    }
+  });
+
+  it('trusts text that has no lead at all', () => {
+    expect(withoutFeatureLead(SENTENCE)).toEqual({
+      text: SENTENCE,
+      adapterText: true
+    });
+  });
+});
+
+// Re-check of #2405, finding 2: the refused size already had its unit, and
+// the size that builds was left bare. Each size is checked on its own.
+describe('each size takes the unit on its own', () => {
+  it.each(['mm', 'in'])('writes %s after a bare size that builds', (unit) => {
+    expect(
+      blendSizesWithUnit(
+        `Chamfer could not be created on 1 selected edge with distance 1.5 ${unit}. Try a smaller distance: distance 0.985 builds here.`,
+        unit
+      )
+    ).toBe(
+      `Chamfer could not be created on 1 selected edge with distance 1.5 ${unit}. Try a smaller distance: distance 0.985 ${unit} builds here.`
     );
   });
 });

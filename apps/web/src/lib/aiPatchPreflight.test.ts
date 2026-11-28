@@ -17,7 +17,7 @@ import {
   type FaceTopologyReferenceV5,
   type ProjectDocument
 } from '@openzcad/shared';
-import { preflightCadPatch } from './aiPatchPreflight';
+import { PreflightWarningError, preflightCadPatch } from './aiPatchPreflight';
 
 const proposal = {
   proposalId: 'proposal_exact_box',
@@ -204,6 +204,34 @@ describe('AI exact patch preflight', () => {
       }))
     ).rejects.toThrow(/expected exact result body/);
     expect(base).toEqual(snapshot);
+  });
+
+  // Re-check of #2405: the assistant removes a refusal's lead as the
+  // attributed feature's name before it writes units, so the preflight
+  // error carries that name.
+  it("names the attributed feature a refusal's lead belongs to", async () => {
+    const base = createProjectDocument('AI', toUserId('user_ai'));
+    const name =
+      'Rough": Chamfer could not be created on 1 selected edge with distance 2.';
+    const message = `Feature "${name}": Chamfer could not be created on 1 selected edge with distance 1.5.`;
+    const error = await preflightCadPatch(
+      base,
+      proposal,
+      async (candidate) => ({
+        ...exactDerived(candidate),
+        warnings: [message],
+        featureWarnings: [
+          {
+            featureId: listFeaturesInOrder(candidate).at(-1)!.featureId,
+            featureName: name,
+            kind: 'build-failed',
+            message
+          }
+        ]
+      })
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PreflightWarningError);
+    expect(error).toMatchObject({ message, featureName: name });
   });
 
   it('reports every feature that failed exact preflight', async () => {

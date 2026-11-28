@@ -513,3 +513,37 @@ it("words a missing target body from its code, not the adapter's sentence", () =
     screen.getByRole('region', { name: 'History details' })
   ).not.toHaveTextContent('target is unavailable');
 });
+
+// Re-check of #2405: without the typed attribution the card read the
+// warning strings, stripped a name holding `": ` up to it, and the name's
+// "distance 2" took the unit.
+it('removes a name that reads like the refusal as the name, without attribution', () => {
+  const { document, fillet } = plateAndFillet();
+  const name =
+    'Rough": Chamfer could not be created on 1 selected edge with distance 2.';
+  const named = withFeature(document, fillet.id, (feature) => ({
+    ...feature,
+    name
+  }));
+  render(
+    <FeatureHistoryPanel
+      document={{
+        ...named,
+        units: 'inch',
+        derived: {
+          ...named.derived,
+          warnings: [
+            `Feature "${name}": Chamfer could not be created on 1 selected edge with distance 1.5. Try a smaller distance: distance 0.985 builds here.`
+          ]
+        }
+      }}
+      selectedId={fillet.id}
+      failure={null}
+      onSelect={vi.fn()}
+      onDismissFailure={vi.fn()}
+    />
+  );
+  expect(screen.getByRole('alert').textContent).toBe(
+    'Chamfer could not be created on 1 selected edge with distance 1.5 in. Try a smaller distance: distance 0.985 in builds here.'
+  );
+});

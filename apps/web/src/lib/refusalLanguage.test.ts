@@ -902,7 +902,7 @@ describe('plainRefusalSentence', () => {
     ['mm', 'mm'],
     ['in', 'in']
   ])('puts %s after each size', (unit) => {
-    expect(plainRefusalSentence(raw, undefined, unit)).toBe(
+    expect(plainRefusalSentence(raw, undefined, unit, 'Chamfer 1')).toBe(
       `Chamfer could not be created on 1 selected edge with distance 0.5 ${unit}. Try a smaller distance: distance 0.095 ${unit} builds here.`
     );
   });
@@ -914,7 +914,8 @@ describe('plainRefusalSentence', () => {
       plainRefusalSentence(
         raw.replace('Chamfer 1', 'Chamfer with distance 2 "Nominal"'),
         undefined,
-        'in'
+        'in',
+        'Chamfer with distance 2 "Nominal"'
       )
     ).toBe(
       'Chamfer could not be created on 1 selected edge with distance 0.5 in. Try a smaller distance: distance 0.095 in builds here.'
@@ -922,7 +923,7 @@ describe('plainRefusalSentence', () => {
   });
 
   it.each(['mm', 'in'])('never writes %s twice', (unit) => {
-    const once = plainRefusalSentence(raw, undefined, unit);
+    const once = plainRefusalSentence(raw, undefined, unit, 'Chamfer 1');
     expect(plainRefusalSentence(once, undefined, unit)).toBe(once);
   });
 
@@ -931,7 +932,8 @@ describe('plainRefusalSentence', () => {
       plainRefusalSentence(
         raw.replace('Chamfer 1', 'Edge 4 mm with distance 3 mm'),
         undefined,
-        'mm'
+        'mm',
+        'Edge 4 mm with distance 3 mm'
       )
     ).toBe(
       'Chamfer could not be created on 1 selected edge with distance 0.5 mm. Try a smaller distance: distance 0.095 mm builds here.'
@@ -939,7 +941,7 @@ describe('plainRefusalSentence', () => {
   });
 
   it('leaves sizes bare without a unit, and words a typed code as plainRefusal does', () => {
-    expect(plainRefusalSentence(raw, undefined, null)).toBe(
+    expect(plainRefusalSentence(raw, undefined, null, 'Chamfer 1')).toBe(
       'Chamfer could not be created on 1 selected edge with distance 0.5. Try a smaller distance: distance 0.095 builds here.'
     );
     expect(
@@ -949,5 +951,23 @@ describe('plainRefusalSentence', () => {
         'mm'
       )
     ).toBe(TARGET_BODY_UNAVAILABLE);
+  });
+});
+
+// Re-check of #2405: a name holding `": ` read like the refusal, and its
+// size took the unit. Units only after the lead is removed as the name.
+describe('plainRefusalSentence with a name that reads like the refusal', () => {
+  const name =
+    'Rough": Chamfer could not be created on 1 selected edge with distance 2.';
+  const raw = `Feature "${name}": Chamfer could not be created on 1 selected edge with distance 1.5. Try a smaller distance: distance 0.985 builds here.`;
+
+  it('writes the unit after the refused size, given the name', () => {
+    expect(plainRefusalSentence(raw, undefined, 'in', name)).toBe(
+      'Chamfer could not be created on 1 selected edge with distance 1.5 in. Try a smaller distance: distance 0.985 in builds here.'
+    );
+  });
+
+  it('writes no unit without it', () => {
+    expect(plainRefusalSentence(raw, undefined, 'in')).not.toMatch(/\d in\b/);
   });
 });
