@@ -273,8 +273,14 @@ describe('planarFaceSweepClear', () => {
  * it with the same shape on the display mesh: a plate, and beside it a ring
  * of freeform patches whose box reaches over the plate's corner while no
  * patch stands over the plate.
+ *
+ * This is wording coverage only: the refusal is injected, so it passes
+ * whatever the kernel does. Remus 2026.1.173 (remus#2017) builds the real
+ * move; `test/threaded-bore-face-move.test.ts` checks that on the installed
+ * kernel. These cases still pin the sentence chosen if a kernel refuses a
+ * move the mesh shows clear.
  */
-describe('a refused face move beside a thread', () => {
+describe('the wording of an injected face-move refusal beside a thread', () => {
   const KERNEL =
     'offset: move-face would change topology at face Some(Id(11608)), edge None: swept face reaches nonadjacent face 11744 before completing the move';
 
