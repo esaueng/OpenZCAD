@@ -6,8 +6,12 @@ import {
   MIRROR_SOURCE_UNAVAILABLE,
   SPLIT_PLANE_MISSES,
   SPLIT_PLANE_ON_EDGE,
+  SPLIT_CURVED_SECTION,
   SPLIT_PLANE_ON_FACE,
+  SPLIT_PLANE_TOUCHES,
+  TARGET_BODY_UNAVAILABLE,
   plainRefusal,
+  plainRefusalSentence,
   stepImportRefusal,
   withFaceSweepReading
 } from './refusalLanguage';
@@ -580,7 +584,7 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
     ],
     [
       'the cutting plane crosses face 18, whose surface is not planar; the section across it is not a straight edge and is not implemented',
-      "The cutting plane crosses a curved face, which splitting can't cut yet. Move the plane so it crosses only flat faces."
+      SPLIT_CURVED_SECTION
     ],
     [
       'the cutting plane contains edge 36 of the solid; splitting along an existing edge has no unambiguous answer',
@@ -590,7 +594,7 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
       // Untyped, the touch names neither an edge nor a face: the kernel
       // words both alike (see the typed Split cases below).
       "the cutting plane does not cross the solid's interior; it only touches the body and contains edge 3 of the solid, so there is nothing to split",
-      'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.'
+      SPLIT_PLANE_TOUCHES
     ],
     [
       // Untyped, not claimed as a miss: the kernel says this of a plane
@@ -694,9 +698,7 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
     it('falls back to the prose table for a cause it has no sentence for', () => {
       expect(
         plainRefusal(TOUCH, split('unsupported', 'some_future_cause')).message
-      ).toBe(
-        'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.'
-      );
+      ).toBe(SPLIT_PLANE_TOUCHES);
       expect(
         plainRefusal(
           'split: unsupported configuration: the cutting plane crosses curved edge 36; trimming a curve to the plane is not implemented here',
@@ -826,5 +828,95 @@ describe('withFaceSweepReading', () => {
     const other = { message: 'Unsupported adjacent surface.' };
     expect(withFaceSweepReading(other, read)).toBe(other);
     expect(read).not.toHaveBeenCalled();
+  });
+});
+
+// K10: every feature that works on a body it does not make refused a missing
+// body with a bare "… target is unavailable." Only Mirror's was typed
+// (#2278); the rest now carry `target_body_unavailable`.
+describe('a missing target body', () => {
+  const record = {
+    category: 'invalid_input',
+    code: 'target_body_unavailable'
+  } as const;
+
+  it.each([
+    'Transform target is unavailable.',
+    'Shell target is unavailable.',
+    'Draft target is unavailable.',
+    'Edge modifier target is unavailable.',
+    'Boolean target Bracket is unavailable.',
+    'Thicken source body is unavailable.'
+  ])('words %j from its code', (adapter) => {
+    const raw = `Feature "Body no longer exists": ${adapter}`;
+    expect(plainRefusal(raw, record)).toEqual({
+      message: TARGET_BODY_UNAVAILABLE,
+      detail: raw,
+      ...record
+    });
+  });
+
+  it('says what may have happened, and not which', () => {
+    expect(TARGET_BODY_UNAVAILABLE).toBe(
+      "A body this feature uses isn't built at this point in the history. It may be suppressed, or its feature may have failed."
+    );
+  });
+});
+
+// K10: the touch sentence covered a tangent point too. Split by x = 13 on an
+// R10 r3 torus about z meets it at one point on the outer rim, and the
+// kernel reports the seam edge there; the sentence said the plane "runs
+// along an existing edge or face".
+describe('a Split plane that only touches the body', () => {
+  it('names an edge, a face and a single point, and no direction', () => {
+    expect(SPLIT_PLANE_TOUCHES).toBe(
+      'The cutting plane only touches the body, along an edge or a face or at a single point, so there is nothing to cut. Move the plane so it passes through the body.'
+    );
+    expect(SPLIT_PLANE_TOUCHES).not.toMatch(/runs along/);
+  });
+});
+
+// Since Remus 2026.1.173 Split cuts spheres and tori; the kernel names a
+// face "not planar" only where it could not build that one section. The
+// sentence told users to cut only flat faces.
+describe('a Split section the kernel could not build across a curved face', () => {
+  const raw =
+    'the cutting plane crosses face 18, whose surface is not planar; the section across it is not a straight edge and is not implemented';
+
+  it('does not say curved faces cannot be cut', () => {
+    const { message } = plainRefusal(raw);
+    expect(message).toBe(
+      "Split couldn't build the cut across a curved face at this plane. Move the plane a little, or split the body somewhere else."
+    );
+    expect(message).not.toMatch(/only flat faces|can't cut yet/);
+  });
+});
+
+// The command bar puts the document's unit after a blend refusal's sizes;
+// History and Resume read refusals through the same helper.
+describe('plainRefusalSentence', () => {
+  const raw =
+    'Feature "Chamfer 1": Chamfer could not be created on 1 selected edge with distance 0.5. Try a smaller distance: distance 0.095 builds here.';
+
+  it.each([
+    ['mm', 'mm'],
+    ['in', 'in']
+  ])('puts %s after each size', (unit) => {
+    expect(plainRefusalSentence(raw, undefined, unit)).toBe(
+      `Chamfer could not be created on 1 selected edge with distance 0.5 ${unit}. Try a smaller distance: distance 0.095 ${unit} builds here.`
+    );
+  });
+
+  it('leaves sizes bare without a unit, and words a typed code as plainRefusal does', () => {
+    expect(plainRefusalSentence(raw, undefined, null)).toBe(
+      'Chamfer could not be created on 1 selected edge with distance 0.5. Try a smaller distance: distance 0.095 builds here.'
+    );
+    expect(
+      plainRefusalSentence(
+        'Shell target is unavailable.',
+        { category: 'invalid_input', code: 'target_body_unavailable' },
+        'mm'
+      )
+    ).toBe(TARGET_BODY_UNAVAILABLE);
   });
 });

@@ -40,6 +40,7 @@ import {
   SPLIT_PLANE_MISSES,
   SPLIT_PLANE_ON_EDGE,
   SPLIT_PLANE_ON_FACE,
+  SPLIT_PLANE_TOUCHES,
   plainRefusal,
   type RefusalClassification
 } from '../apps/web/src/lib/refusalLanguage';
@@ -894,6 +895,13 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
       );
       expect(refused.reason, label).toBeUndefined();
       expect(refused.bar, label).not.toBe(GENERIC_REFUSAL);
+      // The x = 13 plane meets the torus at a single point; the kernel
+      // reports the seam edge there. The sentence names a point contact
+      // too, not only an edge or face it "runs along" (K10).
+      if (category === 'unsupported') {
+        expect(refused.bar, label).toBe(SPLIT_PLANE_TOUCHES);
+        expect(refused.bar, label).toMatch(/single point/);
+      }
     });
   });
 

@@ -70,6 +70,12 @@ interface AdapterRefusalSpec {
  *   the Mirror's place in the history (it is suppressed, or the feature that
  *   makes it failed and handed nothing through). No kernel call is made, so
  *   no kernel code exists for it.
+ * - `target_body_unavailable`: the same absence for every other feature
+ *   that works on a body it does not make (Transform, Shell, Draft, Hole,
+ *   Split, Pattern, a fillet or chamfer, a boolean's operand, a cut
+ *   through all or up to next, …): the body has no shape at the feature's
+ *   place in the history. Mirror keeps its own code, whose sentence a
+ *   Mirror of several bodies words after the refused body's name.
  */
 export const ADAPTER_REFUSALS = {
   union_not_solid: {
@@ -111,7 +117,8 @@ export const ADAPTER_REFUSALS = {
     family: 'validation',
     category: 'invalid_input'
   },
-  mirror_source_unavailable: { family: 'reference', category: 'invalid_input' }
+  mirror_source_unavailable: { family: 'reference', category: 'invalid_input' },
+  target_body_unavailable: { family: 'reference', category: 'invalid_input' }
 } as const satisfies Record<string, AdapterRefusalSpec>;
 
 export type AdapterRefusalCode = keyof typeof ADAPTER_REFUSALS;
@@ -168,4 +175,13 @@ export function adapterRefusalRecord(
     category: spec.category,
     code
   };
+}
+
+/**
+ * A feature's target body has no shape where the feature sits in the
+ * history: typed as `target_body_unavailable`, with the adapter's sentence
+ * ("Shell target is unavailable.") kept as the detail.
+ */
+export function targetBodyUnavailable(message: string): AdapterRefusal {
+  return new AdapterRefusal('target_body_unavailable', message);
 }

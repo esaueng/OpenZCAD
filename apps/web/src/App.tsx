@@ -45051,6 +45051,7 @@ export function App() {
               action={pendingResume.label}
               {...(pendingResume.row ? { row: pendingResume.row } : {})}
               failures={pendingResume.failures}
+              unitLabel={doc ? displayLengthName(doc.units) : null}
               onKeep={() => {
                 setPendingResume(null);
                 setStatus(

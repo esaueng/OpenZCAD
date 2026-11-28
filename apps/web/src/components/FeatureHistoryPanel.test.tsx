@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   createProjectDocument,
@@ -16,7 +16,10 @@ import {
 } from '@openzcad/shared';
 import { FeatureHistoryPanel } from './FeatureHistoryPanel';
 import { FeatureBuildError } from '../lib/featureValidation';
-import { MIRROR_SOURCE_UNAVAILABLE } from '../lib/refusalLanguage';
+import {
+  MIRROR_SOURCE_UNAVAILABLE,
+  TARGET_BODY_UNAVAILABLE
+} from '../lib/refusalLanguage';
 
 it('shows dependent history and routes a failed edit by feature identity', async () => {
   const base = addPrimitiveFeature(
@@ -386,4 +389,85 @@ it('words a committed failing step from the attributed typed records', () => {
   expect(
     screen.getByRole('region', { name: 'History details' })
   ).not.toHaveTextContent('Mirror target is unavailable.');
+});
+
+// A chamfer's rebuild refusal quotes its sizes bare. The command bar puts
+// the document's unit after them; History's card read "0.5" and "0.095"
+// with no unit (preview re-check of #2278, finding 2).
+describe("puts the document's unit after a refused chamfer's sizes", () => {
+  const message =
+    'Feature "Round corners": Chamfer could not be created on 1 selected edge with distance 0.5. Try a smaller distance: distance 0.095 builds here.';
+  it.each([
+    ['mm', 'mm'],
+    ['inch', 'in']
+  ] as const)('in a %s document', (units, unit) => {
+    const { document, fillet } = plateAndFillet();
+    const committed: ProjectDocument = {
+      ...document,
+      units,
+      derived: { ...document.derived, warnings: [message] }
+    };
+    render(
+      <FeatureHistoryPanel
+        document={committed}
+        featureWarnings={[
+          {
+            featureId: fillet.featureId,
+            featureName: 'Round corners',
+            kind: 'build-failed',
+            message,
+            kernelRefusal: {
+              family: 'blend',
+              category: 'quality_refused',
+              code: 'edge_modifier_refused'
+            }
+          }
+        ]}
+        selectedId={fillet.id}
+        failure={null}
+        onSelect={vi.fn()}
+        onDismissFailure={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      `Chamfer could not be created on 1 selected edge with distance 0.5 ${unit}. Try a smaller distance: distance 0.095 ${unit} builds here.`
+    );
+  });
+});
+
+// K10: every feature but Mirror refused a missing target body untyped. The
+// card words the typed code, as the bar does.
+it("words a missing target body from its code, not the adapter's sentence", () => {
+  const { document, fillet } = plateAndFillet();
+  const message =
+    'Feature "Round corners": Edge modifier target is unavailable.';
+  render(
+    <FeatureHistoryPanel
+      document={{
+        ...document,
+        derived: { ...document.derived, warnings: [message] }
+      }}
+      featureWarnings={[
+        {
+          featureId: fillet.featureId,
+          featureName: 'Round corners',
+          kind: 'build-failed',
+          message,
+          kernelRefusal: {
+            family: 'reference',
+            category: 'invalid_input',
+            code: 'target_body_unavailable'
+          }
+        }
+      ]}
+      selectedId={fillet.id}
+      failure={null}
+      onSelect={vi.fn()}
+      onDismissFailure={vi.fn()}
+    />
+  );
+  expect(screen.getByRole('alert')).toHaveTextContent(TARGET_BODY_UNAVAILABLE);
+  expect(
+    screen.getByRole('region', { name: 'History details' })
+  ).not.toHaveTextContent('target is unavailable');
 });

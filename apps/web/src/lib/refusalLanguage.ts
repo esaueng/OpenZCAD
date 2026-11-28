@@ -13,6 +13,7 @@
  */
 
 import { ownEntry } from '@openzcad/shared';
+import { blendRefusalText } from './inPlace/sizeRefusal';
 export interface PlainRefusal {
   message: string;
   headline?: string;
@@ -161,6 +162,15 @@ const DIAMETER_DOES_NOT_FIT =
  */
 export const MIRROR_SOURCE_UNAVAILABLE =
   "The body to mirror isn't built at this point in the history. It may be suppressed, or its feature may have failed.";
+/**
+ * The adapter's `target_body_unavailable`: the same absence for every other
+ * feature that works on a body it does not make (Transform, Shell, Draft, a
+ * fillet, a boolean's operand, …). "A body" rather than "the body", because
+ * a boolean names several and the record does not say which; the adapter's
+ * sentence, which names it, stays in the detail.
+ */
+export const TARGET_BODY_UNAVAILABLE =
+  "A body this feature uses isn't built at this point in the history. It may be suppressed, or its feature may have failed.";
 const FILLETS_NOT_REBUILT =
   "The fillets around this wall can't be rebuilt at that diameter. Change or remove those fillets in History, then resize the wall.";
 
@@ -210,14 +220,15 @@ const SPLIT_PLANE_NOT_CUT =
   'Split could not cut the body along this plane. Check that the plane passes through the body.';
 /**
  * The kernel's "does not cross the interior", where nothing proved how the
- * plane meets the body. On a curved body the kernel says this of a tangent
- * plane that meets a seam edge, such as one touching a torus at its outer
- * rim (K10), and the adapter proves no cause there: the sentence must claim
- * neither a touch nor a direction to slide, only the edge or face the plane
- * runs along.
+ * plane meets the body. The refusal itself says the plane only touches the
+ * body, but not where: along an edge, flat on a face, or at a single point.
+ * The last is a tangent plane on a curved body, such as x = 13 on an R10 r3
+ * torus about z, which meets it at one point on the outer rim; the kernel
+ * reports the seam edge it finds there, and the adapter proves no cause
+ * (K10). So the sentence names all three and no direction to move in.
  */
-const SPLIT_PLANE_TOUCHES =
-  'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.';
+export const SPLIT_PLANE_TOUCHES =
+  'The cutting plane only touches the body, along an edge or a face or at a single point, so there is nothing to cut. Move the plane so it passes through the body.';
 /**
  * M11 (owner decision D2): why two picked edges give Split no plane, by the
  * pick's own code. The pick is refused before any rebuild, so no kernel
@@ -232,6 +243,12 @@ export const SPLIT_EDGE_PLANE_SENTENCES: Readonly<
   'curved-edge':
     'A plane through edges needs straight edges, and this edge is curved. Pick a straight edge.'
 };
+/**
+ * The kernel's "crosses face N, whose surface is not planar": the section
+ * across that one curved face could not be built at this plane.
+ */
+export const SPLIT_CURVED_SECTION =
+  "Split couldn't build the cut across a curved face at this plane. Move the plane a little, or split the body somewhere else.";
 const SPLIT_SENTENCES: Readonly<Record<string, string>> = {
   plane_misses_body: SPLIT_PLANE_MISSES,
   plane_on_face: SPLIT_PLANE_ON_FACE,
@@ -254,6 +271,9 @@ function typedSentence(typed: RefusalClassification): string | null {
   }
   if (typed.code === 'mirror_source_unavailable') {
     return MIRROR_SOURCE_UNAVAILABLE;
+  }
+  if (typed.code === 'target_body_unavailable') {
+    return TARGET_BODY_UNAVAILABLE;
   }
   if (typed.code === 'cylinder-diameter-unbuildable') {
     return typed.reason === 'group_reblend_failed'
@@ -419,9 +439,12 @@ const TRANSLATIONS: readonly Translation[] = [
       "The cutting plane runs through a hole in a face, which splitting can't handle yet. Move the plane clear of holes and openings."
   },
   {
+    // Since Remus 2026.1.173 (remus#2023) Split sections sphere and torus
+    // faces, so curved faces can be cut; the kernel says this only when it
+    // could not build the section across one particular face. The sentence
+    // must not say curved faces cannot be cut.
     pattern: /cutting plane crosses face .*not planar/i,
-    sentence:
-      "The cutting plane crosses a curved face, which splitting can't cut yet. Move the plane so it crosses only flat faces."
+    sentence: SPLIT_CURVED_SECTION
   },
   {
     // A plane through the body that contains one of its edges: "the cutting
@@ -848,4 +871,24 @@ export function plainRefusal(
   }
   const detail = [sentence, tail].filter(Boolean).join('\n');
   return { message: plain, detail, ...classified };
+}
+
+/**
+ * {@link plainRefusal}'s sentence as the command bar shows it: without a
+ * leading feature name, and with the document's length unit after every
+ * size a fillet or chamfer refusal quotes ("with distance 0.5 mm. Try a
+ * smaller distance: distance 0.095 mm builds here."). History's failing-step
+ * card and the Resume dialog read a refusal through this too, so a size
+ * never reaches them without its unit. `unit` is the display name
+ * (`displayLengthName`), or null to leave sizes bare.
+ */
+export function plainRefusalSentence(
+  text: string,
+  classification: string | RefusalClassification | undefined,
+  unit: string | null
+): string {
+  return blendRefusalText(
+    plainRefusal(blendRefusalText(text, null), classification).message,
+    unit
+  );
 }

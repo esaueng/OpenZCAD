@@ -31,6 +31,7 @@ import {
   resolveParamValue
 } from '@openzcad/document-core';
 
+import { targetBodyUnavailable } from './adapter-refusal';
 import { collapseShape } from './exact-boolean-helpers';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 import { raiseFeatureWarning } from './exact-feature-warnings';
@@ -651,7 +652,7 @@ export function buildThreadFeature(
   }
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
-    throw new Error('Thread target is unavailable.');
+    throw targetBodyUnavailable('Thread target is unavailable.');
   }
   // Face resolution works on a single solid; fuse a multi-solid body first,
   // exactly as a hole does.
