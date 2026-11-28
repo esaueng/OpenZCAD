@@ -3,6 +3,7 @@ import {
   emptyExportMessage,
   exportScope,
   exportScopeLabel,
+  unavailableExportMessage,
   type ExportScopeBody
 } from './exportScope';
 
@@ -96,5 +97,49 @@ describe('exportScope (ZC-199)', () => {
     expect(exportScopeLabel(exportScope([body('a'), body('b')], null))).toBe(
       'all bodies (2)'
     );
+  });
+
+  it('counts bodies a failed feature keeps out instead of claiming all (#2254)', () => {
+    const withheld = exportScope(
+      [body('a'), body('b', { withheld: true })],
+      null
+    );
+    expect(exportScopeLabel(withheld)).toBe('1 of 2 bodies');
+    // A body the failure built nothing for is added by the caller.
+    expect(
+      exportScopeLabel({ ...exportScope([body('a')], null), omittedIds: ['x'] })
+    ).toBe('1 of 2 bodies');
+    expect(
+      exportScopeLabel({ ...exportScope(model, null), omittedIds: ['x'] })
+    ).toBe('visible bodies (2 of 3, 1 hidden left out)');
+  });
+
+  it('names the failed feature, not "Create a body", when every body is held out (#2205)', () => {
+    // The palette, the desktop menu and File share this reason.
+    const note =
+      'Fitting not exported: “Solid offset” failed to rebuild, so it does not match the design. Fix or suppress the failed feature in History to export it.';
+    const failed = exportScope([body('a', { withheld: true })], null);
+    expect(unavailableExportMessage(failed, note)).toBe(note);
+    // A genuinely empty document keeps the missing-body advice.
+    expect(unavailableExportMessage(exportScope([], null), null)).toBe(
+      'Create a body before exporting.'
+    );
+    expect(unavailableExportMessage(null, null)).toBe(
+      'Create a body before exporting.'
+    );
+    // So does an all-hidden scope, and a scope that still exports keeps the
+    // empty-scope wording for when it does become empty.
+    expect(
+      unavailableExportMessage(
+        exportScope([body('a', { hidden: true })], null),
+        null
+      )
+    ).toBe('Show a body before exporting.');
+    expect(
+      unavailableExportMessage(
+        exportScope([body('a'), body('b', { withheld: true })], null),
+        note
+      )
+    ).toBe('Create a body before exporting.');
   });
 });
