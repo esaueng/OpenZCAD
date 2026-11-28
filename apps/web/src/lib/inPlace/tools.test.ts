@@ -2948,6 +2948,52 @@ describe('review: loft apex and guided sweeps', () => {
         pitch: 3
       }
     });
+    // A pitch that runs against the axis reaches the rig with its sign, by
+    // either sizing: the end rides where the coil is built, down the axis
+    // it still turns right-handed about. The height has no sign, so its
+    // arrow turns to run with the coil.
+    const coilEnd = (
+      numbers: Record<string, number>,
+      options: Record<string, string>
+    ) => {
+      const handles = helix.handles(slots, numbers, ctx, options);
+      const turns = handles.find((handle) => handle.valueId === 'turns');
+      if (turns?.kind !== 'coil') throw new Error('Expected a coil handle.');
+      return { handles, turns };
+    };
+    const back = coilEnd({ pitch: -4.2, height: 4.2, turns: 1 }, {});
+    expect(back.turns.params).toMatchObject({
+      axis: { x: 0, y: 0, z: 1 },
+      pitch: -4.2
+    });
+    expect(
+      back.handles.find((handle) => handle.valueId === 'height')
+    ).toMatchObject({
+      kind: 'linear',
+      params: {
+        origin: { x: -20, y: 0, z: 0 },
+        direction: { x: 0, y: 0, z: -1 }
+      }
+    });
+    const backByPitch = coilEnd(
+      { pitch: -4.2, height: 4.2, turns: 1 },
+      { size: 'pitch' }
+    );
+    expect(backByPitch.turns.params).toMatchObject({
+      axis: { x: 0, y: 0, z: 1 },
+      pitch: -4.2
+    });
+    // The pitch carries its own sign: its arrow stays along the axis.
+    expect(
+      backByPitch.handles.find((handle) => handle.valueId === 'pitch')
+    ).toMatchObject({ params: { direction: { x: 0, y: 0, z: 1 } } });
+    // The two rigs are told apart, so a switch of direction rebuilds them.
+    const forward = coilEnd({ pitch: 4.2, height: 4.2, turns: 1 }, {});
+    expect(forward.turns.params.pitch).toBeCloseTo(4.2);
+    expect(forward.turns.key).not.toBe(back.turns.key);
+    expect(
+      forward.handles.find((handle) => handle.valueId === 'height')?.key
+    ).not.toBe(back.handles.find((handle) => handle.valueId === 'height')?.key);
     const start = end?.kind === 'coil' ? end.params.startDirection : null;
     expect(start?.x).toBeCloseTo(22 / Math.hypot(22, 2));
     expect(start?.y).toBeCloseTo(2 / Math.hypot(22, 2));

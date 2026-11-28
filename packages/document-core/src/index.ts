@@ -3830,9 +3830,35 @@ export function sweepProfile(
  * from where the profile sits, and the field only records the distance when
  * the coil was made. An edit to it used to apply, as one undo step, and
  * change nothing. A faceted helix is built at its `radius` and takes one.
+ *
+ * The refusal holds only while the record reads
+ * (`recordedCoilRadiusReads`): one left naming a deleted parameter is put
+ * right by the same edit, and nothing else can do it.
  */
 export function recordedCoilRadiusRefusal(name: string): string {
   return `${name} is wound through its profile, so its radius is the profile's distance from the axis and \`radius\` only records it. Move the profile in its sketch, or the axis, to change the coil's radius.`;
+}
+
+/**
+ * Whether a coil's recorded `radius` reads as a number against the
+ * document's parameters. A coil wound in place builds without it, so a
+ * record such as `R`, with R since deleted, can outlive what it names.
+ */
+export function recordedCoilRadiusReads(
+  document: ProjectDocument,
+  radius: ParamValue
+): boolean {
+  try {
+    resolveParamValue(
+      radius,
+      getParameterScope(document).scope,
+      'radius',
+      document.units
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function helicalSweepProfile(

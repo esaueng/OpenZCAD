@@ -228,8 +228,8 @@ describe('plainRefusal', () => {
         'The coils would overlap: one turn must climb further than the profile is tall. Increase Pitch or Height, or wind less than one full turn.'
       ],
       [
-        // #2188: the adapter's, from the profile's exact span.
-        'helical sweep coils would overlap: the profile spans 3 along the axis, leaving no clearance at the pitch 2.997',
+        // #2188: the adapter's, from the profile's own curves.
+        'helical sweep coils would overlap: one turn carries the profile 2.997 along the axis, onto itself',
         'The coils would overlap: one turn must climb further than the profile is tall. Increase Pitch or Height, or wind less than one full turn.'
       ],
       [

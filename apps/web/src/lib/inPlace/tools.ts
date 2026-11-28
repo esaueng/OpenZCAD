@@ -2597,9 +2597,15 @@ const helicalSweep: InPlaceToolSpec = {
     );
     const byPitch = options.size === 'pitch';
     const turns = values.turns ?? 3;
+    // One turn's rise along `climb`, with its sign: a pitch that runs
+    // against the axis builds the coil down it, still turning the same way
+    // round, and the end's handle rides there (the preview's end cap is at
+    // −4.2 for one turn of −4.2, not at +4.2). Sized by height, which has no
+    // sign, the direction is the held pitch's, as `request` reads it.
+    const back = pitchRunsBack(values);
     const pitch = byPitch
-      ? Math.abs(values.pitch ?? 5)
-      : (values.height ?? 15) / (turns > 0 ? turns : 1);
+      ? (values.pitch ?? 5)
+      : ((values.height ?? 15) / (turns > 0 ? turns : 1)) * (back ? -1 : 1);
     const coil = coilPath(slots, ctx, options, outline, axisLine, climb);
     const arrowOrigin = coil ? coil.center : origin;
     const turnsHandle: HandleSpec = coil
@@ -2622,8 +2628,13 @@ const helicalSweep: InPlaceToolSpec = {
       {
         valueId: byPitch ? 'pitch' : 'height',
         kind: 'linear',
-        key: `${base}:${byPitch ? 'pitch' : 'height'}`,
-        params: { origin: arrowOrigin, direction: climb }
+        // The pitch carries its own sign along the axis. The height does
+        // not, so its arrow turns to run the way the coil does.
+        key: `${base}:${byPitch ? 'pitch' : back ? 'height:back' : 'height'}`,
+        params: {
+          origin: arrowOrigin,
+          direction: !byPitch && back ? reversed(climb) : climb
+        }
       },
       turnsHandle
     ];

@@ -189,6 +189,7 @@ import {
   withParameterKinds,
   type HelicalSweepInput,
   helicalSweepProfile,
+  recordedCoilRadiusReads,
   recordedCoilRadiusRefusal,
   holeBody,
   type HoleInput,
@@ -5449,11 +5450,14 @@ export function commandsForCadPatch(
           throw new Error(`Feature ${operation.featureId} not found.`);
         }
         // #2120: a coil wound in place takes its radius from its profile,
-        // so a new stored one would be accepted and change nothing.
+        // so a new stored one would be accepted and change nothing. A
+        // record that no longer reads (it names a deleted parameter) may
+        // still be replaced: nothing else repairs it.
         if (
           target.data.featureKind === 'helical-sweep' &&
           'radius' in operation.data &&
           operation.data.radius !== target.data.radius &&
+          recordedCoilRadiusReads(projectedDocument, target.data.radius) &&
           !operation.clearData.includes('construction') &&
           ('construction' in operation.data
             ? operation.data.construction

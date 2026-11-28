@@ -80,10 +80,7 @@ import {
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { fuseUniformSolid } from './exact-boolean-helpers';
 import { requireValidSolid } from './kernel-validation';
-import {
-  helicalCoilOverlap,
-  helicalSectionExtent
-} from './exact-helical-clearance';
+import { helicalCoilOverlap } from './exact-helical-clearance';
 import {
   GEOMETRY_EPSILON,
   cross,
@@ -3478,12 +3475,13 @@ export function buildHelicalSweep(
   if (!direction) {
     throw new Error('Helical sweep axis direction must be non-zero.');
   }
-  const radius = resolveParamValue(
-    feature.data.radius,
-    scope,
-    'radius',
-    document.units
-  );
+  // In place, the radius is where the profile sits; the stored one is a
+  // record the coil is not built from, so it is not read at all: one that
+  // names a parameter since deleted does not stop the coil rebuilding.
+  const inPlace = feature.data.construction === 'in-place';
+  const radius = inPlace
+    ? Number.NaN
+    : resolveParamValue(feature.data.radius, scope, 'radius', document.units);
   const pitch = resolveParamValue(
     feature.data.pitch,
     scope,
@@ -3496,9 +3494,6 @@ export function buildHelicalSweep(
     'turns',
     document.units
   );
-  // In place, the radius is where the profile sits; the stored one is a
-  // record, so it is not required to read as positive.
-  const inPlace = feature.data.construction === 'in-place';
   if (
     (!inPlace && !(radius > 0)) ||
     pitch === 0 ||
@@ -3513,16 +3508,17 @@ export function buildHelicalSweep(
   }
   if (inPlace) {
     // The kernel refuses coils that would overlap, but reads the profile's
-    // span from a few points on each curve and can fall short of it; the
-    // span is measured here from the curves themselves first (#2188).
-    const extent = helicalSectionExtent(
+    // height from a few points on each curve and can fall short of it; the
+    // profile is tested against itself a turn on, from its curves, first
+    // (#2188).
+    const overlap = helicalCoilOverlap(
       kernel,
       face,
       [origin.x, origin.y, origin.z],
       [direction.x, direction.y, direction.z],
-      pitch
+      pitch,
+      turns
     );
-    const overlap = extent ? helicalCoilOverlap(extent, pitch, turns) : null;
     if (overlap) throw new Error(overlap);
   }
   const solid = inPlace

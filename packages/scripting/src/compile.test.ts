@@ -4,6 +4,7 @@ import {
   addSketchFeature,
   createProjectDocument,
   extrudeSketch,
+  deleteParameter,
   findSketch,
   helicalSweepProfile,
   setParameter
@@ -162,9 +163,15 @@ describe('compileHistoryEdit', () => {
   });
 
   describe("a helical sweep's radius (#2120)", () => {
-    function spring(construction?: 'in-place'): ProjectDocument {
+    function spring(
+      construction?: 'in-place',
+      radius: number | string = 12
+    ): ProjectDocument {
       const wire = addSketchFeature(
-        createProjectDocument('Spring', toUserId('user_edit')),
+        setParameter(createProjectDocument('Spring', toUserId('user_edit')), {
+          name: 'R',
+          expression: '12'
+        }),
         {
           name: 'Wire',
           planeRef: { type: 'canonical', plane: 'XZ', offset: 0 },
@@ -186,7 +193,7 @@ describe('compileHistoryEdit', () => {
         },
         axisOrigin: { x: 0, y: 0, z: 0 },
         axisDirection: { x: 0, y: 0, z: 1 },
-        radius: 12,
+        radius,
         pitch: 5.25,
         turns: 6.25,
         ...(construction ? { construction } : {})
@@ -210,6 +217,25 @@ describe('compileHistoryEdit', () => {
           )
         )
       ).toHaveLength(1);
+    });
+
+    it('takes a number in place of a record that no longer reads', () => {
+      // `radius: R` with R since deleted. The coil does not read it, but
+      // the text still shows it and nothing else can put it right.
+      const stranded = deleteParameter(spring('in-place', 'R'), { name: 'R' });
+      const repair = (text: string) =>
+        text.replace('radius: `R`,', 'radius: 12,');
+      expect(printHistory(stranded)).toContain('radius: `R`,');
+      const result = edit(stranded, repair);
+      expect(errorsOf(result)).toEqual([]);
+      expect(result.proposal?.operations).toEqual([
+        expect.objectContaining({
+          kind: 'update_feature',
+          data: { radius: 12 }
+        })
+      ]);
+      // While R still reads, the record is as good as a number: refused.
+      expect(errorsOf(edit(spring('in-place', 'R'), repair))).toHaveLength(1);
     });
 
     it('leaves the rest of a coil wound in place editable', () => {

@@ -1326,11 +1326,16 @@ function ValueField({
           setDraft(field.text);
           event.currentTarget.select();
         }}
-        onInput={() => {
+        onInput={(event) => {
           // Every keystroke, a paste or a cut. Not onChange: React holds
           // that back when the text ends up as it was, which is exactly
-          // "1" typed over a selected "1".
+          // "1" typed over a selected "1". The text is taken here too:
+          // after Enter on the untouched field there is no entry in
+          // progress, and with no change reported none would begin, so
+          // leaving the field would drop what was typed.
           typed.current = true;
+          setDraft(event.currentTarget.value);
+          setRefused(false);
         }}
         onChange={(event) => {
           setDraft(event.target.value);

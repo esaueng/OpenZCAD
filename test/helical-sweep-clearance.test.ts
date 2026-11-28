@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addSketchFeature,
   createProjectDocument,
+  deleteParameter,
+  findFeature,
   findSketch,
+  setParameter,
   helicalSweepProfile,
   resolveParamValue,
   updateFeature,
@@ -15,6 +18,7 @@ import {
   toUserId,
   type BodyId,
   type ProjectDocument,
+  type SketchObjectData,
   type Vector3
 } from '@openzcad/shared';
 
@@ -49,8 +53,10 @@ const UPRIGHT: Placement = {
   direction: { x: 0, y: 0, z: 1 }
 };
 
-function coil(
-  placement: Placement,
+/** A sweep of the one closed profile `objects` draw in an XZ sketch. */
+function sweepOf(
+  objects: SketchObjectData[],
+  placement: Pick<Placement, 'origin' | 'direction'>,
   pitch: number,
   turns: number,
   construction: 'in-place' | 'faceted' = 'in-place'
@@ -59,28 +65,25 @@ function coil(
     createProjectDocument('Coil', toUserId('user_test')),
     {
       name: 'Wire',
-      plane: 'XZ',
-      offset: 0,
-      object: {
-        objectKind: 'circle',
-        radius: WIRE_RADIUS,
-        centerX: placement.centre[0],
-        centerY: placement.centre[1]
-      }
+      planeRef: { type: 'canonical', plane: 'XZ', offset: 0 },
+      objects
     }
   );
   const sketch = findSketch(profile.document, profile.sketchId)!;
-  const objects = sketch.objectIds.map((id) => {
+  const drawn = sketch.objectIds.map((id) => {
     const node = profile.document.nodes[id];
     if (node?.kind !== 'sketch-object') {
       throw new Error('Expected a sketch object.');
     }
     return { id: node.id, data: node.data };
   });
-  const [region] = computeSketchProfileAnalysis(objects, (value) =>
+  const regions = computeSketchProfileAnalysis(drawn, (value) =>
     resolveParamValue(value, {}, 'profile dimension')
   ).profiles;
-  if (!region) throw new Error('Expected one closed circle profile.');
+  const [region] = regions;
+  if (!region || regions.length !== 1) {
+    throw new Error('Expected one closed profile.');
+  }
   return helicalSweepProfile(profile.document, {
     name: 'Coil',
     profile: {
@@ -102,6 +105,28 @@ function coil(
   });
 }
 
+function coil(
+  placement: Placement,
+  pitch: number,
+  turns: number,
+  construction: 'in-place' | 'faceted' = 'in-place'
+) {
+  return sweepOf(
+    [
+      {
+        objectKind: 'circle',
+        radius: WIRE_RADIUS,
+        centerX: placement.centre[0],
+        centerY: placement.centre[1]
+      }
+    ],
+    placement,
+    pitch,
+    turns,
+    construction
+  );
+}
+
 describe('exact helical sweep', { timeout: 300_000 }, () => {
   let adapter: Awaited<ReturnType<typeof createExactKernelAdapter>>;
   beforeAll(async () => {
@@ -120,7 +145,17 @@ describe('exact helical sweep', { timeout: 300_000 }, () => {
     pitch: number,
     turns: number
   ) {
-    const made = coil(placement, pitch, turns);
+    return expectSoundSweep(
+      coil(placement, pitch, turns),
+      turnVolume(COIL_RADIUS) * turns
+    );
+  }
+
+  /** `exact` is the volume Pappus gives the sweep. */
+  async function expectSoundSweep(
+    made: ReturnType<typeof sweepOf>,
+    exact: number
+  ) {
     const { derived, body } = await built(made.document, made.bodyId);
     expect(
       (derived.featureWarnings ?? []).filter(
@@ -130,7 +165,6 @@ describe('exact helical sweep', { timeout: 300_000 }, () => {
     expect(derived.exportableBodyIds).toContain(made.bodyId);
     // A coil that ran through itself counts the shared material twice: the
     // 2.997 mm coil of #2188 measured 9% over.
-    const exact = turnVolume(COIL_RADIUS) * turns;
     expect(Math.abs(body!.volume - exact) / exact).toBeLessThan(2e-3);
     const caps = body!.topology!.faces.filter(
       (face) => face.geometry?.surfaceType === 'plane'
@@ -149,16 +183,20 @@ describe('exact helical sweep', { timeout: 300_000 }, () => {
     pitch: number,
     turns: number
   ) {
-    const made = coil(placement, pitch, turns);
+    await expectRefusedSweep(coil(placement, pitch, turns));
+  }
+
+  async function expectRefusedSweep(
+    made: ReturnType<typeof sweepOf>,
+    reason = 'helical sweep coils would overlap'
+  ) {
     const { derived, body } = await built(made.document, made.bodyId);
     expect(body).toBeUndefined();
     expect(derived.exportableBodyIds).not.toContain(made.bodyId);
     expect(derived.featureWarnings).toEqual([
       expect.objectContaining({
         kind: 'build-failed',
-        message: expect.stringContaining(
-          'helical sweep coils would overlap'
-        ) as string
+        message: expect.stringContaining(reason) as string
       })
     ]);
   }
@@ -200,6 +238,77 @@ describe('exact helical sweep', { timeout: 300_000 }, () => {
     it('builds just short of a turn at any pitch: the ends do not meet', async () => {
       await expectSound(placement, 2.99, 0.999);
     });
+  });
+
+  describe('a profile whose tallest point is not where a curve is sampled', () => {
+    /**
+     * The Ø3 mm wire drawn as six 60° arcs, one join 0.01 rad before the
+     * wire's highest point along the axis: that point lies on an arc, a
+     * hair inside its end.
+     */
+    const sixArcs = (): SketchObjectData[] => {
+      const join = 90 - (0.01 * 180) / Math.PI;
+      return Array.from({ length: 6 }, (_unused, index) => ({
+        objectKind: 'arc' as const,
+        centerX: COIL_RADIUS,
+        centerY: 0,
+        radius: WIRE_RADIUS,
+        startAngleDeg: join + 60 * index,
+        endAngleDeg: join + 60 * (index + 1)
+      }));
+    };
+
+    it('refuses a turn 75 nm short of the wire, wherever its arcs join', async () => {
+      // The wire is 3 mm tall whatever it is drawn from: one turn of
+      // 2.999925 mm leaves the two end caps overlapping.
+      await expectRefusedSweep(sweepOf(sixArcs(), UPRIGHT, 2.999925, 1));
+    });
+
+    it('builds the same wire with clearance', async () => {
+      await expectSoundSweep(
+        sweepOf(sixArcs(), UPRIGHT, 3.02, 1),
+        turnVolume(COIL_RADIUS)
+      );
+    });
+  });
+
+  describe('a profile taller than any line along the axis through it', () => {
+    // An ellipse of semi-axes 4 × 0.5 mm turned 0.75 rad in the plane
+    // through the axis: 5.501979 mm from its lowest point to its highest,
+    // but no line along the axis runs more than 1.357528 mm inside it. A
+    // turn carries the profile along such a line, so it is that length the
+    // pitch must clear.
+    const ellipse = (): SketchObjectData[] => [
+      {
+        objectKind: 'ellipse',
+        centerX: COIL_RADIUS,
+        centerY: 0,
+        radiusX: 4,
+        radiusY: 0.5,
+        rotationDeg: (0.75 * 180) / Math.PI
+      }
+    ];
+    const ellipseTurn = 2 * Math.PI * COIL_RADIUS * Math.PI * 4 * 0.5;
+
+    it('builds a turn that clears it, though shorter than the profile is tall', async () => {
+      await expectSoundSweep(
+        sweepOf(ellipse(), UPRIGHT, 5.500979, 1),
+        ellipseTurn
+      );
+    });
+
+    it('refuses a turn no longer than its longest line along the axis', async () => {
+      await expectRefusedSweep(
+        sweepOf(ellipse(), UPRIGHT, 1.3, 1),
+        'one turn carries the profile 1.3 along the axis, onto itself'
+      );
+    });
+  });
+
+  it('builds a hair short of a full turn: the ends have not come round', async () => {
+    // 0.99999999 of a turn is not a turn. The kernel builds it, and nothing
+    // here stands in for an angle the coil has not swept.
+    await expectSound(UPRIGHT, 2.997, 0.99999999);
   });
 
   describe('the coil radius in History as text (#2120)', () => {
@@ -244,6 +353,61 @@ describe('exact helical sweep', { timeout: 300_000 }, () => {
       expect(Math.abs(after.body!.volume - exact(15)) / exact(15)).toBeLessThan(
         2e-3
       );
+    });
+
+    it('builds a coil wound in place whose recorded radius no longer reads, and takes its repair', async () => {
+      // `radius: R`, and R since deleted. The coil is wound through its
+      // profile and never reads the record, so it builds as it did; the
+      // text takes a number in the record's place.
+      const made = coil(UPRIGHT, 5.25, 2);
+      const coilId = made.document.featureOrder.at(-1)!;
+      const named = updateFeature(
+        setParameter(made.document, { name: 'R', expression: '12' }),
+        { featureId: coilId, data: { radius: 'R' } }
+      );
+      const stranded = deleteParameter(named, { name: 'R' });
+      expect(findFeature(stranded, coilId)?.data).toMatchObject({
+        radius: 'R',
+        construction: 'in-place'
+      });
+      const { derived, body } = await built(stranded, made.bodyId);
+      expect(
+        (derived.featureWarnings ?? []).filter(
+          (warning) => warning.kind !== 'advisory'
+        )
+      ).toEqual([]);
+      const exact = turnVolume(COIL_RADIUS) * 2;
+      expect(Math.abs(body!.volume - exact) / exact).toBeLessThan(2e-3);
+
+      const repaired = textEdit(stranded, (text) =>
+        text.replace('radius: `R`,', 'radius: 12,')
+      );
+      expect(repaired.diagnostics).toEqual([]);
+      expect(repaired.proposal!.operations).toEqual([
+        expect.objectContaining({
+          kind: 'update_feature',
+          data: { radius: 12 }
+        })
+      ]);
+      // A faceted helix is built at its radius, and still says so.
+      const faceted = coil(UPRIGHT, 5.25, 2, 'faceted');
+      const lost = await built(
+        deleteParameter(
+          updateFeature(
+            setParameter(faceted.document, { name: 'R', expression: '12' }),
+            {
+              featureId: faceted.document.featureOrder.at(-1)!,
+              data: { radius: 'R' }
+            }
+          ),
+          { name: 'R' }
+        ),
+        faceted.bodyId
+      );
+      expect(lost.body).toBeUndefined();
+      expect(lost.derived.featureWarnings).toEqual([
+        expect.objectContaining({ kind: 'build-failed' })
+      ]);
     });
 
     it('applies a radius edit to a faceted helix, which is built at it', async () => {

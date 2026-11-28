@@ -1,27 +1,39 @@
 /**
- * Whether the turns of an in-place helical sweep clear one another, measured
+ * Whether the turns of an in-place helical sweep clear one another, decided
  * from the profile's own curves.
  *
- * A screw about an axis carries the point at height `z` and angle `φ` to
- * `z + pitch·θ/2π`, `φ + θ`. Two profile points meet again after a turn
- * exactly when their values of `h = z − pitch·φ/2π` differ by a whole number
- * of pitches, so the coils stay apart while `h` spans less than one pitch
- * over the profile, and a pair one pitch apart is only reached once the
- * sweep turns far enough to bring the profile round to itself: a full turn,
- * less the angle the profile itself subtends at the axis.
+ * A screw about an axis carries the point at radius `r`, height `z` and
+ * angle `φ` to `r`, `z + pitch·θ/2π`, `φ + θ`. In the coordinates
+ * `(r, h = z − pitch·φ/2π)` every point of the profile keeps its place as it
+ * turns, and one full turn moves it by exactly one pitch in `h`: after a
+ * turn the profile is back in the half-plane it started in, a pitch further
+ * along the axis. So a coil of a full turn or more runs into itself exactly
+ * when the profile, drawn in `(r, h)`, meets its own copy moved one pitch
+ * along `h`. For a profile in a plane through the axis `φ` is constant and
+ * `(r, h)` is simply that plane.
  *
- * The kernel applies the same rule (`helicalSweepInPlace` refuses "coils
- * would overlap"), but reads the span from 48 points on each curve. On a
- * Ø3 mm circle whose extremes fall between those points it reads 2.9938 mm,
- * so a one-turn coil at a 2.997 mm pitch was built with its two end caps
- * overlapping in one plane (issue #2188). This module finds the extremes
- * themselves, each refined on its curve to machine precision, and the
- * builder refuses on that span before the kernel is asked.
+ * Two copies of one region cannot sit one inside the other, so they meet
+ * exactly when their boundaries do. The test below is therefore a distance
+ * between curves: every boundary curve against every boundary curve moved
+ * one pitch. Copies that only touch are refused too, since two turns meeting
+ * along a curve are not a solid.
+ *
+ * It is not the profile's height that a turn must clear. A slanted ellipse
+ * 5.5 mm from its lowest point to its highest, but with no line along the
+ * axis running more than 1.45 mm inside it, clears itself at a 1.5 mm pitch;
+ * and a profile's height read from points sampled on its curves comes up
+ * short wherever the highest point falls between them. The kernel's own
+ * check (`helicalSweepInPlace` refuses "coils would overlap") reads the
+ * height that way, and on a Ø3 mm circle it made 2.9938 mm, so a one-turn
+ * coil at a 2.997 mm pitch was built with its end caps overlapping in one
+ * plane (issue #2188). The builder asks here before it asks the kernel.
  */
 import { geometryTolerance } from '@openzcad/geometry';
 import type { RemusKernel } from './remus-runtime';
 
 type Triple = readonly [number, number, number];
+/** A point of the profile in `(r, h)`. */
+type Point = readonly [number, number];
 
 /** The part of the kernel this module reads, so a test can supply a double. */
 export type HelicalClearanceKernel = Pick<
@@ -32,23 +44,29 @@ export type HelicalClearanceKernel = Pick<
   | 'getNurbsCurveData'
 >;
 
-export interface HelicalSectionExtent {
-  /** How far `z − pitch·φ/2π` ranges over the profile: what a turn must clear. */
-  span: number;
-  /** The angle the profile subtends at the axis, in radians. */
-  angularWidth: number;
-  /** The profile's nearest approach to the axis. */
-  minRadius: number;
-}
-
 const TAU = 2 * Math.PI;
-/** Samples on each polynomial span of a curve, before the extremes are refined. */
-const SAMPLES_PER_SPAN = 48;
-const MAX_SAMPLES_PER_EDGE = 4096;
+/** Pieces each polynomial span of a curve starts in, before any is halved. */
+const PIECES_PER_SPAN = 8;
+const MAX_PIECES_PER_EDGE = 1024;
 const MAX_EDGES = 2048;
-/** Golden-section steps: the bracket shrinks by 0.618 each, to below 1e-12. */
-const REFINE_STEPS = 60;
-const GOLDEN = (Math.sqrt(5) - 1) / 2;
+/**
+ * How much further than its sampled points a piece of curve is taken to
+ * stand off its chord. Read at the quarter points and the middle, a circular
+ * arc is farthest at the middle and a cubic within 3% of the largest reading.
+ */
+const DEVIATION_ALLOWANCE = 2;
+/** A piece this close to its chord, as a share of the tolerance, is its chord. */
+const FLAT_SHARE = 1e-3;
+/** No piece is halved below this share of its curve's parameter range. */
+const MIN_PARAMETER_SHARE = 2 ** -40;
+/**
+ * Pairs of pieces compared before the test gives up and refuses. Curves that
+ * cross or clear are settled in a few hundred; only curves running alongside
+ * one another within a hair of the tolerance over a long stretch come near.
+ */
+const MAX_COMPARISONS = 2_000_000;
+/** The least arc round the axis a profile must leave empty, in radians. */
+const MIN_EMPTY_ARC = 1e-3;
 
 function dot(a: Triple, b: Triple): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -82,64 +100,201 @@ function spanCount(kernel: HelicalClearanceKernel, edge: number): number {
   }
 }
 
-interface Sample {
-  point: Triple;
-  /** Along the axis from its origin. */
-  z: number;
-  /** About the axis, continuous along the profile. */
-  phi: number;
-  radius: number;
+/** From the point `p` to the nearest point of the segment `a`–`b`. */
+function pointToSegment(p: Point, a: Point, b: Point): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const length2 = dx * dx + dy * dy;
+  const along =
+    length2 > 0
+      ? Math.min(
+          1,
+          Math.max(0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length2)
+        )
+      : 0;
+  return Math.hypot(p[0] - (a[0] + dx * along), p[1] - (a[1] + dy * along));
 }
 
-/**
- * The extreme of `value` on one edge near the sample that is largest among
- * its neighbours, found by golden-section search between those neighbours.
- * `sign` is −1 for a minimum.
- */
-function refined(
-  at: (t: number) => number,
-  lo: number,
-  hi: number,
-  sign: 1 | -1
-): number {
-  let a = lo;
-  let b = hi;
-  let c = b - GOLDEN * (b - a);
-  let d = a + GOLDEN * (b - a);
-  let fc = sign * at(c);
-  let fd = sign * at(d);
-  let best = Math.max(fc, fd);
-  for (let step = 0; step < REFINE_STEPS; step += 1) {
-    if (fc > fd) {
-      b = d;
-      d = c;
-      fd = fc;
-      c = b - GOLDEN * (b - a);
-      fc = sign * at(c);
-    } else {
-      a = c;
-      c = d;
-      fc = fd;
-      d = a + GOLDEN * (b - a);
-      fd = sign * at(d);
-    }
-    best = Math.max(best, fc, fd);
+/** Which side of the line `a`→`b` the point `p` lies on. */
+function side(a: Point, b: Point, p: Point): number {
+  return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+}
+
+/** Between the segments `a0`–`a1` and `b0`–`b1`: zero where they cross. */
+function segmentDistance(a0: Point, a1: Point, b0: Point, b1: Point): number {
+  const b0Side = side(a0, a1, b0);
+  const b1Side = side(a0, a1, b1);
+  const a0Side = side(b0, b1, a0);
+  const a1Side = side(b0, b1, a1);
+  if (
+    ((b0Side > 0 && b1Side < 0) || (b0Side < 0 && b1Side > 0)) &&
+    ((a0Side > 0 && a1Side < 0) || (a0Side < 0 && a1Side > 0))
+  ) {
+    return 0;
   }
-  return sign * best;
+  // Segments that do not cross are nearest at an end of one of them; ends
+  // that only graze the other segment come out here as a distance near zero.
+  return Math.min(
+    pointToSegment(a0, b0, b1),
+    pointToSegment(a1, b0, b1),
+    pointToSegment(b0, a0, a1),
+    pointToSegment(b1, a0, a1)
+  );
+}
+
+/** One boundary curve of the profile, read in `(r, h)`. */
+interface Curve {
+  at: (t: number) => Point;
+  /** The shortest parameter range a piece of it is halved to. */
+  minWidth: number;
 }
 
 /**
- * The profile face's extent under the screw about `axis` (a unit vector)
- * through `origin`, or null when its curves cannot be read; the kernel's own
- * check then stands alone, as it did before.
+ * A stretch of one curve between two parameters, both ends included, held
+ * as its chord and a bound on how far the curve stands off that chord.
  */
-export function helicalSectionExtent(
+interface Piece {
+  curve: Curve;
+  t0: number;
+  t1: number;
+  p0: Point;
+  /** At the quarter, the middle and the three-quarter parameter. */
+  p1: Point;
+  p2: Point;
+  p3: Point;
+  p4: Point;
+  deviation: number;
+  /** The box round the chord, grown by the deviation. */
+  rMin: number;
+  rMax: number;
+  hMin: number;
+  hMax: number;
+  halves: [Piece, Piece] | null;
+}
+
+function pieceOf(
+  curve: Curve,
+  t0: number,
+  t1: number,
+  p0: Point,
+  p2: Point,
+  p4: Point
+): Piece {
+  const p1 = curve.at(t0 + (t1 - t0) * 0.25);
+  const p3 = curve.at(t0 + (t1 - t0) * 0.75);
+  const deviation =
+    DEVIATION_ALLOWANCE *
+    Math.max(
+      pointToSegment(p1, p0, p4),
+      pointToSegment(p2, p0, p4),
+      pointToSegment(p3, p0, p4)
+    );
+  if (!Number.isFinite(deviation)) throw new Error('unreadable curve');
+  return {
+    curve,
+    t0,
+    t1,
+    p0,
+    p1,
+    p2,
+    p3,
+    p4,
+    deviation,
+    rMin: Math.min(p0[0], p4[0]) - deviation,
+    rMax: Math.max(p0[0], p4[0]) + deviation,
+    hMin: Math.min(p0[1], p4[1]) - deviation,
+    hMax: Math.max(p0[1], p4[1]) + deviation,
+    halves: null
+  };
+}
+
+/** The piece's two halves, read once however many pairs ask for them. */
+function halvesOf(piece: Piece): [Piece, Piece] {
+  if (!piece.halves) {
+    const middle = (piece.t0 + piece.t1) / 2;
+    piece.halves = [
+      pieceOf(piece.curve, piece.t0, middle, piece.p0, piece.p1, piece.p2),
+      pieceOf(piece.curve, middle, piece.t1, piece.p2, piece.p3, piece.p4)
+    ];
+  }
+  return piece.halves;
+}
+
+/**
+ * Whether the curves come within `tolerance` of their own copy moved `shift`
+ * along `h`: true where they cross, touch or pass within the tolerance, and
+ * also where that could not be settled within the work allowed.
+ *
+ * Each pair of pieces is bounded from below by the distance between its
+ * chords less what the curves stand off them. A pair bounded clear is
+ * dropped; a pair of pieces flat enough to be their chords is decided by the
+ * chords; any other pair is halved along its more curved piece. Every piece
+ * holds both its ends, so no stretch of a curve, and no join between two
+ * curves, is left unread.
+ */
+function meetsOwnCopy(
+  pieces: readonly Piece[],
+  shift: number,
+  tolerance: number
+): boolean {
+  const flat = tolerance * FLAT_SHARE;
+  const settled = (piece: Piece) =>
+    piece.deviation <= flat ||
+    Math.abs(piece.t1 - piece.t0) <= piece.curve.minWidth;
+  const moved = (point: Point): Point => [point[0], point[1] + shift];
+  // The copy is `b`, moved up by the shift.
+  const apart = (a: Piece, b: Piece) =>
+    a.rMin - b.rMax > tolerance ||
+    b.rMin - a.rMax > tolerance ||
+    a.hMin - (b.hMax + shift) > tolerance ||
+    b.hMin + shift - a.hMax > tolerance;
+
+  const stack: [Piece, Piece][] = [];
+  const byRadius = [...pieces].sort((a, b) => a.rMin - b.rMin);
+  for (let i = 0; i < byRadius.length; i += 1) {
+    const a = byRadius[i]!;
+    for (let j = i; j < byRadius.length; j += 1) {
+      const b = byRadius[j]!;
+      if (b.rMin - a.rMax > tolerance) break;
+      if (!apart(a, b)) stack.push([a, b]);
+      if (i !== j && !apart(b, a)) stack.push([b, a]);
+    }
+  }
+
+  let comparisons = 0;
+  for (let pair = stack.pop(); pair; pair = stack.pop()) {
+    const [a, b] = pair;
+    comparisons += 1;
+    if (comparisons > MAX_COMPARISONS) return true;
+    if (apart(a, b)) continue;
+    const chords = segmentDistance(a.p0, a.p4, moved(b.p0), moved(b.p4));
+    if (chords - a.deviation - b.deviation > tolerance) continue;
+    const aSettled = settled(a);
+    const bSettled = settled(b);
+    if (aSettled && bSettled) return true;
+    if (!aSettled && (bSettled || a.deviation >= b.deviation)) {
+      const [first, second] = halvesOf(a);
+      stack.push([first, b], [second, b]);
+    } else {
+      const [first, second] = halvesOf(b);
+      stack.push([a, first], [a, second]);
+    }
+  }
+  return false;
+}
+
+/**
+ * The profile face's boundary in `(r, h)` about `axis` (a unit vector)
+ * through `origin`, cut into its first pieces, or null when it cannot be
+ * read; the kernel's own check then stands alone, as it did before.
+ */
+function sectionPieces(
   kernel: HelicalClearanceKernel,
   face: number,
   origin: Triple,
   axis: Triple,
   pitch: number
-): HelicalSectionExtent | null {
+): { pieces: Piece[]; scale: number } | null {
   let edges: number[];
   try {
     edges = [...new Set(Array.from(kernel.getFaceEdges(face)))];
@@ -148,12 +303,13 @@ export function helicalSectionExtent(
   }
   if (edges.length === 0 || edges.length > MAX_EDGES) return null;
 
-  // The frame the angle is read in: `u` toward the first point read, so
-  // the profile starts at angle zero, and `v` a quarter turn on from it the
-  // way the kernel turns (right-handed about the axis).
+  // The frame the angle is read in: `u` toward the first point read and `v`
+  // a quarter turn on from it the way the kernel turns (right-handed about
+  // the axis).
   let u: Triple | null = null;
   let v: Triple | null = null;
-  const locate = (point: Triple) => {
+  /** Radius, height along the axis and angle in (−π, π] of a point. */
+  const locate = (point: Triple): Triple => {
     const offset: Triple = [
       point[0] - origin[0],
       point[1] - origin[1],
@@ -174,19 +330,11 @@ export function helicalSectionExtent(
       u !== null && v !== null && radius > 0
         ? Math.atan2(dot(radial, v), dot(radial, u))
         : 0;
-    return { z, radius, angle };
+    return [radius, z, angle];
   };
 
-  const anchored: Sample[] = [];
-  let hMin = Infinity;
-  let hMax = -Infinity;
-  let phiMin = Infinity;
-  let phiMax = -Infinity;
-  let minRadius = Infinity;
-  const height = (z: number, phi: number) => z - (pitch * phi) / TAU;
-
   try {
-    for (const edge of edges) {
+    const read = edges.map((edge) => {
       const [t0, t1] = Array.from(kernel.getEdgeParamSpan(edge));
       if (
         t0 === undefined ||
@@ -195,162 +343,136 @@ export function helicalSectionExtent(
         !Number.isFinite(t1) ||
         t0 === t1
       ) {
-        return null;
+        throw new Error('unreadable edge');
       }
       const count = Math.min(
-        MAX_SAMPLES_PER_EDGE,
-        SAMPLES_PER_SPAN * spanCount(kernel, edge)
+        MAX_PIECES_PER_EDGE,
+        PIECES_PER_SPAN * spanCount(kernel, edge)
       );
-      const read = (t: number) => {
+      const place = (t: number) => {
         const p = kernel.evaluateEdgeCurve(edge, t);
-        const point: Triple = [p[0]!, p[1]!, p[2]!];
-        return { point, ...locate(point) };
+        return locate([p[0]!, p[1]!, p[2]!]);
       };
-      const parameters: number[] = [];
-      const samples: Sample[] = [];
-      for (let index = 0; index <= count; index += 1) {
-        const t = t0 + ((t1 - t0) * index) / count;
-        const here = read(t);
-        if (
-          !Number.isFinite(here.z) ||
-          !Number.isFinite(here.radius) ||
-          !(here.radius > 0)
-        ) {
-          // On the axis the angle has no value; the kernel refuses a
-          // profile that touches the axis by name.
-          return null;
+      // Each first piece is read at its ends and its middle.
+      const parameters = Array.from(
+        { length: 2 * count + 1 },
+        (_unused, index) => t0 + ((t1 - t0) * index) / (2 * count)
+      );
+      return { t0, t1, place, parameters, placed: parameters.map(place) };
+    });
+
+    // The angle about the axis is read on one branch across the whole
+    // profile. A profile beside the axis leaves an arc round it empty, and
+    // the cut goes through the middle of that arc. Each curve covers the
+    // arc its angle runs over, followed from point to point (neighbouring
+    // points on a curve that keeps off the axis are less than half a turn
+    // apart). A profile on or round the axis leaves no arc empty and is the
+    // kernel's to refuse by name.
+    const covered: { from: number; to: number }[] = [];
+    let scale = Math.abs(pitch);
+    for (const edge of read) {
+      let angle = 0;
+      let low = Infinity;
+      let high = -Infinity;
+      edge.placed.forEach(([radius, z, raw], index) => {
+        if (!Number.isFinite(z) || !Number.isFinite(radius) || !(radius > 0)) {
+          throw new Error('profile on the axis');
         }
-        const before = samples[samples.length - 1];
-        let phi: number;
-        if (before) {
-          // Neighbouring points on a curve that keeps off the axis are less
-          // than half a turn apart.
-          phi = before.phi + wrapped(here.angle - before.phi);
-        } else {
-          // An edge takes up where the nearest point already placed stands:
-          // the edge it joins end to end, or, for a hole, the nearest point
-          // of the boundary round it. The straight line between them stays
-          // inside the outer boundary, which does not enclose the axis, so
-          // it too turns less than half a turn.
-          const near = nearest(anchored, here.point);
-          phi = near ? near.phi + wrapped(here.angle - near.phi) : 0;
-        }
-        parameters.push(t);
-        samples.push({
-          point: here.point,
-          z: here.z,
-          phi,
-          radius: here.radius
-        });
-      }
-      // Each sample that tops or bottoms its neighbours brackets an extreme
-      // of the curve; refine it there. Strictly above the one before, so a
-      // run of equal samples (a straight edge square to the axis) is read
-      // once as it stands and not searched point by point.
-      const valueAt =
-        (pick: (z: number, phi: number, radius: number) => number, i: number) =>
-        (t: number) => {
-          const here = read(t);
-          const base = samples[i]!;
-          const phi = base.phi + wrapped(here.angle - base.phi);
-          return pick(here.z, phi, here.radius);
-        };
-      const pickPhi = (_z: number, phi: number) => phi;
-      const pickRadius = (_z: number, _phi: number, radius: number) => radius;
-      for (let i = 0; i < samples.length; i += 1) {
-        const here = samples[i]!;
-        const h = height(here.z, here.phi);
-        hMin = Math.min(hMin, h);
-        hMax = Math.max(hMax, h);
-        phiMin = Math.min(phiMin, here.phi);
-        phiMax = Math.max(phiMax, here.phi);
-        minRadius = Math.min(minRadius, here.radius);
-        const prev = samples[i - 1];
-        const next = samples[i + 1];
-        if (!prev || !next) continue;
-        const lo = parameters[i - 1]!;
-        const hi = parameters[i + 1]!;
-        const hPrev = height(prev.z, prev.phi);
-        const hNext = height(next.z, next.phi);
-        if (h > hPrev && h >= hNext) {
-          hMax = Math.max(hMax, refined(valueAt(height, i), lo, hi, 1));
-        }
-        if (h < hPrev && h <= hNext) {
-          hMin = Math.min(hMin, refined(valueAt(height, i), lo, hi, -1));
-        }
-        if (here.phi > prev.phi && here.phi >= next.phi) {
-          phiMax = Math.max(phiMax, refined(valueAt(pickPhi, i), lo, hi, 1));
-        }
-        if (here.phi < prev.phi && here.phi <= next.phi) {
-          phiMin = Math.min(phiMin, refined(valueAt(pickPhi, i), lo, hi, -1));
-        }
-        if (here.radius < prev.radius && here.radius <= next.radius) {
-          minRadius = Math.min(
-            minRadius,
-            refined(valueAt(pickRadius, i), lo, hi, -1)
-          );
-        }
-      }
-      anchored.push(...samples);
+        angle = index === 0 ? raw : angle + wrapped(raw - angle);
+        low = Math.min(low, angle);
+        high = Math.max(high, angle);
+        scale = Math.max(scale, radius, Math.abs(z));
+      });
+      const from = low - TAU * Math.floor((low + Math.PI) / TAU);
+      covered.push({ from, to: from + (high - low) });
     }
+    // Once round from the lowest start. An arc that runs on past the end of
+    // that round covers the beginning of it too, so each is laid down a
+    // turn earlier as well before the gaps are read.
+    covered.sort((a, b) => a.from - b.from);
+    const first = covered[0]!.from;
+    let reach = first;
+    for (const arc of covered) reach = Math.max(reach, arc.to - TAU);
+    let emptyFrom = reach;
+    let empty = -Infinity;
+    for (const arc of [...covered, { from: first + TAU, to: first + TAU }]) {
+      if (arc.from - reach > empty) {
+        empty = arc.from - reach;
+        emptyFrom = reach;
+      }
+      reach = Math.max(reach, arc.to);
+    }
+    if (!(empty > MIN_EMPTY_ARC)) return null;
+    const centre = emptyFrom + empty / 2 + Math.PI;
+
+    const pieces: Piece[] = [];
+    for (const edge of read) {
+      const section = ([radius, z, angle]: Triple): Point => [
+        radius,
+        z - (pitch * (centre + wrapped(angle - centre))) / TAU
+      ];
+      const curve: Curve = {
+        at: (t) => section(edge.place(t)),
+        minWidth: Math.abs(edge.t1 - edge.t0) * MIN_PARAMETER_SHARE
+      };
+      const points = edge.placed.map(section);
+      for (let index = 0; index + 2 < points.length; index += 2) {
+        pieces.push(
+          pieceOf(
+            curve,
+            edge.parameters[index]!,
+            edge.parameters[index + 2]!,
+            points[index]!,
+            points[index + 1]!,
+            points[index + 2]!
+          )
+        );
+      }
+    }
+    return { pieces, scale };
   } catch {
     return null;
   }
-  if (
-    !Number.isFinite(hMin) ||
-    !Number.isFinite(hMax) ||
-    !Number.isFinite(phiMin) ||
-    !Number.isFinite(phiMax) ||
-    !Number.isFinite(minRadius)
-  ) {
-    return null;
-  }
-  return {
-    span: hMax - hMin,
-    angularWidth: phiMax - phiMin,
-    minRadius
-  };
-}
-
-function nearest(samples: readonly Sample[], point: Triple): Sample | null {
-  let best: Sample | null = null;
-  let bestDistance = Infinity;
-  for (const sample of samples) {
-    const distance =
-      (sample.point[0] - point[0]) ** 2 +
-      (sample.point[1] - point[1]) ** 2 +
-      (sample.point[2] - point[2]) ** 2;
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      best = sample;
-    }
-  }
-  return best;
 }
 
 /**
  * Why the turns of this in-place helical sweep would run into one another,
- * or null when they clear.
+ * or null when they clear or the profile cannot be read.
  *
- * The coils overlap when the sweep turns far enough to bring the profile
- * round to itself and one turn climbs no more than the profile spans. Coils
- * that only touch are refused too: two turns meeting along a curve are not a
- * solid. A sweep short of a full turn is left alone, whatever its pitch.
+ * Asked only of a sweep that makes a full turn: until `turns` reaches 1 the
+ * profile has not come back round to where it started, and a sweep a hair
+ * short of that is not rounded up to it. (A profile out of any plane through
+ * the axis is spread round the axis and can meet itself sooner; that case is
+ * left to the kernel's own check.) For such a profile at one turn exactly
+ * this can refuse a coil whose copies in `(r, h)` meet only at points the
+ * sweep stops just short of bringing together; the kernel's rule, which
+ * measures the whole height, refuses every such coil as well.
+ *
+ * `axis` is a unit vector.
  */
 export function helicalCoilOverlap(
-  extent: HelicalSectionExtent,
+  kernel: HelicalClearanceKernel,
+  face: number,
+  origin: Triple,
+  axis: Triple,
   pitch: number,
   turns: number
 ): string | null {
   const climb = Math.abs(pitch);
-  // The angle left between the two ends of the coil, and the gap that
-  // leaves at the profile's nearest point to the axis.
-  const slack = TAU * (1 - turns) - extent.angularWidth;
-  if (slack * extent.minRadius > geometryTolerance(extent.minRadius)) {
+  if (!(turns >= 1) || !(climb > 0) || !Number.isFinite(climb)) return null;
+  const section = sectionPieces(kernel, face, origin, axis, pitch);
+  if (!section) return null;
+  let meets: boolean;
+  try {
+    meets = meetsOwnCopy(
+      section.pieces,
+      climb,
+      geometryTolerance(section.scale)
+    );
+  } catch {
     return null;
   }
-  if (extent.span < climb - geometryTolerance(Math.max(extent.span, climb))) {
-    return null;
-  }
-  return `helical sweep coils would overlap: the profile spans ${String(extent.span)} along the axis, leaving no clearance at the pitch ${String(climb)}`;
+  return meets
+    ? `helical sweep coils would overlap: one turn carries the profile ${String(climb)} along the axis, onto itself`
+    : null;
 }

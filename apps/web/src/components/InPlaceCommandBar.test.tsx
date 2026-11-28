@@ -879,6 +879,42 @@ describe('InPlaceCommandBar', () => {
       expect(onValueCommit).toHaveBeenCalledOnce();
     });
 
+    it.each([
+      ['typed', 'insertText'],
+      ['pasted', 'insertFromPaste']
+    ])(
+      'takes 1 %s over the selection after Enter on the untouched field',
+      (_how, inputType) => {
+        // Enter on the field as it stands enters nothing and leaves no
+        // entry in progress, with the text selected. The same text put
+        // over that selection changes nothing React reports as a change:
+        // the entry is whatever the input event itself delivered.
+        const onValueCommit = vi.fn(() => true);
+        const field = turnsField(onValueCommit);
+        fireEvent.focus(field);
+        fireEvent.keyDown(field, { key: 'Enter' });
+        expect(onValueCommit).not.toHaveBeenCalled();
+        fireEvent.input(field, { target: { value: '1' }, inputType });
+        // Tab out.
+        fireEvent.blur(field);
+        expect(onValueCommit).toHaveBeenCalledOnce();
+        expect(onValueCommit).toHaveBeenCalledWith('turns', '1');
+      }
+    );
+
+    it('applies 1 typed after Enter on the untouched field when Done is pressed', () => {
+      const onValueCommit = vi.fn(() => true);
+      const field = turnsField(onValueCommit);
+      fireEvent.focus(field);
+      fireEvent.keyDown(field, { key: 'Enter' });
+      fireEvent.input(field, { target: { value: '1' } });
+      fireEvent.pointerDown(screen.getByRole('button', { name: /Done/ }), {
+        button: 0
+      });
+      expect(onValueCommit).toHaveBeenCalledOnce();
+      expect(onValueCommit).toHaveBeenCalledWith('turns', '1');
+    });
+
     it('leaves the held value alone when the field is only visited', () => {
       const onValueCommit = vi.fn(() => true);
       const field = turnsField(onValueCommit);

@@ -5,10 +5,14 @@ import type {
 import type {
   CustomFeatureScript,
   FeatureId,
+  ParamValue,
   ProjectDocument,
   SketchId
 } from '@openzcad/shared';
-import { recordedCoilRadiusRefusal } from '@openzcad/document-core';
+import {
+  recordedCoilRadiusReads,
+  recordedCoilRadiusRefusal
+} from '@openzcad/document-core';
 import { publishScript } from './script';
 import {
   historyModelOf,
@@ -76,6 +80,7 @@ class Compiler {
   private readonly parameterDeletes: CadPatchOperation[] = [];
 
   constructor(
+    private readonly document: ProjectDocument,
     private readonly spans: ReadonlyMap<string, TextSpan>,
     private readonly fallback: TextSpan
   ) {}
@@ -417,11 +422,14 @@ class Compiler {
     // radius from where the profile sits, and the stored `radius` only
     // records that distance. An edit to it would apply and change nothing
     // (#2120), so it is refused with what does move the coil. A faceted
-    // helix is built at its `radius` and keeps the field.
+    // helix is built at its `radius` and keeps the field. A record that no
+    // longer reads (it names a parameter since deleted) is the exception:
+    // the text shows it, and this edit is the only thing that repairs it.
     if (
       stored.featureKind === 'helical-sweep' &&
       'radius' in data &&
-      after.construction === 'in-place'
+      after.construction === 'in-place' &&
+      recordedCoilRadiusReads(this.document, before.radius as ParamValue)
     ) {
       this.refuse(feature.featureId, recordedCoilRadiusRefusal(feature.name));
       return;
@@ -509,7 +517,7 @@ export function compileHistoryEdit(
     return { proposal: null, diagnostics: read.diagnostics, summary: [] };
   }
   const start = { line: 1, column: 1, offset: 0 };
-  const compiler = new Compiler(read.spans, { start, end: start });
+  const compiler = new Compiler(document, read.spans, { start, end: start });
   const operations = compiler.compile(historyModelOf(document), read.model);
   const diagnostics = [...read.diagnostics, ...compiler.diagnostics].sort(
     (left, right) => left.span.start.offset - right.span.start.offset

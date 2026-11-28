@@ -32,7 +32,10 @@ export interface CoilRigParams {
   startDirection: HandleVec3;
   /** How far the coil's path is from the axis. */
   radius: number;
-  /** How far one turn climbs along `axis` (positive). */
+  /**
+   * How far one turn climbs along `axis`. Negative runs against it: the
+   * coil still turns right-handed about `axis`, and its end goes down it.
+   */
   pitch: number;
   /** The turns the coil has when the gesture begins. */
   turns: number;
@@ -76,7 +79,8 @@ export function buildCoilHandle(params: CoilRigParams): DragRig {
   const axis = toVector3(params.axis).normalize();
   const { u, v } = angleRigBasis(axis, toVector3(params.startDirection));
   const radius = params.radius;
-  const pitch = Math.abs(params.pitch);
+  // Signed: the rise along the axis, which a pitch against it makes a fall.
+  const pitch = params.pitch;
   const minTurns = params.minTurns ?? 0.05;
   const maxTurns = params.maxTurns ?? 100;
   let current = Math.min(maxTurns, Math.max(minTurns, params.turns));
@@ -132,7 +136,7 @@ export function buildCoilHandle(params: CoilRigParams): DragRig {
     },
     valueFromRay(ray: THREE.Ray, previous: number) {
       const along = Math.abs(ray.direction.clone().normalize().dot(axis));
-      if (along >= EDGE_ON_COS || pitch <= 0) {
+      if (along >= EDGE_ON_COS || pitch === 0) {
         // Round the axis, on the plane level with the coil's end now.
         const level = center
           .clone()
@@ -149,16 +153,17 @@ export function buildCoilHandle(params: CoilRigParams): DragRig {
           360
         );
       }
-      // From the side: the height up a line through the coil's end, parallel
-      // to the axis, where the ray passes closest to it — as a linear rig
-      // reads its arrow. (The axis itself sits behind the coil: in
+      // From the side: the height along a line through the coil's end,
+      // parallel to the axis, where the ray passes closest to it — as a
+      // linear rig reads its arrow. Over the signed pitch it is the turns
+      // whichever way the coil runs; the far side of its start is none. (The axis itself sits behind the coil: in
       // perspective the ray's nearest point on it is not level with the
       // pointer.)
       const end = pointAt(previous);
       const onLine = new THREE.Vector3();
       ray.distanceSqToSegment(
-        end.clone().addScaledVector(axis, -pitch * (maxTurns + 1)),
-        end.clone().addScaledVector(axis, pitch * (maxTurns + 1)),
+        end.clone().addScaledVector(axis, -Math.abs(pitch) * (maxTurns + 1)),
+        end.clone().addScaledVector(axis, Math.abs(pitch) * (maxTurns + 1)),
         undefined,
         onLine
       );

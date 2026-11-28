@@ -3,9 +3,11 @@ import { parseCadPatchProposal } from '@openzcad/ai-contracts';
 import {
   addSketchFeature,
   createProjectDocument,
+  deleteParameter,
   findFeature,
   findSketch,
   helicalSweepProfile,
+  setParameter,
   holeBody,
   type ExtrudeInput
 } from '@openzcad/document-core';
@@ -321,9 +323,15 @@ describe('AI modeling command translation', () => {
   });
 
   it('refuses a new radius for a coil wound in place, and applies one to a faceted helix (#2120)', () => {
-    const radiusEdit = (construction?: 'in-place') => {
+    const radiusEdit = (
+      construction?: 'in-place',
+      radius: number | string = 12
+    ) => {
       const wire = addSketchFeature(
-        createProjectDocument('Spring', toUserId('user_ai')),
+        setParameter(createProjectDocument('Spring', toUserId('user_ai')), {
+          name: 'R',
+          expression: '12'
+        }),
         {
           name: 'Wire',
           planeRef: { type: 'canonical', plane: 'XZ', offset: 0 },
@@ -345,7 +353,7 @@ describe('AI modeling command translation', () => {
         },
         axisOrigin: { x: 0, y: 0, z: 0 },
         axisDirection: { x: 0, y: 0, z: 1 },
-        radius: 12,
+        radius,
         pitch: 5.25,
         turns: 6.25,
         ...(construction ? { construction } : {})
@@ -379,6 +387,21 @@ describe('AI modeling command translation', () => {
     );
     expect(findFeature(pitched, exact.featureId)).toMatchObject({
       data: { radius: 12, pitch: 6, construction: 'in-place' }
+    });
+
+    // A record that no longer reads (`R`, since deleted) takes a number:
+    // nothing else can put it right. While R reads, it is refused as above.
+    const named = radiusEdit('in-place', 'R');
+    expect(() =>
+      commandsForCadPatch(named.document, named.proposal({ radius: 12 }))
+    ).toThrow(/wound through its profile/);
+    const stranded = deleteParameter(named.document, { name: 'R' });
+    const repaired = applyCandidate(
+      stranded,
+      commandsForCadPatch(stranded, named.proposal({ radius: 12 }))
+    );
+    expect(findFeature(repaired, named.featureId)).toMatchObject({
+      data: { radius: 12, construction: 'in-place' }
     });
 
     const faceted = radiusEdit();
