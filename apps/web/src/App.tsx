@@ -2766,6 +2766,11 @@ interface OffsetPreviewCandidate {
   preflightRejection?: string;
   /** The display mesh's view of the path, read only after a collision refusal. */
   sweepReading?: () => FaceSweepReading | undefined;
+  /**
+   * A face set's leading-plane frame: the faces it moves. The rest of the
+   * set stays where it is on the source body. Absent: every face moves.
+   */
+  movedTopologyIds?: string[];
 }
 
 type RadiusPreviewCandidate = Omit<
@@ -4784,6 +4789,8 @@ export function App() {
     radius?: number;
     /** Signed offset of this published face-offset frame (either lane). */
     offset?: number;
+    /** A leading-plane frame's moved faces; absent when every face moved. */
+    movedTopologyIds?: string[];
   } | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
   const checkpointRoomRef = useRef<{
@@ -7014,18 +7021,29 @@ export function App() {
         ) {
           return null;
         }
-        const command = offsetChainRef.current?.buildOffsetFaceSetLead({
+        const setInput = {
           document: base,
           bodyId: current.target.bodyId as BodyId,
           face: {
             topologyId: current.target.topologyId,
             hash: current.target.hash
           },
-          members: current.target.offsetFaceSet,
+          members: current.target.offsetFaceSet
+        };
+        const command = offsetChainRef.current?.buildOffsetFaceSetLead({
+          ...setInput,
           offset
         });
         if (!command) return null;
+        // The chain's first plane, which this frame alone moves.
+        const leading = offsetChainRef.current?.faceSetOffsetPlanes(
+          setInput,
+          offset
+        )?.[0];
         return {
+          ...(leading
+            ? { movedTopologyIds: leading.map((face) => face.topologyId) }
+            : {}),
           selectionKey: faceOffsetPlanKey(current) ?? '',
           document: command.apply(base),
           offset,
@@ -32963,14 +32981,13 @@ export function App() {
     const { target } = interaction;
     const body = ownEntry(representations, target.bodyId as BodyId);
     if (!body || body.consumed || hiddenBodyIds.has(body.bodyId)) return false;
+    // Read from the frame the viewer draws, as the handle reads it: with no
+    // frame up (none yet, or one taken down after a refusal) the source
+    // body is what is on screen, and nothing has moved.
     return sectionHidesFaceOffset(
       {
         faces: offsetFaceExtents(body, target),
-        // The frame on screen, a face set's leading-plane frame included.
-        previewOffset: shownFaceOffset(
-          currentFaceGeometryPreview,
-          renderedOffsetPreview
-        )
+        ...shownFaceOffset(currentFaceGeometryPreview)
       },
       offsetSectionView
     );
@@ -32979,8 +32996,7 @@ export function App() {
     interaction,
     representations,
     hiddenBodyIds,
-    currentFaceGeometryPreview,
-    renderedOffsetPreview
+    currentFaceGeometryPreview
   ]);
 
   // M07: the armed face set's faces, for their direction ticks.

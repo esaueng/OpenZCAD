@@ -15,7 +15,7 @@ const sideFace: BoundingBox = {
 const plusX = { x: 1, y: 0, z: 0 };
 const plusZ = { x: 0, y: 0, z: 1 };
 const still = {
-  faces: [{ bounds: sideFace, normal: plusX }],
+  faces: [{ topologyId: 'side', bounds: sideFace, normal: plusX }],
   previewOffset: null
 };
 
@@ -105,8 +105,8 @@ describe('sectionHidesFaceOffset', () => {
       sectionHidesFaceOffset(
         {
           faces: [
-            { bounds: sideFace, normal: plusX },
-            { bounds: topFace, normal: plusZ }
+            { topologyId: 'side', bounds: sideFace, normal: plusX },
+            { topologyId: 'top', bounds: topFace, normal: plusZ }
           ],
           previewOffset: null
         },
@@ -117,8 +117,8 @@ describe('sectionHidesFaceOffset', () => {
       sectionHidesFaceOffset(
         {
           faces: [
-            { bounds: sideFace, normal: plusX },
-            { bounds: topFace, normal: plusZ }
+            { topologyId: 'side', bounds: sideFace, normal: plusX },
+            { topologyId: 'top', bounds: topFace, normal: plusZ }
           ],
           previewOffset: null
         },
@@ -141,6 +141,7 @@ describe('sectionHidesFaceOffset', () => {
           ...still,
           faces: [
             {
+              topologyId: 'side',
               bounds: { min: sideFace.min, max: { ...sideFace.max, z: NaN } },
               normal: plusX
             }
@@ -163,8 +164,8 @@ describe('sectionHidesFaceOffset', () => {
     };
     const section = { plane: 'XY', offset: 11 } as const;
     const faces = [
-      { bounds: side, normal: plusX },
-      { bounds: top, normal: plusZ }
+      { topologyId: 'side', bounds: side, normal: plusX },
+      { topologyId: 'top', bounds: top, normal: plusZ }
     ];
     expect(
       sectionHidesFaceOffset({ faces, previewOffset: null }, section)
@@ -192,7 +193,10 @@ describe('sectionHidesFaceOffset', () => {
     };
     expect(
       sectionHidesFaceOffset(
-        { faces: [{ bounds: far, normal: plusX }], previewOffset: null },
+        {
+          faces: [{ topologyId: 'far', bounds: far, normal: plusX }],
+          previewOffset: null
+        },
         { plane: 'XY', offset: 0.5 }
       )
     ).toBe(true);
@@ -200,12 +204,52 @@ describe('sectionHidesFaceOffset', () => {
 });
 
 describe('shownFaceOffset', () => {
-  it('reads the frame on screen before the last whole preview', () => {
-    // A face set's leading-plane frame at +2 over a whole preview at +0.5.
-    expect(shownFaceOffset({ offset: 2 }, 0.5)).toBe(2);
-    expect(shownFaceOffset(null, 0.5)).toBe(0.5);
-    expect(shownFaceOffset({}, 0.5)).toBe(0.5);
-    expect(shownFaceOffset(null, null)).toBeNull();
+  it('reads the frame the viewer draws, and nothing moved without one', () => {
+    expect(shownFaceOffset({ offset: 2 })).toEqual({ previewOffset: 2 });
+    expect(shownFaceOffset({ offset: 2, movedTopologyIds: ['top'] })).toEqual({
+      previewOffset: 2,
+      movedTopologyIds: ['top']
+    });
+    // A frame taken down (a refused whole rebuild clears the leading frame)
+    // leaves the source body on screen, whatever the last whole preview was.
+    expect(shownFaceOffset(null)).toEqual({ previewOffset: null });
+    expect(shownFaceOffset({})).toEqual({ previewOffset: null });
+  });
+});
+
+describe('a face set drag frame by frame', () => {
+  // A 20 × 10 × 10 block's +Z top and +X side (x = 20), offset together;
+  // a YZ cut at x = 21 keeps x ≤ 21.
+  const top: BoundingBox = {
+    min: { x: 0, y: 0, z: 10 },
+    max: { x: 20, y: 10, z: 10 }
+  };
+  const side: BoundingBox = {
+    min: { x: 20, y: 0, z: 0 },
+    max: { x: 20, y: 10, z: 10 }
+  };
+  const faces = [
+    { topologyId: 'side', bounds: side, normal: plusX },
+    { topologyId: 'top', bounds: top, normal: plusZ }
+  ];
+  const section = { plane: 'YZ', offset: 21 } as const;
+  const hides = (frame: Parameters<typeof shownFaceOffset>[0]) =>
+    sectionHidesFaceOffset({ faces, ...shownFaceOffset(frame) }, section);
+
+  it('keeps the faces a leading-plane frame has not moved in place', () => {
+    // The +2 leading frame lifts the top alone: the side stays at x = 20.
+    expect(hides({ offset: 2, movedTopologyIds: ['top'] })).toBe(false);
+  });
+
+  it('reports the whole frame once it moves the side into the cut', () => {
+    expect(hides({ offset: 2 })).toBe(true);
+    // A leading frame that moves the side is reported as well.
+    expect(hides({ offset: 2, movedTopologyIds: ['side'] })).toBe(true);
+  });
+
+  it('goes quiet when a refusal takes the frame down', () => {
+    expect(hides({ offset: 2 })).toBe(true);
+    expect(hides(null)).toBe(false);
   });
 });
 

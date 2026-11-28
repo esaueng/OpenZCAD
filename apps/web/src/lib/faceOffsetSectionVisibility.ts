@@ -56,6 +56,7 @@ export function faceMeshBounds(
 
 /** One face an offset moves: where it is, and which way the offset moves it. */
 export interface OffsetFaceExtent {
+  topologyId: string;
   /** The face's display-mesh bounds (`faceMeshBounds`). */
   bounds: BoundingBox;
   /**
@@ -87,6 +88,12 @@ export function sectionHidesFaceOffset(
     faces: readonly OffsetFaceExtent[];
     /** Signed offset the preview on screen shows; null or 0 when none. */
     previewOffset: number | null;
+    /**
+     * The faces that frame moved, when it moved only some of them (a face
+     * set's leading-plane frame); the others stay where they are. Absent:
+     * every face moved.
+     */
+    movedTopologyIds?: readonly string[] | undefined;
   },
   section: SectionViewSettings
 ): boolean {
@@ -100,9 +107,10 @@ export function sectionHidesFaceOffset(
   const { normal: cut, constant } = sectionClippingPlane(section);
   const axis = CUT_AXIS[section.plane];
   const boxes: BoundingBox[] = [];
-  for (const { bounds, normal } of input.faces) {
+  const moved = input.movedTopologyIds ? new Set(input.movedTopologyIds) : null;
+  for (const { topologyId, bounds, normal } of input.faces) {
     boxes.push(bounds);
-    if (shift !== 0) {
+    if (shift !== 0 && (!moved || moved.has(topologyId))) {
       if (![normal.x, normal.y, normal.z].every(Number.isFinite)) return false;
       boxes.push({
         min: {
@@ -159,7 +167,11 @@ export function offsetFaceExtents(
   const handle = faceMeshBounds(body, target.topologyId);
   if (handle) {
     const [x, y, z] = target.normal;
-    extents.push({ bounds: handle, normal: { x, y, z } });
+    extents.push({
+      topologyId: target.topologyId,
+      bounds: handle,
+      normal: { x, y, z }
+    });
   }
   for (const member of target.offsetFaceSet ?? []) {
     const bounds = faceMeshBounds(body, member.topologyId);
@@ -171,6 +183,7 @@ export function offsetFaceExtents(
       ? Math.hypot(measured.x, measured.y, measured.z)
       : 0;
     extents.push({
+      topologyId: member.topologyId,
       bounds,
       normal:
         measured && Number.isFinite(length) && length > 0
@@ -186,16 +199,28 @@ export function offsetFaceExtents(
 }
 
 /**
- * The offset the face on screen shows. A face drag's published frame
- * carries its own value, and a face set's leading-plane frame is published
- * without updating the last whole preview's value, so the frame is read
- * first; the whole preview's value only stands when no frame is up.
+ * What the face frame on screen shows, read from the frame the viewer
+ * draws: its offset, and when it is a face set's leading-plane frame, the
+ * faces it moved (the rest of the set stays on the source body). With no
+ * frame up (none yet, or one taken down after a refusal) the source body is
+ * on screen and nothing has moved, as the offset handle reads it too.
  */
 export function shownFaceOffset(
-  frame: { offset?: number | undefined } | null,
-  renderedOffset: number | null
-): number | null {
-  return frame && frame.offset !== undefined && Number.isFinite(frame.offset)
-    ? frame.offset
-    : renderedOffset;
+  frame: {
+    offset?: number | undefined;
+    movedTopologyIds?: readonly string[] | undefined;
+  } | null
+): {
+  previewOffset: number | null;
+  movedTopologyIds?: readonly string[];
+} {
+  if (!frame || frame.offset === undefined || !Number.isFinite(frame.offset)) {
+    return { previewOffset: null };
+  }
+  return {
+    previewOffset: frame.offset,
+    ...(frame.movedTopologyIds
+      ? { movedTopologyIds: frame.movedTopologyIds }
+      : {})
+  };
 }
