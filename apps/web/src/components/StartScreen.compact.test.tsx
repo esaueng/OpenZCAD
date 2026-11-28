@@ -195,6 +195,15 @@ describe('the compact library', () => {
     expect(screen.getByText('No projects yet')).toBeVisible();
   });
 
+  it('says what Shared holds when every project is archived', async () => {
+    await renderCompact({ projects: [old] });
+    const shelves = within(screen.getByRole('group', { name: 'Shelves' }));
+    expect(screen.getByText('No projects on this shelf')).toBeVisible();
+    fireEvent.click(shelves.getByRole('button', { name: 'Shared' }));
+    expect(screen.getByText('Nothing shared yet')).toBeVisible();
+    expect(screen.queryByText('No projects on this shelf')).toBeNull();
+  });
+
   it('searches from the field on top', async () => {
     await renderCompact();
     const search = screen.getByRole('searchbox', { name: 'Search projects' });

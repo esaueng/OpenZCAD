@@ -275,12 +275,7 @@ export function CommandBar({
     }
   }, [open]);
 
-  // A draft the bar was mounted with is an earlier visit's, already
-  // handled: the search button's empty draft outlives the workspace, and
-  // replaying it opened the full-screen list over the next project opened
-  // or imported (the phone review). Only a draft that arrives after mount
-  // opens the bar.
-  const handledDraftId = useRef<number | null>(draft?.id ?? null);
+  const handledDraftId = useRef<number | null>(null);
   useEffect(() => {
     if (!draft || handledDraftId.current === draft.id) {
       return;

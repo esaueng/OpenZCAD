@@ -1517,6 +1517,21 @@ describe('the keypad on a touch screen', () => {
     }
   });
 
+  it('appends after a first key that leaves the selected value as it was', () => {
+    // 5 over a selected 5 changes nothing React would write, so the field
+    // kept its selection and the 0 after it replaced the 5.
+    matchPointer(true);
+    try {
+      const { input } = setup('5');
+      expect(input.selectionEnd).toBe(1);
+      fireEvent.click(screen.getByRole('button', { name: '5' }));
+      fireEvent.click(screen.getByRole('button', { name: '0' }));
+      expect(input).toHaveValue('50');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(['touch', 'pen'])(
     'raises the system keyboard for a %s on the field itself',
     (pointerType) => {

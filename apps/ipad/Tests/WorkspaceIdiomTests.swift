@@ -30,6 +30,9 @@ final class WorkspaceIdiomTests: XCTestCase {
         XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .accessibilityExtraExtraExtraLarge, shortSide: 420), 1.31)
         XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .accessibilityExtraExtraExtraLarge, shortSide: 375), 1.17)
         XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .accessibilityExtraExtraExtraLarge, shortSide: 1024), 1.5)
+        // 402 / 320 is 1.25625: rounded down, never up past the floor.
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .accessibilityExtraExtraExtraLarge, shortSide: 402), 1.25)
+        XCTAssertGreaterThanOrEqual(402 / WorkspaceIdiom.pageZoom(bodyPointSize: 53, shortSide: 402), 320)
         // A device narrower than the floor is never zoomed out.
         XCTAssertEqual(WorkspaceIdiom.pageZoom(bodyPointSize: 40, shortSide: 300), 1)
     }

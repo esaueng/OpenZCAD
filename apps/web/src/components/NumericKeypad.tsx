@@ -934,6 +934,19 @@ function NumericKeypadControl({
       : null;
   };
 
+  // A key replaces the selection and leaves the caret at the end. A value
+  // the key left as it was (5 over a selected 5) is not rewritten by React,
+  // so its selection is collapsed here, or the next key replaced it: 5 then
+  // 0 read 0, not 50.
+  const typePadKey = (key: string) => {
+    const next = appendKeypadKey(value, key, fieldSelection());
+    previewIfValid(next);
+    const input = inputRef.current;
+    if (input && input.value === next) {
+      input.setSelectionRange(next.length, next.length);
+    }
+  };
+
   const previewIfValid = (next: string, requestedMode = dimensionMode) => {
     if (next !== value) {
       untouchedPrefill.current = false;
@@ -1470,9 +1483,7 @@ function NumericKeypadControl({
                 key={key}
                 type="button"
                 className="keypad-key"
-                onClick={() =>
-                  previewIfValid(appendKeypadKey(value, key, fieldSelection()))
-                }
+                onClick={() => typePadKey(key)}
               >
                 {key === '*' ? '×' : key === '/' ? '÷' : key}
               </button>
@@ -1481,9 +1492,7 @@ function NumericKeypadControl({
               type="button"
               className="keypad-key"
               aria-label="Backspace"
-              onClick={() =>
-                previewIfValid(appendKeypadKey(value, '⌫', fieldSelection()))
-              }
+              onClick={() => typePadKey('⌫')}
             >
               <Delete size={14} aria-hidden="true" />
             </button>

@@ -33,10 +33,11 @@ enum WorkspaceIdiom: Equatable {
     /// device: the largest accessibility sizes (a 53 pt body) get as much as
     /// a CAD workspace can hold, not their full size.
     static func pageZoom(bodyPointSize: CGFloat, shortSide: CGFloat) -> CGFloat {
-        let wanted = bodyPointSize / defaultBodyPointSize
-        let ceiling = min(maximumPageZoom, shortSide / minimumPageWidth)
-        let zoom = min(max(wanted, 1), max(ceiling, 1))
-        return (zoom * 100).rounded() / 100
+        // Hundredths: the size rounds to the nearest, the ceiling down, so a
+        // rounded zoom never narrows the page past the floor.
+        let wanted = (bodyPointSize / defaultBodyPointSize * 100).rounded() / 100
+        let ceiling = (min(maximumPageZoom, shortSide / minimumPageWidth) * 100).rounded(.down) / 100
+        return min(max(wanted, 1), max(ceiling, 1))
     }
 
     /// The zoom for a text size, read from the system's own body font.

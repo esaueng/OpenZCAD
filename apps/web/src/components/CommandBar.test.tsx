@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
+import { usePromptDraft } from '../lib/promptDraft';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ASSISTANT_PROMPT_FILES_EVENT,
@@ -738,9 +739,6 @@ describe('CommandBar', () => {
     // One command, so the slash draft below opens a list with a row in it.
     const commands = [command('fillet', 'Fillet', 'Modify')];
     const { rerender } = render(
-      <Bar commands={commands} onAsk={onAsk} draft={null} />
-    );
-    rerender(
       <Bar
         commands={commands}
         onAsk={onAsk}
@@ -771,34 +769,69 @@ describe('CommandBar', () => {
   });
 });
 
-describe('CommandBar mounted with an earlier draft', () => {
-  it('stays closed until a new draft arrives', () => {
-    // The phone review: the search button's empty draft outlived the
-    // workspace, and the next project opened (or imported) came up under
-    // the full-screen command list.
-    const commands = [command('fillet', 'Fillet', 'Modify')];
-    const onOpenChange = vi.fn();
-    const { rerender } = render(
-      <Bar
-        commands={commands}
-        onOpenChange={onOpenChange}
-        draft={{ id: 3, text: '' }}
-      />
+describe('the host’s draft across workspaces', () => {
+  /** App's wiring: the draft settles as the bar closes. */
+  function Host({
+    workspace,
+    mounted = true,
+    commands
+  }: {
+    workspace: number;
+    mounted?: boolean;
+    commands: PaletteCommand[];
+  }) {
+    const [open, setOpen] = useState(false);
+    const { draft, write, settle } = usePromptDraft();
+    return (
+      <>
+        <button type="button" onClick={() => write('')}>
+          Search
+        </button>
+        {mounted ? (
+          <CommandBar
+            // A new project or import remounts the workspace and its bar.
+            key={workspace}
+            commands={commands}
+            open={open}
+            onOpenChange={(next) => {
+              setOpen(next);
+              if (!next) settle();
+            }}
+            searchKey={{ glyph: '⌘K', accessible: 'Cmd+K' }}
+            draft={draft}
+          />
+        ) : null}
+      </>
     );
-    const search = searchField();
-    expect(search).not.toHaveFocus();
-    expect(screen.queryByRole('listbox')).toBeNull();
-    expect(onOpenChange).not.toHaveBeenCalled();
+  }
 
-    rerender(
-      <Bar
-        commands={commands}
-        onOpenChange={onOpenChange}
-        draft={{ id: 4, text: '' }}
-      />
+  it('does not reopen a closed search over the next workspace', async () => {
+    // The phone review: search opened and closed, back to projects, and the
+    // next project opened (or imported) under the full-screen list.
+    const commands = [command('fillet', 'Fillet', 'Modify')];
+    const { rerender } = render(<Host workspace={1} commands={commands} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    expect(searchField()).toHaveFocus();
+    await userEvent.keyboard('{Escape}');
+    expect(searchField()).not.toHaveFocus();
+
+    rerender(<Host workspace={2} commands={commands} />);
+    expect(searchField()).not.toHaveFocus();
+    expect(screen.queryByRole('listbox')).toBeNull();
+
+    // A search asked for again opens, though its words are the same.
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    expect(searchField()).toHaveFocus();
+  });
+
+  it('opens for a search asked for while the bar is still loading', () => {
+    const commands = [command('fillet', 'Fillet', 'Modify')];
+    const { rerender } = render(
+      <Host workspace={1} mounted={false} commands={commands} />
     );
-    expect(search).toHaveFocus();
-    expect(onOpenChange).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    rerender(<Host workspace={1} commands={commands} />);
+    expect(searchField()).toHaveFocus();
   });
 });
 

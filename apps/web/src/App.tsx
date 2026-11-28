@@ -1146,6 +1146,7 @@ import {
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
+import { usePromptDraft } from './lib/promptDraft';
 import {
   listedStoredFiles,
   projectCommentsOffered,
@@ -5126,16 +5127,13 @@ export function App() {
     id: number;
     text: string;
   } | null>(null);
-  // Words the assistant puts into the prompt line: a suggestion picked to
-  // edit before sending, or a question it could not take yet. A fresh id
-  // writes the field even when the words repeat.
-  const [promptDraft, setPromptDraft] = useState<{
-    id: number;
-    text: string;
-  } | null>(null);
-  const draftPrompt = useCallback((text: string) => {
-    setPromptDraft((current) => ({ id: (current?.id ?? 0) + 1, text }));
-  }, []);
+  // Words the assistant puts into the prompt line, and the search button's
+  // empty draft: settled when the bar closes (`usePromptDraft`).
+  const {
+    draft: promptDraft,
+    write: draftPrompt,
+    settle: settlePromptDraft
+  } = usePromptDraft();
   // What the assistant reports about itself, for the prompt's glyph and
   // placeholder: a reply streaming, replies unread behind a tucked-away
   // stream, and what the selection lets an ask see.
@@ -44636,7 +44634,10 @@ export function App() {
               <CommandBar
                 commands={paletteCommands}
                 open={paletteOpen}
-                onOpenChange={setPaletteOpen}
+                onOpenChange={(open) => {
+                  setPaletteOpen(open);
+                  if (!open) settlePromptDraft();
+                }}
                 onAsk={
                   assistantAvailable
                     ? (question) => {

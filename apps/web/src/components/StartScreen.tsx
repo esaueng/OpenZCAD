@@ -4329,7 +4329,17 @@ export function StartScreen({
                 <span className="start-empty-mark" aria-hidden="true">
                   <BrandMark />
                 </span>
-                {shelf === 'active' && partsElsewhere ? (
+                {shelf === 'active' && activeFilter === 'shared' ? (
+                  // Shared before "all your projects are in Archive": this
+                  // tab is about sharing, whatever else is on the shelves.
+                  <>
+                    <strong>Nothing shared yet</strong>
+                    <span>
+                      Projects shared with you, and the ones you share, show up
+                      here.
+                    </span>
+                  </>
+                ) : shelf === 'active' && partsElsewhere ? (
                   <>
                     <strong>No projects on this shelf</strong>
                     <span>{`All your projects are in ${partsElsewhere}.`}</span>
@@ -4352,14 +4362,6 @@ export function StartScreen({
                         Create your first project
                       </button>
                     </div>
-                  </>
-                ) : shelf === 'active' && activeFilter === 'shared' ? (
-                  <>
-                    <strong>Nothing shared yet</strong>
-                    <span>
-                      Projects shared with you, and the ones you share, show up
-                      here.
-                    </span>
                   </>
                 ) : shelf === 'active' ? (
                   <>
