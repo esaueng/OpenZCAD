@@ -471,4 +471,175 @@ describe('D02/D07 tolerance units (schema v156)', () => {
     expect(inch.width).toBe('1 ±0.005');
     expect(inch.frame).toMatch(/\| 0\.002$/);
   });
+
+  it('prints a tiny converted amount nonzero and its limits distinct', () => {
+    const ref: DrawingEdgeRef = { bodyId: 'b' as BodyId, hash: 7 };
+    const inch = drawingNumberFormat({ units: 'inch' }, 'mm');
+    const one = { symbol: '', value: 1, decimals: 3, kind: 'length' as const };
+    // 0.00001 mm, the smallest tolerances' order, is 0.00000039 in.
+    const tiny = (tolerance: DrawingDimension['tolerance']) =>
+      formatDimension(width(ref, { tolerance }), one, inch);
+    expect(tiny({ kind: 'symmetric', value: 0.00001, units: 'mm' }).label).toBe(
+      '1 ±0.00000039'
+    );
+    expect(
+      tiny({ kind: 'limits', upper: 0.00001, lower: -0.00001, units: 'mm' })
+        .text?.stack
+    ).toEqual(['1.00000039', '0.99999961']);
+    expect(
+      tiny({ kind: 'deviation', upper: 0.00001, lower: 0, units: 'mm' }).text
+        ?.stack
+    ).toEqual(['+0.00000039', '0']);
+    expect(formatFrameTolerance(0.00001, inch, 'mm')).toBe('0.00000039');
+    // The smallest amount in the largest ratio: 0.000001 mm is 1e-9 m.
+    const metres = drawingNumberFormat({ units: 'm' }, 'mm');
+    expect(formatFrameTolerance(0.000001, metres, 'mm')).toBe('0.000000001');
+  });
+
+  it('prints a frame to the sheet’s decimals when converted', () => {
+    const six = drawingNumberFormat({ units: 'inch', decimals: 6 }, 'mm');
+    expect(formatFrameTolerance(0.1, six, 'mm')).toBe('0.003937');
+    // Unconverted, a frame's amount is never padded.
+    expect(formatFrameTolerance(0.1, six, 'inch')).toBe('0.1');
+    expect(formatFrameTolerance(0.1, six)).toBe('0.1');
+  });
+
+  it('prints a tiny converted amount in every export', async () => {
+    const { bodies, bodyId, ref } = await boxModel();
+    const sheet: DrawingSheet = {
+      ...sheetOf(
+        [bodyId],
+        [
+          width(ref, {
+            tolerance: {
+              kind: 'limits',
+              upper: 0.00001,
+              lower: -0.00001,
+              units: 'mm'
+            }
+          }),
+          frame({ amount: 0.00001, units: 'mm' })
+        ]
+      ),
+      format: { units: 'inch' }
+    };
+    const shown = drawn(sheet, bodies);
+    expect(shown.width).toBe('1.00000039/0.99999961');
+    expect(shown.frame).toMatch(/\| 0\.00000039$/);
+    for (const text of [shown.svg, shown.dxf, shown.pdf]) {
+      expect(text).toContain('1.00000039');
+      expect(text).toContain('0.99999961');
+      expect(text).toContain('0.00000039');
+    }
+  });
+
+  it('pins a units change made without stating the pin, and replays and redoes it', async () => {
+    const { document, bodies, bodyId, ref } = await boxModel();
+    const sheet = sheetOf(
+      [bodyId],
+      [width(ref, { tolerance: { kind: 'symmetric', value: 0.1 } }), frame()]
+    );
+    const manager = new CommandManager(document);
+    manager.execute(commandFactories.addDrawingSheet({ sheet }));
+    manager.execute(
+      commandFactories.updateDrawingSheet({
+        sheetId,
+        format: { units: 'inch' }
+      })
+    );
+    const pinned = sheetIn(manager.document);
+    expect(
+      (pinned.annotations![0] as DrawingLinearDimension).tolerance
+    ).toEqual({ kind: 'symmetric', value: 0.1, units: 'mm' });
+    expect(pinned.annotations![1]).toMatchObject({ amount: 0.1, units: 'mm' });
+    expect(drawn(pinned, bodies).width).toBe('1 ±0.0039');
+    expect(() => assertStorableDocument(manager.document)).not.toThrow();
+    expect(
+      replayCommands(document, manager.document.commandLog).drawings
+    ).toEqual(manager.document.drawings);
+
+    manager.undo();
+    expect(sheetIn(manager.document)).toEqual(sheet);
+    manager.redo();
+    expect(sheetIn(manager.document)).toEqual(pinned);
+    expect(
+      replayCommands(document, manager.document.commandLog).drawings
+    ).toEqual(manager.document.drawings);
+
+    // A change that keeps the printed units pins nothing.
+    const decimals = new CommandManager(document);
+    decimals.execute(commandFactories.addDrawingSheet({ sheet }));
+    decimals.execute(
+      commandFactories.updateDrawingSheet({ sheetId, format: { decimals: 4 } })
+    );
+    expect(sheetIn(decimals.document).annotations).toEqual(sheet.annotations);
+  });
+
+  it('replays a units switch logged before v156 exactly as it was recorded', async () => {
+    const { document, bodyId, ref } = await boxModel();
+    const sheet = sheetOf(
+      [bodyId],
+      [width(ref, { tolerance: { kind: 'symmetric', value: 0.1 } }), frame()]
+    );
+    const legacy: ProjectDocument = {
+      ...document,
+      schemaVersion: 155 as ProjectDocument['schemaVersion'],
+      drawings: { sheets: [sheet] }
+    };
+    // As a v155 client logged it: no pin, so the amounts read as inches.
+    const replayed = replayCommands(legacy, [
+      ...legacy.commandLog,
+      {
+        kind: 'drawing.sheet.update',
+        payload: { sheetId, format: { units: 'inch' } },
+        replayVersion: 1,
+        label: 'Change drawing properties',
+        timestamp: '2026-11-01T00:00:00.000Z'
+      }
+    ]);
+    expect(sheetIn(replayed)).toEqual({ ...sheet, format: { units: 'inch' } });
+    expect(() => assertStorableDocument(replayed)).not.toThrow();
+  });
+
+  it('refuses to state tolerance units on a pre-v156 document', async () => {
+    const { document, bodyId, ref } = await boxModel();
+    const sheet = sheetOf(
+      [bodyId],
+      [width(ref, { tolerance: { kind: 'symmetric', value: 0.1 } }), frame()]
+    );
+    const legacy: ProjectDocument = {
+      ...document,
+      schemaVersion: 155 as ProjectDocument['schemaVersion'],
+      drawings: { sheets: [sheet] }
+    };
+    const manager = new CommandManager(legacy);
+    const refused = /Drawing tolerance units require project schema v156/;
+    for (const command of [
+      commandFactories.updateDrawingSheet({
+        sheetId,
+        format: { units: 'inch' },
+        pinToleranceUnits: 'mm'
+      }),
+      commandFactories.updateDrawingSheet({
+        sheetId,
+        format: { units: 'inch' }
+      }),
+      commandFactories.updateDrawingAnnotation({
+        sheetId,
+        annotation: frame({ units: 'mm' })
+      }),
+      commandFactories.addDrawingAnnotation({
+        sheetId,
+        annotation: frame({ annotationId: id('g'), units: 'mm' })
+      })
+    ]) {
+      expect(() => manager.execute(command)).toThrow(refused);
+      expect(manager.document).toBe(legacy);
+    }
+    // A change that states nothing stays open to a v155 document.
+    manager.execute(
+      commandFactories.updateDrawingSheet({ sheetId, format: { decimals: 4 } })
+    );
+    expect(() => assertStorableDocument(manager.document)).not.toThrow();
+  });
 });

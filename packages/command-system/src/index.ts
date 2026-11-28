@@ -3683,8 +3683,15 @@ export const commandFactories = {
     payload: DrawingSheetUpdateInput,
     label = payload.source ? 'Update drawing' : 'Edit drawing sheet'
   ): CommandDefinition<DrawingSheetUpdateInput> {
-    return makeCommand('drawing.sheet.update', label, payload, (document) =>
-      updateDrawingSheet(document, payload)
+    // v156: a fresh format change works out its own tolerance pin, so a
+    // caller that states none never reinterprets a tolerance; a logged one
+    // replays with the payload it was recorded with.
+    const derived: DrawingSheetUpdateInput =
+      payload.format !== undefined && payload.pinToleranceUnits === undefined
+        ? { ...payload, derivePinToleranceUnits: true }
+        : payload;
+    return makeCommand('drawing.sheet.update', label, derived, (document) =>
+      updateDrawingSheet(document, derived)
     );
   },
   deleteDrawingSheet(

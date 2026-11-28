@@ -657,28 +657,58 @@ export function toleranceUnitFactor(
 }
 
 /**
+ * The most decimals a converted tolerance amount prints with: the smallest
+ * stored amount (0.000001) in the largest ratio (mm to m) is 1e-9, which
+ * takes nine, and one significant digit more takes ten.
+ */
+const MAX_CONVERTED_TOLERANCE_DECIMALS = 12;
+
+/**
  * The decimals a tolerance amount prints with once multiplied by `factor`:
  * as many as state it exactly when it is not converted, or when its
- * converted value is exact within the bound (0.001 in is 0.0254 mm), else
- * one significant digit more than it was stated with (0.02 mm is
- * 0.00079 in, and 0.1 mm is 0.0039 in), so a converted amount neither
- * rounds to a different tolerance nor prints a long tail of noise.
+ * converted value is exact (0.001 in is 0.0254 mm), else one significant
+ * digit more than it was stated with (0.02 mm is 0.00079 in, 0.1 mm is
+ * 0.0039 in, and 0.00001 mm is 0.00000039 in), so a converted amount neither
+ * rounds to a different tolerance, nor to zero, nor prints a long tail of
+ * noise. A converted amount may take more decimals than a stored one.
  */
-function toleranceDecimals(amount: number, factor: number): number {
+export function toleranceDecimals(amount: number, factor: number): number {
   if (factor === 1 || amount === 0) return significantDecimals(amount);
-  const converted = amount * factor;
-  const exact = significantDecimals(converted);
-  if (
-    exact < MAX_DRAWING_DIMENSION_DECIMALS ||
-    Math.abs(Number(converted.toFixed(exact)) - converted) <=
-      1e-9 * Math.max(1, Math.abs(converted))
-  )
-    return exact;
+  const converted = Math.abs(amount * factor);
   const digits =
     significantDecimals(amount) + Math.floor(Math.log10(Math.abs(amount))) + 1;
-  return Math.min(
-    MAX_DRAWING_DIMENSION_DECIMALS,
-    Math.max(0, digits - Math.floor(Math.log10(Math.abs(converted))))
+  const rounded = Math.min(
+    MAX_CONVERTED_TOLERANCE_DECIMALS,
+    Math.max(0, digits - Math.floor(Math.log10(converted)))
+  );
+  // Exact within a relative bound, so a tiny amount is never "exactly" 0.
+  for (
+    let decimals = 0;
+    decimals <= Math.max(MAX_DRAWING_DIMENSION_DECIMALS, rounded);
+    decimals++
+  )
+    if (
+      Math.abs(Number(converted.toFixed(decimals)) - converted) <=
+      1e-9 * converted
+    )
+      return decimals;
+  return rounded;
+}
+
+/**
+ * v156: a stored tolerance amount in the sheet's printed units, as a field
+ * shows it: converted by `factor`, to at least the decimals a tolerance
+ * stores and as many more as it prints with, so it is never shown as 0.
+ */
+export function printedToleranceAmount(amount: number, factor: number): number {
+  if (factor === 1) return amount;
+  return Number(
+    (amount * factor).toFixed(
+      Math.max(
+        MAX_DRAWING_DIMENSION_DECIMALS,
+        toleranceDecimals(amount, factor)
+      )
+    )
   );
 }
 
@@ -1426,7 +1456,9 @@ export function generalToleranceTable(
 
 /**
  * D07 v98: a frame's tolerance amount in the sheet's number format, from
- * the units it is in (v156: `units`, else the sheet's printed units).
+ * the units it is in (v156: `units`, else the sheet's printed units). A
+ * converted amount prints to at least the sheet's decimals, trailing zeros
+ * trimmed; one in the printed units as it is stated.
  */
 export function formatFrameTolerance(
   value: number,
@@ -1436,7 +1468,9 @@ export function formatFrameTolerance(
   const factor = toleranceUnitFactor({ units }, format.units);
   return writeNumber(
     value * factor,
-    toleranceDecimals(value, factor),
+    factor === 1
+      ? toleranceDecimals(value, factor)
+      : Math.max(format.lengthDecimals, toleranceDecimals(value, factor)),
     'length',
     format,
     true

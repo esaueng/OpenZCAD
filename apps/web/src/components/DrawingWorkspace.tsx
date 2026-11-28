@@ -216,6 +216,8 @@ import {
   sheetMarkLookup,
   sheetNumberFormat,
   toleranceUnitFactor,
+  printedToleranceAmount,
+  formatDrawingNumber,
   type DrawingNumberFormat,
   markHiddenLeaders,
   markBrokenHosts,
@@ -2369,7 +2371,7 @@ function ToleranceAnnotationFields(props: {
         </select>
       </label>
       <FrameAmountField
-        value={printedAmount(
+        value={printedToleranceAmount(
           frame.amount,
           toleranceUnitFactor(frame, props.numberFormat.units)
         )}
@@ -2523,26 +2525,24 @@ function ToleranceAnnotationFields(props: {
   );
 }
 
-/** D07 (v98): a frame's tolerance, positive, in the sheet's printed units. */
 /**
- * v156: a stored tolerance amount shown in a field in the sheet's printed
- * units: converted by `factor` and stated to the most decimals a tolerance
- * stores, so committing it again states the same amount.
+ * A tolerance amount as a field shows it: in plain decimals, where
+ * `String` would write a converted 0.00000039 as 3.9e-7.
  */
-function printedAmount(amount: number, factor: number): number {
-  return factor === 1
-    ? amount
-    : Number((amount * factor).toFixed(MAX_DRAWING_DIMENSION_DECIMALS));
+function amountText(value: number): string {
+  const text = String(value);
+  return /e/i.test(text) ? formatDrawingNumber(value, 12) : text;
 }
 
+/** D07 (v98): a frame's tolerance, positive, in the sheet's printed units. */
 function FrameAmountField(props: {
   value: number;
   units: UnitSystem;
   disabled: boolean;
   onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(String(props.value));
-  useEffect(() => setDraft(String(props.value)), [props.value]);
+  const [draft, setDraft] = useState(amountText(props.value));
+  useEffect(() => setDraft(amountText(props.value)), [props.value]);
   const commit = () => {
     const value = Number(draft);
     if (
@@ -2554,7 +2554,7 @@ function FrameAmountField(props: {
       value !== props.value
     )
       props.onCommit(value);
-    setDraft(String(props.value));
+    setDraft(amountText(props.value));
   };
   return (
     <label className="drawing-field">
@@ -2571,7 +2571,7 @@ function FrameAmountField(props: {
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit();
           if (event.key === 'Escape')
-            resetDraft(event, draft, String(props.value), setDraft);
+            resetDraft(event, draft, amountText(props.value), setDraft);
         }}
       />
     </label>
@@ -3068,7 +3068,7 @@ const TOLERANCE_LABELS: Readonly<Record<DrawingToleranceKind, string>> = {
  * (degrees on an angle); v156 stores a length's with those units, so a
  * later change of the sheet's units converts them. Editing one amount of a
  * tolerance stored in other units restates the whole tolerance in the
- * printed units, the other amount as the field shows it.
+ * printed units, the other amount as the field shows it (see `setBound`).
  */
 function ToleranceFields(props: {
   selected: DrawingDimension;
@@ -3095,11 +3095,41 @@ function ToleranceFields(props: {
     !angular && tolerance && tolerance.kind !== 'basic'
       ? toleranceUnitFactor(tolerance, props.units)
       : 1;
-  const shown = (amount: number) => printedAmount(amount, factor);
+  const shown = (amount: number) => printedToleranceAmount(amount, factor);
   const kept =
     angular || !tolerance || tolerance.kind === 'basic'
       ? printed
       : { units: drawingToleranceUnits(tolerance, props.units) };
+  /**
+   * One bound of a pair, typed in the printed units. The pair is restated
+   * in the printed units, the other bound as its field shows it, unless
+   * that takes more decimals than a tolerance stores (a tiny amount
+   * converted, 0.00001 mm is 0.00000039 in): then the typed bound is
+   * converted to the units the pair is in, and the other is kept exactly.
+   */
+  const setBound = (
+    pair: Extract<DrawingTolerance, { upper: number }>,
+    edited: 'upper' | 'lower',
+    value: number
+  ) => {
+    const other = edited === 'upper' ? pair.lower : pair.upper;
+    const restated = shown(other);
+    const [upper, lower] =
+      edited === 'upper' ? [value, restated] : [restated, value];
+    if (Number(restated.toFixed(MAX_DRAWING_DIMENSION_DECIMALS)) === restated)
+      set({ kind: pair.kind, upper, lower, ...printed });
+    else {
+      const stated = Number(
+        (value / factor).toFixed(MAX_DRAWING_DIMENSION_DECIMALS)
+      );
+      set({
+        kind: pair.kind,
+        upper: edited === 'upper' ? stated : pair.upper,
+        lower: edited === 'lower' ? stated : pair.lower,
+        ...kept
+      });
+    }
+  };
   const set = (next: DrawingTolerance | null) => {
     // v105: a toleranced diameter states its diameter, not a hole's
     // callout, so a thread class goes with the callout.
@@ -3193,27 +3223,13 @@ function ToleranceFields(props: {
             label="Upper"
             value={shown(tolerance.upper)}
             disabled={!editable}
-            onCommit={(upper) =>
-              set({
-                kind: tolerance.kind,
-                upper,
-                lower: shown(tolerance.lower),
-                ...printed
-              })
-            }
+            onCommit={(upper) => setBound(tolerance, 'upper', upper)}
           />
           <AmountField
             label="Lower"
             value={shown(tolerance.lower)}
             disabled={!editable}
-            onCommit={(lower) =>
-              set({
-                kind: tolerance.kind,
-                upper: shown(tolerance.upper),
-                lower,
-                ...printed
-              })
-            }
+            onCommit={(lower) => setBound(tolerance, 'lower', lower)}
           />
         </div>
       )}
@@ -3243,15 +3259,15 @@ function AmountField(props: {
   disabled: boolean;
   onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(String(props.value));
-  useEffect(() => setDraft(String(props.value)), [props.value]);
+  const [draft, setDraft] = useState(amountText(props.value));
+  useEffect(() => setDraft(amountText(props.value)), [props.value]);
   const commit = () => {
     const value = Number(draft);
     if (draft.trim() !== '' && Number.isFinite(value) && value !== props.value)
       props.onCommit(value);
     // Accepted, the new value replaces this on its way back; refused, the
     // stored one does.
-    setDraft(String(props.value));
+    setDraft(amountText(props.value));
   };
   return (
     <label className="drawing-field">
@@ -3267,7 +3283,7 @@ function AmountField(props: {
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit();
           if (event.key === 'Escape')
-            resetDraft(event, draft, String(props.value), setDraft);
+            resetDraft(event, draft, amountText(props.value), setDraft);
         }}
       />
     </label>

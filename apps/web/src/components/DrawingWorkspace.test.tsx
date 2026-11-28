@@ -883,9 +883,11 @@ describe('DrawingWorkspace', () => {
     );
     let command = onCommand.mock.calls.at(-1)![0];
     expect(command.kind).toBe('drawing.sheet.update');
+    // v156: every format change works out its own tolerance pin.
     expect(command.payload).toEqual({
       sheetId: sheet.sheetId,
-      format: { decimalSeparator: 'comma', units: 'inch' }
+      format: { decimalSeparator: 'comma', units: 'inch' },
+      derivePinToleranceUnits: true
     });
     await userEvent.selectOptions(
       within(panel).getByRole('combobox', { name: 'Angles' }),
@@ -901,7 +903,11 @@ describe('DrawingWorkspace', () => {
       ''
     );
     command = onCommand.mock.calls.at(-1)![0];
-    expect(command.payload).toEqual({ sheetId: sheet.sheetId, format: null });
+    expect(command.payload).toEqual({
+      sheetId: sheet.sheetId,
+      format: null,
+      derivePinToleranceUnits: true
+    });
     // A print weight in bounds is kept; one out of bounds reverts.
     await userEvent.click(screen.getByText('Line weights (mm)'));
     const visible = within(panel).getByRole('spinbutton', {
@@ -2032,6 +2038,77 @@ describe('DrawingWorkspace', () => {
         lower: -0.001969,
         units: 'inch'
       });
+    });
+
+    it('shows a tiny millimetre tolerance nonzero in inches, and keeps it through an edit (v156)', async () => {
+      const sheet: DrawingSheet = {
+        ...dimensioned(),
+        format: { units: 'inch' }
+      };
+      const linear = sheet.annotations![0] as DrawingLinearDimension;
+      sheet.annotations = [
+        {
+          ...linear,
+          tolerance: {
+            kind: 'deviation',
+            upper: 0.00001,
+            lower: -0.00001,
+            units: 'mm'
+          }
+        },
+        {
+          annotationId: 'dann_f' as DrawingAnnotationId,
+          kind: 'feature-control-frame',
+          viewId: linear.viewId,
+          attachedTo: linear.annotationId,
+          characteristic: 'flatness',
+          amount: 0.00001,
+          units: 'mm',
+          placementMm: { x: 0, y: 0 }
+        }
+      ];
+      const { onCommand } = setup({ sheet });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      // 0.00001 mm is 0.00000039 in, never 0.
+      const drawn = await within(canvas).findByRole('button', {
+        name: 'Horizontal dimension 0.394 +0.00000039/-0.00000039'
+      });
+      const frame = await within(canvas).findByRole('button', {
+        name: 'Feature control frame Flatness | 0.00000039'
+      });
+      await userEvent.click(drawn);
+      const upper = screen.getByRole<HTMLInputElement>('spinbutton', {
+        name: 'Tolerance upper'
+      });
+      expect(upper.value).toBe('0.00000039');
+      expect(
+        screen.getByRole<HTMLInputElement>('spinbutton', {
+          name: 'Tolerance lower'
+        }).value
+      ).toBe('-0.00000039');
+      // The lower bound takes more decimals in inches than a tolerance
+      // stores, so the typed bound joins it in millimetres instead.
+      await userEvent.clear(upper);
+      await userEvent.type(upper, '0.00001{Enter}');
+      const command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.update');
+      expect(
+        (command.payload as { annotation: DrawingLinearDimension }).annotation
+          .tolerance
+      ).toEqual({
+        kind: 'deviation',
+        upper: 0.000254,
+        lower: -0.00001,
+        units: 'mm'
+      });
+      await userEvent.click(frame);
+      expect(
+        screen.getByRole<HTMLInputElement>('spinbutton', {
+          name: 'Frame tolerance'
+        }).value
+      ).toBe('0.00000039');
     });
 
     it('states a frame’s characteristic, tolerance and datums (D07 v98)', async () => {

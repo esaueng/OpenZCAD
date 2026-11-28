@@ -607,8 +607,10 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // so it must refuse the document. Builds on v153.
 // v155 records how an Offset Face edit resolves a history-free rim.
 // v156 adds D02/D07 tolerance units (`units` on a drawing dimension's length
-// tolerance and on a feature control frame, and `pinToleranceUnits` on a
-// drawing.sheet.update): the unit a stored amount is in, so changing a
+// tolerance and on a feature control frame, and `pinToleranceUnits` or
+// `derivePinToleranceUnits` on a drawing.sheet.update, the second set on
+// every format change a v156 client builds): the unit a stored amount is in,
+// so changing a
 // sheet's dimension units converts it rather than reinterpreting it. An
 // older client would read a stated inch tolerance as a millimetre one, 25.4x
 // off, so it must refuse the document. Absent keeps the pre-v156 meaning
