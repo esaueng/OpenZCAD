@@ -715,8 +715,10 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
   // an R5 sphere at the origin is two hemispheres meeting on the z = 0
   // equator. Until remus#2023 the kernel judged "entirely on one side" from
   // the body's edges alone, so z = 1 was refused like z = 6. It now sections
-  // a sphere or torus face the plane crosses between its edges, so every
-  // plane through the sphere builds two exact halves. A tangent or missing
+  // a sphere or torus face the plane crosses between its edges, so the
+  // horizontal planes below (z = 1, −1 and the equator) build two exact
+  // halves. Not every plane through the sphere does: a tilted plane clear of
+  // the equator is still refused (the last case here). A tangent or missing
   // plane is still refused, and the adapter, which cannot prove a miss on a
   // curved body, still claims no cause.
   describe('S7: a Split through a sphere', () => {
@@ -790,9 +792,13 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
       );
     });
 
-    // Capability boundary, still refused upstream: a tilted plane that
-    // crosses one hemisphere's face clear of the equator. The kernel's
-    // section and its half-space fallback both decline it, typed.
+    // Capability boundary, still refused on Remus 2026.1.173: a tilted
+    // plane that crosses one hemisphere's face clear of the equator. The
+    // section is a closed curve inside that face, bounded by none of its
+    // edges, which remus#2023 does not implement; the half-space boolean
+    // fallback then fails its volume-conservation check. Both decline it as
+    // `modeling/unsupported/split_refused`, so a kernel fix that builds it
+    // fails `expectTyped` here and has to flip this case to two halves.
     it('a tilted plane clear of the equator stays a typed refusal', async () => {
       const { document, ball } = sphere();
       const split = addSplitFeature(document, {
