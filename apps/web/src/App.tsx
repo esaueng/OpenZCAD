@@ -7586,6 +7586,18 @@ export function App() {
       geometry.prepareFirstStepImport(document, signal) ??
       rebuildInDisposableWorker(document, signal),
     releaseCancellable: (signal) => geometry.releasePreparedImport(signal),
+    // The current model's own failures, once its exact rebuild is the one on
+    // screen: a later feature that already failed does not refuse an edit
+    // ahead of it.
+    priorModel: (document) =>
+      geometry.isReadyFor(document)
+        ? {
+            warnings: document.derived.warnings,
+            ...(featureAttribution?.derived === document.derived
+              ? { featureWarnings: featureAttribution.featureWarnings }
+              : {})
+          }
+        : null,
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),

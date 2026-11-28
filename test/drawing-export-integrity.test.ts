@@ -25,8 +25,12 @@ import {
   composeSheetPage,
   joinHiddenRuns,
   sectionCaption,
+  sectionNoteRefusal,
   SECTION_APPROXIMATE_NOTE,
+  sheetBoxOnPaper,
   sheetMarksOnPaper,
+  textWidthMm,
+  titleBlockBox,
   viewPageBox,
   viewPlacementIssue,
   type ComposedView,
@@ -376,6 +380,186 @@ describe('hidden edges export as hidden (#2073)', () => {
       ])
     ).toEqual([{ points: [0, 0, 1, 0, 2, 0], closed: false }]);
   });
+
+  /**
+   * A circular rim sampled every 12 degrees, seen so nearly edge-on that it
+   * projects to a 1.5 x 0.3 mm ellipse: its 30 chords turn by up to 55
+   * degrees at the ellipse's two ends, and the whole of it is as long as one
+   * dash and its gap.
+   */
+  const rimPoint = (i: number): [number, number] => [
+    0.75 * Math.cos((Math.PI * i) / 15),
+    0.15 * Math.sin((Math.PI * i) / 15)
+  ];
+  const rimChords = Array.from({ length: 30 }, (_, i) => [
+    ...rimPoint(i),
+    ...rimPoint(i + 1)
+  ]);
+
+  it('joins every piece of one projected edge, however sharply its projection turns', () => {
+    const turns = rimChords.map((chord, i) => {
+      const next = rimChords[(i + 1) % 30]!;
+      const [ax, ay] = [chord[2]! - chord[0]!, chord[3]! - chord[1]!];
+      const [bx, by] = [next[2]! - next[0]!, next[3]! - next[1]!];
+      return Math.abs(Math.atan2(ax * by - ay * bx, ax * bx + ay * by));
+    });
+    expect(Math.max(...turns)).toBeGreaterThan((50 * Math.PI) / 180);
+    // Handed over chord by chord, all of one edge: one closed run.
+    const pieces = joinHiddenRuns(
+      rimChords,
+      rimChords.map(() => 7)
+    );
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0]!.closed).toBe(true);
+    expect(pieces[0]!.points).toHaveLength(60);
+    // Handed over whole, with no record of its edge: a polyline is one
+    // edge's, and stays one run.
+    const whole = joinHiddenRuns([
+      Array.from({ length: 31 }, (_, i) => rimPoint(i)).flat()
+    ]);
+    expect(whole).toHaveLength(1);
+    expect(whole[0]!.closed).toBe(true);
+    expect(whole[0]!.points).toHaveLength(60);
+    // Two pieces of one edge and a piece of another meeting them part-way:
+    // the branch still ends the runs.
+    expect(
+      joinHiddenRuns(
+        [
+          [0, 0, 1, 0],
+          [1, 0, 1, 1],
+          [1, 0, 2, -1]
+        ],
+        [3, 3, 4]
+      )
+    ).toHaveLength(3);
+  });
+
+  it('joins two different edges only where the line carries straight on', () => {
+    const corner = (degrees: number) => {
+      const turn = (degrees * Math.PI) / 180;
+      return [
+        [0, 0, 4, 0],
+        [4, 0, 4 + 4 * Math.cos(turn), 4 * Math.sin(turn)]
+      ];
+    };
+    // A 15 degree corner is a corner: more than any smooth curve's chords
+    // turn (0.24 rad, 13.75 degrees), whether or not the edges are known.
+    expect(joinHiddenRuns(corner(15), [1, 2])).toHaveLength(2);
+    expect(joinHiddenRuns(corner(15))).toHaveLength(2);
+    // Two halves of one curve, split at a seam, still read as one line.
+    expect(joinHiddenRuns(corner(13.7), [1, 2])).toHaveLength(1);
+    // The same 15 degrees inside one edge is that edge's own shape.
+    expect(joinHiddenRuns(corner(15), [5, 5])).toHaveLength(1);
+  });
+
+  it('carries each hidden line’s edge from the projection to the exported page', () => {
+    // A 10 mm cube with a Ø1.5 rim inside it, tilted until the Front view
+    // sees it as a 1.5 x 0.3 mm ellipse: wholly hidden.
+    const corners = [
+      [-5, -5, -5],
+      [5, -5, -5],
+      [5, 5, -5],
+      [-5, 5, -5],
+      [-5, -5, 5],
+      [5, -5, 5],
+      [5, 5, 5],
+      [-5, 5, 5]
+    ];
+    const quads = [
+      [0, 3, 2, 1],
+      [4, 5, 6, 7],
+      [0, 1, 5, 4],
+      [2, 3, 7, 6],
+      [1, 2, 6, 5],
+      [0, 4, 7, 3]
+    ];
+    const tilt = Math.sqrt(1 - 0.2 ** 2);
+    const rim = Array.from({ length: 31 }, (_, i) => {
+      const a = (Math.PI * (i % 30)) / 15;
+      // Front looks along y: x across the page, z up it.
+      return [
+        0.75 * Math.cos(a),
+        0.75 * Math.sin(a) * tilt,
+        0.75 * Math.sin(a) * 0.2
+      ];
+    }).flat();
+    const front = view(frontId, 'front');
+    const projection = projectView({
+      orientation: 'front',
+      hiddenLines: true,
+      bodies: [
+        {
+          vertices: Float64Array.from(corners.flat()),
+          indices: Uint32Array.from(
+            quads.flatMap(([a, b, c, d]) => [a!, b!, c!, a!, c!, d!])
+          ),
+          edges: [
+            rim,
+            ...[
+              [0, 1],
+              [1, 2],
+              [2, 3],
+              [3, 0],
+              [4, 5],
+              [5, 6],
+              [6, 7],
+              [7, 4],
+              [0, 4],
+              [1, 5],
+              [2, 6],
+              [3, 7]
+            ].map(([a, b]) => [...corners[a!]!, ...corners[b!]!])
+          ]
+        }
+      ]
+    });
+    // One edge id per hidden line, and the rim's lines share one.
+    expect(projection.hiddenSources).toHaveLength(projection.hidden.length);
+    const rimLines = projection.hidden.flatMap((line, index) =>
+      Math.abs(line[0]!) < 1 && Math.abs(line[1]!) < 1 ? [index] : []
+    );
+    expect(rimLines.length).toBeGreaterThan(0);
+    expect(
+      new Set(rimLines.map((index) => projection.hiddenSources![index])).size
+    ).toBe(1);
+
+    const page = composeSheetPage(
+      sheetOf([front]),
+      [{ view: front, projection }],
+      {
+        projectName: 'Rim',
+        units: 'mm'
+      }
+    );
+    // The rim alone lies within a millimetre of the view's centre (the SVG
+    // counts y down the page).
+    const a3 = drawingPaperMm({ size: 'A3', orientation: 'landscape' });
+    const near = (points: [number, number][]) =>
+      points.every(
+        ([x, y]) =>
+          Math.abs(x - 120) < 1 &&
+          Math.min(Math.abs(y - 150), Math.abs(a3.height - y - 150)) < 1
+      );
+    const svgRim = svgGroup(sheetPageToSvg(page, 'Integrity'), 'hidden').filter(
+      (element) => near(svgPoints(element))
+    );
+    // One closed dashed path, 3.2 mm round: not six solid slivers.
+    expect(svgRim).toHaveLength(1);
+    expect(svgRim[0]).toMatch(/^<polygon /);
+    expect(svgPoints(svgRim[0]!)).toHaveLength(30);
+    expect(perimeter(svgPoints(svgRim[0]!), true)).toBeGreaterThan(3);
+    const drawn = page.strokes.filter(
+      (stroke) =>
+        stroke.kind === 'hidden' &&
+        stroke.points.every((value, index) =>
+          index % 2 === 0
+            ? Math.abs(value - 120) < 1
+            : Math.abs(value - 150) < 1
+        )
+    );
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0]!.closed).toBe(true);
+  });
 });
 
 describe('a section cut from the tessellation says so on the paper (#2110)', () => {
@@ -434,11 +618,15 @@ describe('a section cut from the tessellation says so on the paper (#2110)', () 
     );
   });
 
-  /** An approximate section of a Front at `source`, centred at `center`. */
+  /**
+   * An approximate section of a Front at `source`, centred at `center`,
+   * with `layer` as the sheet's annotations.
+   */
   function edgePage(
     orientation: DrawingView['orientation'],
     source: { x: number; y: number },
-    center: { x: number; y: number }
+    center: { x: number; y: number },
+    layer?: Parameters<typeof composeSheetPage>[3]
   ): SheetPage {
     const front = view(frontId, 'front', { centerMm: source });
     const section = view(sectionId, orientation, {
@@ -463,7 +651,8 @@ describe('a section cut from the tessellation says so on the paper (#2110)', () 
           }
         }
       ],
-      { projectName: 'Spindle', units: 'mm' }
+      { projectName: 'Spindle', units: 'mm' },
+      layer
     );
   }
   const a3 = drawingPaperMm({ size: 'A3', orientation: 'landscape' });
@@ -497,6 +686,132 @@ describe('a section cut from the tessellation says so on the paper (#2110)', () 
         SECTION_APPROXIMATE_NOTE
       );
     }
+  });
+
+  type Box = { minX: number; minY: number; maxX: number; maxY: number };
+  /** A text's box as the writers set it: its width, cap height tall. */
+  const textBox = (text: SheetPage['texts'][number]): Box => {
+    const width = textWidthMm(text.text, text.sizeMm, text.bold);
+    const left =
+      text.x -
+      (text.align === 'middle' ? width / 2 : text.align === 'end' ? width : 0);
+    return {
+      minX: left,
+      minY: text.y,
+      maxX: left + width,
+      maxY: text.y + text.sizeMm
+    };
+  };
+  const overlap = (a: Box, b: Box) =>
+    a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
+  const noteOf = (page: SheetPage) =>
+    page.texts.find((text) => text.text === SECTION_APPROXIMATE_NOTE);
+  /** The 20 mm square view centred at `center`. */
+  const viewBox = (center: { x: number; y: number }): Box => ({
+    minX: center.x - 10,
+    minY: center.y - 10,
+    maxX: center.x + 10,
+    maxY: center.y + 10
+  });
+
+  it('keeps the approximation clear of the view next to its section', () => {
+    // The section's outline 2 mm above the bottom edge: no room under it or
+    // in the gap to its caption, so the note goes over the view. Its source
+    // starts 2 mm above it, where the note would have gone.
+    const source = { x: 120, y: 34 };
+    const center = { x: 120, y: 12 };
+    const page = edgePage('bottom', source, center);
+    const note = noteOf(page)!;
+    expect(note).toBeDefined();
+    expect(page.crowdedSectionNotes).toBeUndefined();
+    expect(sheetMarksOnPaper([], [note], a3)).toBe(true);
+    expect(overlap(textBox(note), viewBox(source))).toBe(false);
+    expect(overlap(textBox(note), viewBox(center))).toBe(false);
+  });
+
+  it('keeps the approximation clear of a sheet note, a dimension and the title block', () => {
+    const source = { x: 120, y: 60 };
+    const center = { x: 120, y: 12 };
+    // Where the note goes with nothing in its way.
+    const alone = noteOf(edgePage('bottom', source, center))!;
+    const remark = {
+      x: alone.x - 20,
+      y: alone.y + 0.5,
+      sizeMm: 3,
+      text: 'DEBURR ALL EDGES'
+    };
+    const noted = edgePage('bottom', source, center, {
+      strokes: [],
+      texts: [remark]
+    });
+    expect(noteOf(noted)).toBeDefined();
+    expect(overlap(textBox(noteOf(noted)!), textBox(remark))).toBe(false);
+    expect(noted.texts).toContainEqual(remark);
+    // A dimension line through it.
+    const line = {
+      kind: 'dimension' as const,
+      points: [alone.x - 30, alone.y + 1, alone.x + 30, alone.y + 1.5]
+    };
+    const dimensioned = noteOf(
+      edgePage('bottom', source, center, { strokes: [line], texts: [] })
+    )!;
+    const box = textBox(dimensioned);
+    expect(box.minY >= alone.y + 1.5 || box.maxY <= alone.y + 1).toBe(true);
+    // Over the title block, the note is put clear of it.
+    const block = titleBlockBox(sheetOf([]));
+    const inBlock = { x: block.x + 60, y: block.y + 3 };
+    const blocked = edgePage(
+      'bottom',
+      { x: inBlock.x, y: inBlock.y + 60 },
+      inBlock
+    );
+    expect(noteOf(blocked)).toBeDefined();
+    expect(
+      overlap(textBox(noteOf(blocked)!), {
+        minX: block.x,
+        minY: block.y,
+        maxX: block.x + block.width,
+        maxY: block.y + block.height
+      })
+    ).toBe(false);
+  });
+
+  it('refuses the export, naming the section, when its approximation has nowhere to go', () => {
+    // A picture over the whole sheet: wherever the note went, it would
+    // print over it.
+    const page = edgePage(
+      'right',
+      { x: 120, y: 150 },
+      { x: 260, y: 150 },
+      {
+        strokes: [],
+        texts: [],
+        images: [
+          {
+            x: 5,
+            y: 5,
+            width: a3.width - 10,
+            height: a3.height - 10,
+            checksumSha256: 'a'.repeat(64),
+            contentType: 'image/png'
+          }
+        ]
+      }
+    );
+    expect(page.crowdedSectionNotes).toEqual([
+      { viewId: sectionId, label: 'A' }
+    ]);
+    expect(sectionNoteRefusal(page)).toBe(
+      'The note that Section A-A is approximate has no clear place by the section: views, annotations or the title block take every one. Move the section, or what is beside it, to export.'
+    );
+    // The sheet on screen still says so, by the caption.
+    expect(noteOf(page)).toBeDefined();
+    // A page whose notes are all placed refuses nothing.
+    expect(
+      sectionNoteRefusal(
+        edgePage('right', { x: 120, y: 150 }, { x: 260, y: 150 })
+      )
+    ).toBeNull();
   });
 
   it('leaves an exact section as it was', () => {
@@ -655,6 +970,63 @@ describe('the off-paper check and the page agree on the paper’s edge (#2166)',
       expect(Math.min(...drawn.head!.points)).toBeGreaterThanOrEqual(0);
       expect(Math.min(...drawn.line!.points)).toBeGreaterThanOrEqual(0);
     }
+  });
+
+  it('prints whole every picture the check passes, and none it refuses', () => {
+    const picture = (box: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }) => ({
+      ...box,
+      checksumSha256: 'b'.repeat(64),
+      contentType: 'image/png' as const
+    });
+    const drawnPicture = (box: Parameters<typeof picture>[0]) =>
+      composeSheetPage(
+        sheetOf([]),
+        [],
+        { projectName: 'Edge', units: 'mm' },
+        { strokes: [], texts: [], images: [picture(box)] }
+      ).images?.[0];
+    for (const [name, box] of [
+      // A strip wholly in the hair under the bottom edge: 7 to 3 µm below.
+      ['under', { x: 20, y: -0.007, width: 30, height: 0.004 }],
+      ['left of', { x: -0.007, y: 20, width: 0.004, height: 30 }],
+      // A picture laid flush whose arithmetic lands it 5 µm past an edge.
+      ['over', { x: 20, y: paper.height - 30 + 0.005, width: 40, height: 30 }],
+      [
+        'right of',
+        { x: paper.width - 40 + 0.005, y: 20, width: 40, height: 30 }
+      ],
+      ['on', { x: 20, y: 20, width: 40, height: 30 }]
+    ] as const) {
+      expect(sheetBoxOnPaper(box, paper), name).toBe(true);
+      const drawn = drawnPicture(box)!;
+      // Drawn, at its size, and none of it past the paper.
+      expect(drawn, name).toBeDefined();
+      expect(drawn.width, name).toBe(box.width);
+      expect(drawn.height, name).toBe(box.height);
+      expect(drawn.x, name).toBeGreaterThanOrEqual(0);
+      expect(drawn.y, name).toBeGreaterThanOrEqual(0);
+      expect(drawn.x + drawn.width, name).toBeLessThanOrEqual(paper.width);
+      expect(drawn.y + drawn.height, name).toBeLessThanOrEqual(paper.height);
+    }
+    // Past the tolerance the check refuses it, wherever the page stands.
+    for (const box of [
+      { x: 20, y: -0.03, width: 30, height: 0.01 },
+      { x: 20, y: -5, width: 30, height: 30 },
+      { x: paper.width - 10, y: 20, width: 40, height: 30 }
+    ])
+      expect(sheetBoxOnPaper(box, paper)).toBe(false);
+    // One wholly off the paper is not drawn; one partly on it still shows.
+    expect(
+      drawnPicture({ x: 20, y: -40, width: 30, height: 30 })
+    ).toBeUndefined();
+    expect(drawnPicture({ x: 20, y: -5, width: 30, height: 30 })).toEqual(
+      picture({ x: 20, y: -5, width: 30, height: 30 })
+    );
   });
 
   it('refuses every mark the page would cut or drop', () => {

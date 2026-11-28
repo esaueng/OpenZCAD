@@ -13,6 +13,7 @@ import {
   projectToView,
   type DrawingSheet,
   type DrawingView,
+  type DrawingViewId,
   type DrawingViewOrientation,
   type UnitSystem
 } from '@openzcad/shared';
@@ -96,6 +97,14 @@ export interface SheetPage {
    * kinds (and a page without any) use {@link SHEET_STROKE_WIDTH_MM}.
    */
   strokeWidthsMm?: Partial<Record<SheetStrokeKind, number>>;
+  /**
+   * #2110: the approximate sections whose note found no place by the
+   * section clear of the page's other marks. The page still draws each (the
+   * sheet on screen goes on saying the section is approximate), over
+   * whatever is there; an export of it is refused (`sectionNoteRefusal`).
+   * Absent when every note has a place of its own.
+   */
+  crowdedSectionNotes?: { viewId: DrawingViewId; label: string }[];
 }
 
 /** A page's print weight for `kind`. */
@@ -740,24 +749,36 @@ function clipStroke(stroke: SheetStroke, rect: PaperRect): SheetStroke[] {
 /** Hidden-line ends closer than this on the paper are one point (mm). */
 const HIDDEN_JOIN_MM = 1e-3;
 /**
- * The most a hidden line may turn where two pieces are joined into one run,
- * as the cosine of that angle (20 degrees). Hidden lines carry no record of
- * the edge they came from, so the turn stands for it: the chords of one
- * curved edge turn by the tessellation's angular step, at most 0.24 rad
- * (13.8 degrees), while two edges that meet at a corner turn by the corner.
+ * The most a hidden line may turn where pieces of two different edges are
+ * joined into one run, as the cosine of that angle: the display
+ * tessellation's angular step (`angularDeflection`, 0.24 rad, 13.75
+ * degrees), with room for roundoff. Two edges that carry one smooth curve
+ * on (the halves of a circle split at its seam, a line running into the arc
+ * tangent to it) turn by no more than a curve's own chords do; two that
+ * turn by more meet at a corner. Pieces of one edge are not held to it: a
+ * projection may turn a smooth edge's chords as sharply as it likes (a rim
+ * seen nearly edge-on).
  */
-const HIDDEN_JOIN_MIN_COS = Math.cos((20 * Math.PI) / 180);
+const HIDDEN_JOIN_MIN_COS = Math.cos(0.24 + 1e-6);
 
 /**
  * #2073: a view's hidden lines on the paper as the fewest continuous runs:
- * every repeated segment once, and pieces that meet end to end and carry
- * straight on (within `HIDDEN_JOIN_MIN_COS`), with nothing else meeting them
- * there, joined into one polyline (closed where it comes back to its start).
- * Hidden-line removal hands a curved edge over in many short pieces, often
- * more than once (the edge, the face silhouette along it); each drawn alone
- * restarts the dash pattern, so pieces shorter than a dash print solid and a
- * hidden port reads as a visible opening. Joined, the pattern runs on along
- * the curve, as a plotter would draw it.
+ * every repeated segment once, and pieces that meet end to end, with
+ * nothing else meeting them there, joined into one polyline (closed where
+ * it comes back to its start) when they are pieces of one projected edge,
+ * or carry straight on from one edge to the next (within
+ * `HIDDEN_JOIN_MIN_COS`). Hidden-line removal hands a curved edge over in
+ * many short pieces, often more than once (the edge, the face silhouette
+ * along it); each drawn alone restarts the dash pattern, so pieces shorter
+ * than a dash print solid and a hidden port reads as a visible opening.
+ * Joined, the pattern runs on along the curve, as a plotter would draw it.
+ *
+ * `sources` names the projected edge each line is a piece of
+ * (`ViewProjection.hiddenSources`). Pieces of one edge always join, however
+ * the projection turned them: the direction says nothing about a curve seen
+ * nearly edge-on, whose chords double back at its ends. A line is always
+ * one edge's own, so its segments join each other with or without
+ * `sources`; lines with none are each taken as an edge of their own.
  *
  * Two edges that only share a corner stay two runs: joined, the dash that
  * ends on one puts its gap over the start of the next, and a short edge
@@ -766,7 +787,8 @@ const HIDDEN_JOIN_MIN_COS = Math.cos((20 * Math.PI) / 180);
  * Pure and order-preserving, so the same lines always give the same runs.
  */
 export function joinHiddenRuns(
-  lines: readonly (readonly number[])[]
+  lines: readonly (readonly number[])[],
+  sources?: ArrayLike<number | undefined>
 ): { points: number[]; closed: boolean }[] {
   const q = HIDDEN_JOIN_MM;
   const xs: number[] = [];
@@ -790,22 +812,35 @@ export function joinHiddenRuns(
   };
   const from: number[] = [];
   const to: number[] = [];
-  const seen = new Set<string>();
-  for (const line of lines) {
+  /**
+   * The edges each segment is a piece of: the line that drew it, and the
+   * projected edge that line came from. A segment drawn more than once (the
+   * edge, and the silhouette along it) is a piece of each.
+   */
+  const edges: string[][] = [];
+  const seen = new Map<string, number>();
+  lines.forEach((line, index) => {
+    const source = sources?.[index];
+    const own =
+      source === undefined ? [`l${index}`] : [`l${index}`, `e${source}`];
     let last = -1;
     for (let i = 0; i + 1 < line.length; i += 2) {
       const id = vertex(line[i]!, line[i + 1]!);
       if (last >= 0 && id !== last) {
         const key = last < id ? `${last}:${id}` : `${id}:${last}`;
-        if (!seen.has(key)) {
-          seen.add(key);
+        const drawn = seen.get(key);
+        if (drawn === undefined) {
+          seen.set(key, from.length);
           from.push(last);
           to.push(id);
-        }
+          edges.push([...own]);
+        } else
+          for (const edge of own)
+            if (!edges[drawn]!.includes(edge)) edges[drawn]!.push(edge);
       }
       last = id;
     }
-  }
+  });
   const incident = new Map<number, number[]>();
   for (let s = 0; s < from.length; s += 1)
     for (const v of [from[s]!, to[s]!]) {
@@ -819,6 +854,9 @@ export function joinHiddenRuns(
   const joint = (v: number): boolean => {
     const meeting = incident.get(v)!;
     if (meeting.length !== 2) return false;
+    // One edge's own pieces: its shape on the paper is the edge's.
+    const second = edges[meeting[1]!]!;
+    if (edges[meeting[0]!]!.some((edge) => second.includes(edge))) return true;
     const [a, b] = [other(meeting[0]!, v), other(meeting[1]!, v)];
     const [ax, ay] = [xs[a]! - xs[v]!, ys[a]! - ys[v]!];
     const [bx, by] = [xs[b]! - xs[v]!, ys[b]! - ys[v]!];
@@ -883,25 +921,123 @@ export function sheetMarksOnPaper(
   for (const stroke of strokes)
     for (let i = 0; i + 1 < stroke.points.length; i += 2)
       if (!on(stroke.points[i]!, stroke.points[i + 1]!)) return false;
-  for (const text of texts) {
-    if (!text.text) continue;
-    const width = textWidthMm(text.text, text.sizeMm, text.bold);
-    const shift =
-      text.align === 'middle' ? width / 2 : text.align === 'end' ? width : 0;
-    const radians = ((text.angleDeg ?? 0) * Math.PI) / 180;
-    const [cos, sin] = [Math.cos(radians), Math.sin(radians)];
-    const x0 = text.x - cos * shift;
-    const y0 = text.y - sin * shift;
-    for (const [along, up] of [
+  for (const text of texts)
+    for (const [x, y] of textCorners(text)) if (!on(x, y)) return false;
+  return true;
+}
+
+/**
+ * The corners of a text's box on the paper: as wide as the writers set it,
+ * cap height tall, turned with it. None for an empty text.
+ */
+function textCorners(text: SheetText): [number, number][] {
+  if (!text.text) return [];
+  const width = textWidthMm(text.text, text.sizeMm, text.bold);
+  const shift =
+    text.align === 'middle' ? width / 2 : text.align === 'end' ? width : 0;
+  const radians = ((text.angleDeg ?? 0) * Math.PI) / 180;
+  const [cos, sin] = [Math.cos(radians), Math.sin(radians)];
+  const x0 = text.x - cos * shift;
+  const y0 = text.y - sin * shift;
+  return (
+    [
       [0, 0],
       [width, 0],
       [0, text.sizeMm],
       [width, text.sizeMm]
-    ] as const)
-      if (!on(x0 + cos * along - sin * up, y0 + sin * along + cos * up))
-        return false;
+    ] as const
+  ).map(([along, up]) => [
+    x0 + cos * along - sin * up,
+    y0 + sin * along + cos * up
+  ]);
+}
+
+/** The upright box around `points`, or null for none. */
+function boundsOf(
+  points: readonly (readonly [number, number])[]
+): PaperRect | null {
+  if (points.length === 0) return null;
+  const rect = {
+    minX: Infinity,
+    minY: Infinity,
+    maxX: -Infinity,
+    maxY: -Infinity
+  };
+  for (const [x, y] of points) {
+    rect.minX = Math.min(rect.minX, x);
+    rect.minY = Math.min(rect.minY, y);
+    rect.maxX = Math.max(rect.maxX, x);
+    rect.maxY = Math.max(rect.maxY, y);
   }
-  return true;
+  return rect;
+}
+
+/** Whether two boxes share any area (touching edges do not). */
+function rectsOverlap(a: PaperRect, b: PaperRect): boolean {
+  return (
+    a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY
+  );
+}
+
+/**
+ * What else a page prints, for a mark still to be placed to keep clear of:
+ * boxes (views, texts, pictures, the title block) and lines (dimensions,
+ * leaders, cutting lines). `add` takes another box.
+ */
+interface PageObstacles {
+  crosses(rect: PaperRect): boolean;
+  add(rect: PaperRect): void;
+}
+
+function pageObstacles(
+  boxes: readonly PaperRect[],
+  strokes: readonly SheetStroke[]
+): PageObstacles {
+  const rects = [...boxes];
+  const lines = strokes.flatMap((stroke) => {
+    const points: [number, number][] = [];
+    for (let i = 0; i + 1 < stroke.points.length; i += 2)
+      points.push([stroke.points[i]!, stroke.points[i + 1]!]);
+    if (stroke.closed && points.length > 2) points.push(points[0]!);
+    const bounds = boundsOf(points);
+    return bounds ? [{ points, bounds }] : [];
+  });
+  return {
+    add: (rect) => void rects.push(rect),
+    crosses: (rect) => {
+      if (rects.some((box) => rectsOverlap(box, rect))) return true;
+      // A line along the box's edge only touches it.
+      const inner = {
+        minX: rect.minX + 1e-6,
+        minY: rect.minY + 1e-6,
+        maxX: rect.maxX - 1e-6,
+        maxY: rect.maxY - 1e-6
+      };
+      return lines.some(({ points, bounds }) => {
+        if (
+          bounds.minX > inner.maxX ||
+          bounds.maxX < inner.minX ||
+          bounds.minY > inner.maxY ||
+          bounds.maxY < inner.minY
+        )
+          return false;
+        if (points.length === 1)
+          return insideRect(inner, points[0]![0], points[0]![1]);
+        for (let i = 0; i + 1 < points.length; i += 1)
+          if (
+            clipSegment(
+              inner,
+              points[i]![0],
+              points[i]![1],
+              points[i + 1]![0],
+              points[i + 1]![1]
+            )
+          )
+            return true;
+        return false;
+      });
+    }
+  };
 }
 
 /**
@@ -954,16 +1090,20 @@ export function composeSheetPage(
       ['visible', projection.visible]
     ] as const) {
       const pieces: number[][] = [];
-      for (const line of lines) {
+      // The projected edge each piece is of, for the hidden ones.
+      const sources: (number | undefined)[] = [];
+      lines.forEach((line, index) => {
         const page: [number, number][] = [];
         for (let i = 0; i + 1 < line.length; i += 2)
           page.push(toPage(line[i]!, line[i + 1]!));
-        for (const piece of clip ? clipPolylineToCircle(page, clip) : [page])
+        for (const piece of clip ? clipPolylineToCircle(page, clip) : [page]) {
           pieces.push(piece.flat());
-      }
+          sources.push(projection.hiddenSources?.[index]);
+        }
+      });
       // #2073: hidden pieces joined, so the dash runs on along a curve.
       if (kind === 'hidden')
-        for (const run of joinHiddenRuns(pieces))
+        for (const run of joinHiddenRuns(pieces, sources))
           strokes.push({
             kind,
             points: run.points,
@@ -991,20 +1131,87 @@ export function composeSheetPage(
     }
   }
   const block = titleBlock(sheet, context);
+  // #2110: each approximate section's note, placed last: clear of every
+  // view, text, line and picture the page prints, and of the title block.
+  const crowded: NonNullable<SheetPage['crowdedSectionNotes']> = [];
+  if (marks.notes.length > 0) {
+    const boxOf = (box: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }) => ({
+      minX: box.x,
+      minY: box.y,
+      maxX: box.x + box.width,
+      maxY: box.y + box.height
+    });
+    const obstacles = pageObstacles(
+      [
+        ...views.flatMap(({ view, projection }) =>
+          projection.bounds
+            ? [
+                boxOf(
+                  viewPageBox(view, projection.bounds, sheet, context.units)
+                )
+              ]
+            : []
+        ),
+        boxOf(titleBlockBox(sheet)),
+        ...(annotations?.images ?? []).map(boxOf),
+        ...[
+          ...marks.texts,
+          ...details.texts,
+          ...auxiliaries.texts,
+          ...(annotations?.texts ?? [])
+        ].flatMap((text) => {
+          const box = boundsOf(textCorners(text));
+          return box ? [box] : [];
+        })
+      ],
+      [
+        ...marks.strokes,
+        ...details.strokes,
+        ...auxiliaries.strokes,
+        ...(annotations?.strokes ?? [])
+      ]
+    );
+    for (const note of marks.notes) {
+      const placed = sectionNotePlacement(note, paper, obstacles);
+      marks.texts.push({
+        x: placed.x,
+        y: placed.y,
+        sizeMm: SECTION_NOTE_MM,
+        text: SECTION_APPROXIMATE_NOTE,
+        align: 'middle'
+      });
+      if (placed.crowded)
+        crowded.push({ viewId: note.viewId, label: note.label });
+    }
+  }
   // Views and annotations can be placed past the paper's edge (a smaller
   // paper, a drag); what lies there is not on the page, so it is not drawn.
   // #2166: by the edge the off-paper check reads (`paperEdge`).
   const onPaper = paperEdge(paper);
   const weights = sheet.format?.lineWidthsMm;
   // D02 (v92): a picture is kept whole while any of it is on the paper (the
-  // writers clip to the page); one wholly off it is not drawn.
-  const images = (annotations?.images ?? []).filter(
-    (image) =>
-      image.x < paper.width &&
-      image.y < paper.height &&
-      image.x + image.width > 0 &&
-      image.y + image.height > 0
-  );
+  // writers clip to the page); one wholly off it is not drawn. #2166: by the
+  // same edge as every other mark, so a picture the off-paper check passes
+  // (`sheetBoxOnPaper`) is one the page draws: moved, at its size, by the
+  // hair it lies past the edge, as a stroke's points are (`ontoPaper`).
+  const images = (annotations?.images ?? []).flatMap((image) => {
+    if (
+      image.x > onPaper.maxX ||
+      image.y > onPaper.maxY ||
+      image.x + image.width < onPaper.minX ||
+      image.y + image.height < onPaper.minY
+    )
+      return [];
+    if (!sheetBoxOnPaper(image, paper)) return [image];
+    const x = Math.max(0, Math.min(image.x, paper.width - image.width));
+    const y = Math.max(0, Math.min(image.y, paper.height - image.height));
+    return [x === image.x && y === image.y ? image : { ...image, x, y }];
+  });
   return {
     widthMm: paper.width,
     heightMm: paper.height,
@@ -1012,6 +1219,7 @@ export function composeSheetPage(
       ? { strokeWidthsMm: { ...weights } }
       : {}),
     ...(images.length > 0 ? { images } : {}),
+    ...(crowded.length > 0 ? { crowdedSectionNotes: crowded } : {}),
     strokes: [
       ...strokes,
       ...marks.strokes,
@@ -1074,26 +1282,47 @@ const SECTION_NOTE_MM = 2.5;
 /** The least paper left around the note: its comma hangs under the line. */
 const SECTION_NOTE_INSET_MM = 1;
 
+/** How far from where it reads best a note is still tried, in lines. */
+const SECTION_NOTE_ROWS = 8;
+
+/** An approximate section's note, still to be placed on the page. */
+interface SectionNoteRequest {
+  viewId: DrawingViewId;
+  label: string;
+  /** The section view's centre across the page, and its footprint. */
+  centerX: number;
+  box: { y: number; height: number };
+  /** Its caption's baseline, and whether that is under the view. */
+  captionY: number;
+  below: boolean;
+}
+
 /**
  * #2110: where a section's approximation note prints (the middle of its
- * baseline), so that all of it is on the paper. The page draws no text whose
- * anchor is off the paper and the writers cut the rest at the edge, and a
- * section whose note went missing would export as an exact one.
+ * baseline), so that all of it is on the paper and none of it over another
+ * mark. The page draws no text whose anchor is off the paper and the writers
+ * cut the rest at the edge, and a section whose note went missing, or sat
+ * unreadable over a neighbouring view or a sheet note, would export as an
+ * exact one.
  *
  * Tried in order: beyond the caption, away from the view, where it reads
  * with the caption; in the gap between the caption and the view; beyond the
- * view on its other side. Failing all three (a view as tall as the paper)
- * it is moved up or down onto the paper where it would first have gone. It
- * is as wide as a small view, so along the caption it is moved in from the
- * left or right edge by as much as it would overrun.
+ * view on its other side; then line by line further out on either side, up
+ * to `SECTION_NOTE_ROWS` lines. It is as wide as a small view, so along the
+ * caption it is moved in from the left or right edge by as much as it would
+ * overrun. The first place on the paper that `obstacles` leaves clear is
+ * taken and added to them, for the next section's note.
+ *
+ * With none clear the note is `crowded`: it goes where it would have with
+ * nothing else on the page, for the sheet on screen to keep saying so, and
+ * the export is refused (`sectionNoteRefusal`).
  */
 function sectionNotePlacement(
-  centerX: number,
-  box: { y: number; height: number },
-  captionY: number,
-  below: boolean,
-  paper: { width: number; height: number }
-): { x: number; y: number } {
+  note: SectionNoteRequest,
+  paper: { width: number; height: number },
+  obstacles: PageObstacles
+): { x: number; y: number; crowded: boolean } {
+  const { box, captionY, below } = note;
   const inset = SECTION_NOTE_INSET_MM;
   const caption = SECTION_LABEL_MM * 0.7;
   const candidates = below
@@ -1108,15 +1337,54 @@ function sectionNotePlacement(
         box.y - SECTION_NOTE_MM - 1.5
       ];
   const top = paper.height - inset - SECTION_NOTE_MM;
-  const y =
-    candidates.find((candidate) => candidate >= inset && candidate <= top) ??
-    Math.min(Math.max(candidates[0]!, inset), top);
   const half = textWidthMm(SECTION_APPROXIMATE_NOTE, SECTION_NOTE_MM) / 2;
   const x = Math.min(
-    Math.max(centerX, half + inset),
+    Math.max(note.centerX, half + inset),
     Math.max(paper.width - half - inset, half + inset)
   );
-  return { x, y };
+  const onPaper = (y: number) => y >= inset && y <= top;
+  const rectAt = (y: number): PaperRect => ({
+    minX: x - half,
+    minY: y,
+    maxX: x + half,
+    maxY: y + SECTION_NOTE_MM
+  });
+  const line = SECTION_NOTE_MM + 1.5;
+  const away = below ? -1 : 1;
+  const rows = [...candidates];
+  for (let k = 1; k <= SECTION_NOTE_ROWS; k += 1)
+    rows.push(
+      candidates[0]! + away * k * line,
+      candidates[2]! - away * k * line
+    );
+  const clear = rows.find((y) => onPaper(y) && !obstacles.crosses(rectAt(y)));
+  if (clear !== undefined) {
+    obstacles.add(rectAt(clear));
+    return { x, y: clear, crowded: false };
+  }
+  const y =
+    candidates.find(onPaper) ?? Math.min(Math.max(candidates[0]!, inset), top);
+  return { x, y, crowded: true };
+}
+
+/**
+ * #2110: why a page cannot export: an approximate section's note has no
+ * place clear of the page's other marks (`SheetPage.crowdedSectionNotes`),
+ * and printed over one of them the section would pass for an exact one.
+ * Names each section; null for a page that places every note.
+ */
+export function sectionNoteRefusal(
+  page: Pick<SheetPage, 'crowdedSectionNotes'>
+): string | null {
+  const names = (page.crowdedSectionNotes ?? []).map(({ label }) =>
+    sectionCaption(label).replace('SECTION', 'Section')
+  );
+  if (names.length === 0) return null;
+  const one = names.length === 1;
+  const list = one
+    ? names[0]!
+    : `${names.slice(0, -1).join(', ')} and ${names.at(-1)!}`;
+  return `The ${one ? 'note' : 'notes'} that ${list} ${one ? 'is' : 'are'} approximate ${one ? 'has' : 'have'} no clear place by the ${one ? 'section' : 'sections'}: views, annotations or the title block take every one. Move the ${one ? 'section' : 'sections'}, or what is beside ${one ? 'it' : 'them'}, to export.`;
 }
 
 /**
@@ -1342,9 +1610,15 @@ export function composeSectionMarks(
   sheet: Pick<DrawingSheet, 'paper' | 'scale' | 'views'>,
   views: readonly ComposedView[],
   units: UnitSystem
-): { strokes: SheetStroke[]; texts: SheetText[] } {
+): {
+  strokes: SheetStroke[];
+  texts: SheetText[];
+  /** #2110: the approximate sections' notes, for the page to place. */
+  notes: SectionNoteRequest[];
+} {
   const strokes: SheetStroke[] = [];
   const texts: SheetText[] = [];
+  const notes: SectionNoteRequest[] = [];
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
   for (const view of sheet.views) {
     if (!view.section) continue;
@@ -1440,23 +1714,20 @@ export function composeSectionMarks(
         align: 'middle'
       });
       // #2110: on the caption's far side from the view, so it reads with
-      // it, unless that is off the paper (`sectionNotePlacement`).
+      // it, unless that is off the paper or taken: the page places it once
+      // everything else it prints is known (`sectionNotePlacement`).
       if (own.projection.sectionApproximate)
-        texts.push({
-          ...sectionNotePlacement(
-            view.centerMm.x,
-            box,
-            captionY,
-            below,
-            drawingPaperMm(sheet.paper)
-          ),
-          sizeMm: SECTION_NOTE_MM,
-          text: SECTION_APPROXIMATE_NOTE,
-          align: 'middle'
+        notes.push({
+          viewId: view.viewId,
+          label,
+          centerX: view.centerMm.x,
+          box,
+          captionY,
+          below
         });
     }
   }
-  return { strokes, texts };
+  return { strokes, texts, notes };
 }
 
 /**

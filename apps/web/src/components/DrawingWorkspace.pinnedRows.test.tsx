@@ -903,6 +903,8 @@ describe('DrawingWorkspace: pinned rows read, key, fail and keep their own row',
     });
     // The Narrow view says why it is not, by its row.
     await within(canvas).findByText(/Front — Configuration "Narrow"/);
+    // Nor is a sheet whose export that holds back called up to date.
+    expect(screen.queryByText('Drawing up to date')).toBeNull();
     expect(
       within(canvas).queryByRole('button', { name: 'Horizontal dimension 40' })
     ).toBeNull();
@@ -1393,7 +1395,11 @@ describe('DrawingWorkspace: pinned rows stay fenced, bounded and reported', () =
     // One Front on the model's row; it is set to draw Narrow.
     const sheet = fronts(null);
     const onCommand = vi.fn<Props['onCommand']>(() => true);
-    const view = render(sizedWorkspace(sized.document, sheet, { onCommand }));
+    const requestBodies = vi.fn((row: ProjectDocument) =>
+      Promise.resolve({ bodies: sizedBodies(row) })
+    );
+    const options = { onCommand, requestBodies };
+    const view = render(sizedWorkspace(sized.document, sheet, options));
     const canvas = await drawn(1);
     await waitFor(() => expect(dimension(canvas, 70)).toBeTruthy());
     await userEvent.click(
@@ -1403,6 +1409,8 @@ describe('DrawingWorkspace: pinned rows stay fenced, bounded and reported', () =
       screen.getByLabelText('Configuration'),
       NARROW
     );
+    // Saved once Narrow has built, not before.
+    await waitFor(() => expect(onCommand).toHaveBeenCalledTimes(1));
     // One undoable step: the view's row, and the sheet's fence with it.
     const [edit, rebind] = onCommand.mock.calls
       .at(-1)![0]
@@ -1424,19 +1432,151 @@ describe('DrawingWorkspace: pinned rows stay fenced, bounded and reported', () =
     );
     expect(pinned.source.fingerprint).not.toBe(sheet.source.fingerprint);
     // Still current, and drawn from Narrow.
-    view.rerender(sizedWorkspace(sized.document, pinned, { onCommand }));
+    view.rerender(sizedWorkspace(sized.document, pinned, options));
     await waitFor(() => expect(dimension(canvas, 40)).toBeTruthy());
     expect(screen.queryByText('Model changed')).toBeNull();
+    // Narrow was built once: the check before the fence is the build drawn.
+    expect(requestBodies).toHaveBeenCalledTimes(1);
     // An edit to Narrow now leaves it stale, as drawn.
     const edited = setConfigurationCell(sized.document, {
       rowId: NARROW,
       column: sized.column,
       value: '45'
     });
-    view.rerender(sizedWorkspace(edited, pinned, { onCommand }));
+    view.rerender(sizedWorkspace(edited, pinned, options));
     await screen.findByText('Model changed');
     expect(dimension(canvas, 40)).toBeTruthy();
     expect(dimension(canvas, 45)).toBeNull();
+  });
+
+  /** `sized` with Narrow's width naming a parameter the model has not got. */
+  const narrowUnbuildable = (): ProjectDocument => {
+    const set = sized.document.configurations!;
+    return {
+      ...sized.document,
+      configurations: {
+        ...set,
+        rows: set.rows.map((row) =>
+          row.id === NARROW
+            ? {
+                ...row,
+                parameters: {
+                  ...row.parameters,
+                  [sized.column.parameterId]: 'deleted_name * 2'
+                }
+              }
+            : row
+        )
+      }
+    };
+  };
+  const narrowUnbuildableReason = (then: string) =>
+    new RegExp(
+      `^The configuration “Narrow” cannot be built, so this sheet would not show it: .*deleted_name.*\\. Change that configuration’s values, then ${then}\\.$`
+    );
+  const statusWith = (
+    onStatus: { mock: { calls: Parameters<Props['onStatus']>[] } },
+    reason: RegExp
+  ) => onStatus.mock.calls.some(([message]) => reason.test(message));
+
+  it('refuses the Update that would fence a sheet to a row the model cannot take', async () => {
+    const sheet = fronts(null, NARROW);
+    const first = render(sizedWorkspace(sized.document, sheet));
+    const before = await drawn();
+    await waitFor(() => expect(dimension(before, 40)).toBeTruthy());
+    first.unmount();
+    // Narrow's width now names a parameter the model no longer has, while
+    // Wide stays active and builds as it did.
+    const onCommand = vi.fn<Props['onCommand']>(() => true);
+    const onStatus = vi.fn<Props['onStatus']>();
+    const options = { onCommand, onStatus };
+    const view = render(sizedWorkspace(narrowUnbuildable(), sheet, options));
+    await screen.findByText('Model changed');
+    await userEvent.click(screen.getByRole('button', { name: 'Update' }));
+    const reason = narrowUnbuildableReason('Update the sheet to export it');
+    await waitFor(() => expect(statusWith(onStatus, reason)).toBe(true));
+    // No fence is saved: the sheet stays as it was last verified, and its
+    // drawing of the row as it last built still exports, as drawn.
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(screen.queryByText('Drawing up to date')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Update' })).toBeNull();
+    expect(svgTexts(await exported('SVG'))).toContain('40');
+    // Once the row can be built, the Update is offered again and saves.
+    const mended = setConfigurationCell(sized.document, {
+      rowId: NARROW,
+      column: sized.column,
+      value: '46'
+    });
+    view.rerender(sizedWorkspace(mended, sheet, options));
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Update' })
+    );
+    await waitFor(() => expect(onCommand).toHaveBeenCalledTimes(1));
+    updatedSheet(sheet, onCommand);
+  });
+
+  it('refuses to move a current view to a row whose feature fails, and keeps the sheet as it is', async () => {
+    const sheet = fronts(null);
+    const onCommand = vi.fn<Props['onCommand']>(() => true);
+    const onStatus = vi.fn<Props['onStatus']>();
+    render(
+      sizedWorkspace(sized.document, sheet, {
+        onCommand,
+        onStatus,
+        requestBodies: boreFailsInNarrow()
+      })
+    );
+    const canvas = await drawn(1);
+    await waitFor(() => expect(dimension(canvas, 70)).toBeTruthy());
+    await screen.findByText('Drawing up to date');
+    await userEvent.click(
+      within(canvas).getByRole('button', { name: 'Front view' })
+    );
+    await userEvent.selectOptions(
+      screen.getByLabelText('Configuration'),
+      NARROW
+    );
+    await waitFor(() =>
+      expect(onStatus).toHaveBeenCalledWith(
+        narrowFailure('draw the view from it')
+      )
+    );
+    // Neither the view's row nor a fence to its failed build is saved: the
+    // sheet is still the verified drawing of the model, and still exports.
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(screen.getByText('Drawing up to date')).toBeTruthy();
+    expect(dimension(canvas, 70)).toBeTruthy();
+    expect(svgTexts(await exported('SVG'))).toContain('70');
+  });
+
+  it('refuses to move a current view to a row the model cannot take', async () => {
+    const sheet = fronts(null);
+    const onCommand = vi.fn<Props['onCommand']>(() => true);
+    const onStatus = vi.fn<Props['onStatus']>();
+    const requestBodies = vi.fn((row: ProjectDocument) =>
+      Promise.resolve({ bodies: sizedBodies(row) })
+    );
+    render(
+      sizedWorkspace(narrowUnbuildable(), sheet, {
+        onCommand,
+        onStatus,
+        requestBodies
+      })
+    );
+    const canvas = await drawn(1);
+    await screen.findByText('Drawing up to date');
+    await userEvent.click(
+      within(canvas).getByRole('button', { name: 'Front view' })
+    );
+    await userEvent.selectOptions(
+      screen.getByLabelText('Configuration'),
+      NARROW
+    );
+    const reason = narrowUnbuildableReason('draw the view from it');
+    await waitFor(() => expect(statusWith(onStatus, reason)).toBe(true));
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(requestBodies).not.toHaveBeenCalled();
+    expect(screen.getByText('Drawing up to date')).toBeTruthy();
   });
 
   it('counts a row build that comes in after its sheet left the screen', async () => {

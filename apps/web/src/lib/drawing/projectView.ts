@@ -77,6 +77,15 @@ export interface ViewProjection {
   /** Flat `[u0, v0, u1, v1, …]` polylines in model units. */
   visible: Float64Array[];
   hidden: Float64Array[];
+  /**
+   * #2073: for each line of `hidden`, the projected line it is a piece of:
+   * one physical edge of a body, or one silhouette of a curved face. The
+   * numbers only tell the lines of one projection apart. A sheet joins the
+   * pieces of one line into a single dashed run whatever the projection did
+   * to its shape (`joinHiddenRuns`). Absent on a projection made before
+   * this was recorded: each hidden line is then taken as its own.
+   */
+  hiddenSources?: Uint32Array;
   /** Extent of everything the view draws, or null for an empty view. */
   bounds: { minU: number; minV: number; maxU: number; maxV: number } | null;
   /**
@@ -122,7 +131,8 @@ export function projectionBuffers(
     ...projection.hidden,
     ...(projection.edgeRuns?.visible ?? []),
     ...(projection.edgeRuns?.hidden ?? []),
-    ...(projection.hatch ? [projection.hatch] : [])
+    ...(projection.hatch ? [projection.hatch] : []),
+    ...(projection.hiddenSources ? [projection.hiddenSources] : [])
   ])
     buffers.add(line.buffer);
   return [...buffers];
@@ -1356,6 +1366,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     return {
       visible: [],
       hidden: [],
+      hiddenSources: new Uint32Array(0),
       bounds: null,
       edgeRuns: { visible: [], hidden: [] },
       ...(hatch ? { hatch } : {})
@@ -1377,6 +1388,9 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   const hidden: Float64Array[] = [];
   const edgeVisible: Float64Array[] = [];
   const edgeHidden: Float64Array[] = [];
+  /** The entry of `lines` each line of `hidden` is a piece of. */
+  const hiddenLine: number[] = [];
+  let lineIndex = 0;
   let fromSilhouette = false;
   const emit = (points: number[], isHidden: boolean, scale: number) => {
     if (points.length < 6) return;
@@ -1400,6 +1414,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     // An edge running along the view direction projects to a point.
     if (drawn <= scale * 1e-9) return;
     (isHidden ? hidden : visible).push(flat);
+    if (isHidden) hiddenLine.push(lineIndex);
     if (!fromSilhouette) (isHidden ? edgeHidden : edgeVisible).push(flat);
   };
 
@@ -1407,7 +1422,8 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   // neighbours' state: where an edge meets a face's plane at its own end,
   // the occlusion tolerance leaves a sliver that is neither clearly in front
   // nor behind, and no drawing wants it. The cutoff is the line's own body's.
-  for (const { points: line, scale, silhouette } of lines) {
+  for (const [index, { points: line, scale, silhouette }] of lines.entries()) {
+    lineIndex = index;
     fromSilhouette = silhouette;
     const minPiece = scale * 1e-4;
     const count = Math.floor(line.length / 3);
@@ -1565,9 +1581,19 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     }
     return pieces;
   };
+  // Each kept piece of a hidden line is still a piece of that line's edge.
+  const keptHidden: Float64Array[] = [];
+  const keptSources: number[] = [];
+  hidden.forEach((line, index) => {
+    for (const piece of keptOf(line)) {
+      keptHidden.push(piece);
+      keptSources.push(hiddenLine[index]!);
+    }
+  });
   return {
     visible,
-    hidden: hidden.flatMap(keptOf),
+    hidden: keptHidden,
+    hiddenSources: Uint32Array.from(keptSources),
     bounds,
     edgeRuns: {
       visible: edgeVisible,

@@ -33,7 +33,7 @@ import {
 } from '@openzcad/shared';
 import {
   FeatureBuildError,
-  refusingWarningDetail,
+  featureFailedBefore,
   validatedFeatureRejection
 } from './featureValidation';
 
@@ -217,6 +217,9 @@ export function affectedFeatureTargets(
         ? featureReplacedInputBody(feature)
         : null;
       if (passed !== null && feature.bodyId && affectedBodies.has(passed)) {
+        // What follows is validated with the edit, as a dependent: for the
+        // failures the edit causes, not one it already had (the commit's
+        // `priorModel`).
         affectedBodies.add(feature.bodyId);
         if (options.standIns)
           targets.push({
@@ -569,35 +572,20 @@ export function reorderRefusal(
   const named = new Map<string, number>();
   for (const feature of features)
     named.set(feature.name, (named.get(feature.name) ?? 0) + 1);
-  // Without typed attribution a saved warning cannot say whether it was a
-  // failure or an advisory, so only the exact failure the candidate reports,
-  // on a uniquely named feature, counts as one the model already had.
-  const candidateFailures = (feature: (typeof features)[number]): string[] =>
-    derived.featureWarnings
-      ? derived.featureWarnings
-          .filter(
-            (entry) =>
-              entry.featureId === feature.featureId &&
-              (entry.kind === 'build-failed' || entry.kind === 'refusal')
-          )
-          .map((entry) => entry.message)
-      : derived.warnings.filter((warning) =>
-          warning.startsWith(`Feature "${feature.name}":`)
-        );
+  // Without typed attribution only the exact failure the candidate reports,
+  // on a uniquely named feature, counts as one the model already had
+  // (`featureFailedBefore`).
   const failedBefore = (feature: (typeof features)[number]): boolean =>
-    beforeWarnings
-      ? Boolean(
-          refusingWarningDetail(
-            feature.name,
-            before?.warnings ?? [],
-            beforeWarnings,
-            feature.featureId
-          )
-        )
-      : named.get(feature.name) === 1 &&
-        candidateFailures(feature).some((message) =>
-          (before?.warnings ?? []).includes(message)
-        );
+    featureFailedBefore({
+      featureName: feature.name,
+      featureId: feature.featureId,
+      uniqueName: named.get(feature.name) === 1,
+      before: {
+        warnings: before?.warnings ?? [],
+        ...(beforeWarnings ? { featureWarnings: beforeWarnings } : {})
+      },
+      candidate: derived
+    });
   for (const feature of reordered.slice(Math.min(from, toIndex))) {
     if (isFeatureSuppressed(feature)) continue;
     const rejection = validatedFeatureRejection({

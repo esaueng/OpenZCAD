@@ -3415,6 +3415,54 @@ describe('DrawingWorkspace section views (D03)', () => {
     expect(screen.getByText(/Cut faces are hatched/)).toBeTruthy();
   });
 
+  it('refuses the export when an approximate section’s note has no clear place (#2110)', async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const sheet = withSection(fingerprint);
+    const section = sheet.views[1]!;
+    // The kernel could not cut the cube: its section is cut from the mesh.
+    const cutFromMesh = () =>
+      Promise.resolve({
+        [bodyId]: {
+          ...halfCube(),
+          ...projectionBodyInput(cube())!,
+          approximate: 'The kernel could not cut it exactly.'
+        }
+      });
+    const note = 'APPROXIMATE: CUT FROM THE TESSELLATION, NOT DIMENSIONABLE';
+    const pdf = () =>
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' });
+    // With room by its caption, the note prints there and the sheet exports.
+    resetRetainedProjections();
+    renderSheet(sheet, cutFromMesh);
+    await within(
+      screen.getByRole('application', { name: 'Sheet Sheet 1' })
+    ).findByText(note);
+    await waitFor(() => expect(pdf().disabled).toBe(false));
+    cleanup();
+    // Sheet notes over every line it could take: from eight lines under the
+    // 50 mm view to eight over its caption, all of them on the paper.
+    const crowd: DrawingAnnotation[] = Array.from({ length: 52 }, (_, i) => ({
+      kind: 'note',
+      annotationId: `dann_crowd_${i}` as DrawingAnnotationId,
+      placementMm: { x: 5, y: section.centerMm.y - 62.5 + i * 2.5 },
+      text: 'M'.repeat(60)
+    }));
+    resetRetainedProjections();
+    const { onStatus } = renderSheet(
+      { ...sheet, annotations: crowd },
+      cutFromMesh
+    );
+    const refusal =
+      'The note that Section A-A is approximate has no clear place by the section: views, annotations or the title block take every one. Move the section, or what is beside it, to export.';
+    await waitFor(() => expect(pdf().title).toBe(refusal));
+    expect(pdf().disabled).toBe(true);
+    expect(screen.getAllByText(refusal).length).toBeGreaterThan(0);
+    fireEvent.click(pdf());
+    expect(onStatus).not.toHaveBeenCalledWith(expect.stringMatching(/^Saved/));
+  });
+
   it('creates a section from a line dragged across a view, placed by a click', async () => {
     resetRetainedProjections();
     const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
