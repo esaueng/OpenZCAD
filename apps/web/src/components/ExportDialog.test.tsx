@@ -368,6 +368,172 @@ describe('ExportDialog', () => {
     expect(screen.getByRole('combobox', { name: 'Units' })).toBeDisabled();
   });
 
+  /**
+   * #2095: a glTF-led package still writes its OBJ and PLY in the export
+   * unit, so the choice stays live and the scope line says which file is in
+   * which unit.
+   */
+  it('lets a glTF-led package choose the unit its OBJ and PLY are written in', async () => {
+    const user = userEvent.setup();
+    const onExportUnitsChange = vi.fn();
+    renderDialog({ exportUnits: 'inch', onExportUnitsChange });
+
+    await user.click(screen.getByRole('radio', { name: 'glTF (GLB)' }));
+    const units = screen.getByRole('combobox', { name: 'Units' });
+    expect(units).toBeDisabled();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Also export OBJ' }));
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Also export PLY (binary)' })
+    );
+    expect(units).toBeEnabled();
+    expect(
+      screen.getByText(
+        'Exports all bodies (2): OBJ and PLY (binary) in inches, which those files do not record; glTF (GLB) in meters, the unit glTF defines.'
+      )
+    ).toBeVisible();
+    await user.selectOptions(units, 'cm');
+    expect(onExportUnitsChange).toHaveBeenCalledWith('cm');
+  });
+
+  /**
+   * #2369: a 3MF declares its unit, its STL companion does not — the 3MF's
+   * declaration must not stand in for both.
+   */
+  it('warns that STL beside a 3MF does not record its unit', async () => {
+    const user = userEvent.setup();
+    renderDialog({ exportUnits: 'inch', onExportUnitsChange: vi.fn() });
+    expect(
+      screen.getByText(
+        'Exports all bodies (2) in inches, declared in the package.'
+      )
+    ).toBeVisible();
+
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Also export STL (binary)' })
+    );
+    expect(
+      screen.getByText(
+        'Exports all bodies (2): 3MF in inches, declared in the package; STL (binary) in inches, which the file does not record.'
+      )
+    ).toBeVisible();
+  });
+
+  /**
+   * The same disclosure in millimetres: a 3MF that declares millimetres does
+   * not make its STL companion say so. Only a single-format export keeps the
+   * slicer sentence.
+   */
+  it('names each format’s unit in a mixed millimetre package too', async () => {
+    const user = userEvent.setup();
+    renderDialog({ onExportUnitsChange: vi.fn() });
+    expect(
+      screen.getByText(
+        'Exports all bodies (2) in millimeters, ready for slicing.'
+      )
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Also export STL (binary)' })
+    );
+    expect(
+      screen.getByText(
+        'Exports all bodies (2): 3MF in millimeters, declared in the package; STL (binary) in millimeters, which the file does not record.'
+      )
+    ).toBeVisible();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Also export OBJ' }));
+    expect(
+      screen.getByText(
+        'Exports all bodies (2): 3MF in millimeters, declared in the package; STL (binary) and OBJ in millimeters, which those files do not record.'
+      )
+    ).toBeVisible();
+  });
+
+  /**
+   * #2080: watertight is not within tolerance. A mesh whose measured
+   * deviation is over the chosen limit says so before it is exported.
+   */
+  it('says when the measured deviation exceeds the allowed limit', async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      onCheckQuality: vi.fn(async (): Promise<MeshQualityReport> => ({
+        ...watertight('body_a', 'body_b'),
+        triangleCount: 10_136,
+        maxDeviation: 0.0991
+      }))
+    });
+
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+
+    expect(
+      await screen.findByText(
+        '10,136 triangles · measured deviation 0.099 mm exceeds the 0.08 mm allowed. Choose a finer quality and re-check, or export to accept it.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Export 3MF/ })).toBeEnabled();
+  });
+
+  /**
+   * The comparison is on the measured value, not on its three-decimal
+   * rendering: 0.0804 mm is over a 0.08 mm limit although it rounds to
+   * 0.080, and the text carries the digits that show the overrun.
+   */
+  it('flags a deviation over the limit by less than the usual precision shows', async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      onCheckQuality: vi.fn(async (): Promise<MeshQualityReport> => ({
+        ...watertight('body_a', 'body_b'),
+        maxDeviation: 0.0804
+      }))
+    });
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    expect(
+      await screen.findByText(
+        '24 triangles · measured deviation 0.0804 mm exceeds the 0.08 mm allowed. Choose a finer quality and re-check, or export to accept it.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('shows as many digits as it takes to read above the limit', async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      onCheckQuality: vi.fn(async (): Promise<MeshQualityReport> => ({
+        ...watertight('body_a', 'body_b'),
+        maxDeviation: 0.08000004
+      }))
+    });
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    expect(
+      await screen.findByText(
+        /measured deviation 0\.08000004 mm exceeds the 0\.08 mm allowed\./
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('does not flag a deviation that is the limit itself', async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      onCheckQuality: vi.fn(async (): Promise<MeshQualityReport> => ({
+        ...watertight('body_a', 'body_b'),
+        maxDeviation: 0.08
+      }))
+    });
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    expect(
+      await screen.findByText(
+        '24 triangles · measured deviation 0.080 mm of 0.08 mm allowed'
+      )
+    ).toBeInTheDocument();
+  });
+
   it('says a failed check left the export alone, with the kernel text under Details', async () => {
     // 13 November review I3: "check: distance computation failed: circular
     // trim ray-event endpoint is unresolved" was the whole message, in red.

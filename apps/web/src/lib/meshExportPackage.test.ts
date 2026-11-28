@@ -54,6 +54,42 @@ describe('packageMeshExport (I04)', () => {
     expect(text(files['Part-Pin 2.mtl']!)).toContain('newmtl b');
     expect(text(files['Part-Pin.obj']!)).toContain('mtllib Part-Pin.mtl');
   });
+
+  /**
+   * #2369: STL, OBJ and PLY record no unit, so a package that mixes them with
+   * a 3MF or a glTF names every file's unit in a manifest of its own.
+   */
+  it('names each file’s unit in a units manifest', async () => {
+    const result = await packageMeshExport({
+      formats: ['3mf', 'stl-binary', 'glb', 'obj'],
+      scopes: [{ bodyIds: ['a'], stem: 'Part' }],
+      objMaterials: true,
+      units: 'inch',
+      write: async (format, _ids, extra) =>
+        format === 'obj'
+          ? {
+              data: zipSync({
+                [`${extra.objMaterials!.stem}.obj`]: new Uint8Array([1]),
+                [`${extra.objMaterials!.stem}.mtl`]: new Uint8Array([2])
+              }),
+              warnings: []
+            }
+          : { data: new Uint8Array([1]), warnings: [] }
+    });
+    const files = unzipSync(result.zip);
+    expect(result.names).toContain('units.txt');
+    expect(text(files['units.txt']!)).toBe(
+      [
+        'Length units of the files in this package.',
+        '',
+        'Part.3mf: inches (declared in the file)',
+        'Part.stl: inches (not recorded in the file)',
+        'Part.glb: meters (the unit glTF defines)',
+        'Part.obj: inches (not recorded in the file)',
+        ''
+      ].join('\n')
+    );
+  });
 });
 
 describe('exportMesh (I04)', () => {

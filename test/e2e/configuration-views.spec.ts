@@ -1,16 +1,37 @@
-import type { Page } from '@playwright/test';
+import type { Download, Page } from '@playwright/test';
 import {
   addConfigurationColumn,
   addConfigurationRow,
   addPrimitiveFeature,
   createConfigurations,
   createProjectDocument,
+  documentForConfiguration,
   listParameters,
   setConfigurationCell,
   setParameter
 } from '@openzcad/document-core';
-import { toUserId, type FeatureNode } from '@openzcad/shared';
+import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import {
+  toUserId,
+  type DrawingAnnotationId,
+  type DrawingLinearDimension,
+  type FeatureNode
+} from '@openzcad/shared';
+import { resolveDrawingAnnotation } from '../../apps/web/src/lib/drawing/annotations';
+import { edgeRefFor } from '../../apps/web/src/lib/drawing/annotationPicking';
+import {
+  createStarterSheet,
+  drawingSourceFingerprint
+} from '../../apps/web/src/lib/drawing/sheetSources';
+import { rowFencedFingerprint } from '../../apps/web/src/lib/drawing/viewConfigurations';
 import { expect, stubApi, test } from './openzcad-fixtures';
+
+async function readDownload(download: Download): Promise<Buffer> {
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks);
+}
 
 /**
  * F06 slice 4b: one configuration per drawing view. The model's active row
@@ -233,6 +254,106 @@ test(
     await expect(drawings.getByText(/no longer exists as a body/)).toHaveCount(
       0
     );
+    // Nothing Large builds changed with the switch, so the sheet, fenced to
+    // Large's content when its views were set to draw it, is still current.
+    await expect(drawings.getByText('Drawing up to date')).toBeVisible();
+    await expect(drawings.getByText('Model changed')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  }
+);
+
+test(
+  'a dimension on a view pinned to another row reads and exports that row’s width (#2111)',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    // Small (20 mm) is active; the sheet's Front draws Large (45 mm), with
+    // a dimension across the plate picked on Large's own edge.
+    let document = bracket();
+    const plate = document.bodyOrder[0]!;
+    const adapter = await createExactKernelAdapter();
+    let annotation: DrawingLinearDimension | undefined;
+    try {
+      const small = (await adapter.syncDocument(document)).bodyRepresentations;
+      const large = (
+        await adapter.syncDocument(documentForConfiguration(document, 'large'))
+      ).bodyRepresentations;
+      const sheet = createStarterSheet({
+        name: 'Sheet 1',
+        bodyIds: [plate],
+        bodies: small,
+        units: 'mm',
+        paper: { size: 'A3', orientation: 'landscape' },
+        projectionAngle: 'first',
+        fingerprint: drawingSourceFingerprint(small, [plate])!
+      });
+      const front = sheet.views.find((view) => view.orientation === 'front')!;
+      for (const edge of large[plate]!.topology!.edges) {
+        const ref = edgeRefFor(large, plate, edge);
+        if (!ref) continue;
+        const candidate: DrawingLinearDimension = {
+          kind: 'linear',
+          annotationId: 'dann_width' as DrawingAnnotationId,
+          viewId: front.viewId,
+          direction: 'horizontal',
+          from: { edge: ref, anchor: 'first' },
+          to: { edge: ref, anchor: 'second' },
+          placementMm: { x: 0, y: -20 }
+        };
+        const read = resolveDrawingAnnotation(candidate, front, large, 'mm');
+        if (read.ok && read.resolved.label === '45') {
+          annotation = candidate;
+          break;
+        }
+      }
+      expect(annotation).toBeDefined();
+      const views = sheet.views.map((view) =>
+        view.viewId === front.viewId
+          ? { ...view, configurationId: 'large' }
+          : view
+      );
+      document = {
+        ...document,
+        drawings: {
+          sheets: [
+            {
+              ...sheet,
+              // Saved as drawn: fenced to what Large builds as well.
+              source: {
+                fingerprint: rowFencedFingerprint(
+                  sheet.source.fingerprint,
+                  { views },
+                  document
+                )
+              },
+              views,
+              annotations: [annotation!]
+            }
+          ]
+        }
+      };
+    } finally {
+      adapter.dispose();
+    }
+    await importProject(page, document, 'Bracket');
+    await mode(page, 'Draw').click();
+    const drawings = page.getByRole('region', { name: 'Drawings' });
+    const canvas = drawings.getByRole('application', { name: 'Sheet Sheet 1' });
+    await expect(
+      canvas.getByRole('button', { name: 'Horizontal dimension 45' })
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(
+      canvas.getByRole('button', { name: 'Horizontal dimension 20' })
+    ).toHaveCount(0);
+    const exportSvg = drawings.getByRole('button', { name: 'Export SVG' });
+    await expect(exportSvg).toBeEnabled();
+    const downloadPromise = page.waitForEvent('download');
+    await exportSvg.click();
+    const svg = (await readDownload(await downloadPromise)).toString('utf8');
+    expect(svg).toContain('>45</text>');
+    expect(svg).not.toContain('>20</text>');
     expect(errors).toEqual([]);
   }
 );

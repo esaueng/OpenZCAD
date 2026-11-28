@@ -220,6 +220,46 @@ export function explodedSheetFingerprint(
     : `${base}|x:${hashString(explodedPlacementKey(matrices, ids))}`;
 }
 
+/**
+ * A sheet's saved fence in its parts: the model fingerprint, then its
+ * exploded views' placements (`|x:`, AS03) and the content of the rows its
+ * views name (`|r:`, F06), each empty when the sheet was saved without it.
+ */
+export function sheetFenceParts(fingerprint: string): {
+  base: string;
+  exploded: string;
+  rows: string;
+} {
+  const rowsAt = fingerprint.indexOf('|r:');
+  const head = rowsAt < 0 ? fingerprint : fingerprint.slice(0, rowsAt);
+  const explodedAt = head.indexOf('|x:');
+  return {
+    base: explodedAt < 0 ? head : head.slice(0, explodedAt),
+    exploded: explodedAt < 0 ? '' : head.slice(explodedAt + 3),
+    rows: rowsAt < 0 ? '' : fingerprint.slice(rowsAt + 3)
+  };
+}
+
+/**
+ * The fence a sheet was saved with, as its views now read it. Where parts
+ * are placed matters only while a view draws them exploded, and a row's
+ * content only while a view names a row: a sheet whose last such view went
+ * is as current as its model.
+ */
+export function storedSheetFence(
+  sheet: Pick<DrawingSheet, 'views' | 'source'>,
+  namesRow: boolean
+): string {
+  const { base, exploded, rows } = sheetFenceParts(sheet.source.fingerprint);
+  return (
+    base +
+    (exploded && sheet.views.some((view) => view.exploded)
+      ? `|x:${exploded}`
+      : '') +
+    (rows && namesRow ? `|r:${rows}` : '')
+  );
+}
+
 /** Projected extent of the bodies' display meshes in one orientation. */
 export function estimateViewExtent(
   bodies: SourceBodies,
