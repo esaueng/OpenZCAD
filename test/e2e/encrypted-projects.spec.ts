@@ -369,11 +369,27 @@ test('refuses a withdrawn verification record until the owner restores it', asyn
   await settings
     .getByRole('button', { name: 'Show encrypted projects' })
     .click();
+  // Its encrypted name no longer verifies, so the row shows the title this
+  // browser holds and the project's id: the action and the confirmation say
+  // exactly which record the owner authorizes.
+  const { id: projectId } = server.db
+    .prepare('SELECT id FROM projects WHERE storage_format = 2')
+    .get() as { id: string };
+  const named = `Secret bracket (project ID ${projectId})`;
+  await expect(
+    settings.getByText(`Project ID ${projectId}`, { exact: true })
+  ).toBeVisible();
   await settings
     .getByRole('button', {
-      name: /^Restore the verification record of /
+      name: `Restore the verification record of ${named}`,
+      exact: true
     })
     .click();
+  await expect(
+    settings.getByText(
+      `Restoring saves the verification record of ${named} to your account again`
+    )
+  ).toBeVisible();
   const restore = settings.getByRole('button', {
     name: 'Restore verification record'
   });
@@ -388,7 +404,8 @@ test('refuses a withdrawn verification record until the owner restores it', asyn
   await restore.click();
   await expect(
     settings.getByText(
-      /^The verification record of .+ is back in your account\. Open the project again/
+      `The verification record of ${named} is back in your account. Open the project again to sync it.`,
+      { exact: true }
     )
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
   expect(

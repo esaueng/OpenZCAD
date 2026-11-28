@@ -864,8 +864,20 @@ export async function restoreProjectAuthority(
       throw error;
     }
     guard();
+    // The ordinary load verifies whatever the account returns now against
+    // this device's pin (account MAC, certified signer, rollback and fork
+    // checks) and pins it. Another device may have published the next
+    // record by the ordinary compare-and-swap since the Worker stored this
+    // one: such a verified successor, at a later sequence, is the restored
+    // record carried on, and the restoration succeeded. Other bytes at the
+    // restored sequence, or anything earlier, are not what the Worker
+    // accepted.
     const stored = await loadProjectAuthority(ctx, projectId);
-    if (!stored || stored.record.record !== request.record)
+    if (
+      !stored ||
+      (stored.record.record !== request.record &&
+        stored.value.sequence <= request.sequence)
+    )
       return fail(
         'The account did not retain the authority record it accepted.'
       );

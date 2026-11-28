@@ -37,6 +37,7 @@ import {
   ProjectGroupError
 } from '../apps/web/src/lib/e2ee/projectGroups';
 import { EncryptedProjectIntegrityError } from '../apps/web/src/lib/e2ee/encryptedProjectStore';
+import { verifyRestoredAuthority } from '../apps/web/src/lib/e2ee/pageDeviceRemoval';
 import {
   createEncrypted,
   device,
@@ -382,6 +383,230 @@ it('lets two devices restore at once: one record is stored and both verify it', 
     ).record.record
   ).toBe(raced!.record);
   expect(stored(srv, projectId)).toHaveLength(1);
+});
+
+it('counts an ordinary publish that lands right after the restoration as the restoration succeeding', async () => {
+  const { srv, laptop, projectId, pinned } = await pinnedProject();
+  const desktop = device(srv, owner, 'owner_desktop');
+  await desktop.store.loadProject(projectId);
+  withdraw(srv, projectId);
+  const before = pinned.accepted!.authority.sequence;
+  // The Worker stores the laptop's record. Before the laptop reads it back,
+  // the desktop publishes the next one by the ordinary compare-and-swap.
+  let successor: E2eeProjectAuthorityRecord | null = null;
+  laptop.answer = async (path, init, response) => {
+    if (
+      path.endsWith('/authority') &&
+      init.method === 'POST' &&
+      response.ok &&
+      !successor
+    ) {
+      const restoredRequest = JSON.parse(
+        init.body as string
+      ) as E2eeSaveProjectAuthorityRequest;
+      expect(restoredRequest).toMatchObject({
+        sequence: before + 1,
+        restoreMissing: true
+      });
+      successor = await reseal(restoredRequest, {
+        sequence: before + 2,
+        signerDeviceId: 'owner_desktop'
+      });
+      await desktop.groups.api.saveAuthority!(projectId, {
+        ...successor,
+        expectedSequence: before + 1
+      });
+    }
+    return response;
+  };
+
+  const restored = await restoreProjectAuthority(
+    laptop.groups,
+    projectId,
+    AUTHORITY_RESTORE_CONFIRMATION
+  );
+  expect(successor).not.toBeNull();
+  // The laptop verified and pinned the desktop's newer record: a success.
+  expect(restored.record).toEqual(successor);
+  expect(restored.value).toMatchObject({
+    sequence: before + 2,
+    signerDeviceId: 'owner_desktop'
+  });
+  expect((await pins(laptop, projectId)).accepted?.authority).toEqual(
+    successor
+  );
+  expect(stored(srv, projectId)).toEqual([
+    {
+      sequence: before + 2,
+      signer_device_id: 'owner_desktop',
+      record: successor!.record
+    }
+  ]);
+  expect(await projectAuthorityRecovery(laptop.groups, projectId)).toBe('none');
+  expect(
+    (await reload(srv, laptop).store.loadProject(projectId)).projectId
+  ).toBe(projectId);
+});
+
+it('still fails the read-back when the account returns other bytes at the restored sequence, or nothing', async () => {
+  // Another record at the very sequence the Worker acknowledged.
+  {
+    const { srv, laptop, projectId, pinned } = await pinnedProject();
+    withdraw(srv, projectId);
+    let acknowledged = false;
+    laptop.answer = async (path, init, response) => {
+      if (!path.endsWith('/authority')) return response;
+      if (init.method === 'POST') {
+        acknowledged = response.ok;
+        return response;
+      }
+      if (!acknowledged) return response;
+      const { authority } = (await response.json()) as {
+        authority: E2eeProjectAuthorityRecord;
+      };
+      return Response.json({
+        authority: await reseal(authority, { signerDeviceId: 'owner_desktop' })
+      });
+    };
+    await expect(
+      restoreProjectAuthority(
+        laptop.groups,
+        projectId,
+        AUTHORITY_RESTORE_CONFIRMATION
+      )
+    ).rejects.toThrow(/did not retain the authority record/);
+    expect(acknowledged).toBe(true);
+    expect((await pins(laptop, projectId)).owner).toEqual(pinned.owner);
+  }
+  // The record withheld again right after the acknowledgement.
+  {
+    const { srv, laptop, projectId, pinned } = await pinnedProject();
+    withdraw(srv, projectId);
+    let acknowledged = false;
+    laptop.answer = async (path, init, response) => {
+      if (!path.endsWith('/authority')) return response;
+      if (init.method === 'POST') {
+        acknowledged = response.ok;
+        return response;
+      }
+      return acknowledged ? Response.json({ authority: null }) : response;
+    };
+    await expect(
+      restoreProjectAuthority(
+        laptop.groups,
+        projectId,
+        AUTHORITY_RESTORE_CONFIRMATION
+      )
+    ).rejects.toMatchObject({ code: 'authority-withdrawn' });
+    expect(acknowledged).toBe(true);
+    expect(await pins(laptop, projectId)).toEqual(pinned);
+  }
+});
+
+it('checks the history through the saved head’s key epoch, not only the restored record’s', async () => {
+  const { srv, laptop, projectId } = await pinnedProject();
+  // The desktop last verified the project at key epoch 0.
+  const desktop = device(srv, owner, 'owner_desktop');
+  await desktop.store.loadProject(projectId);
+  // The laptop then rotated the keys and saved under the new epoch.
+  expect(await commitProjectGroup(laptop.groups, projectId)).toEqual({
+    epoch: 1,
+    keyEpoch: 1
+  });
+  const current = await laptop.store.loadProject(projectId);
+  await laptop.store.saveProjectDocument({
+    projectId,
+    expectedVersion: current.version,
+    document: edited(current, 'Rotated')
+  });
+  withdraw(srv, projectId);
+  // The account no longer serves the newer epoch's key archive.
+  const withoutNewerArchive: Device['answer'] = async (
+    path,
+    _init,
+    response
+  ) => {
+    if (!path.includes('/keys/archives') || !response.ok) return response;
+    const body = (await response.json()) as {
+      archives: { keyEpoch: number }[];
+    };
+    return Response.json({
+      ...body,
+      archives: body.archives.filter((archive) => archive.keyEpoch < 1)
+    });
+  };
+  desktop.answer = withoutNewerArchive;
+
+  const restored = await restoreProjectAuthority(
+    desktop.groups,
+    projectId,
+    AUTHORITY_RESTORE_CONFIRMATION
+  );
+  expect(restored.value.latestKeyEpoch).toBe(0);
+  const deps = {
+    groups: desktop.groups,
+    documents: desktop.documents,
+    pins: desktop.pins
+  };
+  // The restored record's own epoch verifies, which is all the check used
+  // to cover; the saved head needs epoch 1, and opening refuses.
+  await epochAuthority(desktop.groups, projectId, 0);
+  const outcome = await verifyRestoredAuthority(deps, projectId, 0);
+  expect(outcome).toMatchObject({ verified: false, savedVersionChecked: true });
+  expect(outcome.problem).toBeTruthy();
+  const reopened = reload(srv, desktop);
+  reopened.answer = withoutNewerArchive;
+  expect(await refusal(reopened.store.loadProject(projectId))).toBeInstanceOf(
+    Error
+  );
+  // Once the account serves that archive, the same check passes and the
+  // project opens: the answer follows what opening would find.
+  desktop.answer = undefined;
+  expect(await verifyRestoredAuthority(deps, projectId, 0)).toEqual({
+    verified: true,
+    savedVersionChecked: true
+  });
+  expect((await reload(srv, desktop).store.loadProject(projectId)).name).toBe(
+    'Rotated'
+  );
+  desktop.answer = withoutNewerArchive;
+
+  // A saved version that cannot be read is reported as not checked, never
+  // as verified through it.
+  expect(
+    await verifyRestoredAuthority(
+      {
+        ...deps,
+        documents: {
+          loadDocument: async () => {
+            throw new Error('offline');
+          }
+        }
+      },
+      projectId,
+      0
+    )
+  ).toEqual({ verified: true, savedVersionChecked: false });
+});
+
+it('reports a restored project verified through its saved head when nothing newer is needed', async () => {
+  const { srv, laptop, projectId } = await pinnedProject();
+  withdraw(srv, projectId);
+  const restored = await restoreProjectAuthority(
+    laptop.groups,
+    projectId,
+    AUTHORITY_RESTORE_CONFIRMATION
+  );
+  expect(
+    await verifyRestoredAuthority(
+      { groups: laptop.groups, documents: laptop.documents, pins: laptop.pins },
+      projectId,
+      restored.value.latestKeyEpoch
+    )
+  ).toEqual({ verified: true, savedVersionChecked: true });
+  expect(
+    (await reload(srv, laptop).store.loadProject(projectId)).projectId
+  ).toBe(projectId);
 });
 
 it('refuses a record that reappears as a rollback or fork, keeping the pins', async () => {
