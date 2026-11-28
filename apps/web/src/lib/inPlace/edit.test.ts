@@ -51,6 +51,7 @@ import {
   type InPlaceSlots,
   resolveNewAxis
 } from './tools';
+import { inPlacePanelState } from './panel';
 
 const BODY = 'body_a' as BodyId;
 const SKETCH = 'sketch_1' as SketchId;
@@ -115,7 +116,8 @@ function feature(data: FeatureData, bodyId?: BodyId): FeatureNode {
 function untouched(
   node: FeatureNode,
   changed: Record<string, number> = {},
-  editContext: InPlaceEditContext = EDIT_CTX
+  editContext: InPlaceEditContext = EDIT_CTX,
+  chosen: Record<string, string> = {}
 ): ResolvedInPlaceRequest | null {
   const armed = inPlaceEditSeed(node, editContext)!;
   const spec = IN_PLACE_TOOL_SPECS[armed.tool];
@@ -174,7 +176,13 @@ function untouched(
   for (const [id, raw] of Object.entries(armed.seed.raws)) {
     if (!(id in changed)) values[id] = raw;
   }
-  const request = spec.request(slots, values, armed.seed.options, ctx, numbers);
+  const request = spec.request(
+    slots,
+    values,
+    { ...armed.seed.options, ...chosen },
+    ctx,
+    numbers
+  );
   return request && resolveNewAxis(request, null);
 }
 
@@ -1057,6 +1065,107 @@ describe('an untouched edit writes the feature back as stored', () => {
         'pitch'
       );
       expect(untouched(feature(data))).toMatchObject({ pitch });
+    }
+  });
+
+  it('helical sweep: a coil saved growing down reopens on Down, and Down again leaves it', () => {
+    // #2119: the saved −Z axis reopened under Grows: Up, so choosing Down,
+    // the way the coil already ran, turned it round to grow upward.
+    const profile = { all: true as const, sourceEntityIds: ['a'] };
+    for (const [stored, turned] of [
+      [
+        { x: 0, y: 0, z: -1 },
+        { x: 0, y: 0, z: 1 }
+      ],
+      [
+        { x: -0.6, y: 0, z: -0.8 },
+        { x: 0.6, y: 0, z: 0.8 }
+      ]
+    ]) {
+      const data: FeatureData = {
+        featureKind: 'helical-sweep',
+        profile: { sketchId: SKETCH, profile },
+        axisOrigin: { x: 0, y: 0, z: 0 },
+        axisDirection: stored!,
+        radius: 12,
+        pitch: 5.25,
+        turns: 6.25,
+        construction: 'in-place'
+      };
+      expect(
+        inPlaceEditSeed(feature(data), EDIT_CTX)!.seed.options
+      ).toMatchObject({ grow: 'down' });
+      // Left alone, and with Down chosen again, the axis goes back as stored.
+      expect(untouched(feature(data))).toMatchObject({ axisDirection: stored });
+      expect(
+        untouched(feature(data), {}, EDIT_CTX, { grow: 'down' })
+      ).toMatchObject({ axisDirection: stored });
+      // Up is the change: the coil turns to grow the other way, once.
+      const up = untouched(feature(data), {}, EDIT_CTX, { grow: 'up' });
+      expect(up).toEqual(expect.objectContaining({ axisDirection: turned }));
+      // Saved that way it reopens on Up, and Down turns it back.
+      const upward: FeatureData = { ...data, axisDirection: turned! };
+      expect(
+        inPlaceEditSeed(feature(upward), EDIT_CTX)!.seed.options
+      ).toMatchObject({ grow: 'up' });
+      expect(
+        untouched(feature(upward), {}, EDIT_CTX, { grow: 'down' })
+      ).toEqual(expect.objectContaining({ axisDirection: stored }));
+    }
+  });
+
+  it('helical sweep: sized by height, a reversed pitch keeps its direction', () => {
+    // #2191: an oblique one-turn coil saved at −4.2 mm, then switched to
+    // Height & turns and applied, was written back at +4.2 mm.
+    const profile = { all: true as const, sourceEntityIds: ['a'] };
+    const spec = IN_PLACE_TOOL_SPECS['helical-sweep'];
+    for (const stored of [-4.2, 4.2]) {
+      const data: FeatureData = {
+        featureKind: 'helical-sweep',
+        profile: { sketchId: SKETCH, profile },
+        axisOrigin: { x: 18, y: 0, z: -4 },
+        axisDirection: { x: 0.6, y: 0, z: 0.8 },
+        radius: 12,
+        pitch: stored,
+        turns: 1,
+        construction: 'in-place'
+      };
+      const armed = inPlaceEditSeed(feature(data), EDIT_CTX)!;
+      // The switch carries the height the coil has, as a size.
+      const carried = spec.optionCarries!(
+        'size',
+        'height',
+        inPlacePanelState(spec, armed.seed.options, armed.seed.values),
+        {} as InPlaceContext
+      )!;
+      expect(carried.height!.value).toBeCloseTo(4.2);
+      const height = carried.height!.value;
+      // Untouched after the switch, the stored pitch goes back as it was.
+      expect(
+        untouched(feature(data), { height }, EDIT_CTX, { size: 'height' })
+      ).toMatchObject({
+        pitch: stored,
+        turns: 1,
+        axisOrigin: data.axisOrigin,
+        axisDirection: data.axisDirection
+      });
+      // A new height stretches it the way it already runs.
+      expect(
+        untouched(feature(data), { height: 8.4 }, EDIT_CTX, { size: 'height' })
+      ).toMatchObject({ pitch: stored * 2 });
+      // Back to Pitch & turns, the row reads with its sign.
+      expect(
+        spec.optionCarries!(
+          'size',
+          'pitch',
+          inPlacePanelState(
+            spec,
+            { ...armed.seed.options, size: 'height' },
+            { ...armed.seed.values, height: 8.4 }
+          ),
+          {} as InPlaceContext
+        )!.pitch!.value
+      ).toBeCloseTo(stored * 2);
     }
   });
 

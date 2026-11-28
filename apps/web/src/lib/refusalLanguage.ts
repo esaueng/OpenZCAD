@@ -383,6 +383,15 @@ const TRANSLATIONS: readonly Translation[] = [
     sentence: 'The exact kernel could not build this result.'
   },
   {
+    // Issue #2189. The kernel, and the adapter's own measure of the profile
+    // ahead of it (#2188), refuse a coil whose turns would run into one
+    // another. The headline used to be the generic one, with the cause and
+    // the two controls that clear it only under Technical details.
+    pattern: /helical sweep coils would overlap/i,
+    sentence:
+      'The coils would overlap: one turn must climb further than the profile is tall. Increase Pitch or Height, or wind less than one full turn.'
+  },
+  {
     pattern: /conical cap reaches or crosses its support apex/i,
     sentence:
       'The conical end would collapse at that distance. Try a smaller offset.'

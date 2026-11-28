@@ -2948,6 +2948,52 @@ describe('review: loft apex and guided sweeps', () => {
         pitch: 3
       }
     });
+    // A pitch that runs against the axis reaches the rig with its sign, by
+    // either sizing: the end rides where the coil is built, down the axis
+    // it still turns right-handed about. The height has no sign, so its
+    // arrow turns to run with the coil.
+    const coilEnd = (
+      numbers: Record<string, number>,
+      options: Record<string, string>
+    ) => {
+      const handles = helix.handles(slots, numbers, ctx, options);
+      const turns = handles.find((handle) => handle.valueId === 'turns');
+      if (turns?.kind !== 'coil') throw new Error('Expected a coil handle.');
+      return { handles, turns };
+    };
+    const back = coilEnd({ pitch: -4.2, height: 4.2, turns: 1 }, {});
+    expect(back.turns.params).toMatchObject({
+      axis: { x: 0, y: 0, z: 1 },
+      pitch: -4.2
+    });
+    expect(
+      back.handles.find((handle) => handle.valueId === 'height')
+    ).toMatchObject({
+      kind: 'linear',
+      params: {
+        origin: { x: -20, y: 0, z: 0 },
+        direction: { x: 0, y: 0, z: -1 }
+      }
+    });
+    const backByPitch = coilEnd(
+      { pitch: -4.2, height: 4.2, turns: 1 },
+      { size: 'pitch' }
+    );
+    expect(backByPitch.turns.params).toMatchObject({
+      axis: { x: 0, y: 0, z: 1 },
+      pitch: -4.2
+    });
+    // The pitch carries its own sign: its arrow stays along the axis.
+    expect(
+      backByPitch.handles.find((handle) => handle.valueId === 'pitch')
+    ).toMatchObject({ params: { direction: { x: 0, y: 0, z: 1 } } });
+    // The two rigs are told apart, so a switch of direction rebuilds them.
+    const forward = coilEnd({ pitch: 4.2, height: 4.2, turns: 1 }, {});
+    expect(forward.turns.params.pitch).toBeCloseTo(4.2);
+    expect(forward.turns.key).not.toBe(back.turns.key);
+    expect(
+      forward.handles.find((handle) => handle.valueId === 'height')?.key
+    ).not.toBe(back.handles.find((handle) => handle.valueId === 'height')?.key);
     const start = end?.kind === 'coil' ? end.params.startDirection : null;
     expect(start?.x).toBeCloseTo(22 / Math.hypot(22, 2));
     expect(start?.y).toBeCloseTo(2 / Math.hypot(22, 2));
@@ -2964,7 +3010,50 @@ describe('review: loft apex and guided sweeps', () => {
         { options: { size: 'pitch' }, numbers: { pitch: 2.5, turns: 4 } },
         'mm'
       )
-    ).toBe('Stands 10 mm tall');
+    ).toBe('Climbs 10 mm along its axis');
+    // #2118: the Height is that climb, not the spring's overall height.
+    expect(helix.values.find((value) => value.id === 'height')?.note).toMatch(
+      /climbs along its axis.*profile adds its own height/
+    );
+  });
+
+  it("a helix's typed axis is turned by Grows only when the choice changes", () => {
+    // #2119: an edit of a coil saved growing down opens on Down, with the
+    // stored direction on the typed chips; Down again is no change.
+    const helix = IN_PLACE_TOOL_SPECS['helical-sweep'];
+    const slots = { ...EMPTY, profiles: [pick('s1', 1)] };
+    const typed = {
+      axisOX: -20,
+      axisOY: 0,
+      axisOZ: 0,
+      axisDX: 0,
+      axisDY: 0,
+      axisDZ: -1
+    };
+    const values = { ...typed, height: 12, turns: 4 };
+    const direction = (options: Record<string, string>) =>
+      (
+        helix.request(
+          slots,
+          values,
+          { axisMode: 'typed', ...options },
+          ctx,
+          values
+        ) as { axisDirection: Vector3 }
+      ).axisDirection;
+    expect(direction({ grow: 'down', savedGrow: 'down' })).toEqual({
+      x: 0,
+      y: 0,
+      z: -1
+    });
+    expect(direction({ grow: 'up', savedGrow: 'down' })).toEqual({
+      x: 0,
+      y: 0,
+      z: 1
+    });
+    // A new coil's typed axis runs as typed; Down turns it, as before.
+    expect(direction({})).toEqual({ x: 0, y: 0, z: -1 });
+    expect(direction({ grow: 'down' })).toEqual({ x: 0, y: 0, z: 1 });
   });
 
   it('a guided sweep is always Standard', () => {
