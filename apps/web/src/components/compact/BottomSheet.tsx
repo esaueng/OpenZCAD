@@ -27,6 +27,10 @@ import {
   SHEET_OVERLAY_ATTRIBUTE
 } from './compactSlots';
 
+/** What a press on the sheet's surface leaves to itself, not to a drag. */
+const SURFACE_DRAG_EXCLUDED =
+  'button, a, input, select, textarea, label, [role="slider"], [role="button"], [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
+
 /** Room left around a field scrolled into view in the sheet, in CSS px. */
 const REVEAL_MARGIN = 12;
 
@@ -192,6 +196,8 @@ export function BottomSheet({
     startY: number;
     startHeight: number;
     moved: boolean;
+    /** Started on the sheet's own surface rather than its grabber. */
+    fromSurface?: boolean;
   } | null>(null);
   const [dragHeight, setDragHeight] = useState<number | null>(null);
   // Alternates on every change of height, so the reduced-motion fade
@@ -323,11 +329,13 @@ export function BottomSheet({
       const body = sheet.querySelector<HTMLElement>(
         '.compact-sheet-body[data-page]'
       );
-      // A page's first control, though not a text field: focus there would
-      // raise the on-screen keyboard over a page opened only to look (the
-      // All tools sheet's search). The field is one tap away.
+      // A page's first control, though never a text field: focus there
+      // would raise the on-screen keyboard over a page opened only to look
+      // (the All tools sheet's search; Draw's Properties, whose sheet name
+      // took the keyboard and left the drawing a sliver beside it). The
+      // field is one tap away; a page of fields alone starts on the grabber.
       const items = body ? focusables(body) : [];
-      const target = items.find((item) => !isTextField(item)) ?? items[0];
+      const target = items.find((item) => !isTextField(item));
       (target ?? grabberRef.current)?.focus({ preventScroll: true });
       return;
     }
@@ -405,6 +413,11 @@ export function BottomSheet({
   }, [detent]);
 
   const canClose = !hasRoot && stack.length === 0;
+  // The workspace's own content at peek is one row (a tray, or a running
+  // tool's row): the sheet is that row and a grip. Its Close would do
+  // nothing there (the content keeps it at peek) and its Back has no page,
+  // so the head is only the grabber, drawn as a grip over the row's top.
+  const asRow = detent === 'peek' && page === null && hasRoot;
   const hostHeight = () =>
     sheetRef.current?.parentElement?.getBoundingClientRect().height ?? 0;
   // A phone held landscape draws the sheet at the stage's side
@@ -447,7 +460,7 @@ export function BottomSheet({
         type: 'set-detent',
         detent: nearestDetent(height, hostHeight(), canClose, isSideSheet())
       });
-    } else {
+    } else if (!drag.fromSurface) {
       // A tap toggles between peek and half; from full it comes down.
       dispatch({
         type: 'set-detent',
@@ -458,6 +471,22 @@ export function BottomSheet({
   const onGrabberPointerCancel = () => {
     dragRef.current = null;
     setDragHeight(null);
+  };
+  // At peek the sheet is its one row (`asRow`): its grabber is a thin grip,
+  // so the row's own surface drags it too, between and around its controls.
+  // A tap there is nothing; only a drag moves the sheet.
+  const onSurfacePointerDown = (event: ReactPointerEvent<HTMLElement>) => {
+    if (!asRow || event.button !== 0 || !sheetRef.current) return;
+    const target = event.target as Element | null;
+    if (target?.closest(SURFACE_DRAG_EXCLUDED)) return;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight: sheetRef.current.getBoundingClientRect().height,
+      moved: false,
+      fromSurface: true
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
   const onGrabberKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -574,12 +603,16 @@ export function BottomSheet({
         ref={sheetRef}
         className={`compact-sheet${dragHeight !== null ? ' is-dragging' : ''}${
           reducedMotion ? ' is-reduced-motion' : ''
-        }${fadeTurn ? ' fade-a' : ' fade-b'}`}
+        }${fadeTurn ? ' fade-a' : ' fade-b'}${asRow ? ' is-row' : ''}`}
         data-detent={detent}
         aria-label={label}
         hidden={detent === 'closed'}
         style={style}
         onKeyDown={onKeyDown}
+        onPointerDown={onSurfacePointerDown}
+        onPointerMove={onGrabberPointerMove}
+        onPointerUp={onGrabberPointerUp}
+        onPointerCancel={onGrabberPointerCancel}
         onTransitionEnd={(event) => {
           if (
             event.target === event.currentTarget &&
@@ -602,7 +635,7 @@ export function BottomSheet({
             >
               <ChevronLeft size={22} aria-hidden="true" />
             </button>
-          ) : (
+          ) : asRow ? null : (
             <span className="compact-sheet-head-spacer" aria-hidden="true" />
           )}
           <div
@@ -627,14 +660,16 @@ export function BottomSheet({
               <h2 className="compact-sheet-title">{drawn?.title ?? ''}</h2>
             ) : null}
           </div>
-          <button
-            type="button"
-            className="compact-icon-button"
-            aria-label="Close sheet"
-            onClick={() => dispatch({ type: 'close' })}
-          >
-            <X size={20} aria-hidden="true" />
-          </button>
+          {asRow ? null : (
+            <button
+              type="button"
+              className="compact-icon-button"
+              aria-label="Close sheet"
+              onClick={() => dispatch({ type: 'close' })}
+            >
+              <X size={20} aria-hidden="true" />
+            </button>
+          )}
         </div>
         {/* The workspace's content stays mounted under a pushed page, so a
           form mid-edit keeps what was typed when the page is popped. */}

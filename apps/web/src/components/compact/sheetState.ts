@@ -26,11 +26,13 @@ export const SHEET_DETENT_NAMES: Record<SheetDetent, string> = {
 };
 
 /**
- * The peek height in CSS pixels: the grabber's row over one tray row of
- * 44 px targets (U12 slice 4), so the tray's verbs, or a running tool's
- * Cancel and Done, stand in reach at the lowest height the sheet rests at.
+ * The peek height in CSS pixels: one tray row of 44 px targets under a
+ * 12 px grip (U12 slice 4), so the tray's verbs, or a running tool's Cancel
+ * and Done, stand in reach at the lowest height the sheet rests at. The
+ * grip used to be a 44 px row of its own, with a Close that did nothing at
+ * peek: 40 px of the stage spent on it (the space review).
  */
-export const SHEET_PEEK_PX = 104;
+export const SHEET_PEEK_PX = 64;
 
 /**
  * A page in the back stack, by id only: its title and content are drawn

@@ -408,8 +408,7 @@ function CompactAppShell({
                       hasSheetContent={hasSheetContent}
                       commandRowPresent={commandRowPresent}
                       rowOnly={
-                        (commandOnStage ||
-                          (commandRowPresent && !command)) &&
+                        (commandOnStage || (commandRowPresent && !command)) &&
                         !inspector &&
                         !panelLane
                       }
@@ -422,7 +421,11 @@ function CompactAppShell({
                         hasSheetContent ? (
                           <>
                             {command && (
-                              <div className="compact-sheet-card">
+                              <div
+                                className={`compact-sheet-card${
+                                  commandOnStage ? ' is-on-stage' : ''
+                                }`}
+                              >
                                 {command}
                               </div>
                             )}
