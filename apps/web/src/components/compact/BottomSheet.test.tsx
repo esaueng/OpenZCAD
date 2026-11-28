@@ -956,6 +956,165 @@ describe('BottomSheet at peek on its row', () => {
     expect(sheet().dataset.nav).toBe('pop');
   });
 
+  it('holds a row with nothing under it at peek, stretching under a drag', () => {
+    // The motion review: View's, Tweak's and Draw's trays rose over blank
+    // space.
+    function Held() {
+      const { state, dispatch } = useSheet(true);
+      useEffect(() => {
+        dispatch({ type: 'set-detent', detent: 'peek' });
+      }, [dispatch]);
+      return (
+        <BottomSheet
+          label="Workspace sheet"
+          state={state}
+          dispatch={dispatch}
+          hasRoot
+          renderPage={renderPage}
+          holdFittingRow
+        >
+          <p>Row surface</p>
+        </BottomSheet>
+      );
+    }
+    render(<Held />);
+    const root = sheet().querySelector<HTMLElement>(
+      '.compact-sheet-body:not([data-page])'
+    )!;
+    const fits = (scroll: number) => {
+      Object.defineProperty(root, 'scrollHeight', {
+        configurable: true,
+        value: scroll
+      });
+      Object.defineProperty(root, 'clientHeight', {
+        configurable: true,
+        value: 52
+      });
+    };
+    fits(52);
+    vi.spyOn(sheet(), 'getBoundingClientRect').mockReturnValue(rect(64));
+    vi.spyOn(sheet().parentElement!, 'getBoundingClientRect').mockReturnValue(
+      rect(800)
+    );
+    const surface = screen.getByText('Row surface');
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 1, clientY: 700 });
+    fireEvent.pointerMove(surface, { pointerId: 1, clientY: 340 });
+    // A short stretch, never the 424px the finger went.
+    const stretched = parseFloat(sheet().style.height);
+    expect(stretched).toBeGreaterThan(64);
+    expect(stretched).toBeLessThanOrEqual(104);
+    fireEvent.pointerUp(surface, { pointerId: 1, clientY: 340 });
+    expect(sheet().dataset.detent).toBe('peek');
+    const slider = screen.getByRole('slider', { name: 'Sheet height' });
+    fireEvent.keyDown(slider, { key: 'ArrowUp' });
+    fireEvent.keyDown(slider, { key: 'End' });
+    expect(sheet().dataset.detent).toBe('peek');
+    // Content running past the row still rises to show it.
+    fits(200);
+    fireEvent.keyDown(slider, { key: 'ArrowUp' });
+    expect(sheet().dataset.detent).toBe('half');
+  });
+
+  it('goes back on a swipe from the page’s leading edge, and springs back short of it', () => {
+    render(
+      <Harness
+        hasRoot
+        initial={[
+          { type: 'push', page: page('more') },
+          { type: 'push', page: page('project') }
+        ]}
+      >
+        <p>Root</p>
+      </Harness>
+    );
+    vi.spyOn(sheet(), 'getBoundingClientRect').mockReturnValue(rect(400));
+    const body = () =>
+      sheet().querySelector<HTMLElement>('.compact-sheet-body[data-page]')!;
+    expect(body().dataset.page).toBe('project');
+    // Away from the edge: the page's own, not a swipe.
+    fireEvent.pointerDown(body(), {
+      button: 0,
+      pointerId: 1,
+      clientX: 120,
+      clientY: 200
+    });
+    fireEvent.pointerMove(body(), { pointerId: 1, clientX: 260, clientY: 200 });
+    expect(body().style.transform).toBe('');
+    fireEvent.pointerUp(body(), { pointerId: 1, clientX: 260, clientY: 200 });
+    // From the edge, up and down: the page's scroll.
+    fireEvent.pointerDown(body(), {
+      button: 0,
+      pointerId: 2,
+      clientX: 8,
+      clientY: 200
+    });
+    fireEvent.pointerMove(body(), { pointerId: 2, clientX: 12, clientY: 260 });
+    fireEvent.pointerMove(body(), { pointerId: 2, clientX: 120, clientY: 260 });
+    expect(body().style.transform).toBe('');
+    fireEvent.pointerUp(body(), { pointerId: 2, clientX: 120, clientY: 260 });
+    // From the edge, sideways but short: it follows, then springs back.
+    fireEvent.pointerDown(body(), {
+      button: 0,
+      pointerId: 3,
+      clientX: 8,
+      clientY: 200
+    });
+    fireEvent.pointerMove(body(), { pointerId: 3, clientX: 48, clientY: 204 });
+    expect(body()).toHaveClass('is-swiping');
+    expect(body().style.transform).toBe('translateX(40px)');
+    fireEvent.pointerUp(body(), { pointerId: 3, clientX: 48, clientY: 204 });
+    expect(body().dataset.page).toBe('project');
+    expect(body().style.transform).toBe('');
+    // Far enough: back one page.
+    fireEvent.pointerDown(body(), {
+      button: 0,
+      pointerId: 4,
+      clientX: 8,
+      clientY: 200
+    });
+    fireEvent.pointerMove(body(), { pointerId: 4, clientX: 140, clientY: 210 });
+    fireEvent.pointerUp(body(), { pointerId: 4, clientX: 140, clientY: 210 });
+    expect(body().dataset.page).toBe('more');
+    expect(sheet().dataset.nav).toBe('pop');
+  });
+
+  it('comes up to half when a field on a page at peek is tapped to type in', () => {
+    // The motion review: All tools' search at peek found Fillet under the
+    // sheet's edge.
+    function Search() {
+      const { state, dispatch } = useSheet(true);
+      useEffect(() => {
+        dispatch({ type: 'push', page: page('tools') });
+        dispatch({ type: 'set-detent', detent: 'peek' });
+      }, [dispatch]);
+      return (
+        <BottomSheet
+          label="Workspace sheet"
+          state={state}
+          dispatch={dispatch}
+          hasRoot
+          renderPage={(key) => ({
+            title: key,
+            content: (
+              <>
+                <button type="button">Tile</button>
+                <input type="search" aria-label="Search tools" />
+              </>
+            )
+          })}
+        >
+          <input type="text" aria-label="Row field" />
+        </BottomSheet>
+      );
+    }
+    render(<Search />);
+    expect(sheet().dataset.detent).toBe('peek');
+    act(() => screen.getByRole('button', { name: 'Tile' }).focus());
+    expect(sheet().dataset.detent).toBe('peek');
+    act(() => screen.getByRole('searchbox', { name: 'Search tools' }).focus());
+    expect(sheet().dataset.detent).toBe('half');
+  });
+
   it('opens a page of fields on its grabber, not the keyboard', () => {
     // The space review: Draw's Properties focused the sheet name, and the
     // keyboard left the drawing a sliver beside it.

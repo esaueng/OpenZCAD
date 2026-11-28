@@ -526,6 +526,30 @@ export default function CompactWorkspace({
     }
   }, [dispatch, stackDepth, trayOnly]);
 
+  // The pick cleared under its page (a tap on empty stage, an undo): the
+  // page would only say Nothing picked over the stage, so it goes, and the
+  // tray comes back to be picked from again.
+  const selectionOpen = state.stack.some((page) => page.key === 'selection');
+  const picked = selectionLabel !== null && selectionLabel !== undefined;
+  useEffect(() => {
+    if (selectionOpen && !picked) dispatch({ type: 'close' });
+  }, [dispatch, picked, selectionOpen]);
+
+  // A new mode's tray comes in, rather than its row of tools swapping in
+  // one cut under the finger that chose it.
+  const traySlotRef = useRef<HTMLDivElement | null>(null);
+  const lastMode = useRef(workspaceMode);
+  useEffect(() => {
+    if (lastMode.current === workspaceMode) return;
+    lastMode.current = workspaceMode;
+    const slot = traySlotRef.current;
+    if (!slot) return;
+    slot.classList.remove('is-entering');
+    // Restarts the entrance when modes change again before it ends.
+    void slot.offsetWidth;
+    slot.classList.add('is-entering');
+  }, [workspaceMode]);
+
   // The panel sheet follows the workspace's open panel (every route to a
   // panel sets it), and a sheet put away by Back, Close or Escape shuts it.
   const panelsInStack = state.stack.some(
@@ -958,6 +982,7 @@ export default function CompactWorkspace({
           onRowRaise={onRowRaise}
           rowRaisePreview={rowRaisePreview}
           onPageLower={onPageLower}
+          holdFittingRow={trayOnly}
         >
           {/* The mode's tray first: the row the sheet shows at peek. A
               running command's bar brings its own row, which stands in for
@@ -966,6 +991,12 @@ export default function CompactWorkspace({
           {trayShown ? (
             <CompactTrayContext.Provider value={traySlot}>
               <div
+                ref={traySlotRef}
+                onAnimationEnd={(event) => {
+                  if (event.target === event.currentTarget) {
+                    event.currentTarget.classList.remove('is-entering');
+                  }
+                }}
                 className={`compact-tray-slot${
                   hasModeTray && !hasSheetContent && !commandRowPresent
                     ? ' is-alone'

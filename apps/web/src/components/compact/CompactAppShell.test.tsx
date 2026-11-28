@@ -847,6 +847,29 @@ describe('AppShell in the compact workspace', () => {
     expect(onClearSelection).toHaveBeenCalledTimes(1);
   });
 
+  it('puts the pick’s page away when the pick clears under it', async () => {
+    // The motion review: a tap on empty stage cleared the pick and left a
+    // blank Nothing picked page over the stage.
+    const { container, rerender } = render(
+      shell(chrome({ selectionLabel: '1 cylindrical face' }))
+    );
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Selection: 1 cylindrical face'
+      })
+    );
+    expect(
+      screen.getByRole('heading', { name: '1 cylindrical face' })
+    ).toBeVisible();
+    rerender(shell(chrome({ selectionLabel: null })));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('heading', { name: 'Nothing picked' })
+      ).toBeNull()
+    );
+    expect(container.querySelector('.compact-sheet [data-page]')).toBeNull();
+  });
+
   it('opens the panel sheet from More, and shuts it with Back', async () => {
     const onOpen = vi.fn();
     const closed = chrome({
