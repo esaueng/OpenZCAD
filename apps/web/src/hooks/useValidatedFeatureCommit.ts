@@ -1,10 +1,15 @@
 import { FeatureBuildError } from '../lib/featureValidation';
 import { useRef } from 'react';
+import { listFeaturesInOrder } from '@openzcad/document-core';
 import { displayLengthName, ownEntry } from '@openzcad/shared';
 import type { FeatureId, BodyId, ProjectDocument } from '@openzcad/shared';
 import { CommandManager, type AnyCommand } from '@openzcad/command-system';
 import { errorMessage } from '../lib/errors';
-import { validatedFeatureRejection } from '../lib/featureValidation';
+import {
+  featureFailedBefore,
+  validatedFeatureRejection,
+  type RebuildWarnings
+} from '../lib/featureValidation';
 
 export interface ValidatedFeatureCommitOptions {
   manager(): CommandManager | null;
@@ -20,6 +25,19 @@ export interface ValidatedFeatureCommitOptions {
   ): Promise<ProjectDocument['derived']>;
   /** Release the cancellable run's prepared worker after commit or abandonment. */
   releaseCancellable?(signal: AbortSignal): void;
+  /**
+   * What the exact rebuild of `document` itself reported: its warnings, with
+   * their typed attribution where the host still holds it for that result.
+   * Null while that rebuild has not landed, since nothing then says what the
+   * model had.
+   *
+   * With it, a later feature the edit only rebuilds (a `dependent` target)
+   * refuses the edit for a failure the edit causes, not for one the model
+   * already carries: a step kept failing with "Resume anyway" would otherwise
+   * refuse every edit ahead of it, a rename included. Without it, or for the
+   * edited feature itself, any failure refuses as before.
+   */
+  priorModel?(document: ProjectDocument): RebuildWarnings | null;
   /**
    * `derived` is the exact rebuild validation already produced for this
    * candidate; committing it alongside the command lets the caller render
@@ -409,18 +427,52 @@ export function useValidatedFeatureCommit(
         host.onStatus(VALIDATED_FEATURE_REVALIDATING_STATUS);
         current = manager.document;
       }
+      // What the model already had, for the dependents' failures to be
+      // compared with. A moved document is refused below whatever it had.
+      const prior =
+        !documentMoved && input.targets.some((target) => target.dependent)
+          ? (host.priorModel?.(current) ?? null)
+          : null;
+      const named = new Map<string, number>();
+      if (prior)
+        for (const feature of listFeaturesInOrder(current))
+          named.set(feature.name, (named.get(feature.name) ?? 0) + 1);
       for (const target of input.targets) {
+        const bodyPresent = Boolean(
+          ownEntry(derived.bodyRepresentations, target.resultBodyId)
+        );
+        // A later feature that failed before this edit is not refused for
+        // failing still. Its body is: one it had and would now lose is the
+        // edit's doing.
+        const standing =
+          prior !== null &&
+          target.dependent === true &&
+          featureFailedBefore({
+            featureName: target.featureName,
+            ...(target.featureId ? { featureId: target.featureId } : {}),
+            uniqueName: named.get(target.featureName) === 1,
+            before: prior,
+            candidate: derived
+          });
         const rejection = validatedFeatureRejection({
           featureName: target.featureName,
           ...(target.featureId ? { featureId: target.featureId } : {}),
           ...(target.dependent ? { dependent: true } : {}),
-          warnings: derived.warnings,
-          ...(derived.featureWarnings
-            ? { featureWarnings: derived.featureWarnings }
-            : {}),
-          bodyPresent: Boolean(
-            ownEntry(derived.bodyRepresentations, target.resultBodyId)
-          ),
+          ...(standing
+            ? { warnings: [], featureWarnings: [] }
+            : {
+                warnings: derived.warnings,
+                ...(derived.featureWarnings
+                  ? { featureWarnings: derived.featureWarnings }
+                  : {})
+              }),
+          bodyPresent:
+            bodyPresent ||
+            (standing &&
+              !ownEntry(
+                current.derived.bodyRepresentations,
+                target.resultBodyId
+              )),
           documentMoved,
           unit: displayLengthName(current.units)
         });

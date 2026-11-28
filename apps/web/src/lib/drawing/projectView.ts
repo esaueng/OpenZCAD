@@ -77,6 +77,15 @@ export interface ViewProjection {
   /** Flat `[u0, v0, u1, v1, …]` polylines in model units. */
   visible: Float64Array[];
   hidden: Float64Array[];
+  /**
+   * #2073: for each line of `hidden`, the projected line it is a piece of:
+   * one physical edge of a body, or one silhouette of a curved face. The
+   * numbers only tell the lines of one projection apart. A sheet joins the
+   * pieces of one line into a single dashed run whatever the projection did
+   * to its shape (`joinHiddenRuns`). Absent on a projection made before
+   * this was recorded: each hidden line is then taken as its own.
+   */
+  hiddenSources?: Uint32Array;
   /** Extent of everything the view draws, or null for an empty view. */
   bounds: { minU: number; minV: number; maxU: number; maxV: number } | null;
   /**
@@ -122,7 +131,8 @@ export function projectionBuffers(
     ...projection.hidden,
     ...(projection.edgeRuns?.visible ?? []),
     ...(projection.edgeRuns?.hidden ?? []),
-    ...(projection.hatch ? [projection.hatch] : [])
+    ...(projection.hatch ? [projection.hatch] : []),
+    ...(projection.hiddenSources ? [projection.hiddenSources] : [])
   ])
     buffers.add(line.buffer);
   return [...buffers];
@@ -1031,6 +1041,67 @@ export function triangleSag(
 }
 
 /**
+ * #2073: the faces a view sees edge-on, one flag per face: those whose
+ * projection is a curve, not a region. A wall seen along its axis (a bore, a
+ * radial port, the side of an extrusion) has no outline of its own; it draws
+ * as its end edges. Its tessellation is only that flat to within its own
+ * tolerance, though: where an end is a curve the kernel approximates (the
+ * saddle a port cuts in a bore), the small facets along it lean either way,
+ * a few degrees and more, and a silhouette read off their normals wanders
+ * all over the wall in hundreds of pieces that pile up on the end edges.
+ *
+ * A face is edge-on when none of its triangles shows more width in the view
+ * (its least projected altitude) than the face's tessellation may sit from
+ * the surface it stands for (the largest `triangleSag` on the face). That
+ * is judged per face, not per facet: a single thin facet says nothing (a
+ * fine mesh is made of them), and a face that shows more than its own
+ * tolerance anywhere keeps every facet's own facing, so a wall with real
+ * draft, or a cylinder tilted enough to show, outlines as before. A planar
+ * face has no sag, so it is edge-on only when it shows nothing at all.
+ * Triangles of no face are never flagged.
+ */
+function edgeOnFaces(
+  body: ProjectionBodyInput,
+  frame: DrawingViewFrame,
+  mesh: MeshAnalysis,
+  sag: Float64Array
+): Uint8Array {
+  const faceCount = body.faces?.length ?? 0;
+  const edgeOn = new Uint8Array(faceCount);
+  if (faceCount === 0) return edgeOn;
+  const shown = new Float64Array(faceCount);
+  const allowed = new Float64Array(faceCount);
+  const seen = new Uint8Array(faceCount);
+  const { positions, welded } = mesh;
+  const u = [0, 0, 0];
+  const v = [0, 0, 0];
+  for (let t = 0; t < mesh.faceOf.length; t += 1) {
+    const face = mesh.faceOf[t]!;
+    if (face < 0) continue;
+    seen[face] = 1;
+    for (let k = 0; k < 3; k += 1) {
+      const i = welded[body.indices[t * 3 + k]!]! * 3;
+      const [x, y, z] = [positions[i]!, positions[i + 1]!, positions[i + 2]!];
+      u[k] = dot(frame.x, x, y, z);
+      v[k] = dot(frame.up, x, y, z);
+    }
+    const area = Math.abs(
+      (u[1]! - u[0]!) * (v[2]! - v[0]!) - (u[2]! - u[0]!) * (v[1]! - v[0]!)
+    );
+    const longest = Math.max(
+      Math.hypot(u[1]! - u[0]!, v[1]! - v[0]!),
+      Math.hypot(u[2]! - u[1]!, v[2]! - v[1]!),
+      Math.hypot(u[0]! - u[2]!, v[0]! - v[2]!)
+    );
+    if (longest > 0) shown[face] = Math.max(shown[face]!, area / longest);
+    allowed[face] = Math.max(allowed[face]!, sag[t] ?? 0);
+  }
+  for (let face = 0; face < faceCount; face += 1)
+    edgeOn[face] = seen[face] && shown[face]! <= allowed[face]! ? 1 : 0;
+  return edgeOn;
+}
+
+/**
  * The silhouette polylines of one body's curved surfaces, as world points.
  * Exported for tests.
  */
@@ -1038,16 +1109,22 @@ export function bodySilhouettes(
   body: ProjectionBodyInput,
   frame: DrawingViewFrame,
   weldQuantum: number,
-  mesh: MeshAnalysis = analyzeMesh(body, weldQuantum)
+  mesh: MeshAnalysis = analyzeMesh(body, weldQuantum),
+  sag: Float64Array = triangleSag(body, mesh)
 ): Polyline3[] {
   const triangleCount = mesh.faceOf.length;
+  const edgeOn = edgeOnFaces(body, frame, mesh, sag);
   const facing = new Int8Array(triangleCount);
   for (let t = 0; t < triangleCount; t += 1) {
     // A facet seen exactly edge-on counts as facing away. A cylinder whose
     // silhouette falls mid-facet then outlines at that facet's front edge,
     // half a facet off the true curve; a wall seen along its axis (all of it
     // edge-on) meets its caps at sharp creases, which are never silhouettes.
+    // So does every facet of a face seen edge-on as a whole (`edgeOnFaces`),
+    // whichever way its tessellation happens to lean.
+    const face = mesh.faceOf[t]!;
     facing[t] =
+      !(face >= 0 && edgeOn[face]) &&
       dot(
         frame.direction,
         mesh.normals[t * 3]!,
@@ -1220,9 +1297,12 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   const meshes = bodies.map((body, bodyIndex) =>
     analyzeMesh(body, welds[bodyIndex]!)
   );
+  const sags = bodies.map((body, bodyIndex) =>
+    triangleSag(body, meshes[bodyIndex])
+  );
   bodies.forEach((body, bodyIndex) => {
     const { vertices, indices } = body;
-    const sag = triangleSag(body, meshes[bodyIndex]);
+    const sag = sags[bodyIndex]!;
     const triangles: Triangle[] = [];
     bodyTriangles.push(triangles);
     for (let t = 0; t + 2 < indices.length; t += 3) {
@@ -1339,7 +1419,8 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       body,
       frame,
       welds[bodyIndex]!,
-      meshes[bodyIndex]
+      meshes[bodyIndex],
+      sags[bodyIndex]
     ))
       lines.push({ points: silhouette.points, scale, silhouette: true });
   });
@@ -1356,6 +1437,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     return {
       visible: [],
       hidden: [],
+      hiddenSources: new Uint32Array(0),
       bounds: null,
       edgeRuns: { visible: [], hidden: [] },
       ...(hatch ? { hatch } : {})
@@ -1377,6 +1459,9 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   const hidden: Float64Array[] = [];
   const edgeVisible: Float64Array[] = [];
   const edgeHidden: Float64Array[] = [];
+  /** The entry of `lines` each line of `hidden` is a piece of. */
+  const hiddenLine: number[] = [];
+  let lineIndex = 0;
   let fromSilhouette = false;
   const emit = (points: number[], isHidden: boolean, scale: number) => {
     if (points.length < 6) return;
@@ -1400,6 +1485,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     // An edge running along the view direction projects to a point.
     if (drawn <= scale * 1e-9) return;
     (isHidden ? hidden : visible).push(flat);
+    if (isHidden) hiddenLine.push(lineIndex);
     if (!fromSilhouette) (isHidden ? edgeHidden : edgeVisible).push(flat);
   };
 
@@ -1407,7 +1493,8 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   // neighbours' state: where an edge meets a face's plane at its own end,
   // the occlusion tolerance leaves a sliver that is neither clearly in front
   // nor behind, and no drawing wants it. The cutoff is the line's own body's.
-  for (const { points: line, scale, silhouette } of lines) {
+  for (const [index, { points: line, scale, silhouette }] of lines.entries()) {
+    lineIndex = index;
     fromSilhouette = silhouette;
     const minPiece = scale * 1e-4;
     const count = Math.floor(line.length / 3);
@@ -1565,9 +1652,19 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     }
     return pieces;
   };
+  // Each kept piece of a hidden line is still a piece of that line's edge.
+  const keptHidden: Float64Array[] = [];
+  const keptSources: number[] = [];
+  hidden.forEach((line, index) => {
+    for (const piece of keptOf(line)) {
+      keptHidden.push(piece);
+      keptSources.push(hiddenLine[index]!);
+    }
+  });
   return {
     visible,
-    hidden: hidden.flatMap(keptOf),
+    hidden: keptHidden,
+    hiddenSources: Uint32Array.from(keptSources),
     bounds,
     edgeRuns: {
       visible: edgeVisible,

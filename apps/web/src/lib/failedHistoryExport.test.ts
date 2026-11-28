@@ -4,11 +4,15 @@ import {
   addSplitFeature,
   booleanBodies,
   createProjectDocument,
+  filletEdges,
+  holeBody,
   listFeaturesInOrder,
   mirrorBody,
   shellBody
 } from '@openzcad/document-core';
 import {
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
   type BodyId,
   type FeatureWarning,
@@ -240,5 +244,168 @@ describe('failed-history export of kept inputs (M11)', () => {
         ...failedHistoryExportBodies(failing(split.document, [a])).keys()
       ]).toEqual(keepOriginal ? [] : [a]);
     }
+  });
+});
+
+describe('failed-history export across pass-through steps (#2382)', () => {
+  /** The derived state of a build in which the named features failed. */
+  function built(
+    document: ProjectDocument,
+    live: BodyId[],
+    consumed: BodyId[],
+    failedNames: string[]
+  ): ProjectDocument {
+    const failed = listFeaturesInOrder(document).filter((feature) =>
+      failedNames.includes(feature.name)
+    );
+    // Only presence and `consumed` matter to the guard.
+    const shown: Record<string, { bodyId: BodyId; consumed: boolean }> = {};
+    for (const bodyId of live) shown[bodyId] = { bodyId, consumed: false };
+    for (const bodyId of consumed) shown[bodyId] = { bodyId, consumed: true };
+    return {
+      ...document,
+      derived: {
+        ...document.derived,
+        bodyRepresentations:
+          shown as unknown as ProjectDocument['derived']['bodyRepresentations'],
+        warnings: failed.map((feature) => `Feature "${feature.name}": failed.`),
+        featureWarnings: failed.map((feature) => ({
+          featureId: feature.featureId,
+          featureName: feature.name,
+          kind: 'build-failed' as const,
+          message: `Feature "${feature.name}": failed.`
+        }))
+      }
+    };
+  }
+  function flagged(
+    document: ProjectDocument,
+    name: string,
+    key: string
+  ): ProjectDocument {
+    const feature = listFeaturesInOrder(document).find(
+      (entry) => entry.name === name
+    )!;
+    return {
+      ...document,
+      nodes: {
+        ...document.nodes,
+        [feature.id]: {
+          ...feature,
+          metadata: { ...feature.metadata, [key]: true }
+        }
+      }
+    };
+  }
+  /** A plate, a wall that fails, then a fillet on the wall's result. */
+  function chain() {
+    const { document, housing, bracket } = fixture();
+    const wall = listFeaturesInOrder(document).find(
+      (feature) => feature.name === 'Housing wall'
+    )!.bodyId!;
+    const rounded = filletEdges(document, {
+      name: 'Round',
+      targetBodyId: wall,
+      edgeHashes: [77],
+      size: 1
+    });
+    return { document: rounded.document, housing, bracket, wall, rounded };
+  }
+
+  it('withholds the body a suppressed step hands on from a failed one', () => {
+    const { document, housing, bracket, wall, rounded } = chain();
+    // The wall fails and passes the housing through under its id; the
+    // suppressed fillet passes that on under its own, which is what is on
+    // screen and what an export would write.
+    const failed = built(
+      flagged(document, 'Round', FEATURE_SUPPRESSED_METADATA_KEY),
+      [rounded.bodyId, bracket],
+      [housing, wall],
+      ['Housing wall']
+    );
+    expect([...failedHistoryExportBodies(failed).values()]).toEqual([
+      expect.objectContaining({
+        bodyId: rounded.bodyId,
+        featureName: 'Housing wall'
+      })
+    ]);
+  });
+
+  it('follows it through a second suppressed step and a step built after them', () => {
+    const { document, housing, bracket, wall, rounded } = chain();
+    const again = filletEdges(document, {
+      name: 'Round again',
+      targetBodyId: rounded.bodyId,
+      edgeHashes: [78],
+      size: 1
+    });
+    const bored = holeBody(again.document, {
+      name: 'Bore',
+      targetBodyId: again.bodyId,
+      faceHash: 5,
+      style: 'simple',
+      diameter: 2,
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    });
+    const failed = built(
+      flagged(
+        flagged(bored.document, 'Round', FEATURE_SUPPRESSED_METADATA_KEY),
+        'Round again',
+        FEATURE_SUPPRESSED_METADATA_KEY
+      ),
+      [bored.bodyId, bracket],
+      [housing, wall, rounded.bodyId, again.bodyId],
+      ['Housing wall']
+    );
+    expect([...failedHistoryExportBodies(failed).keys()]).toEqual([
+      bored.bodyId
+    ]);
+  });
+
+  it('follows it through a later failed step', () => {
+    const { document, housing, bracket, wall, rounded } = chain();
+    const failed = built(
+      document,
+      [rounded.bodyId, bracket],
+      [housing, wall],
+      ['Housing wall', 'Round']
+    );
+    expect([...failedHistoryExportBodies(failed).values()]).toEqual([
+      expect.objectContaining({
+        bodyId: rounded.bodyId,
+        featureName: 'Housing wall'
+      })
+    ]);
+  });
+
+  it('carries nothing through a step History is rolled back past', () => {
+    const { document, housing, bracket, wall } = chain();
+    // Rolled back before the fillet: the build skips it, so the failed
+    // wall's stand-in is still on screen under the wall's own id.
+    const failed = built(
+      flagged(document, 'Round', FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY),
+      [wall, bracket],
+      [housing],
+      ['Housing wall']
+    );
+    expect([...failedHistoryExportBodies(failed).keys()]).toEqual([wall]);
+  });
+
+  it('leaves a suppressed step on a sound body alone', () => {
+    const { document, housing, bracket, wall } = chain();
+    const other = filletEdges(document, {
+      name: 'Round bracket',
+      targetBodyId: bracket,
+      edgeHashes: [9],
+      size: 1
+    });
+    const failed = built(
+      flagged(other.document, 'Round bracket', FEATURE_SUPPRESSED_METADATA_KEY),
+      [other.bodyId, wall],
+      [housing, bracket],
+      ['Round']
+    );
+    expect(failedHistoryExportBodies(failed).has(other.bodyId)).toBe(false);
   });
 });

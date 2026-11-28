@@ -7628,6 +7628,18 @@ export function App() {
       geometry.prepareFirstStepImport(document, signal) ??
       rebuildInDisposableWorker(document, signal),
     releaseCancellable: (signal) => geometry.releasePreparedImport(signal),
+    // The current model's own failures, once its exact rebuild is the one on
+    // screen: a later feature that already failed does not refuse an edit
+    // ahead of it.
+    priorModel: (document) =>
+      geometry.isReadyFor(document)
+        ? {
+            warnings: document.derived.warnings,
+            ...(featureAttribution?.derived === document.derived
+              ? { featureWarnings: featureAttribution.featureWarnings }
+              : {})
+          }
+        : null,
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
@@ -44535,6 +44547,7 @@ export function App() {
                 document={doc}
                 bodies={doc.derived.bodyRepresentations}
                 geometryPending={!geometry.isReadyFor(doc)}
+                failedBodies={failedHistoryBodies}
                 rebuildProgress={
                   geometry.state.phase === 'rebuilding' &&
                   geometry.state.progress?.stage === 'feature'
@@ -44555,13 +44568,19 @@ export function App() {
                   )
                 }
                 requestBodies={(source, signal) =>
-                  solvedDrawingSource(source)
-                    .then((solved) =>
-                      geometry.syncOnce(solved, undefined, undefined, {
-                        signal
-                      })
-                    )
-                    .then((derived) => derived.bodyRepresentations)
+                  solvedDrawingSource(source).then((solved) =>
+                    geometry
+                      .syncOnce(solved, undefined, undefined, { signal })
+                      .then((derived) => ({
+                        bodies: derived.bodyRepresentations,
+                        // #2382: this row's own failed features, as
+                        // `failedHistoryBodies` reads the active row's.
+                        failedBodies: failedHistoryExportBodies(
+                          { ...solved, derived },
+                          derived.featureWarnings
+                        )
+                      }))
+                  )
                 }
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}

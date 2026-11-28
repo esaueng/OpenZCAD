@@ -122,9 +122,16 @@ test(
     let front = await frame();
     const inset = 5 * (1 - Math.SQRT1_2) * front.paperPerModel * front.pxPerMm;
     await page.mouse.click(front.right - inset, front.top + inset);
+    // Placed 10 mm outside the arc, 60° round from its first end, above the
+    // view. The dimension's arc spans the full quarter, so its radius sets
+    // how far up it reaches: the front view sits at the top of the sheet,
+    // and a radius much larger runs it off the paper, which refuses the
+    // export (#2166).
+    const arcRadius = 5 * front.paperPerModel * front.pxPerMm;
+    const reach = arcRadius + 10 * front.pxPerMm;
     await page.mouse.click(
-      front.right + 14 * front.pxPerMm,
-      front.top - 14 * front.pxPerMm
+      front.right - arcRadius + reach * Math.cos(Math.PI / 3),
+      front.top + arcRadius - reach * Math.sin(Math.PI / 3)
     );
     await expect(
       canvas.getByRole('button', { name: 'Arc angle dimension 90°' })

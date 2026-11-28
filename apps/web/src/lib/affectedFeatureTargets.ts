@@ -1,4 +1,8 @@
-import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  featureReplacedInputBody,
+  findSketch,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
 import {
   displayLengthName,
   transformStampBodyIds,
@@ -17,6 +21,7 @@ import {
   type FeatureData,
   featureDatumAxisRefs,
   isDatumPlaneRef,
+  isFeatureManuallySuppressed,
   isFeatureSuppressed,
   type DatumPlaneSource,
   type BodyId,
@@ -28,7 +33,7 @@ import {
 } from '@openzcad/shared';
 import {
   FeatureBuildError,
-  refusingWarningDetail,
+  featureFailedBefore,
   validatedFeatureRejection
 } from './featureValidation';
 
@@ -110,6 +115,13 @@ export function affectedFeatureTargets(
      * feature as stored does not, since its kept inputs stand on their own.
      */
     inputBranches?: boolean;
+    /**
+     * Also list each manually suppressed step that hands an affected body on
+     * under its own result id (ADR-017). It builds nothing, so an edit has
+     * nothing of its own to validate there; a failure upstream of it is
+     * still what stands under that id (#2382).
+     */
+    standIns?: boolean;
   } = {}
 ): AffectedFeatureTarget[] {
   const features = listFeaturesInOrder(document);
@@ -197,6 +209,26 @@ export function affectedFeatureTargets(
 
   for (const feature of features.slice(sourceIndex + 1)) {
     if (isFeatureSuppressed(feature)) {
+      // ADR-017: a manually suppressed step that replaces its input hands
+      // that input through under its own result id, so what follows it
+      // still builds on the affected body. Read from the build's own table
+      // (`featureReplacedInputBody`); a rollback-paused step passes nothing.
+      const passed = isFeatureManuallySuppressed(feature)
+        ? featureReplacedInputBody(feature)
+        : null;
+      if (passed !== null && feature.bodyId && affectedBodies.has(passed)) {
+        // What follows is validated with the edit, as a dependent: for the
+        // failures the edit causes, not one it already had (the commit's
+        // `priorModel`).
+        affectedBodies.add(feature.bodyId);
+        if (options.standIns)
+          targets.push({
+            featureName: feature.name,
+            featureId: feature.featureId,
+            resultBodyId: feature.bodyId,
+            dependent: true
+          });
+      }
       continue;
     }
     const data = feature.data;
@@ -540,35 +572,20 @@ export function reorderRefusal(
   const named = new Map<string, number>();
   for (const feature of features)
     named.set(feature.name, (named.get(feature.name) ?? 0) + 1);
-  // Without typed attribution a saved warning cannot say whether it was a
-  // failure or an advisory, so only the exact failure the candidate reports,
-  // on a uniquely named feature, counts as one the model already had.
-  const candidateFailures = (feature: (typeof features)[number]): string[] =>
-    derived.featureWarnings
-      ? derived.featureWarnings
-          .filter(
-            (entry) =>
-              entry.featureId === feature.featureId &&
-              (entry.kind === 'build-failed' || entry.kind === 'refusal')
-          )
-          .map((entry) => entry.message)
-      : derived.warnings.filter((warning) =>
-          warning.startsWith(`Feature "${feature.name}":`)
-        );
+  // Without typed attribution only the exact failure the candidate reports,
+  // on a uniquely named feature, counts as one the model already had
+  // (`featureFailedBefore`).
   const failedBefore = (feature: (typeof features)[number]): boolean =>
-    beforeWarnings
-      ? Boolean(
-          refusingWarningDetail(
-            feature.name,
-            before?.warnings ?? [],
-            beforeWarnings,
-            feature.featureId
-          )
-        )
-      : named.get(feature.name) === 1 &&
-        candidateFailures(feature).some((message) =>
-          (before?.warnings ?? []).includes(message)
-        );
+    featureFailedBefore({
+      featureName: feature.name,
+      featureId: feature.featureId,
+      uniqueName: named.get(feature.name) === 1,
+      before: {
+        warnings: before?.warnings ?? [],
+        ...(beforeWarnings ? { featureWarnings: beforeWarnings } : {})
+      },
+      candidate: derived
+    });
   for (const feature of reordered.slice(Math.min(from, toIndex))) {
     if (isFeatureSuppressed(feature)) continue;
     const rejection = validatedFeatureRejection({

@@ -11,10 +11,18 @@ import {
   createBodyFeatureIds,
   createProjectDocument,
   filletEdges,
+  holeBody,
   listFeaturesInOrder,
   transformBody
 } from '@openzcad/document-core';
-import { toUserId, type BodyId, type ProjectDocument } from '@openzcad/shared';
+import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
+  toUserId,
+  type BodyId,
+  type FeatureWarning,
+  type ProjectDocument
+} from '@openzcad/shared';
+import { affectedFeatureTargets } from '../lib/affectedFeatureTargets';
 import {
   useValidatedFeatureCommit,
   VALIDATED_FEATURE_BUSY_STATUS,
@@ -416,6 +424,226 @@ describe('validated feature commit', () => {
     expect(onStatus).toHaveBeenLastCalledWith(
       'Fillet could not be created on 2 selected edges with radius 1 mm.'
     );
+  });
+});
+
+/**
+ * Re-check of #2439: an edit is refused for a later feature it newly breaks,
+ * not for one that already failed. Since the walk carries a body across a
+ * suppressed step, the feature after that step is validated with the edit;
+ * its standing failure (kept with "Resume anyway") is not the edit's doing.
+ */
+describe('an edit ahead of a feature that already failed', () => {
+  const BORE_FAILURE =
+    'Feature "Bore": Hole could not be created on the selected face.';
+
+  /** A block, moved; a suppressed fillet on it; a bore on its result. */
+  function chain() {
+    const block = addPrimitiveFeature(
+      createProjectDocument('Kept failure', toUserId('user_kept_failure')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 10, depth: 10 }
+      }
+    );
+    const blockBodyId = block.bodyOrder[0]!;
+    const moved = transformBody(block, {
+      name: 'Move',
+      targetBodyId: blockBodyId,
+      translation: { x: 5, y: 0, z: 0 }
+    }).document;
+    const rounded = filletEdges(moved, {
+      name: 'Round',
+      targetBodyId: blockBodyId,
+      edgeHashes: [101],
+      size: 1
+    });
+    const bored = holeBody(rounded.document, {
+      name: 'Bore',
+      targetBodyId: rounded.bodyId,
+      faceHash: 5,
+      style: 'simple',
+      diameter: 2,
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    });
+    const [, move, round, bore] = listFeaturesInOrder(bored.document);
+    const document: ProjectDocument = {
+      ...bored.document,
+      nodes: {
+        ...bored.document.nodes,
+        [round!.id]: {
+          ...round!,
+          metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+        }
+      }
+    };
+    return {
+      document,
+      move: move!,
+      bore: bore!,
+      bodyIds: [blockBodyId, rounded.bodyId, bored.bodyId]
+    };
+  }
+
+  type Chain = ReturnType<typeof chain>;
+  type Prior = {
+    warnings: readonly string[];
+    featureWarnings?: readonly FeatureWarning[];
+  };
+
+  /** The Move renamed, judged against a rebuild that reports `failures`. */
+  async function rename(input: {
+    /** What the candidate's rebuild reports. */
+    failures(built: Chain): FeatureWarning[];
+    /** The current model's own failures, as the host holds them. */
+    prior?(built: Chain): Prior | null;
+    /** The document as edited, from the chain's. */
+    document?(built: Chain): ProjectDocument;
+  }) {
+    const built = chain();
+    const document = input.document?.(built) ?? built.document;
+    const failures = input.failures(built);
+    const manager = new CommandManager(document);
+    const commit = vi.fn(() => true);
+    const onStatus = vi.fn();
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit({
+        manager: () => manager,
+        derive: async (candidate) => ({
+          bodyRepresentations: Object.fromEntries(
+            built.bodyIds.map((bodyId) => [bodyId, bodyRepresentation(bodyId)])
+          ),
+          exportableBodyIds: built.bodyIds,
+          warnings: failures.map((entry) => entry.message),
+          featureWarnings: failures,
+          updatedAt: candidate.derived.updatedAt
+        }),
+        ...(input.prior ? { priorModel: () => input.prior!(built) } : {}),
+        commit,
+        commitTransaction: () => true,
+        onBusy: vi.fn(),
+        onStatus
+      })
+    );
+    const targets = affectedFeatureTargets(document, built.move.featureId);
+    // The walk reaches the bore across the suppressed fillet.
+    expect(targets.map((target) => target.featureId)).toEqual([
+      built.move.featureId,
+      built.bore.featureId
+    ]);
+    let outcome: ValidatedFeatureOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.run(
+        commandFactories.updateFeature(
+          { featureId: built.move.featureId, name: 'Shift' },
+          'Rename Move'
+        ),
+        {
+          featureName: 'Shift',
+          featureId: built.move.featureId,
+          resultBodyId: targets[0]!.resultBodyId,
+          targets: targets.map((target, index) =>
+            index === 0 ? { ...target, featureName: 'Shift' } : target
+          ),
+          successMessage: 'Rename Move'
+        }
+      );
+    });
+    return { outcome, commit, onStatus };
+  }
+
+  const boreFailed = ({ bore }: Chain): FeatureWarning => ({
+    featureId: bore.featureId,
+    featureName: 'Bore',
+    message: BORE_FAILURE,
+    kind: 'build-failed'
+  });
+
+  it('commits a rename when the bore after a suppressed step fails as it already did', async () => {
+    const { outcome, commit } = await rename({
+      failures: (built) => [boreFailed(built)],
+      prior: (built) => ({
+        warnings: [BORE_FAILURE],
+        featureWarnings: [boreFailed(built)]
+      })
+    });
+    expect(outcome).toBe('committed');
+    expect(commit).toHaveBeenCalledOnce();
+  });
+
+  it('commits it on the saved warning alone, for a feature no other shares its name with', async () => {
+    const { outcome } = await rename({
+      failures: (built) => [boreFailed(built)],
+      prior: () => ({ warnings: [BORE_FAILURE] })
+    });
+    expect(outcome).toBe('committed');
+  });
+
+  it('refuses the same rename when the bore built before it', async () => {
+    const { outcome, commit, onStatus } = await rename({
+      failures: (built) => [boreFailed(built)],
+      prior: () => ({ warnings: [], featureWarnings: [] })
+    });
+    expect(outcome).toBe('rejected');
+    expect(commit).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith(
+      'Hole could not be created on the selected face.'
+    );
+  });
+
+  it('refuses it when the saved warning could be another feature’s, or is another failure', async () => {
+    // Unattributed, and now a different failure than the one the model had.
+    const other = await rename({
+      failures: (built) => [boreFailed(built)],
+      prior: () => ({
+        warnings: ['Feature "Bore": Hole is deeper than its body.']
+      })
+    });
+    expect(other.outcome).toBe('rejected');
+    // Unattributed, and the block shares the bore's name: whose warning it
+    // was is a guess.
+    const twin = await rename({
+      document: ({ document }) => {
+        const block = listFeaturesInOrder(document)[0]!;
+        return {
+          ...document,
+          nodes: { ...document.nodes, [block.id]: { ...block, name: 'Bore' } }
+        };
+      },
+      failures: (built) => [boreFailed(built)],
+      prior: () => ({ warnings: [BORE_FAILURE] })
+    });
+    expect(twin.outcome).toBe('rejected');
+  });
+
+  it('refuses it as before where the host has no current model to compare with', async () => {
+    const failures = (built: Chain) => [boreFailed(built)];
+    expect((await rename({ failures })).outcome).toBe('rejected');
+    // The current model's rebuild has not landed: nothing says what it had.
+    expect((await rename({ failures, prior: () => null })).outcome).toBe(
+      'rejected'
+    );
+  });
+
+  it('still refuses the edited feature’s own failure, standing or not', async () => {
+    const message = 'Feature "Shift": Move could not be applied.';
+    const moveFailed = ({ move }: Chain): FeatureWarning => ({
+      featureId: move.featureId,
+      featureName: 'Shift',
+      message,
+      kind: 'build-failed'
+    });
+    const { outcome, commit } = await rename({
+      failures: (built) => [moveFailed(built)],
+      prior: (built) => ({
+        warnings: [message],
+        featureWarnings: [moveFailed(built)]
+      })
+    });
+    expect(outcome).toBe('rejected');
+    expect(commit).not.toHaveBeenCalled();
   });
 });
 

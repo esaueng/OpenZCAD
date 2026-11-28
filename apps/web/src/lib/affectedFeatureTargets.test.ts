@@ -19,6 +19,8 @@ import {
   updateFeature
 } from '@openzcad/document-core';
 import {
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
   type BodyId,
   type ProjectDocument,
@@ -885,5 +887,81 @@ describe('edit targets of a re-pointed Boolean (M11)', () => {
     expect(names(editAffectedFeatureTargets(base, null, unionId))).toEqual([
       'Union'
     ]);
+  });
+});
+
+describe('affected targets across a suppressed pass-through step (#2382)', () => {
+  /** A block, a fillet on it, then a bore on the fillet's result. */
+  function chain(key?: string) {
+    const block = addPrimitiveFeature(
+      createProjectDocument('Passed', toUserId('user_passed')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 10, depth: 10 }
+      }
+    );
+    const rounded = filletEdges(block, {
+      name: 'Round',
+      targetBodyId: block.bodyOrder[0]!,
+      edgeHashes: [101],
+      size: 1
+    });
+    const bored = holeBody(rounded.document, {
+      name: 'Bore',
+      targetBodyId: rounded.bodyId,
+      faceHash: 5,
+      style: 'simple',
+      diameter: 2,
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    });
+    const [source, round] = listFeaturesInOrder(bored.document);
+    const document: ProjectDocument = key
+      ? {
+          ...bored.document,
+          nodes: {
+            ...bored.document.nodes,
+            [round!.id]: { ...round!, metadata: { [key]: true } }
+          }
+        }
+      : bored.document;
+    return { document, source: source!, rounded, bored };
+  }
+  const results = (targets: { featureName: string; resultBodyId: BodyId }[]) =>
+    targets.map((target) => [target.featureName, target.resultBodyId]);
+
+  it('reaches the step built on the body a suppressed step hands on', () => {
+    const { document, source, rounded, bored } = chain(
+      FEATURE_SUPPRESSED_METADATA_KEY
+    );
+    // The suppressed fillet builds nothing to validate, but the bore after
+    // it still runs on the edited block, under the fillet's id.
+    expect(results(affectedFeatureTargets(document, source.featureId))).toEqual(
+      [
+        ['Block', source.bodyId],
+        ['Bore', bored.bodyId]
+      ]
+    );
+    expect(
+      results(
+        affectedFeatureTargets(document, source.featureId, { standIns: true })
+      )
+    ).toEqual([
+      ['Block', source.bodyId],
+      ['Round', rounded.bodyId],
+      ['Bore', bored.bodyId]
+    ]);
+  });
+
+  it('passes nothing through a step History is rolled back past', () => {
+    const { document, source } = chain(
+      FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY
+    );
+    expect(
+      results(
+        affectedFeatureTargets(document, source.featureId, { standIns: true })
+      )
+    ).toEqual([['Block', source.bodyId]]);
   });
 });

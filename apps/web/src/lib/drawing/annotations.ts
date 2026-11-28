@@ -10,6 +10,7 @@ import {
 } from '@openzcad/document-core';
 import {
   drawingViewFrame,
+  drawingPaperMm,
   drawingPaperPerModelUnit,
   holeCalloutLabel,
   projectToView,
@@ -67,6 +68,8 @@ import {
   viewPaperPerModelUnit,
   clipPolylineToCircle,
   fitText,
+  sheetBoxOnPaper,
+  sheetMarksOnPaper,
   viewClipCircle,
   sheetSafeText,
   textWidthMm,
@@ -5008,11 +5011,18 @@ export function composeSheetAnnotations(
   texts: SheetText[];
   images: SheetImage[];
   boxes: Map<DrawingAnnotationId, AnnotationBox>;
+  /**
+   * #2166: the annotations laid out partly or wholly past the paper's
+   * edge, in layout order: the page would print them cut or not at all.
+   */
+  offPaper: DrawingAnnotationId[];
 } {
   const strokes: SheetStroke[] = [];
   const texts: SheetText[] = [];
   const images: SheetImage[] = [];
   const boxes = new Map<DrawingAnnotationId, AnnotationBox>();
+  const offPaper: DrawingAnnotationId[] = [];
+  const paper = drawingPaperMm(sheet.paper);
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
   // v98: attachments after their hosts (a datum symbol may hang from a
   // frame on a dimension), each in sheet order; a sheet without them keeps
@@ -5060,6 +5070,11 @@ export function composeSheetAnnotations(
     texts.push(...layout.texts);
     if (layout.images) images.push(...layout.images);
     boxes.set(annotation.annotationId, layout.box);
+    const picturesOn = (layout.images ?? []).every((image) =>
+      sheetBoxOnPaper(image, paper)
+    );
+    if (!picturesOn || !sheetMarksOnPaper(layout.strokes, layout.texts, paper))
+      offPaper.push(annotation.annotationId);
   }
-  return { strokes, texts, images, boxes };
+  return { strokes, texts, images, boxes, offPaper };
 }

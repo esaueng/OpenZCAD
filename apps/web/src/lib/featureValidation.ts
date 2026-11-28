@@ -274,6 +274,57 @@ export function validatedFeatureRejection(
   return null;
 }
 
+/** A rebuild's warnings, with their typed attribution where it has one. */
+export interface RebuildWarnings {
+  warnings: readonly string[];
+  featureWarnings?: readonly FeatureWarning[];
+}
+
+/**
+ * Whether the model already had the failure a candidate rebuild reports for
+ * one feature: a failure the design carries (History's "Resume anyway")
+ * rather than one the change under validation causes.
+ *
+ * With typed attribution for the model `before`, a failing record on the
+ * feature answers it. A saved document carries only the sentences, which
+ * cannot say whether one was a failure or an advisory, nor whose it was
+ * when names repeat: then only the exact failure the candidate reports, on
+ * a feature no other shares its name with (`uniqueName`), counts.
+ */
+export function featureFailedBefore(input: {
+  featureName: string;
+  featureId?: FeatureId;
+  uniqueName: boolean;
+  before: RebuildWarnings;
+  candidate: RebuildWarnings;
+}): boolean {
+  const { featureName, featureId, before, candidate } = input;
+  if (before.featureWarnings)
+    return Boolean(
+      refusingWarningDetail(
+        featureName,
+        before.warnings,
+        before.featureWarnings,
+        featureId
+      )
+    );
+  if (!input.uniqueName) return false;
+  const reported = candidate.featureWarnings
+    ? candidate.featureWarnings
+        .filter(
+          (entry) =>
+            (featureId
+              ? entry.featureId === featureId
+              : entry.featureName === featureName) &&
+            (entry.kind === 'build-failed' || entry.kind === 'refusal')
+        )
+        .map((entry) => entry.message)
+    : candidate.warnings.filter((warning) =>
+        warning.startsWith(`Feature "${featureName}":`)
+      );
+  return reported.some((message) => before.warnings.includes(message));
+}
+
 /**
  * What a card says when this edit strands a later feature's saved edge or
  * face pick: which feature, and the two ways forward.
