@@ -189,6 +189,31 @@ test(
     // The issue's gesture again, on settled geometry: Down once.
     await grip(page, PLACEMENT).press('ArrowDown');
     await expect(status).toContainText(REFUSAL);
+    // Read whole: on one line the toast cut the refusal off after the step
+    // names, before "Keep … before …".
+    const line = status.locator('.workspace-toast-body > [role="status"]');
+    await expect(line).toHaveText(REFUSAL);
+    expect(
+      await line.evaluate(
+        (element) =>
+          element.scrollWidth > element.clientWidth + 1 ||
+          element.scrollHeight > element.clientHeight + 1
+      )
+    ).toBe(false);
+    const toast = await status
+      .locator('.workspace-toast-body')
+      .evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return {
+          inside:
+            box.left >= 0 &&
+            box.right <= window.innerWidth &&
+            box.top >= 0 &&
+            box.bottom <= window.innerHeight,
+          wrapped: box.height > 28
+        };
+      });
+    expect(toast).toEqual({ inside: true, wrapped: true });
     expect(await order()).toEqual([...HISTORY]);
     await expect(undo).toBeDisabled();
     // The Subtract's grip, Up once, asks for the same order.
@@ -224,3 +249,147 @@ test(
     expect(errors).toEqual([]);
   }
 );
+
+/**
+ * Where the action notice (a duplicate's Undo) and the wrapped refusal stand,
+ * once their pop-in and fades have run; null for one not drawn.
+ */
+async function noticeBoxes(page: Page) {
+  return page.evaluate(async () => {
+    const selectors = ['.toast', '.workspace-toast', '.workspace-toast-body'];
+    await Promise.all(
+      selectors
+        .flatMap((selector) => [...document.querySelectorAll(selector)])
+        .flatMap((element) => element.getAnimations())
+        .map((animation) => animation.finished)
+    );
+    const box = (selector: string) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      for (
+        let node: Element | null = element;
+        node;
+        node = node.parentElement
+      ) {
+        if (Number(getComputedStyle(node).opacity) === 0) return null;
+      }
+      const { top, bottom, left, right, height } =
+        element.getBoundingClientRect();
+      return height === 0 ? null : { top, bottom, left, right };
+    };
+    return {
+      notice: box('.toast'),
+      refusal: box('.workspace-toast-body'),
+      viewport: { width: window.innerWidth, height: window.innerHeight }
+    };
+  });
+}
+
+/**
+ * Review of #2413: a refusal wraps, so its row is taller than the one the
+ * notice lane allowed a status, and a visible Undo notice stacked over it
+ * covered its last lines. The notice stands clear of the whole refusal, on
+ * the regular stage and on a phone.
+ */
+for (const size of [
+  { width: 1440, height: 900, compact: false },
+  { width: 390, height: 844, compact: true }
+]) {
+  test(
+    `keeps a visible Undo clear of a wrapped refusal at ${size.width}×${size.height}`,
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(180_000);
+      const errors: string[] = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      await stubApi(page, { panelLayout: { right: [['history']] } });
+      if (size.compact) {
+        await page.addInitScript(() => {
+          if (!sessionStorage.getItem('compact-seeded')) {
+            sessionStorage.setItem('compact-seeded', '1');
+            localStorage.setItem('openzcad.layout:v1', 'compact');
+          }
+        });
+      }
+      await page.setViewportSize(size);
+      await page.goto('/');
+      await page
+        .getByRole('button', { name: 'Import project', exact: true })
+        .click();
+      await page.getByLabel('Import project backup').setInputFiles({
+        name: 'vented-block.openzcad',
+        mimeType: 'application/json',
+        buffer: projectBackup(ventedBlock().manager.document)
+      });
+      const status = page.getByRole('contentinfo');
+      let rows;
+      if (size.compact) {
+        await expect(
+          page.locator('.app-shell[data-shell="compact"]')
+        ).toBeVisible({ timeout: 60_000 });
+        await page.getByRole('button', { name: 'More', exact: true }).click();
+        const sheet = page.locator('.compact-sheet');
+        await sheet
+          .getByRole('button', { name: 'Panels', exact: true })
+          .click();
+        rows = sheet.locator('.compact-row');
+      } else {
+        await page
+          .getByRole('button', { name: 'History panel', exact: true })
+          .waitFor({ state: 'visible', timeout: 60_000 });
+        await revealModelPanel(page);
+        rows = page.locator('.feature-row');
+      }
+      await expect(rows).toHaveCount(HISTORY.length, { timeout: 30_000 });
+      await expectBodyCount(page, 1);
+      await expect(status).toContainText('warnings0', { timeout: 120_000 });
+
+      // A duplicate raises the Undo notice, and the refusal comes while it
+      // is up. The pointer rests on the notice, which holds it there.
+      await rows
+        .filter({ hasText: 'Place pocket tool' })
+        .first()
+        .click({ button: 'right' });
+      await page.getByRole('menuitem', { name: 'Duplicate' }).click();
+      const notice = page.locator('.toast', { hasText: 'Duplicated' });
+      await expect(notice).toBeVisible({ timeout: 30_000 });
+      if (!size.compact) await notice.hover();
+      await grip(page, PLACEMENT).press('ArrowDown');
+      const line = status.locator('.workspace-toast-body > [role="status"]');
+      await expect(line).toHaveText(REFUSAL);
+      await expect(notice).toBeVisible();
+
+      const boxes = await noticeBoxes(page);
+      expect(boxes.notice).not.toBeNull();
+      expect(boxes.refusal).not.toBeNull();
+      const {
+        notice: undo,
+        refusal,
+        viewport
+      } = {
+        ...boxes,
+        notice: boxes.notice!,
+        refusal: boxes.refusal!
+      };
+      // Read whole, wrapped, on screen.
+      expect(refusal.bottom - refusal.top).toBeGreaterThan(28);
+      expect(refusal.top).toBeGreaterThanOrEqual(0);
+      expect(refusal.bottom).toBeLessThanOrEqual(viewport.height);
+      expect(refusal.left).toBeGreaterThanOrEqual(0);
+      expect(refusal.right).toBeLessThanOrEqual(viewport.width);
+      // The notice covers none of it: over it on the regular stage, and on
+      // a phone (the line at the stage's top) under it or over it.
+      if (size.compact) {
+        expect(
+          undo.bottom <= refusal.top || undo.top >= refusal.bottom,
+          JSON.stringify(boxes)
+        ).toBe(true);
+      } else {
+        expect(undo.bottom, JSON.stringify(boxes)).toBeLessThanOrEqual(
+          refusal.top
+        );
+      }
+      expect(errors).toEqual([]);
+    }
+  );
+}

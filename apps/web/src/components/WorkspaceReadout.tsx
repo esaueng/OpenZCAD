@@ -36,6 +36,16 @@ function isNotableStatus(status: string, tone: StatusTone): boolean {
   return tone === 'warning' || REFUSAL_PATTERN.test(status);
 }
 
+/**
+ * A refusal ends on what to do instead ("… Keep “Locate vent” before
+ * “Subtract 1”."), and names the steps before it gets there. On one line a
+ * desktop toast cut it off after the names (#2334), so a refusal wraps and
+ * is read whole; every other status keeps its single line.
+ */
+function isRefusalStatus(status: string): boolean {
+  return REFUSAL_PATTERN.test(status);
+}
+
 /** Phones keep the guidance in the bar; its help glyph opens the whole text. */
 const PHONE_QUERY = '(max-width: 520px)';
 
@@ -441,6 +451,40 @@ export function WorkspaceReadout({
     OVERLAY_EXIT_MS
   );
   const shownStatus = quiet ? (fading.rendered ?? '') : paced.status;
+  // Held through the fade once a refusal expires: the text stays drawn for
+  // that 100ms, wrapped, and the rows above keep clear of it until it goes.
+  const refusal = isRefusalStatus(shownStatus) && (shown || quiet);
+  // A wrapped refusal is taller than the 28px row the notice lane allows a
+  // status, so the rows stacked above it (the Undo toast) lift by its real
+  // height, published as the activity pill publishes its own: on the viewer
+  // for the stage's lane, or, over a full compact sheet, on the notice host
+  // that draws the line beside the action notice. The body is taken by a
+  // callback ref: the sheet coming up to full moves the line onto that host
+  // as a new node, which the measure must follow.
+  const [statusBody, setStatusBody] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!refusal || !statusBody) return;
+    const viewer = statusBody.closest<HTMLElement>('.viewer-area');
+    const measure = () => {
+      const height = statusBody.getBoundingClientRect().height;
+      if (height > 0) {
+        const value = `${Math.ceil(height)}px`;
+        viewer?.style.setProperty('--workspace-toast-live-h', value);
+        statusHost?.style.setProperty('--workspace-toast-live-h', value);
+      }
+    };
+    measure();
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(statusBody);
+    return () => {
+      observer?.disconnect();
+      viewer?.style.removeProperty('--workspace-toast-live-h');
+      statusHost?.style.removeProperty('--workspace-toast-live-h');
+    };
+  }, [refusal, statusBody, statusHost, shownStatus]);
   const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
   const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
   const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
@@ -609,18 +653,24 @@ export function WorkspaceReadout({
       </div>
       {footer(
         <footer
-          className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}`}
+          className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}${
+            refusal ? ' is-refusal' : ''
+          }`}
           role="contentinfo"
           // The cut's own line, a state rather than news: the compact
           // workspace (U12) shows it on View's tray instead.
           data-section-line={sectionShown || undefined}
         >
           {compactShell ? (
-            <div className={`workspace-toast-body${quiet ? ' quiet' : ''}`}>
+            <div
+              ref={setStatusBody}
+              className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
+            >
               {toastBody}
             </div>
           ) : (
             <button
+              ref={setStatusBody}
               type="button"
               className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
               // Keep the toast out of the tab order while it is faded out.

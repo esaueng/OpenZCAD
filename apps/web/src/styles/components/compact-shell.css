@@ -1236,6 +1236,24 @@
   margin-bottom: calc(var(--compact-target) + var(--sp-1));
 }
 
+/* A refusal wraps and can stand taller than the 44px row its action takes:
+   the notice lifts by the taller of the two, the refusal's height published
+   on the host (WorkspaceReadout). It keeps the class through its exit fade,
+   still drawn, so the lift holds until it has gone. At peek and half the
+   line stands at the stage's top, clear of the notice (above). */
+.app-shell[data-shell='compact']
+  .compact-notice-host:has(
+    .workspace-toast.is-refusal:not(.ready, [data-section-line]):has(
+        .workspace-toast-undo
+      )
+  )
+  .toast {
+  margin-bottom: calc(
+    max(var(--compact-target), var(--workspace-toast-live-h, 28px)) +
+      var(--sp-1)
+  );
+}
+
 /* As on the regular stage (quiet-stage.css), a settled status only repeats
    what the notice has just said, so it steps aside while the notice is up. */
 .app-shell[data-shell='compact']:has(.compact-notice-host .toast:not(.closing))
