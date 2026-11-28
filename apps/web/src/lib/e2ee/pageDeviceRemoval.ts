@@ -19,8 +19,10 @@ import {
   type RemovalParticipant
 } from './deviceRemoval';
 import { mlsProjectSessions } from './mls/projectSessions';
+import { E2eeError } from '@openzcad/crypto';
 import {
   GROUP_RESET_CONFIRMATION,
+  ProjectGroupError,
   createProjectGroupsApi,
   epochAuthority,
   projectGroupAccount,
@@ -30,6 +32,7 @@ import {
 } from './projectGroups';
 import {
   AUTHORITY_RESTORE_CONFIRMATION,
+  ProjectAuthorityError,
   projectAuthorityRecovery,
   restoreProjectAuthority
 } from './projectAuthority';
@@ -222,6 +225,12 @@ export interface RecoverableProject {
    */
   readonly name: string;
   /**
+   * Set when this device knows no title for a project whose encrypted name
+   * did not verify: `name` is {@link UNVERIFIED_PROJECT_NAME}, never what
+   * the account listed, and the project is told apart by its id.
+   */
+  readonly unnamed?: true;
+  /**
    * Set when the account no longer returns the authority record this device
    * verified for the project (issue #1704): `restorable` when this device's
    * pins name this account, under its current identity, as the owner;
@@ -235,22 +244,24 @@ interface DeviceTitle {
   readonly updatedAt: string;
 }
 
+/** Shown, beside its project ID, for a project this device has no title for. */
+export const UNVERIFIED_PROJECT_NAME = 'Encrypted project';
+
 /**
- * The name to show for an encrypted project whose listed name is only the
- * account's placeholder, because its encrypted name did not verify: the
- * title of this device's own copy of the project, or the title this device
- * last verified on the shelf, whichever is newer, as the start screen
- * chooses. Never a name the account supplied unverified; the placeholder
- * stays when this device knows no title.
+ * The name to show for an encrypted project whose encrypted name did not
+ * verify: the title of this device's own copy of the project, or the title
+ * this device last verified on the shelf, whichever is newer, as the start
+ * screen chooses. Null when this device knows no title. The name the
+ * account lists for such a project is unverified and is never shown: the
+ * caller shows {@link UNVERIFIED_PROJECT_NAME} and the project's id.
  */
 export function trustedProjectName(
-  listed: string,
   device: DeviceTitle | undefined,
   lastVerified: DeviceTitle | undefined
-): string {
+): string | null {
   if (lastVerified && (!device || device.updatedAt <= lastVerified.updatedAt))
     return lastVerified.name;
-  return device?.name ?? listed;
+  return device?.name ?? null;
 }
 
 /**
@@ -293,15 +304,16 @@ export async function encryptedProjectsForRecovery(
                 () => 'none' as const
               )
             : 'none';
+          const title = unnamed?.has(project.projectId)
+            ? trustedProjectName(
+                device.get(project.projectId),
+                lastVerified.get(project.projectId)
+              )
+            : project.name;
           return {
             projectId: project.projectId,
-            name: unnamed?.has(project.projectId)
-              ? trustedProjectName(
-                  project.name,
-                  device.get(project.projectId),
-                  lastVerified.get(project.projectId)
-                )
-              : project.name,
+            name: title ?? UNVERIFIED_PROJECT_NAME,
+            ...(title === null ? { unnamed: true as const } : {}),
             ...(recovery === 'restorable' ||
             recovery === 'identity-discontinued'
               ? { authority: recovery }
@@ -316,35 +328,48 @@ export async function encryptedProjectsForRecovery(
 
 /** What the check after a restoration found, and how far it reached. */
 export interface AuthorityRestoreOutcome {
-  /** Whether every key epoch that was checked verified. */
+  /** Whether everything that was checked verified. */
   readonly verified: boolean;
   /**
-   * Whether the check reached the key epochs of the account's current saved
-   * version, which opening the project verifies. False when that version
-   * could not be read: only the restored record's own key epoch was checked,
-   * and `verified` says nothing about a saved version made after it.
+   * Whether the check ran through the account's current saved version, as
+   * opening the project does. False when that version could not be read:
+   * only the restored record's own key epoch was checked, and `verified`
+   * says nothing about a saved version made after it.
    */
   readonly savedVersionChecked: boolean;
   readonly problem?: string;
 }
 
+/** This device's version pins, read but never moved. */
+const unmovedPins = (pins: Pick<VersionPinStore, 'read'>): VersionPinStore => ({
+  read: (userId, projectId) => pins.read(userId, projectId),
+  advance: async () => true,
+  advanceInfo: async () => true,
+  advanceEnvelope: async () => true
+});
+
 /**
- * Check a project's membership history against its restored record, as
- * opening the project does: through the restored record's key epoch, and
- * through each key epoch of the versions the account saved since this
- * device's pinned one, up to the current head. The head may be at a later
- * key epoch than the record this device restored (another device rotated
- * the keys and saved after this one last verified); opening needs that
- * epoch's history too, so a check that stopped at the record's own epoch
- * would promise a project that still refuses to open.
+ * Check a restored project as opening it does, by running the open path
+ * itself: the account's saved head and the whole signed log from this
+ * device's pinned version up to it, page after page, every version's
+ * author checked against the membership of the key epoch its own signed
+ * header names, and the head decrypted. Nothing the account merely says
+ * about those versions (their key epochs, where the log ends) decides
+ * anything, so the project is reported verified only when opening it
+ * would succeed.
  *
- * Reads and verifies only. The account's word on the head's key epoch
- * decides nothing but how far to check; opening verifies the head itself.
+ * The head may be at a later key epoch than the record this device restored
+ * (another device rotated the keys and saved after this one last verified);
+ * opening needs that epoch's history too.
+ *
+ * Verifies only. It reads this device's version pins and moves none: the
+ * page that opens the project accepts the head itself. The document it
+ * decrypts is dropped.
  */
 export async function verifyRestoredAuthority(
   deps: {
     readonly groups: ProjectGroupContext;
-    readonly documents: Pick<EncryptedDocumentsApi, 'loadDocument'>;
+    readonly documents: EncryptedDocumentsApi;
     readonly pins: Pick<VersionPinStore, 'read'>;
   },
   projectId: string,
@@ -362,35 +387,38 @@ export async function verifyRestoredAuthority(
       problem: problem(error)
     };
   }
-  let saved: number[];
+  const [
+    { createEncryptedProjectStore, EncryptedProjectIntegrityError },
+    { createBlobReferenceRegistry }
+  ] = await Promise.all([
+    import('./encryptedProjectStore'),
+    import('./blobReferences')
+  ]);
+  const references = createBlobReferenceRegistry();
   try {
-    const pin = await deps.pins.read(groups.account.userId, projectId);
-    const { metadata } = await deps.documents.loadDocument(
-      projectId,
-      pin?.headHash ? pin.documentVersion : undefined
-    );
-    saved = [
-      ...new Set([
-        ...metadata.log.map((entry) => entry.keyEpoch),
-        metadata.head.keyEpoch
-      ])
-    ].sort((a, b) => a - b);
-    if (!saved.every((epoch) => Number.isSafeInteger(epoch) && epoch >= 0))
-      throw new Error('The account named an impossible key epoch.');
-  } catch {
-    return { verified: true, savedVersionChecked: false };
-  }
-  try {
-    for (const epoch of saved)
-      if (epoch !== restoredKeyEpoch)
-        await epochAuthority(groups, projectId, epoch);
+    await createEncryptedProjectStore({
+      groups,
+      api: deps.documents,
+      pins: unmovedPins(deps.pins),
+      blobReferences: references
+    }).loadProject(projectId);
     return { verified: true, savedVersionChecked: true };
   } catch (error) {
-    return {
-      verified: false,
-      savedVersionChecked: true,
-      problem: problem(error)
-    };
+    // A refusal by the checks themselves is the answer. Anything else (the
+    // account unreachable, the session ended) left the saved version
+    // unchecked, which is reported as such and never as verified.
+    return error instanceof EncryptedProjectIntegrityError ||
+      error instanceof ProjectGroupError ||
+      error instanceof ProjectAuthorityError ||
+      error instanceof E2eeError
+      ? {
+          verified: false,
+          savedVersionChecked: true,
+          problem: problem(error)
+        }
+      : { verified: true, savedVersionChecked: false };
+  } finally {
+    references.clear();
   }
 }
 

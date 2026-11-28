@@ -1304,7 +1304,9 @@ Decided 2026-10-19, on the evidence of the library spike
   compare-and-swap. Other devices accept it as any newer record, against
   their own pins. No pin is dropped, and an identity that was set up afresh
   (rather than rotated) cannot restore: its keys prove nothing about the
-  pinned owner.
+  pinned owner. The device reads the record back and pins it only when it is
+  the record it wrote or a verified successor; a read-back it refuses leaves
+  every pin as it was.
 
   Encrypted archives use provisional admission: a Welcome join can export
   only the key needed to decrypt its archive until verification completes.

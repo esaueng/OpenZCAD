@@ -274,10 +274,24 @@ export interface TrustedProjectAuthority {
   readonly manifest: MlsAuthorityManifest;
 }
 /** Both the account MAC and the currently certified device signature must verify. */
-export async function loadProjectAuthority(
+export function loadProjectAuthority(
   ctx: ProjectGroupContext,
   projectId: string,
   options: { readonly identityReset?: SignedStatement } = {}
+): Promise<TrustedProjectAuthority | null> {
+  return verifiedProjectAuthority(ctx, projectId, options);
+}
+/**
+ * {@link loadProjectAuthority}, with a last word for the caller: `accept`
+ * sees the record once every check passed and before anything is pinned.
+ * When it throws, the load fails with that error and the pins (owner,
+ * accepted record and roots) stay exactly as they were.
+ */
+async function verifiedProjectAuthority(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  options: { readonly identityReset?: SignedStatement },
+  accept?: (verified: TrustedProjectAuthority) => void
 ): Promise<TrustedProjectAuthority | null> {
   const guard = sessionGuard();
   if (!ctx.api.authority)
@@ -391,6 +405,7 @@ export async function loadProjectAuthority(
     )
   )
     fail('The project authority record carries inconsistent membership state.');
+  const verified = { record: authority, value, manifest };
   await storeFor(ctx).update(ctx.account.userId, projectId, (current) => {
     guard();
     checkOwner(current.owner, manifest);
@@ -422,7 +437,7 @@ export async function loadProjectAuthority(
       )
         fail('The account assigned a key epoch to an older MLS generation.');
     }
-    return {
+    const next = {
       owner: {
         userId: manifest.ownerUserId,
         identityKeyHash: manifest.ownerIdentityKeyHash
@@ -430,8 +445,11 @@ export async function loadProjectAuthority(
       accepted: { hash, authority },
       manifest: newestManifest(current.manifest, value.manifest)
     };
+    // Last, so a record the caller turns down is never pinned.
+    accept?.(verified);
+    return next;
   });
-  return { record: authority, value, manifest };
+  return verified;
 }
 /** New roots need the pinned owner's current, unrevoked device signature. */
 export async function acceptProjectAuthorityManifest(
@@ -864,23 +882,30 @@ export async function restoreProjectAuthority(
       throw error;
     }
     guard();
-    // The ordinary load verifies whatever the account returns now against
+    // The ordinary checks verify whatever the account returns now against
     // this device's pin (account MAC, certified signer, rollback and fork
-    // checks) and pins it. Another device may have published the next
-    // record by the ordinary compare-and-swap since the Worker stored this
-    // one: such a verified successor, at a later sequence, is the restored
-    // record carried on, and the restoration succeeded. Other bytes at the
-    // restored sequence, or anything earlier, are not what the Worker
-    // accepted.
-    const stored = await loadProjectAuthority(ctx, projectId);
-    if (
-      !stored ||
-      (stored.record.record !== request.record &&
-        stored.value.sequence <= request.sequence)
-    )
-      return fail(
-        'The account did not retain the authority record it accepted.'
-      );
-    return stored;
+    // checks). Another device may have published the next record by the
+    // ordinary compare-and-swap since the Worker stored this one: such a
+    // verified successor, at a later sequence, is the restored record
+    // carried on, and the restoration succeeded. Other bytes at the
+    // restored sequence are not what the Worker accepted, however validly
+    // sealed: they are refused before anything is pinned, so the record the
+    // Worker did store still verifies against the unchanged pins when the
+    // account serves it.
+    const notRetained =
+      'The account did not retain the authority record it accepted.';
+    const stored = await verifiedProjectAuthority(
+      ctx,
+      projectId,
+      {},
+      (candidate) => {
+        if (
+          candidate.record.record !== request.record &&
+          candidate.value.sequence <= request.sequence
+        )
+          fail(notRetained);
+      }
+    );
+    return stored ?? fail(notRetained);
   });
 }

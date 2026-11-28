@@ -12,10 +12,12 @@ import { Group, Notice, SettingRow } from './settingsControls';
  * How a project is named wherever its record is restored or its keys reset.
  * A project whose record was withdrawn has no verified name from the
  * account, so two of them can share a name (or the placeholder); its id,
- * the one Project properties shows, says which one is meant.
+ * the one Project properties shows, says which one is meant. So it does for
+ * any project this device has no title for: the account's unverified name
+ * for it is never shown.
  */
 const described = (project: RecoverableProject) =>
-  project.authority
+  project.authority || project.unnamed
     ? `${project.name} (project ID ${project.projectId})`
     : project.name;
 
@@ -158,7 +160,11 @@ export function EncryptedProjectRecovery({
         (current) =>
           current?.map((project) =>
             project.projectId === restoring.projectId
-              ? { projectId: project.projectId, name: project.name }
+              ? {
+                  projectId: project.projectId,
+                  name: project.name,
+                  ...(project.unnamed ? { unnamed: true as const } : {})
+                }
               : project
           ) ?? null
       );
@@ -217,7 +223,11 @@ export function EncryptedProjectRecovery({
           );
           if (!project.authority) {
             return (
-              <SettingRow key={project.projectId} title={project.name} compact>
+              <SettingRow
+                key={project.projectId}
+                title={described(project)}
+                compact
+              >
                 {resetKeys}
               </SettingRow>
             );

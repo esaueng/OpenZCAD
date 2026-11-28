@@ -16,9 +16,12 @@ import {
   toHex,
   type MlsAuthorityTrust
 } from '@openzcad/crypto';
-import type {
-  E2eeProjectAuthorityRecord,
-  E2eeSaveProjectAuthorityRequest
+import {
+  decodeE2eeFrame,
+  encodeE2eeFrame,
+  type E2eeDocumentHeadMetadata,
+  type E2eeProjectAuthorityRecord,
+  type E2eeSaveProjectAuthorityRequest
 } from '@openzcad/shared';
 import {
   AUTHORITY_RESTORE_CONFIRMATION,
@@ -476,7 +479,20 @@ it('still fails the read-back when the account returns other bytes at the restor
       )
     ).rejects.toThrow(/did not retain the authority record/);
     expect(acknowledged).toBe(true);
-    expect((await pins(laptop, projectId)).owner).toEqual(pinned.owner);
+    // PR #2400 re-check: the refused read-back pinned nothing, neither the
+    // owner, nor the accepted record, nor the roots.
+    expect(await pins(laptop, projectId)).toEqual(pinned);
+    // So the record the Worker did store is accepted once the account
+    // serves it, instead of refused as a fork of bytes this device rejected.
+    laptop.answer = undefined;
+    const kept = stored(srv, projectId);
+    expect(kept).toHaveLength(1);
+    expect(
+      (await loadProjectAuthority(laptop.groups, projectId))?.record.record
+    ).toBe(kept[0]!.record);
+    expect(
+      (await reload(srv, laptop).store.loadProject(projectId)).projectId
+    ).toBe(projectId);
   }
   // The record withheld again right after the acknowledgement.
   {
@@ -548,6 +564,7 @@ it('checks the history through the saved head’s key epoch, not only the restor
     documents: desktop.documents,
     pins: desktop.pins
   };
+  const versionPin = await desktop.pins.read(OWNER, projectId);
   // The restored record's own epoch verifies, which is all the check used
   // to cover; the saved head needs epoch 1, and opening refuses.
   await epochAuthority(desktop.groups, projectId, 0);
@@ -566,6 +583,9 @@ it('checks the history through the saved head’s key epoch, not only the restor
     verified: true,
     savedVersionChecked: true
   });
+  // The check is the one opening runs, but it moves no version pin: the
+  // page that opens the project accepts the head itself.
+  expect(await desktop.pins.read(OWNER, projectId)).toEqual(versionPin);
   expect((await reload(srv, desktop).store.loadProject(projectId)).name).toBe(
     'Rotated'
   );
@@ -578,6 +598,7 @@ it('checks the history through the saved head’s key epoch, not only the restor
       {
         ...deps,
         documents: {
+          ...desktop.documents,
           loadDocument: async () => {
             throw new Error('offline');
           }
@@ -587,6 +608,160 @@ it('checks the history through the saved head’s key epoch, not only the restor
       0
     )
   ).toEqual({ verified: true, savedVersionChecked: false });
+});
+
+/** Rewrites what the account says beside a document read's envelope. */
+const relabelled =
+  (
+    change: (metadata: E2eeDocumentHeadMetadata) => E2eeDocumentHeadMetadata,
+    then?: Device['answer']
+  ): Device['answer'] =>
+  async (path, init, response) => {
+    if (!/\/document(\?|$)/.test(path) || !response.ok)
+      return then ? then(path, init, response) : response;
+    const { metadata, payload } = decodeE2eeFrame(
+      new Uint8Array(await response.arrayBuffer())
+    );
+    return new Response(
+      encodeE2eeFrame(change(metadata as E2eeDocumentHeadMetadata), payload),
+      { status: response.status, headers: response.headers }
+    );
+  };
+/**
+ * An account that serves every key archive but `keyEpoch`'s; with `asked`,
+ * only when that one archive is asked for, so a later epoch's chain, which
+ * lists the archives, still verifies.
+ */
+const withoutArchive =
+  (keyEpoch: number, asked = false): NonNullable<Device['answer']> =>
+  async (path, _init, response) => {
+    if (
+      !path.includes('/keys/archives') ||
+      !response.ok ||
+      (asked && !path.includes(`keyEpoch=${keyEpoch}`))
+    )
+      return response;
+    const body = (await response.json()) as {
+      archives: { keyEpoch: number }[];
+    };
+    return Response.json({
+      ...body,
+      archives: body.archives.filter((archive) => archive.keyEpoch !== keyEpoch)
+    });
+  };
+
+// PR #2400 re-check: the account's key-epoch labels are not authenticated.
+it('does not report a restored project verified on the account’s word about its saved versions’ key epochs', async () => {
+  const { srv, laptop, projectId } = await pinnedProject();
+  const desktop = device(srv, owner, 'owner_desktop');
+  await desktop.store.loadProject(projectId);
+  await commitProjectGroup(laptop.groups, projectId);
+  const current = await laptop.store.loadProject(projectId);
+  await laptop.store.saveProjectDocument({
+    projectId,
+    expectedVersion: current.version,
+    document: edited(current, 'Rotated')
+  });
+  withdraw(srv, projectId);
+  // The account withholds key epoch 1's archive, and labels the versions
+  // saved under it as key epoch 0, the restored record's own.
+  const mislabelled = relabelled(
+    (metadata) => ({
+      ...metadata,
+      head: { ...metadata.head, keyEpoch: 0 },
+      log: metadata.log.map((entry) => ({ ...entry, keyEpoch: 0 }))
+    }),
+    withoutArchive(1)
+  );
+  desktop.answer = mislabelled;
+  await restoreProjectAuthority(
+    desktop.groups,
+    projectId,
+    AUTHORITY_RESTORE_CONFIRMATION
+  );
+
+  const outcome = await verifyRestoredAuthority(
+    {
+      groups: desktop.groups,
+      documents: desktop.documents,
+      pins: desktop.pins
+    },
+    projectId,
+    0
+  );
+  // Opening refuses, so the check must not report the project verified.
+  const reopened = reload(srv, desktop);
+  reopened.answer = mislabelled;
+  expect(await refusal(reopened.store.loadProject(projectId))).toBeInstanceOf(
+    Error
+  );
+  expect(outcome).toMatchObject({ verified: false, savedVersionChecked: true });
+  expect(outcome.problem).toBeTruthy();
+});
+
+// PR #2400 re-check: the first page of the log is not the whole history.
+it('checks the key epochs of saved versions on later pages of the account’s log', async () => {
+  const { srv, laptop, projectId } = await pinnedProject();
+  const desktop = device(srv, owner, 'owner_desktop');
+  await desktop.store.loadProject(projectId);
+  // Since then: a save at key epoch 0, one at 1 and the head at 2.
+  let current = await laptop.store.loadProject(projectId);
+  for (const [name, rotate] of [
+    ['Zero', false],
+    ['One', true],
+    ['Two', true]
+  ] as const) {
+    if (rotate) await commitProjectGroup(laptop.groups, projectId);
+    const next = edited(current, name);
+    const { version } = await laptop.store.saveProjectDocument({
+      projectId,
+      expectedVersion: current.version,
+      document: next
+    });
+    current = { ...next, version };
+  }
+  withdraw(srv, projectId);
+  // The account does not serve key epoch 1's own archive, and the first
+  // page of its log stops before the version saved under that epoch.
+  const firstPage = (metadata: E2eeDocumentHeadMetadata) => ({
+    ...metadata,
+    log: metadata.log.slice(0, 2),
+    more: true
+  });
+  const paged = relabelled(firstPage, withoutArchive(1, true));
+  desktop.answer = paged;
+  await restoreProjectAuthority(
+    desktop.groups,
+    projectId,
+    AUTHORITY_RESTORE_CONFIRMATION
+  );
+  const deps = {
+    groups: desktop.groups,
+    documents: desktop.documents,
+    pins: desktop.pins
+  };
+  // Both epochs the first page and the head name verify on their own.
+  await epochAuthority(desktop.groups, projectId, 0);
+  await epochAuthority(desktop.groups, projectId, 2);
+
+  const outcome = await verifyRestoredAuthority(deps, projectId, 0);
+  const reopened = reload(srv, desktop);
+  reopened.answer = paged;
+  expect(await refusal(reopened.store.loadProject(projectId))).toBeInstanceOf(
+    Error
+  );
+  expect(outcome).toMatchObject({ verified: false, savedVersionChecked: true });
+  expect(outcome.problem).toBeTruthy();
+
+  // With that archive served, the paged history verifies and it opens.
+  desktop.answer = relabelled(firstPage);
+  expect(await verifyRestoredAuthority(deps, projectId, 0)).toEqual({
+    verified: true,
+    savedVersionChecked: true
+  });
+  expect((await reload(srv, desktop).store.loadProject(projectId)).name).toBe(
+    'Two'
+  );
 });
 
 it('reports a restored project verified through its saved head when nothing newer is needed', async () => {

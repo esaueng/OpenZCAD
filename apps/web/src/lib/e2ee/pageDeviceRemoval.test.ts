@@ -61,29 +61,17 @@ beforeEach(() => {
 
 describe('trustedProjectName', () => {
   const at = (name: string, updatedAt: string) => ({ name, updatedAt });
-  it('keeps the placeholder when this device knows no title', () => {
-    expect(trustedProjectName('Encrypted project', undefined, undefined)).toBe(
-      'Encrypted project'
-    );
+  it('names nothing when this device knows no title', () => {
+    expect(trustedProjectName(undefined, undefined)).toBeNull();
   });
   it('prefers the newer of this device’s copy and its last verified title', () => {
     const device = at('Edited here', '2026-11-22T00:00:00.000Z');
     const verified = at('Verified', '2026-11-21T00:00:00.000Z');
-    expect(trustedProjectName('Encrypted project', device, undefined)).toBe(
-      'Edited here'
-    );
-    expect(trustedProjectName('Encrypted project', undefined, verified)).toBe(
-      'Verified'
-    );
-    expect(trustedProjectName('Encrypted project', device, verified)).toBe(
-      'Edited here'
-    );
+    expect(trustedProjectName(device, undefined)).toBe('Edited here');
+    expect(trustedProjectName(undefined, verified)).toBe('Verified');
+    expect(trustedProjectName(device, verified)).toBe('Edited here');
     expect(
-      trustedProjectName(
-        'Encrypted project',
-        at('Stale copy', '2026-11-20T00:00:00.000Z'),
-        verified
-      )
+      trustedProjectName(at('Stale copy', '2026-11-20T00:00:00.000Z'), verified)
     ).toBe('Verified');
   });
 });
@@ -129,6 +117,7 @@ describe('encryptedProjectsForRecovery', () => {
       {
         projectId: 'proj_c',
         name: 'Encrypted project',
+        unnamed: true,
         authority: 'restorable'
       },
       { projectId: 'proj_d', name: 'Verified gear' }
@@ -154,7 +143,39 @@ describe('encryptedProjectsForRecovery', () => {
     });
     mocks.listLocalProjects.mockRejectedValueOnce(new Error('blocked'));
     expect(await encryptedProjectsForRecovery(ctx, account)).toEqual([
-      { projectId: 'proj_a', name: 'Encrypted project' }
+      { projectId: 'proj_a', name: 'Encrypted project', unnamed: true }
+    ]);
+  });
+
+  // PR #2400 re-check: the account's listing name is not verified either.
+  it('never shows the name the account lists for a project whose name did not verify', async () => {
+    mocks.listProjects.mockResolvedValueOnce({
+      projects: [
+        { ...placeholder('proj_a'), name: 'Secret bracket' },
+        { ...placeholder('proj_b'), name: 'Restore me first' },
+        { ...placeholder('proj_c'), name: 'Restore me first' }
+      ],
+      pendingEncryptedProjectIds: new Set(['proj_a', 'proj_b', 'proj_c'])
+    });
+    mocks.listLocalProjects.mockResolvedValueOnce([
+      { ...placeholder('proj_a'), name: 'Motor mount' }
+    ]);
+    mocks.projectAuthorityRecovery.mockImplementation(
+      async (_groups, projectId) =>
+        projectId === 'proj_c' ? 'none' : 'restorable'
+    );
+
+    expect(await encryptedProjectsForRecovery(ctx, account)).toEqual([
+      // This device's own title, not the account's.
+      { projectId: 'proj_a', name: 'Motor mount', authority: 'restorable' },
+      // No title here: the generic name, and the id says which project.
+      {
+        projectId: 'proj_b',
+        name: 'Encrypted project',
+        unnamed: true,
+        authority: 'restorable'
+      },
+      { projectId: 'proj_c', name: 'Encrypted project', unnamed: true }
     ]);
   });
 });

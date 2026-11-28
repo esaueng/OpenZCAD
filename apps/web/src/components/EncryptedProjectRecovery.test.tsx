@@ -12,6 +12,7 @@ const RESTORE_CONFIRMATION =
 interface Listed {
   projectId: string;
   name: string;
+  unnamed?: true;
   authority?: 'restorable' | 'identity-discontinued';
 }
 
@@ -266,6 +267,61 @@ describe('EncryptedProjectRecovery', () => {
     expect(
       screen.getByLabelText(
         'Restore the verification record of Encrypted project (project ID proj_aaaa)'
+      )
+    ).toBeTruthy();
+  });
+
+  // PR #2400 re-check: with no title on this device, the generic name and
+  // the project's id stand in, wherever the project is named.
+  it('names a project this device has no title for by the generic name and its id', async () => {
+    page.encryptedProjectsForRecovery.mockResolvedValueOnce([
+      { projectId: 'proj_aaaa', name: 'Encrypted project', unnamed: true },
+      {
+        projectId: 'proj_bbbb',
+        name: 'Encrypted project',
+        unnamed: true,
+        authority: 'restorable'
+      },
+      { projectId: 'proj_cccc', name: 'Bracket' }
+    ]);
+    render(
+      <EncryptedProjectRecovery
+        ctx={context(true)}
+        account={account}
+        canUsePasskey
+      />
+    );
+    fireEvent.click(await screen.findByText('Show encrypted projects'));
+    const reset = await screen.findByLabelText(
+      'Reset the encryption group of Encrypted project (project ID proj_aaaa)'
+    );
+    expect(
+      reset.closest('.setting-row')?.querySelector('.setting-title')
+        ?.textContent
+    ).toBe('Encrypted project (project ID proj_aaaa)');
+    // A verified name needs no id beside it.
+    expect(
+      screen.getByLabelText('Reset the encryption group of Bracket')
+    ).toBeTruthy();
+    fireEvent.click(reset);
+    expect(
+      screen.getByText(/^Resetting starts a new encryption group/).textContent
+    ).toContain('for Encrypted project (project ID proj_aaaa).');
+
+    // After its record is restored the row still carries its id.
+    fireEvent.click(
+      screen.getByLabelText(
+        'Restore the verification record of Encrypted project (project ID proj_bbbb)'
+      )
+    );
+    fireEvent.click(screen.getByLabelText(RESTORE_CONFIRMATION));
+    fireEvent.click(screen.getByText('Restore verification record'));
+    await screen.findByText(
+      /^The verification record of Encrypted project \(project ID proj_bbbb\) is back/
+    );
+    expect(
+      screen.getByLabelText(
+        'Reset the encryption group of Encrypted project (project ID proj_bbbb)'
       )
     ).toBeTruthy();
   });
