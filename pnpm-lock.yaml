@@ -337,11 +337,11 @@ importers:
         specifier: 0.8.3
         version: 0.8.3
       remus-wasm:
-        specifier: github:esaueng/remus#f210583ef8b4259b15c4910ff86ef07914f5bc54&path:/crates/wasm/pkg
-        version: https://codeload.github.com/esaueng/remus/tar.gz/f210583ef8b4259b15c4910ff86ef07914f5bc54#path:/crates/wasm/pkg
+        specifier: github:esaueng/remus#d69ed9c6ac159f8ad633cb415e4c8dfc052e9daf&path:/crates/wasm/pkg
+        version: https://codeload.github.com/esaueng/remus/tar.gz/d69ed9c6ac159f8ad633cb415e4c8dfc052e9daf#path:/crates/wasm/pkg
       remus-wasm-io:
-        specifier: github:esaueng/remus#f210583ef8b4259b15c4910ff86ef07914f5bc54&path:/crates/wasm-io/pkg
-        version: https://codeload.github.com/esaueng/remus/tar.gz/f210583ef8b4259b15c4910ff86ef07914f5bc54#path:/crates/wasm-io/pkg
+        specifier: github:esaueng/remus#d69ed9c6ac159f8ad633cb415e4c8dfc052e9daf&path:/crates/wasm-io/pkg
+        version: https://codeload.github.com/esaueng/remus/tar.gz/d69ed9c6ac159f8ad633cb415e4c8dfc052e9daf#path:/crates/wasm-io/pkg
 
   packages/mls: {}
 
@@ -446,8 +446,8 @@ packages:
     engines: {node: '>=6.0.0'}
     hasBin: true
 
-  '@babel/runtime@7.29.15':
-    resolution: {integrity: sha512-304gsbbGVmQc+cNGHzwHBlqepYdWLKj3VXCQBGt/EGcV7PUPfKI7kAUNW1FZEOCwlQiLvQjg1JEaAlRQ616h+Q==}
+  '@babel/runtime@7.29.16':
+    resolution: {integrity: sha512-LKBjGopxrQE0aFucNL69OyyyF143MOWUULEOftU3oCgyD35Sy84UUpVnt/sNvTb7ZmCyALSt7om+fojlW35zYQ==}
     engines: {node: '>=6.9.0'}
 
   '@babel/runtime@7.29.7':
@@ -1984,13 +1984,13 @@ packages:
     resolution: {integrity: sha512-6tDA8g98We0zd0GvVeMT9arEOnTw9qM03L9cJXaCjrip1OO764RDBLBfrB4cwzNGDj5OA5ioymC9GkizgWJDUg==}
     engines: {node: '>=8'}
 
-  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/f210583ef8b4259b15c4910ff86ef07914f5bc54#path:/crates/wasm-io/pkg:
-    resolution: {path: /crates/wasm-io/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/f210583ef8b4259b15c4910ff86ef07914f5bc54}
-    version: 2026.1.171
+  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/d69ed9c6ac159f8ad633cb415e4c8dfc052e9daf#path:/crates/wasm-io/pkg:
+    resolution: {path: /crates/wasm-io/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/d69ed9c6ac159f8ad633cb415e4c8dfc052e9daf}
+    version: 2026.1.173
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/f210583ef8b4259b15c4910ff86ef07914f5bc54#path:/crates/wasm/pkg:
-    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/f210583ef8b4259b15c4910ff86ef07914f5bc54}
-    version: 2026.1.171
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/d69ed9c6ac159f8ad633cb415e4c8dfc052e9daf#path:/crates/wasm/pkg:
+    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/d69ed9c6ac159f8ad633cb415e4c8dfc052e9daf}
+    version: 2026.1.173
 
   rolldown@1.2.14:
     resolution: {integrity: sha512-eTBTTqMR6uHKLgcUqpJP8ntzDI6V4LYA8negAMBEI7gkgVvOdrx6VsvS2Ym+83KhOPdLCHWJu0w7UQFJZhHKNw==}
@@ -2385,7 +2385,7 @@ snapshots:
     dependencies:
       '@babel/types': 7.29.7
 
-  '@babel/runtime@7.29.15': {}
+  '@babel/runtime@7.29.16': {}
 
   '@babel/runtime@7.29.7': {}
 
@@ -2922,7 +2922,7 @@ snapshots:
   '@testing-library/dom@10.4.1':
     dependencies:
       '@babel/code-frame': 7.29.7
-      '@babel/runtime': 7.29.15
+      '@babel/runtime': 7.29.16
       '@types/aria-query': 5.0.4
       aria-query: 5.3.0
       dom-accessibility-api: 0.5.16
@@ -3678,9 +3678,9 @@ snapshots:
       indent-string: 4.0.0
       strip-indent: 3.0.0
 
-  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/f210583ef8b4259b15c4910ff86ef07914f5bc54#path:/crates/wasm-io/pkg: {}
+  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/d69ed9c6ac159f8ad633cb415e4c8dfc052e9daf#path:/crates/wasm-io/pkg: {}
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/f210583ef8b4259b15c4910ff86ef07914f5bc54#path:/crates/wasm/pkg: {}
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/d69ed9c6ac159f8ad633cb415e4c8dfc052e9daf#path:/crates/wasm/pkg: {}
 
   rolldown@1.2.14:
     dependencies:

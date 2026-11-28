@@ -594,7 +594,7 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
     ],
     [
       // Untyped, not claimed as a miss: the kernel says this of a plane
-      // through a sphere too.
+      // tangent to a sphere too.
       'invalid input: cutting plane does not split the solid (entirely on one side)',
       'Split could not cut the body along this plane. Check that the plane passes through the body.'
     ],
@@ -676,8 +676,8 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
     });
 
     it('claims a miss only when the cause proves one, and never reads as the generic sentence', () => {
-      // The adapter records no cause for a plane through a sphere, which the
-      // kernel refuses with this same text (review of #2074, finding 1).
+      // The adapter records no cause for a plane tangent to a sphere, which
+      // the kernel refuses with this same text (review of #2074, finding 1).
       for (const plain of [
         plainRefusal(MISS),
         plainRefusal(MISS, 'invalid_input'),

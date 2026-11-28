@@ -201,18 +201,20 @@ export const SPLIT_PLANE_ON_FACE =
 export const SPLIT_PLANE_ON_EDGE =
   'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.';
 /**
- * The kernel's "entirely on one side", where nothing proved a miss. The
- * kernel judges the side from the body's edges alone, so it says this of a
- * plane through a sphere too (K10): the sentence must not claim a miss.
+ * The kernel's "entirely on one side", where nothing proved a miss. On a
+ * curved body the kernel says this of a tangent plane too, such as one
+ * touching a sphere at its pole (K10), and the adapter proves no cause there:
+ * the sentence must not claim a miss.
  */
 const SPLIT_PLANE_NOT_CUT =
   'Split could not cut the body along this plane. Check that the plane passes through the body.';
 /**
  * The kernel's "does not cross the interior", where nothing proved how the
- * plane meets the body. The kernel judges it from the body's edges alone, so
- * it says this of a plane through a sphere's equator too (K10): the sentence
- * must claim neither a touch nor a direction to slide, only the edge or face
- * the plane runs along.
+ * plane meets the body. On a curved body the kernel says this of a tangent
+ * plane that meets a seam edge, such as one touching a torus at its outer
+ * rim (K10), and the adapter proves no cause there: the sentence must claim
+ * neither a touch nor a direction to slide, only the edge or face the plane
+ * runs along.
  */
 const SPLIT_PLANE_TOUCHES =
   'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.';

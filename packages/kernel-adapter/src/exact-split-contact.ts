@@ -6,10 +6,12 @@
  * reaches across the plane its two refusals say too little on their own:
  *
  * - `invalid_input` ("cutting plane does not split the solid (entirely on
- *   one side)"). The kernel decides "one side" from the body's EDGES alone
- *   (`plane_contact` in `split.rs`), so a curved face that bows across the
- *   plane between edges clear of it reads the same as a real miss: an R5
- *   sphere cut at z = 1 is refused this way, as z = 6 is.
+ *   one side)"). Since Remus 2026.1.173 (remus#2023) the kernel sections a
+ *   sphere or torus face the plane crosses between its edges, so an R5
+ *   sphere cut at z = 1 builds. On a curved body this refusal still covers
+ *   a tangent plane as well as a real miss (the same sphere at z = 5 and at
+ *   z = 6), and a curved face can bow past every vertex, so no vertex test
+ *   proves which.
  * - `unsupported` ("… it only touches the body and contains edge N …"). The
  *   same refusal whether the plane lies along a lone edge or flat on a face:
  *   the kernel stops at the first edge it finds in the plane, and every

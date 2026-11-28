@@ -488,6 +488,11 @@ const xPlane = (x: number) => ({
   normal: { x: 1, y: 0, z: 0 }
 });
 
+const zPlane = (z: number) => ({
+  origin: { x: 0, y: 0, z },
+  normal: { x: 0, y: 0, z: 1 }
+});
+
 /** The two halves of a built split, low (−normal) side first, by bounds. */
 function halves(
   derived: DerivedState,
@@ -706,31 +711,68 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
     });
   });
 
-  // S7 (review of #2074, finding 1): the kernel judges "entirely on one
-  // side" from the body's edges alone. An R5 sphere at the origin is two
-  // hemispheres meeting on the z = 0 equator, so z = 1, which cuts it, gets
-  // the same refusal as z = 6, which misses it. The adapter cannot prove a
-  // miss on a curved body, records no cause, and the bar claims none.
+  // S7 (review of #2074, finding 1; flipped on Remus 2026.1.173, remus#2023):
+  // an R5 sphere at the origin is two hemispheres meeting on the z = 0
+  // equator. Until remus#2023 the kernel judged "entirely on one side" from
+  // the body's edges alone, so z = 1 was refused like z = 6. It now sections
+  // a sphere or torus face the plane crosses between its edges, so every
+  // plane through the sphere builds two exact halves. A tangent or missing
+  // plane is still refused, and the adapter, which cannot prove a miss on a
+  // curved body, still claims no cause.
   describe('S7: a Split through a sphere', () => {
+    const R = 5;
     function sphere() {
       const document = addPrimitiveFeature(
         createProjectDocument('K10 sphere', user),
-        { name: 'Ball', primitiveKind: 'sphere', dimensions: { radius: 5 } }
+        { name: 'Ball', primitiveKind: 'sphere', dimensions: { radius: R } }
       );
       const ball = Object.values(document.nodes).find(
         (node) => node.kind === 'body'
       ) as { bodyId: BodyId };
       return { document, ball: ball.bodyId };
     }
-    const zPlane = (z: number) => ({
-      origin: { x: 0, y: 0, z },
-      normal: { x: 0, y: 0, z: 1 }
+    /** π·h²·(3R − h)/3, the cap above z = R − h. */
+    const cap = (h: number) => (PI * h * h * (3 * R - h)) / 3;
+    const whole = (4 / 3) * PI * R ** 3;
+
+    // z = 1: 176π/3 above, 108π below; z = −1 mirrors it; z = 0, the
+    // equator itself, halves the ball at 250π/3 each.
+    it.each([
+      ['z = 1, through a hemisphere', 1, cap(R - 1)],
+      ['z = −1, through the other', -1, cap(R + 1)],
+      ['z = 0, along the equator', 0, whole / 2]
+    ])('%s: two exact halves', async (label, z, above) => {
+      const { document, ball } = sphere();
+      const split = addSplitFeature(document, {
+        name: 'Split',
+        targetBodyId: ball,
+        plane: zPlane(z)
+      });
+      const derived = expectBuilt(
+        await outcome(split.document, 'Split'),
+        label
+      );
+      expectVolume(
+        solid(derived, split.bodyId, `${label} above`).volume,
+        above,
+        `${label} above`
+      );
+      expectVolume(
+        solid(derived, split.secondBodyId, `${label} below`).volume,
+        whole - above,
+        `${label} below`
+      );
+    });
+
+    it('pins the z = 1 halves to 176π/3 and 108π', () => {
+      expect(cap(R - 1)).toBeCloseTo((176 * PI) / 3, 12);
+      expect(whole - cap(R - 1)).toBeCloseTo(108 * PI, 12);
     });
 
     it.each([
-      ['z = 1, through the sphere', 1],
+      ['z = 5, tangent at the pole', 5],
       ['z = 6, clear of it', 6]
-    ])('%s: no cause is claimed', async (label, z) => {
+    ])('%s: refused, no cause claimed', async (label, z) => {
       const { document, ball } = sphere();
       const split = addSplitFeature(document, {
         name: 'Split',
@@ -748,62 +790,104 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
       );
     });
 
-    // Through the equator (scoped re-check of #2074): z = 0 contains the
-    // edge where the hemispheres meet, so the kernel calls it a touch. The
-    // plane runs through the centre, so the bar must not say it only
-    // touches the body or tell the user to slide it in.
-    it('z = 0, through the equator: no touch is claimed', async () => {
+    // Capability boundary, still refused upstream: a tilted plane that
+    // crosses one hemisphere's face clear of the equator. The kernel's
+    // section and its half-space fallback both decline it, typed.
+    it('a tilted plane clear of the equator stays a typed refusal', async () => {
       const { document, ball } = sphere();
       const split = addSplitFeature(document, {
         name: 'Split',
         targetBodyId: ball,
-        plane: zPlane(0)
+        plane: { origin: { x: 0, y: 0, z: 4 }, normal: { x: 0.3, y: 0, z: 1 } }
       });
       const refused = expectTyped(
         await outcome(split.document, 'Split'),
         'unsupported',
-        'equator'
+        'tilted'
       );
       expect(refused.reason).toBeUndefined();
-      expect(refused.bar).toBe(
-        'The cutting plane runs along an existing edge or face of the body, so Split cannot tell where to cut. Move the plane slightly.'
+      expect(refused.bar).not.toBe(GENERIC_REFUSAL);
+    });
+  });
+
+  // S8 (Remus 2026.1.173, remus#2023): an R10 r3 torus about z. A plane
+  // through the tube between its edges now builds, by Pappus: the half
+  // above z = h is 2πR times the circular segment r²·acos(h/r) − h·√(r² − h²),
+  // and the axis cut x = 0 halves the whole 2π²Rr² at π²Rr² = 90π² each.
+  // Tangent and missing planes stay refused.
+  describe('S8: a Split through a torus', () => {
+    const major = 10;
+    const minor = 3;
+    function torus() {
+      const document = addPrimitiveFeature(
+        createProjectDocument('K10 torus', user),
+        {
+          name: 'Ring',
+          primitiveKind: 'torus',
+          dimensions: { majorRadius: major, minorRadius: minor }
+        }
       );
-      expect(refused.bar).not.toMatch(/only touches|slide the plane into/i);
+      const ring = Object.values(document.nodes).find(
+        (node) => node.kind === 'body'
+      ) as { bodyId: BodyId };
+      return { document, ring: ring.bodyId };
+    }
+    const whole = 2 * PI * PI * major * minor ** 2;
+    const above = (h: number) =>
+      2 *
+      PI *
+      major *
+      (minor ** 2 * Math.acos(h / minor) - h * Math.sqrt(minor ** 2 - h ** 2));
+
+    it.each([
+      ['z = 1, through the tube', zPlane(1), above(1)],
+      ['x = 0, through the axis', xPlane(0), PI * PI * major * minor ** 2]
+    ])('%s: two exact halves', async (label, plane, first) => {
+      const { document, ring } = torus();
+      const split = addSplitFeature(document, {
+        name: 'Split',
+        targetBodyId: ring,
+        plane
+      });
+      const derived = expectBuilt(
+        await outcome(split.document, 'Split'),
+        label
+      );
+      expectVolume(
+        solid(derived, split.bodyId, `${label} first`).volume,
+        first,
+        `${label} first`
+      );
+      expectVolume(
+        solid(derived, split.secondBodyId, `${label} second`).volume,
+        whole - first,
+        `${label} second`
+      );
     });
 
-    // K10 finding, class Capability boundary (mis-typed as invalid_input),
-    // owner Remus split: a plane through a curved body that crosses none of
-    // its edges is refused as "entirely on one side". Expected: two
-    // spherical caps, π·h²·(3R − h)/3 above (h = R − 1) and the rest below. The
-    // kernel is not changed here; this passes while the refusal stands.
-    it.fails(
-      'z = 1 splits the sphere into two caps (kernel refuses)',
-      async () => {
-        const { document, ball } = sphere();
-        const split = addSplitFeature(document, {
-          name: 'Split',
-          targetBodyId: ball,
-          plane: zPlane(1)
-        });
-        const derived = expectBuilt(
-          await outcome(split.document, 'Split'),
-          'S7'
-        );
-        const R = 5;
-        const h = R - 1;
-        const above = (PI * h * h * (3 * R - h)) / 3;
-        expectVolume(
-          derived.bodyRepresentations[split.bodyId]?.volume,
-          above,
-          'S7 above'
-        );
-        expectVolume(
-          derived.bodyRepresentations[split.secondBodyId]?.volume,
-          (4 / 3) * PI * R ** 3 - above,
-          'S7 below'
-        );
-      }
-    );
+    it('pins the axis halves to 90π²', () => {
+      expect(PI * PI * major * minor ** 2).toBeCloseTo(90 * PI * PI, 12);
+    });
+
+    it.each([
+      ['z = 3, tangent along the top circle', zPlane(3), 'invalid_input'],
+      ['z = 6, clear of it', zPlane(6), 'invalid_input'],
+      ['x = 13, tangent at the outer rim', xPlane(13), 'unsupported']
+    ])('%s: refused, no cause claimed', async (label, plane, category) => {
+      const { document, ring } = torus();
+      const split = addSplitFeature(document, {
+        name: 'Split',
+        targetBodyId: ring,
+        plane
+      });
+      const refused = expectTyped(
+        await outcome(split.document, 'Split'),
+        category,
+        label
+      );
+      expect(refused.reason, label).toBeUndefined();
+      expect(refused.bar, label).not.toBe(GENERIC_REFUSAL);
+    });
   });
 
   it('S6: a typed zero normal makes no Split request', () => {
