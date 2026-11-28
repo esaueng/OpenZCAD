@@ -18808,6 +18808,9 @@ export function App() {
       // the toast slot, so one left standing was carried onto the shelf and,
       // remounted there, started its lifetime over.
       setToast(null);
+      // A search asked for and never shown (the bar was still loading) is the
+      // closed model's: the next one's bar must not open with it.
+      settlePromptDraft();
       setArtifacts([]);
       setSelectedFeatureNode(null);
       setSelectedTopology(null);
