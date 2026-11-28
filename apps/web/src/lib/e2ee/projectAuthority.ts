@@ -22,7 +22,10 @@ import type {
 } from '@openzcad/shared';
 import type { ProjectGroupContext } from './projectGroups';
 import { getKeySessionRevision, isCurrentKeySession } from './keySession';
-import { IDENTITY_DISCONTINUED_PROBLEM } from './encryptionStatus';
+import {
+  AUTHORITY_WITHDRAWN_PROBLEM,
+  IDENTITY_DISCONTINUED_PROBLEM
+} from './encryptionStatus';
 import {
   groupInfoContextBytes,
   parseGroupInfoContext,
@@ -43,7 +46,11 @@ export class ProjectAuthorityError extends Error {
       | 'invalid'
       | 'signer-untrusted'
       /** See `identityDiscontinued`: still a refusal, never a bypass. */
-      | 'identity-discontinued' = 'invalid'
+      | 'identity-discontinued'
+      /** See `withdrawnFromOwner`: still a refusal, never a bypass. */
+      | 'authority-withdrawn'
+      /** `restoreProjectAuthority` declined; nothing was written. */
+      | 'restore-refused' = 'invalid'
   ) {
     super(message);
   }
@@ -212,25 +219,7 @@ function identityDiscontinued(
   ctx: ProjectGroupContext,
   local: ProjectAuthorityLocalState
 ): boolean {
-  let owner: { userId: string; identityKeyHash: string } | null = local.owner;
-  if (!owner && local.accepted) {
-    try {
-      const manifest = decodeMlsAuthorityManifest(
-        signed(
-          decodeMlsAuthorityTrust(
-            fromBase64Url(local.accepted.authority.record)
-          ).manifest
-        ).statement
-      );
-      owner = {
-        userId: manifest.ownerUserId,
-        identityKeyHash: manifest.ownerIdentityKeyHash
-      };
-    } catch {
-      // An unreadable pin says nothing about the owner: generic refusal.
-      return false;
-    }
-  }
+  const owner = pinnedOwner(local);
   const genesis = ctx.account.list.entries[0]?.entry;
   return (
     !!owner &&
@@ -238,6 +227,45 @@ function identityDiscontinued(
     owner.userId === ctx.account.userId &&
     owner.identityKeyHash !== toHex(ctx.account.list.identityKeyHash) &&
     genesis.previousIdentityKeyHash === null
+  );
+}
+/** The owner this device pinned: its recorded intent, else its accepted roots. */
+function pinnedOwner(
+  local: ProjectAuthorityLocalState
+): ExpectedProjectOwner | null {
+  if (local.owner || !local.accepted) return local.owner;
+  try {
+    const manifest = decodeMlsAuthorityManifest(
+      signed(
+        decodeMlsAuthorityTrust(fromBase64Url(local.accepted.authority.record))
+          .manifest
+      ).statement
+    );
+    return {
+      userId: manifest.ownerUserId,
+      identityKeyHash: manifest.ownerIdentityKeyHash
+    };
+  } catch {
+    // An unreadable pin says nothing about the owner: generic refusal.
+    return null;
+  }
+}
+/**
+ * Whether a withdrawn authority is one the owner can restore (issue #1704):
+ * the device pinned this account, under the identity it still has, as the
+ * project's owner. As with `identityDiscontinued`, only the wording and
+ * next action change. The load is refused, every pin stays, and nothing is
+ * restored without the owner's confirmation (`restoreProjectAuthority`).
+ */
+function withdrawnFromOwner(
+  ctx: ProjectGroupContext,
+  local: ProjectAuthorityLocalState
+): boolean {
+  const owner = pinnedOwner(local);
+  return (
+    !!owner &&
+    owner.userId === ctx.account.userId &&
+    owner.identityKeyHash === toHex(ctx.account.list.identityKeyHash)
   );
 }
 export interface TrustedProjectAuthority {
@@ -262,6 +290,11 @@ export async function loadProjectAuthority(
         throw new ProjectAuthorityError(
           IDENTITY_DISCONTINUED_PROBLEM,
           'identity-discontinued'
+        );
+      if (withdrawnFromOwner(ctx, local))
+        throw new ProjectAuthorityError(
+          AUTHORITY_WITHDRAWN_PROBLEM,
+          'authority-withdrawn'
         );
       fail(
         'The account withdrew project authority this device already verified.'
@@ -607,5 +640,235 @@ export async function publishProjectAuthority(
       return;
     }
     fail('Other devices kept changing project authority. Retry the operation.');
+  });
+}
+
+/**
+ * The plain words the owner confirms before a restoration. The server's
+ * word never stands in for them (owner decision, PR #1418).
+ */
+export const AUTHORITY_RESTORE_CONFIRMATION =
+  'This is my project. Restore its verification record from this device.';
+
+/** What this device could do about a project's authority record. */
+export type AuthorityRecovery =
+  /** The account returns a record, or this device pinned none. */
+  | 'none'
+  /** Withdrawn, and this device's pin names this account as the owner. */
+  | 'restorable'
+  /** Withdrawn under an identity the account no longer continues. */
+  | 'identity-discontinued'
+  /** Withdrawn from a project another account owns. */
+  | 'not-owner';
+
+/** Reads only: this device's pins and whether the account returns a record. */
+export async function projectAuthorityRecovery(
+  ctx: ProjectGroupContext,
+  projectId: string
+): Promise<AuthorityRecovery> {
+  if (!ctx.api.authority) return 'none';
+  const local = await storeFor(ctx).read(ctx.account.userId, projectId);
+  if (!local.accepted) return 'none';
+  if ((await ctx.api.authority(projectId)).authority) return 'none';
+  if (identityDiscontinued(ctx, local)) return 'identity-discontinued';
+  return withdrawnFromOwner(ctx, local) ? 'restorable' : 'not-owner';
+}
+
+/**
+ * Put back an authority record the account no longer returns, from this
+ * device's own accepted pin (issue #1704). Only after the owner confirmed
+ * {@link AUTHORITY_RESTORE_CONFIRMATION}; a missing record is otherwise
+ * refused exactly as before.
+ *
+ * Nothing the server says is trusted here. The record written restates the
+ * state this device already authenticated (the same roots, key epoch and
+ * membership state) one sequence later, sealed by this certified device
+ * under the current account key. It is written only when:
+ *
+ * - the pin names this account, under its current identity, as the owner;
+ * - the pinned record still opens under an account key this device holds
+ *   and carries the signature of a device in the account's list;
+ * - the account still returns no record. A record that reappeared, from
+ *   another device's restoration for one, goes through the ordinary load
+ *   and its rollback and fork checks instead.
+ *
+ * Other devices accept the restored record as any newer one: by its account
+ * MAC, its certified signer and their own pins. The pins here are never
+ * dropped or loosened; when anything fails they stay exactly as they were.
+ *
+ * Like a group reset, this is a recovery tool and claims nothing stronger.
+ * The record restates what this device last verified, which may be older
+ * than what another device of the account verified. Such a device refuses
+ * it as a rollback, keeps its own pin and can restore from that instead; a
+ * device with no pin learns no more from it than from the original record.
+ */
+export async function restoreProjectAuthority(
+  ctx: ProjectGroupContext,
+  projectId: string,
+  confirmation: string
+): Promise<TrustedProjectAuthority> {
+  const refuse = (message: string): never => {
+    throw new ProjectAuthorityError(message, 'restore-refused');
+  };
+  if (confirmation !== AUTHORITY_RESTORE_CONFIRMATION)
+    refuse('Confirm that this is your project before restoring its record.');
+  const guard = sessionGuard();
+  const device = ctx.device;
+  if (
+    !device ||
+    !ctx.account.list.devices.some(
+      (entry) => entry.deviceId === device.deviceId
+    )
+  )
+    return refuse(
+      'Only a device that can edit encrypted projects can restore this record. Use one of your other devices.'
+    );
+  const { authority: read, saveAuthority: save } = ctx.api;
+  if (!read || !save)
+    return fail('This service needs authenticated MLS authority storage.');
+  return withProjectAuthorityLock(ctx.account.userId, projectId, async () => {
+    guard();
+    const local = await storeFor(ctx).read(ctx.account.userId, projectId);
+    const pin = local.accepted;
+    if (!pin)
+      return refuse(
+        'This device never verified this project’s record, so it has nothing to restore it from.'
+      );
+    if ((await read(projectId)).authority) {
+      // Nothing is missing (any more): only the ordinary checks decide.
+      return (await loadProjectAuthority(ctx, projectId))!;
+    }
+    if (identityDiscontinued(ctx, local))
+      throw new ProjectAuthorityError(
+        IDENTITY_DISCONTINUED_PROBLEM,
+        'identity-discontinued'
+      );
+    const record = fromBase64Url(pin.authority.record);
+    const value = decodeMlsAuthorityTrust(record);
+    const manifest = decodeMlsAuthorityManifest(
+      signed(value.manifest).statement
+    );
+    if (
+      (await hashOf(record)) !== pin.hash ||
+      value.userId !== ctx.account.userId ||
+      value.projectId !== projectId ||
+      manifest.projectId !== projectId ||
+      value.sequence !== pin.authority.sequence ||
+      value.signerDeviceId !== pin.authority.signerDeviceId ||
+      value.accountKeyGeneration !== pin.authority.accountKeyGeneration ||
+      value.accountKeySequence !== pin.authority.accountKeySequence
+    )
+      refuse('This device’s saved record of this project is inconsistent.');
+    if (manifest.ownerUserId !== ctx.account.userId)
+      refuse('Only the project’s owner can restore its verification record.');
+    if (
+      manifest.ownerIdentityKeyHash !== toHex(ctx.account.list.identityKeyHash)
+    )
+      refuse(
+        'This project was secured under an earlier set of your account’s encryption keys, so this device cannot restore its record.'
+      );
+    checkOwner(local.owner, manifest);
+    if (value.sequence >= 0xffffffff)
+      refuse('This project’s record cannot be advanced any further.');
+    // Pinned earlier, so a since-removed device of this identity still
+    // vouches for it, as it does when the account returns the record.
+    const signer =
+      ctx.account.list.devices.find(
+        (entry) => entry.deviceId === value.signerDeviceId
+      ) ??
+      ctx.account.list.revoked.find(
+        (entry) => entry.kind === 'device' && entry.id === value.signerDeviceId
+      )?.device;
+    if (!signer)
+      return refuse(
+        'No device of this account vouches for the record this device kept.'
+      );
+    const context = parseGroupInfoContext(fromBase64Url(value.latestGroupInfo));
+    if (
+      !same(context.groupId, projectGroupId(projectId)) ||
+      context.epoch + manifest.roots.at(-1)!.keyEpochBase !==
+        value.latestKeyEpoch ||
+      !context.roles.users.some(
+        (user) => user.userId === manifest.ownerUserId && user.role === 'owner'
+      )
+    )
+      refuse('This device’s saved record of this project is inconsistent.');
+    const account = await ctx.account.currentAccountKey();
+    let request: E2eeSaveProjectAuthorityRequest;
+    try {
+      // The pin is this device's own, but it is the whole basis of the
+      // restoration: prove again that this account's keys sealed it.
+      const sealedUnderCurrent =
+        value.accountKeyGeneration === account.generation &&
+        value.accountKeySequence === account.keySequence;
+      const key = sealedUnderCurrent
+        ? account.key
+        : await ctx.account.openAccountKey(
+            value.accountKeyGeneration,
+            value.accountKeySequence
+          );
+      try {
+        await openMlsAuthorityTrust(key, signer.signingKey, {
+          record,
+          recordMac: fromBase64Url(pin.authority.recordMac),
+          signature: fromBase64Url(pin.authority.signature)
+        });
+      } finally {
+        if (!sealedUnderCurrent) key.fill(0);
+      }
+      const sequence = value.sequence + 1;
+      const sealed = await signMlsAuthorityTrust(
+        account.key,
+        device.signing.privateKey,
+        {
+          userId: ctx.account.userId,
+          projectId,
+          sequence,
+          accountKeyGeneration: account.generation,
+          accountKeySequence: account.keySequence,
+          signerDeviceId: device.deviceId,
+          manifest: value.manifest,
+          latestKeyEpoch: value.latestKeyEpoch,
+          latestGroupInfo: value.latestGroupInfo
+        }
+      );
+      request = {
+        expectedSequence: sequence - 1,
+        sequence,
+        accountKeyGeneration: account.generation,
+        accountKeySequence: account.keySequence,
+        signerDeviceId: device.deviceId,
+        record: toBase64Url(sealed.record),
+        recordMac: toBase64Url(sealed.recordMac),
+        signature: toBase64Url(sealed.signature),
+        restoreMissing: true
+      };
+    } finally {
+      account.key.fill(0);
+    }
+    guard();
+    try {
+      await save(projectId, request);
+    } catch (error) {
+      // A lost response, or another device's restoration landing first:
+      // whatever the account returns now passes the ordinary checks, with
+      // their own refusals, or the restoration failed. A record that is
+      // still missing was not stored.
+      guard();
+      const now = await read(projectId).catch(() => null);
+      if (now?.authority) return (await loadProjectAuthority(ctx, projectId))!;
+      if ((error as { code?: unknown }).code === 'E2EE_AUTHORITY_CONFLICT')
+        refuse(
+          'The server did not store the restored record, and nothing was changed. It may not support restoring yet.'
+        );
+      throw error;
+    }
+    guard();
+    const stored = await loadProjectAuthority(ctx, projectId);
+    if (!stored || stored.record.record !== request.record)
+      return fail(
+        'The account did not retain the authority record it accepted.'
+      );
+    return stored;
   });
 }

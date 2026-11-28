@@ -15,7 +15,10 @@ import {
   loadProjectAuthority,
   ProjectAuthorityError
 } from '../apps/web/src/lib/e2ee/projectAuthority';
-import { IDENTITY_DISCONTINUED_PROBLEM } from '../apps/web/src/lib/e2ee/encryptionStatus';
+import {
+  AUTHORITY_WITHDRAWN_PROBLEM,
+  IDENTITY_DISCONTINUED_PROBLEM
+} from '../apps/web/src/lib/e2ee/encryptionStatus';
 import {
   epochAuthority,
   ProjectGroupError
@@ -189,17 +192,20 @@ it('reproduces the stranded lifecycle and refuses it with a recovery-specific, p
   expect(authorityRows(srv, projectId)).toBe(0);
 });
 
-it('keeps the generic withdrawal refusal when the identity is unchanged or was rotated with a transition', async () => {
+it('keeps a withdrawal refusal, not the reset one, when the identity is unchanged or was rotated with a transition', async () => {
   const { srv, desktop, projectId } = await pinnedProject();
   srv.db
     .prepare('DELETE FROM e2ee_project_authority WHERE project_id = ?')
     .run(projectId);
-  // Same identity: a withdrawal, not a reset.
+  // Same identity: a withdrawal, not a reset. The owner's confirmed
+  // restoration is its way forward (`e2ee-authority-restore.test.ts`).
   const same = await loadProjectAuthority(desktop.groups, projectId).catch(
     (error: unknown) => error
   );
-  expect(same).toMatchObject({ code: 'invalid' });
-  expect((same as Error).message).toMatch(/withdrew/);
+  expect(same).toMatchObject({
+    code: 'authority-withdrawn',
+    message: AUTHORITY_WITHDRAWN_PROBLEM
+  });
 
   // A different identity whose genesis names the one it replaces is a
   // rotation: authority missing there is not explained away as a reset.

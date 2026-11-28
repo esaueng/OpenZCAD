@@ -22,11 +22,17 @@ import { mlsProjectSessions } from './mls/projectSessions';
 import {
   GROUP_RESET_CONFIRMATION,
   createProjectGroupsApi,
+  epochAuthority,
   projectGroupAccount,
   resetProjectGroup,
   type ProjectGroupContext,
   type ProjectGroupState
 } from './projectGroups';
+import {
+  AUTHORITY_RESTORE_CONFIRMATION,
+  projectAuthorityRecovery,
+  restoreProjectAuthority
+} from './projectAuthority';
 import { versionPins } from './versionPins';
 import { contactsContext } from './contacts';
 import { contactMemberLists } from './memberLists';
@@ -34,7 +40,7 @@ import { createE2eeShareLinksApi } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
 import { getKeySessionRevision, isCurrentKeySession } from './keySession';
 
-export { GROUP_RESET_CONFIRMATION };
+export { AUTHORITY_RESTORE_CONFIRMATION, GROUP_RESET_CONFIRMATION };
 
 function pageGroups(
   e2ee: E2eeContext,
@@ -201,17 +207,83 @@ export async function renewShareDelegationAfterRemoval(
 export interface RecoverableProject {
   readonly projectId: string;
   readonly name: string;
+  /**
+   * Set when the account no longer returns the authority record this device
+   * verified for the project (issue #1704): `restorable` when this device's
+   * pins name this account, under its current identity, as the owner;
+   * `identity-discontinued` when the account's keys were set up afresh.
+   */
+  readonly authority?: 'restorable' | 'identity-discontinued';
 }
 
-/** The account's encrypted projects, with their names where they open. */
-export async function encryptedProjectsForRecovery(): Promise<
-  RecoverableProject[]
-> {
+/**
+ * The account's encrypted projects, with their names where they open. Given
+ * the account, each project this device holds a verified record of is also
+ * asked for its record, so a withdrawn one can be offered its restoration.
+ * A project that cannot be asked is listed without one.
+ */
+export async function encryptedProjectsForRecovery(
+  e2ee?: E2eeContext,
+  account?: AccountView
+): Promise<RecoverableProject[]> {
   const { api } = await import('../api');
   const { projects } = await api.listProjects();
-  return projects
-    .filter((project) => project.storageFormat === 2)
-    .map((project) => ({ projectId: project.projectId, name: project.name }));
+  const groups = e2ee && account ? pageGroups(e2ee, account) : null;
+  const encrypted = projects.filter((project) => project.storageFormat === 2);
+  const listed: RecoverableProject[] = [];
+  // A few at a time: only projects this device pinned cost a request.
+  for (let start = 0; start < encrypted.length; start += 6) {
+    listed.push(
+      ...(await Promise.all(
+        encrypted.slice(start, start + 6).map(async (project) => {
+          const recovery = groups
+            ? await projectAuthorityRecovery(groups, project.projectId).catch(
+                () => 'none' as const
+              )
+            : 'none';
+          return {
+            projectId: project.projectId,
+            name: project.name,
+            ...(recovery === 'restorable' ||
+            recovery === 'identity-discontinued'
+              ? { authority: recovery }
+              : {})
+          };
+        })
+      ))
+    );
+  }
+  return listed;
+}
+
+/**
+ * Restore one project's authority record from this device's verified copy
+ * (issue #1704) after the owner confirmed `AUTHORITY_RESTORE_CONFIRMATION`,
+ * then check the project's membership history against it, as opening the
+ * project does. Resolves whether that history verified; a restored record
+ * whose history does not verify leaves the project refused as before.
+ */
+export async function restoreEncryptedProjectAuthority(
+  e2ee: E2eeContext,
+  account: AccountView,
+  projectId: string,
+  confirmation: string
+): Promise<{ verified: boolean; problem?: string }> {
+  const groups = pageGroups(e2ee, account);
+  const restored = await restoreProjectAuthority(
+    groups,
+    projectId,
+    confirmation
+  );
+  try {
+    await epochAuthority(groups, projectId, restored.value.latestKeyEpoch);
+    return { verified: true };
+  } catch (error) {
+    return {
+      verified: false,
+      problem: error instanceof Error ? error.message : String(error)
+    };
+  }
 }
 
 /**

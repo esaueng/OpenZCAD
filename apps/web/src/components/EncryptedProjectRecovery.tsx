@@ -14,6 +14,11 @@ import { Group, Notice, SettingRow } from './settingsControls';
  * devices can open its keys any more. The owner must confirm, in plain
  * words, that nobody else has access, and the recovery key (or a passkey)
  * signs the reset. Its code loads only when the section is opened.
+ *
+ * A project whose verification record the account no longer returns (issue
+ * #1704) is named here too. Where this device's own verified copy shows the
+ * account owns it, the owner can put the record back after confirming in
+ * plain words; the account's word alone never does.
  */
 export function EncryptedProjectRecovery({
   ctx,
@@ -34,6 +39,9 @@ export function EncryptedProjectRecovery({
     text: string;
   } | null>(null);
   const [phrase, setPhrase] = useState('');
+  const [restoring, setRestoring] = useState<RecoverableProject | null>(null);
+  const [restoreConfirmed, setRestoreConfirmed] = useState(false);
+  const [restorePhrase, setRestorePhrase] = useState('');
   const [available, setAvailable] = useState(false);
   useEffect(() => {
     let live = true;
@@ -57,7 +65,8 @@ export function EncryptedProjectRecovery({
     try {
       const module = await page();
       setPhrase(module.GROUP_RESET_CONFIRMATION);
-      setProjects(await module.encryptedProjectsForRecovery());
+      setRestorePhrase(module.AUTHORITY_RESTORE_CONFIRMATION);
+      setProjects(await module.encryptedProjectsForRecovery(ctx, account));
     } catch (error) {
       setMessage({
         tone: 'warning',
@@ -105,6 +114,52 @@ export function EncryptedProjectRecovery({
     }
   };
 
+  const restore = async () => {
+    if (!restoring) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const module = await page();
+      const outcome = await module.restoreEncryptedProjectAuthority(
+        ctx,
+        account,
+        restoring.projectId,
+        restoreConfirmed ? module.AUTHORITY_RESTORE_CONFIRMATION : ''
+      );
+      setMessage(
+        outcome.verified
+          ? {
+              tone: 'success',
+              text: `The verification record of ${restoring.name} is back in your account. Open the project again to sync it.`
+            }
+          : {
+              tone: 'warning',
+              text: `The verification record of ${restoring.name} is back in your account, but the project’s history still doesn’t verify, so it stays unsynced. ${outcome.problem ?? ''}`.trim()
+            }
+      );
+      setProjects(
+        (current) =>
+          current?.map((project) =>
+            project.projectId === restoring.projectId
+              ? { projectId: project.projectId, name: project.name }
+              : project
+          ) ?? null
+      );
+      setRestoring(null);
+      setRestoreConfirmed(false);
+    } catch (error) {
+      setMessage({
+        tone: 'warning',
+        text:
+          error instanceof Error
+            ? error.message
+            : 'The verification record could not be restored.'
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!available) return null;
   return (
     <Group title="Encrypted project recovery">
@@ -126,14 +181,15 @@ export function EncryptedProjectRecovery({
       ) : projects.length === 0 ? (
         <Notice tone="info">You have no encrypted projects.</Notice>
       ) : (
-        projects.map((project) => (
-          <SettingRow key={project.projectId} title={project.name} compact>
+        projects.map((project) => {
+          const resetKeys = (
             <button
               className="secondary"
               type="button"
               disabled={busy}
               aria-label={`Reset the encryption group of ${project.name}`}
               onClick={() => {
+                setRestoring(null);
                 setTarget(project);
                 setConfirmed(false);
                 setText('');
@@ -141,9 +197,83 @@ export function EncryptedProjectRecovery({
             >
               Reset keys
             </button>
-          </SettingRow>
-        ))
+          );
+          if (!project.authority) {
+            return (
+              <SettingRow key={project.projectId} title={project.name} compact>
+                {resetKeys}
+              </SettingRow>
+            );
+          }
+          return (
+            <SettingRow
+              key={project.projectId}
+              title={project.name}
+              hint={
+                project.authority === 'restorable'
+                  ? 'Your account no longer returns this project’s verification record, so this device won’t sync it. This device kept its verified copy.'
+                  : 'Secured with encryption keys your account no longer has, so it can’t be verified or synced. Open it, choose Export project in the File menu, then import it as a new project.'
+              }
+            >
+              <span className="encryption-actions">
+                {project.authority === 'restorable' ? (
+                  <button
+                    className="secondary"
+                    type="button"
+                    disabled={busy}
+                    aria-label={`Restore the verification record of ${project.name}`}
+                    onClick={() => {
+                      setTarget(null);
+                      setRestoring(project);
+                      setRestoreConfirmed(false);
+                    }}
+                  >
+                    Restore record
+                  </button>
+                ) : null}
+                {resetKeys}
+              </span>
+            </SettingRow>
+          );
+        })
       )}
+      {restoring ? (
+        <>
+          <Notice tone="warning">
+            Restoring saves the verification record of {restoring.name} to your
+            account again, from the copy this device verified. The project’s
+            members, keys and history stay as they are, and this device keeps
+            checking the account against its own copy. Only restore a project
+            that is yours, and from the device you last used it on.
+          </Notice>
+          <SettingRow title="Confirm" hint={restorePhrase}>
+            <input
+              type="checkbox"
+              aria-label={restorePhrase}
+              checked={restoreConfirmed}
+              onChange={(event) => setRestoreConfirmed(event.target.checked)}
+            />
+          </SettingRow>
+          <div className="settings-button-row">
+            <button
+              className="secondary"
+              type="button"
+              disabled={busy || !restoreConfirmed}
+              onClick={() => void restore()}
+            >
+              Restore verification record
+            </button>
+            <button
+              className="secondary"
+              type="button"
+              disabled={busy}
+              onClick={() => setRestoring(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : null}
       {target ? (
         <>
           <Notice tone="warning">
