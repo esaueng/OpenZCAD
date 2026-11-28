@@ -27,3 +27,20 @@ export function facesAheadOfEdges(
   if (index < 0) return stack;
   return [stack[index]!, ...stack.slice(0, index), ...stack.slice(index + 1)];
 }
+
+/**
+ * A command that takes faces and no edges (Hole, Shell, Draft) has no use
+ * for an edge, so a stack led by one goes to that edge's body's face under
+ * the pointer. A finger's edge band is some 15 px either side of the line,
+ * which covers the whole of a small face drawn at Fit View: a tap on its
+ * middle picked the edge, and the command ignored it.
+ *
+ * Only a face of the edge's own body moves up, the nearest one, which is
+ * the face the pointer is over. A pointer just past a body's outline, where
+ * no face of that body is under it, keeps the stack as it is, so the band
+ * never hands the tap to a face further back.
+ */
+export function faceAheadOfLeadEdge(stack: PickCandidate[]): PickCandidate[] {
+  const lead = stack[0]?.selection;
+  return lead?.kind === 'edge' ? facesAheadOfEdges(stack, lead.bodyId) : stack;
+}

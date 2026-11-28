@@ -2168,6 +2168,7 @@ import {
   inPlaceBodyMode,
   inPlaceFaceMode,
   inPlaceFacePickSurfaces,
+  inPlaceFacesOverEdges,
   takesFeatureFaces,
   toggledPatternSkip,
   patternCopyChip,
@@ -42933,6 +42934,10 @@ export function App() {
               inPlace.active
                 ? inPlaceFacePickSurfaces(inPlaceSpec, inPlace.options)
                 : null
+            }
+            facePickOverEdges={
+              inPlace.active &&
+              inPlaceFacesOverEdges(inPlaceSpec, inPlace.options)
             }
             faceSetPickBodyId={
               tool === null && interaction.mode !== 'sketch'

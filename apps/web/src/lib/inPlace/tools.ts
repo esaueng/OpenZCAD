@@ -6173,6 +6173,29 @@ export function inPlaceFacePickSurfaces(
 }
 
 /**
+ * Whether a command takes faces and nothing an edge could be: no edges, no
+ * datum sources, no axis or direction lines, no plane from two edges and no
+ * bodies. A click led by an edge then takes the face under it instead
+ * (ModelViewer's `facePickOverEdges`): a small face lies wholly inside a
+ * finger's edge band, and a tap on it picked an edge the command ignores.
+ */
+export function inPlaceFacesOverEdges(
+  spec: InPlaceToolSpec | null | undefined,
+  options: Readonly<Record<string, string>> | undefined
+): boolean {
+  if (!spec || !inPlaceFaceMode(spec, options)) return false;
+  return (
+    spec.edgeMode === undefined &&
+    spec.refKinds === undefined &&
+    !spec.axisPicks &&
+    !spec.wantsAxis &&
+    spec.takeDirection === undefined &&
+    !spec.planeFromEdges &&
+    inPlaceBodyMode(spec, options) === undefined
+  );
+}
+
+/**
  * The bodies a command takes as its options now stand, and whether it is
  * editing a stored feature.
  */

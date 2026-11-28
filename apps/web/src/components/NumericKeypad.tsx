@@ -688,7 +688,25 @@ function NumericKeypadControl({
       asSheetRef.current ||
       (typeof window.matchMedia === 'function' &&
         window.matchMedia(PHONE_QUERY).matches);
+    // On the regular stage the phone sheet covers the stage's foot, where a
+    // running command's bar says why a value was refused; the bar stands
+    // above it by the height published here (quiet-stage.css). The compact
+    // workspace draws the control in its own sheet and needs none.
+    let sheetArea: HTMLElement | null = null;
+    const publishSheetHeight = () => {
+      if (asSheetRef.current) return;
+      const area = root.closest<HTMLElement>('.viewer-area');
+      if (!area) return;
+      sheetArea = area;
+      const covered =
+        area.getBoundingClientRect().bottom - root.getBoundingClientRect().top;
+      area.style.setProperty(
+        '--keypad-sheet-h',
+        `${Math.max(0, Math.ceil(covered))}px`
+      );
+    };
     const place = (placement: KeypadPlacement) => {
+      sheetArea?.style.removeProperty('--keypad-sheet-h');
       root.style.visibility = 'visible';
       root.style.left = `${placement.x}px`;
       root.style.top = `${placement.y}px`;
@@ -717,6 +735,7 @@ function NumericKeypadControl({
         root.style.removeProperty('max-height');
         root.dataset.placement = 'sheet';
         setPlacement('sheet');
+        publishSheetHeight();
         positioned = true;
         return;
       }
@@ -818,6 +837,7 @@ function NumericKeypadControl({
       observer?.disconnect();
       window.removeEventListener('resize', reposition);
       stopKeyboardInset();
+      sheetArea?.style.removeProperty('--keypad-sheet-h');
       anchorRef.current = null;
     };
   }, [
