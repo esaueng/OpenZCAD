@@ -54,24 +54,37 @@ export function faceMeshBounds(
     : null;
 }
 
+/** One face an offset moves: where it is, and which way the offset moves it. */
+export interface OffsetFaceExtent {
+  /** The face's display-mesh bounds (`faceMeshBounds`). */
+  bounds: BoundingBox;
+  /**
+   * The face's own outward unit normal: an offset moves every face of a set
+   * by the same signed distance along its own normal.
+   */
+  normal: Vector3;
+}
+
+/** The axis a canonical section plane cuts across. */
+const CUT_AXIS = { XY: 'z', XZ: 'y', YZ: 'x' } as const;
+
 /**
  * Whether the section view on screen hides part of a face being offset, or
  * part of where its preview puts it.
  *
  * Approximation, kept cheap on purpose: each face is its display-mesh
- * bounding box, and the previewed face is that box moved along the face
- * normal by the previewed offset (exact for the plane of a flat face; the
- * outline a preview grows or trims against its neighbours is not followed).
- * The change is taken as both boxes, so a face moved into or out of the cut
- * is reported either way. A box with any corner on the cut-away side of the
- * section plane counts as partly hidden; one touching the plane does not.
+ * bounding box, and the previewed face is that box moved along the face's
+ * own normal by the previewed offset (exact for the plane of a flat face;
+ * the outline a preview grows or trims against its neighbours is not
+ * followed). The change is taken as both boxes, so a face moved into or out
+ * of the cut is reported either way. A box with any corner on the cut-away
+ * side of the section plane counts as partly hidden; one touching the plane
+ * does not.
  */
 export function sectionHidesFaceOffset(
   input: {
-    /** The bounds of every face the offset moves. */
-    faces: readonly BoundingBox[];
-    /** Outward unit normal of the offset; the previewed move runs along it. */
-    normal: Vector3;
+    /** Every face the offset moves, each with its own normal. */
+    faces: readonly OffsetFaceExtent[];
     /** Signed offset the preview on screen shows; null or 0 when none. */
     previewOffset: number | null;
   },
@@ -85,34 +98,39 @@ export function sectionHidesFaceOffset(
       ? input.previewOffset
       : 0;
   const { normal: cut, constant } = sectionClippingPlane(section);
+  const axis = CUT_AXIS[section.plane];
   const boxes: BoundingBox[] = [];
-  for (const face of input.faces) {
-    boxes.push(face);
+  for (const { bounds, normal } of input.faces) {
+    boxes.push(bounds);
     if (shift !== 0) {
+      if (![normal.x, normal.y, normal.z].every(Number.isFinite)) return false;
       boxes.push({
         min: {
-          x: face.min.x + input.normal.x * shift,
-          y: face.min.y + input.normal.y * shift,
-          z: face.min.z + input.normal.z * shift
+          x: bounds.min.x + normal.x * shift,
+          y: bounds.min.y + normal.y * shift,
+          z: bounds.min.z + normal.z * shift
         },
         max: {
-          x: face.max.x + input.normal.x * shift,
-          y: face.max.y + input.normal.y * shift,
-          z: face.max.z + input.normal.z * shift
+          x: bounds.max.x + normal.x * shift,
+          y: bounds.max.y + normal.y * shift,
+          z: bounds.max.z + normal.z * shift
         }
       });
     }
   }
+  // The slack scales with the coordinate the cut is measured along only: a
+  // face far from the origin across the plane keeps a fine tolerance along
+  // the cut axis, where the mesh still resolves it.
   let scale = Math.max(1, Math.abs(section.offset));
   for (const box of boxes) {
-    for (const axis of AXES) {
-      const low = box.min[axis];
-      const high = box.max[axis];
+    for (const each of AXES) {
+      const low = box.min[each];
+      const high = box.max[each];
       if (!Number.isFinite(low) || !Number.isFinite(high) || low > high) {
         return false;
       }
-      scale = Math.max(scale, Math.abs(low), Math.abs(high));
     }
+    scale = Math.max(scale, Math.abs(box.min[axis]), Math.abs(box.max[axis]));
   }
   const clearance = scale * FLOAT32_CLIP_SLACK;
   // Canonical sections have one nonzero normal component, so the box's
@@ -121,4 +139,63 @@ export function sectionHidesFaceOffset(
     (box) =>
       Math.min(cut.dot(box.min), cut.dot(box.max)) + constant < -clearance
   );
+}
+
+/**
+ * The faces an offset moves, as `sectionHidesFaceOffset` reads them: the
+ * handle's face along the handle's normal, then each face of a set along
+ * its own measured normal. A face whose mesh does not cover it is left out;
+ * a set face with no plane normal keeps its place unshifted.
+ */
+export function offsetFaceExtents(
+  body: Pick<BodyRepresentation, 'mesh' | 'topology'>,
+  target: {
+    topologyId: string;
+    normal: readonly [number, number, number];
+    offsetFaceSet?: readonly { topologyId: string }[] | undefined;
+  }
+): OffsetFaceExtent[] {
+  const extents: OffsetFaceExtent[] = [];
+  const handle = faceMeshBounds(body, target.topologyId);
+  if (handle) {
+    const [x, y, z] = target.normal;
+    extents.push({ bounds: handle, normal: { x, y, z } });
+  }
+  for (const member of target.offsetFaceSet ?? []) {
+    const bounds = faceMeshBounds(body, member.topologyId);
+    if (!bounds) continue;
+    const measured = body.topology?.faces.find(
+      (face) => face.topologyId === member.topologyId
+    )?.geometry?.normal;
+    const length = measured
+      ? Math.hypot(measured.x, measured.y, measured.z)
+      : 0;
+    extents.push({
+      bounds,
+      normal:
+        measured && Number.isFinite(length) && length > 0
+          ? {
+              x: measured.x / length,
+              y: measured.y / length,
+              z: measured.z / length
+            }
+          : { x: 0, y: 0, z: 0 }
+    });
+  }
+  return extents;
+}
+
+/**
+ * The offset the face on screen shows. A face drag's published frame
+ * carries its own value, and a face set's leading-plane frame is published
+ * without updating the last whole preview's value, so the frame is read
+ * first; the whole preview's value only stands when no frame is up.
+ */
+export function shownFaceOffset(
+  frame: { offset?: number | undefined } | null,
+  renderedOffset: number | null
+): number | null {
+  return frame && frame.offset !== undefined && Number.isFinite(frame.offset)
+    ? frame.offset
+    : renderedOffset;
 }

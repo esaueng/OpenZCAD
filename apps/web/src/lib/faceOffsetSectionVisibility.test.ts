@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { BoundingBox } from '@openzcad/shared';
 import {
   faceMeshBounds,
-  sectionHidesFaceOffset
+  offsetFaceExtents,
+  sectionHidesFaceOffset,
+  shownFaceOffset
 } from './faceOffsetSectionVisibility';
 
 // The +X side face of a 20 × 10 × 8 block: x = 20, y 0..10, z 0..8.
@@ -11,7 +13,11 @@ const sideFace: BoundingBox = {
   max: { x: 20, y: 10, z: 8 }
 };
 const plusX = { x: 1, y: 0, z: 0 };
-const still = { faces: [sideFace], normal: plusX, previewOffset: null };
+const plusZ = { x: 0, y: 0, z: 1 };
+const still = {
+  faces: [{ bounds: sideFace, normal: plusX }],
+  previewOffset: null
+};
 
 describe('sectionHidesFaceOffset', () => {
   it('is silent when the cut keeps the whole face', () => {
@@ -97,13 +103,25 @@ describe('sectionHidesFaceOffset', () => {
     const section = { plane: 'XY', offset: 8.5 } as const;
     expect(
       sectionHidesFaceOffset(
-        { faces: [sideFace, topFace], normal: plusX, previewOffset: null },
+        {
+          faces: [
+            { bounds: sideFace, normal: plusX },
+            { bounds: topFace, normal: plusZ }
+          ],
+          previewOffset: null
+        },
         section
       )
     ).toBe(false);
     expect(
       sectionHidesFaceOffset(
-        { faces: [sideFace, topFace], normal: plusX, previewOffset: null },
+        {
+          faces: [
+            { bounds: sideFace, normal: plusX },
+            { bounds: topFace, normal: plusZ }
+          ],
+          previewOffset: null
+        },
         { plane: 'XZ', offset: 9 }
       )
     ).toBe(true);
@@ -121,11 +139,110 @@ describe('sectionHidesFaceOffset', () => {
       sectionHidesFaceOffset(
         {
           ...still,
-          faces: [{ min: sideFace.min, max: { ...sideFace.max, z: NaN } }]
+          faces: [
+            {
+              bounds: { min: sideFace.min, max: { ...sideFace.max, z: NaN } },
+              normal: plusX
+            }
+          ]
         },
         section
       )
     ).toBe(false);
+  });
+  it('moves each face of a set along its own normal', () => {
+    // A 20 × 10 × 10 block: the top at z = 10, the handle on the +X side.
+    // An XY cut at z = 11 keeps both; a +2 preview lifts the top to z = 12.
+    const top: BoundingBox = {
+      min: { x: 0, y: 0, z: 10 },
+      max: { x: 20, y: 10, z: 10 }
+    };
+    const side: BoundingBox = {
+      min: { x: 20, y: 0, z: 0 },
+      max: { x: 20, y: 10, z: 10 }
+    };
+    const section = { plane: 'XY', offset: 11 } as const;
+    const faces = [
+      { bounds: side, normal: plusX },
+      { bounds: top, normal: plusZ }
+    ];
+    expect(
+      sectionHidesFaceOffset({ faces, previewOffset: null }, section)
+    ).toBe(false);
+    expect(sectionHidesFaceOffset({ faces, previewOffset: 2 }, section)).toBe(
+      true
+    );
+    // Shifting every face along the handle's +X normal missed it.
+    expect(
+      sectionHidesFaceOffset(
+        {
+          faces: faces.map((face) => ({ ...face, normal: plusX })),
+          previewOffset: 2
+        },
+        section
+      )
+    ).toBe(false);
+  });
+
+  it('keeps a fine tolerance for a face far from the origin across the cut', () => {
+    // A 1 mm face at x = 1e6, spanning z 0..1, cut at z = 0.5.
+    const far: BoundingBox = {
+      min: { x: 1e6, y: 0, z: 0 },
+      max: { x: 1e6, y: 1, z: 1 }
+    };
+    expect(
+      sectionHidesFaceOffset(
+        { faces: [{ bounds: far, normal: plusX }], previewOffset: null },
+        { plane: 'XY', offset: 0.5 }
+      )
+    ).toBe(true);
+  });
+});
+
+describe('shownFaceOffset', () => {
+  it('reads the frame on screen before the last whole preview', () => {
+    // A face set's leading-plane frame at +2 over a whole preview at +0.5.
+    expect(shownFaceOffset({ offset: 2 }, 0.5)).toBe(2);
+    expect(shownFaceOffset(null, 0.5)).toBe(0.5);
+    expect(shownFaceOffset({}, 0.5)).toBe(0.5);
+    expect(shownFaceOffset(null, null)).toBeNull();
+  });
+});
+
+describe('offsetFaceExtents', () => {
+  // Triangle 0: the +X side (x = 5); triangle 1: the top (z = 7).
+  const body = {
+    mesh: {
+      kind: 'mesh' as const,
+      vertices: new Float32Array([
+        5, 0, 0, 5, 2, 0, 5, 0, 7, 0, 0, 7, 5, 0, 7, 0, 2, 7
+      ]),
+      indices: new Uint32Array([0, 1, 2, 3, 4, 5])
+    },
+    topology: {
+      faces: [
+        { topologyId: 'side', hash: 1, triangleStart: 0, triangleCount: 1 },
+        {
+          topologyId: 'top',
+          hash: 2,
+          triangleStart: 1,
+          triangleCount: 1,
+          geometry: { surfaceType: 'plane', normal: { x: 0, y: 0, z: 3 } }
+        }
+      ],
+      edges: [],
+      vertices: []
+    }
+  } as unknown as Parameters<typeof offsetFaceExtents>[0];
+
+  it('gives the handle the handle normal and each set face its own', () => {
+    const extents = offsetFaceExtents(body, {
+      topologyId: 'side',
+      normal: [1, 0, 0],
+      offsetFaceSet: [{ topologyId: 'top' }]
+    });
+    expect(extents.map((extent) => extent.normal)).toEqual([plusX, plusZ]);
+    expect(extents[1]!.bounds.min.z).toBe(7);
   });
 });
 

@@ -1231,8 +1231,9 @@ import {
 } from './lib/resolvedExtrudePreview';
 import { isExtrudeChangeClipped } from './lib/extrudeSectionVisibility';
 import {
-  faceMeshBounds,
-  sectionHidesFaceOffset
+  offsetFaceExtents,
+  sectionHidesFaceOffset,
+  shownFaceOffset
 } from './lib/faceOffsetSectionVisibility';
 import { SectionHidesEditNotice } from './components/SectionHidesEditNotice';
 import type {
@@ -4781,6 +4782,8 @@ export function App() {
     geometry: GeometryReadyState;
     /** Radius of this published cylinder frame, which can lag the handle. */
     radius?: number;
+    /** Signed offset of this published face-offset frame (either lane). */
+    offset?: number;
   } | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
   const checkpointRoomRef = useRef<{
@@ -32960,16 +32963,14 @@ export function App() {
     const { target } = interaction;
     const body = ownEntry(representations, target.bodyId as BodyId);
     if (!body || body.consumed || hiddenBodyIds.has(body.bodyId)) return false;
-    const faces = [
-      target.topologyId,
-      ...(target.offsetFaceSet ?? []).map((member) => member.topologyId)
-    ].flatMap((topologyId) => faceMeshBounds(body, topologyId) ?? []);
-    const [x, y, z] = target.normal;
     return sectionHidesFaceOffset(
       {
-        faces,
-        normal: { x, y, z },
-        previewOffset: renderedOffsetPreview
+        faces: offsetFaceExtents(body, target),
+        // The frame on screen, a face set's leading-plane frame included.
+        previewOffset: shownFaceOffset(
+          currentFaceGeometryPreview,
+          renderedOffsetPreview
+        )
       },
       offsetSectionView
     );
@@ -32978,6 +32979,7 @@ export function App() {
     interaction,
     representations,
     hiddenBodyIds,
+    currentFaceGeometryPreview,
     renderedOffsetPreview
   ]);
 
