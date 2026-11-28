@@ -2,7 +2,7 @@ import { Blob as NodeBlob } from 'node:buffer';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CommandManager } from '@openzcad/command-system';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
 import { parseStl } from '@openzcad/io-stl';
 import {
@@ -13,9 +13,14 @@ import {
   toProjectId,
   toUploadSessionId,
   toUserId,
+  type ArtifactKind,
   type ProjectDocument
 } from '@openzcad/shared';
-import { createInFlightImportChecksums } from './importArchival';
+import {
+  archiveLocalOnlyImportSources,
+  createInFlightImportChecksums,
+  listLocalOnlyImportSources
+} from './importArchival';
 import {
   importedMeshCommand,
   meshInDocumentUnits
@@ -38,7 +43,7 @@ import {
   archiveArtifact,
   type ArchiveArtifactTransport
 } from './archiveArtifact';
-import { encryptedLocalOnly } from './api';
+import { ApiError, encryptedLocalOnly } from './api';
 
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
@@ -277,6 +282,128 @@ describe('archiving a mesh import', () => {
     });
     expect(archived).toEqual({
       artifactId: 'blob_payload',
+      payloadArchived: true,
+      originalArchived: false,
+      note: ' (original file not stored: an encrypted project keeps the imported mesh, not the original file).'
+    });
+  });
+
+  // #1637, the whole path in an encrypted project (as an encrypted revision
+  // branch is one). The encrypted route is the only one asked: it takes the
+  // mesh the feature names and refuses the picked file by kind, before it
+  // reads a byte. A payload that cannot upload leaves the import listed as
+  // local-only, and each retry offers that payload alone until one stores
+  // it, once, with the geometry untouched.
+  it('keeps a failed encrypted mesh archive pending until a retry stores the payload once', async () => {
+    const { contentBlobKindFor } = await import('./e2ee/encryptedContentBlobs');
+    let reachable = false;
+    const stored: string[] = [];
+    const refusedByKind: string[] = [];
+    /** `archiveEncryptedArtifact`, as far as kinds and reachability go. */
+    const archiveEncrypted = async (input: {
+      kind: ArtifactKind;
+      fileName: string;
+    }) => {
+      let blobKind: string;
+      try {
+        blobKind = contentBlobKindFor(input.kind).kind;
+      } catch (error) {
+        refusedByKind.push(input.kind);
+        throw error;
+      }
+      if (!reachable) throw new ApiError(503, 'Storage is unavailable.');
+      stored.push(`${blobKind}:${input.fileName}`);
+      return `${stored.length}`.padStart(32, '0');
+    };
+    const plate = {
+      ...original,
+      fileName: 'plate.3mf',
+      contentType: 'model/3mf',
+      kind: 'mesh-import' as const
+    };
+    const payload = new Uint8Array([1, 2, 3]);
+
+    const landed = await archiveImportedMesh({
+      hold: { bytes: payload },
+      sourceName: 'plate.3mf',
+      original: plate,
+      archive: archiveEncrypted,
+      newId
+    });
+    expect(landed.artifactId).toMatch(/^artifact_local_/);
+    expect(landed.note).toBe(
+      ' (cloud archive unavailable; mesh saved locally).'
+    );
+    expect(stored).toEqual([]);
+    expect(refusedByKind).toEqual(['mesh-import']);
+
+    const manager = new CommandManager(
+      createProjectDocument('Encrypted branch', user)
+    );
+    manager.execute(
+      commandFactories.importMesh({
+        name: 'plate',
+        artifactId: landed.artifactId,
+        sourceName: 'plate.3mf',
+        triangleCount: 1,
+        meshPayloadRef: {
+          marker: 'openzcad-source-ref',
+          version: 1,
+          hashAlgorithm: 'sha256',
+          checksumSha256: 'ab'.repeat(32),
+          logicalBytes: payload.byteLength
+        }
+      })
+    );
+    const pending = () =>
+      listLocalOnlyImportSources(manager.document).map(
+        (source) => `${source.kind}:${source.sourceName}`
+      );
+    const retry = () =>
+      archiveLocalOnlyImportSources({
+        document: manager.document,
+        loadSourceBytes: async () => payload,
+        archive: archiveEncrypted,
+        applyArtifactId: (featureId, artifactId, source) => {
+          manager.archiveSource(featureId, artifactId, source);
+          return true;
+        }
+      });
+    expect(pending()).toEqual(['mesh-payload:plate.3mf']);
+
+    // Still unreachable: nothing is lost and the import stays listed.
+    expect(await retry()).toEqual({
+      archived: [],
+      missing: [],
+      failed: ['plate.3mf']
+    });
+    expect(pending()).toEqual(['mesh-payload:plate.3mf']);
+
+    reachable = true;
+    expect(await retry()).toEqual({
+      archived: ['plate.3mf'],
+      missing: [],
+      failed: []
+    });
+    expect(pending()).toEqual([]);
+    // A second retry has nothing left to send.
+    expect(await retry()).toEqual({ archived: [], missing: [], failed: [] });
+    expect(stored).toEqual(['mesh-payload:plate.3mf.ozmesh']);
+    // The retries never offered the picked file, and added no feature.
+    expect(refusedByKind).toEqual(['mesh-import']);
+    expect(manager.document.featureOrder).toHaveLength(1);
+
+    // With the account reachable the import archives at once, and the
+    // picked file's absence is the project's rule, not a failed upload.
+    const direct = await archiveImportedMesh({
+      hold: { bytes: payload },
+      sourceName: 'plate.3mf',
+      original: plate,
+      archive: archiveEncrypted,
+      newId
+    });
+    expect(direct).toEqual({
+      artifactId: '2'.padStart(32, '0'),
       payloadArchived: true,
       originalArchived: false,
       note: ' (original file not stored: an encrypted project keeps the imported mesh, not the original file).'

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  statusEntryTone,
   advanceStatusClock,
   retireStatus,
   STATUS_CLOCK_STEP_MS,
@@ -41,5 +42,34 @@ describe('status lifetime', () => {
     );
     // A clock that went backwards takes nothing away.
     expect(advanceStatusClock(1000, -50)).toBe(1000);
+  });
+});
+
+describe('status tone', () => {
+  it('takes the outcome’s own tone over words in the names it carries', () => {
+    // Review of #2438: a success naming a feature "Error Check" stood over
+    // a full compact sheet as a warning.
+    expect(
+      statusEntryTone({ text: 'Duplicated Error Check.', tone: 'ready' })
+    ).toBe('ready');
+    expect(
+      statusEntryTone({
+        text: 'Projected 2 linked edges. Left out: Edge 3.',
+        tone: 'warning'
+      })
+    ).toBe('warning');
+  });
+
+  it('reads a status set without a tone from its text, as before', () => {
+    expect(statusEntryTone({ text: 'Duplicated Error Check.' })).toBe(
+      'warning'
+    );
+    expect(
+      statusEntryTone({ text: 'Cannot reorder: “A” would run first.' })
+    ).toBe('warning');
+    expect(statusEntryTone({ text: 'Operation was not applied.' })).toBe(
+      'warning'
+    );
+    expect(statusEntryTone({ text: 'Added box.' })).toBe('ready');
   });
 });

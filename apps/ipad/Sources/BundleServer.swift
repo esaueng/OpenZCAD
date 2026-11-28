@@ -3,17 +3,42 @@ import WebKit
 
 /// Resolves immutable bundled resources inside this app's WebKit process.
 /// No socket, user-document endpoint, write API, or remote origin is exposed.
+/// `/api/*` is a separate path that never reads files: it goes to the native
+/// cloud proxy when the app has one (ADR-026), and fails otherwise.
 final class BundleServer: NSObject, WKURLSchemeHandler {
     static let scheme = "zcad-ipad"
     static let origin = URL(string: "zcad-ipad://app")!
     /// The native-supplied blank page the earlier prototype's storage is
     /// restored into before the workspace loads.
     static let bootstrapPath = "__native_bootstrap__"
+    /// Every workspace document's policy. Frames are refused outright, so
+    /// only the main frame can reach the native message handler; the one
+    /// remote connection is the live-room socket on the API host.
+    static let policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
+        + "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+        + "font-src 'self' data:; connect-src 'self' wss://\(NativeAPI.origin.host!); worker-src 'self' blob:; "
+        + "frame-src 'none'; child-src 'none'; "
+        + "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
     private let root: URL
+    var proxy: ApiProxy?
 
     init(root: URL) { self.root = root }
 
+    static func isApiRequest(_ url: URL) -> Bool {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath.hasPrefix("/api/") == true
+    }
+
+    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
+        MainActor.assumeIsolated { proxy?.stop(task) }
+    }
+
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
+        if let url = task.request.url, Self.isApiRequest(url) {
+            MainActor.assumeIsolated {
+                if let proxy { proxy.start(task, in: webView) } else { task.didFailWithError(URLError(.unsupportedURL)) }
+            }
+            return
+        }
         guard let url = task.request.url,
               WorkspaceViewController.isWorkspaceURL(url),
               task.request.httpMethod == "GET" || task.request.httpMethod == "HEAD" else {
@@ -24,10 +49,7 @@ final class BundleServer: NSObject, WKURLSchemeHandler {
         let resource = Self.resource(root: root, target: url.path.isEmpty ? "/" : url.path)
         let data = bootstrap ? Data("<!doctype html><html><body></body></html>".utf8)
             : resource.flatMap { try? Data(contentsOf: $0, options: .mappedIfSafe) }
-        let policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
-            + "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
-            + "font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; "
-            + "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+        let policy = Self.policy
         let response = HTTPURLResponse(url: url, statusCode: data == nil ? 404 : 200,
             httpVersion: "HTTP/1.1", headerFields: [
                 "Content-Type": bootstrap ? "text/html" : resource.map(Self.contentType) ?? "text/plain",
@@ -41,7 +63,6 @@ final class BundleServer: NSObject, WKURLSchemeHandler {
         task.didFinish()
     }
 
-    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
 
     static func resource(root: URL, target: String) -> URL? {
         guard target.hasPrefix("/"), !target.hasPrefix("//"),

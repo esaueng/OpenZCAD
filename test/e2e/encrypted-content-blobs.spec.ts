@@ -90,6 +90,69 @@ async function serveAccount(page: Page, server: E2eeServer) {
   );
 }
 
+/**
+ * Watches every content write `page` sends on a plaintext route: a project
+ * created or saved with its document, a revision, an artifact or import
+ * finalize, a plaintext upload session, and any request on an upload
+ * session that the encrypted blob route did not open. Encrypted blobs use
+ * the same `/api/uploads/:id/…` transport, so a session counts as encrypted
+ * only when `…/blobs/uploads` handed it out; the classification waits for
+ * those answers, which may still be parsing when the upload goes out.
+ */
+function watchPlaintextContentWrites(page: Page) {
+  const writes: { method: string; path: string; session?: string }[] = [];
+  const encryptedSessions = new Set<string>();
+  const answers: Promise<void>[] = [];
+  page.on('request', (request) => {
+    const method = request.method();
+    if (method === 'GET' || method === 'HEAD') return;
+    const path = new URL(request.url()).pathname;
+    const session = /^\/api\/uploads\/([^/]+)\//.exec(path)?.[1];
+    if (
+      session ||
+      path === '/api/uploads' ||
+      path === '/api/projects' ||
+      path === '/api/imports/finalize' ||
+      path.startsWith('/api/artifacts') ||
+      /^\/api\/projects\/[^/]+\/(document|revisions|artifacts)(\/|$)/.test(path)
+    ) {
+      writes.push({
+        method,
+        path,
+        ...(session ? { session: decodeURIComponent(session) } : {})
+      });
+    }
+  });
+  page.on('response', (response) => {
+    if (
+      response.request().method() !== 'POST' ||
+      !new URL(response.url()).pathname.endsWith('/blobs/uploads')
+    ) {
+      return;
+    }
+    answers.push(
+      response
+        .json()
+        .then((body: { session?: { uploadSessionId: string } }) => {
+          if (body.session) encryptedSessions.add(body.session.uploadSessionId);
+        })
+        .catch(() => undefined)
+    );
+  });
+  /** The writes, split by whether an encrypted blob session carried them. */
+  return async () => {
+    await Promise.all(answers);
+    const named = ({ method, path }: (typeof writes)[number]) =>
+      `${method} ${path}`;
+    const encrypted = (write: (typeof writes)[number]) =>
+      write.session !== undefined && encryptedSessions.has(write.session);
+    return {
+      plaintext: writes.filter((write) => !encrypted(write)).map(named),
+      encrypted: writes.filter(encrypted).map(named)
+    };
+  };
+}
+
 /** Whether this browser's own source store holds the bytes. */
 const holdsSource = (page: Page) =>
   page.evaluate(async (checksum) => {
@@ -580,6 +643,263 @@ test(
     });
     expect(named.filter((blobId) => !thumbnails.has(blobId))).toEqual([]);
     expect(status).not.toContain('archived');
+    expect(errors).toEqual([]);
+  }
+);
+
+/**
+ * #1637: a 3MF imported into an end-to-end encrypted revision branch. The
+ * triangles the feature rebuilds from are stored as an encrypted
+ * `mesh-payload` blob named by the branch's saved head; nothing goes through
+ * a plaintext route. While that upload cannot finish, the import still lands
+ * and says the mesh is on this device only: the project does not read as
+ * plainly saved, and the File menu offers the archive again. Retrying stores
+ * the payload once and adds no geometry. The file the user picked is not
+ * kept by an encrypted project, and the import says so in those words
+ * rather than as an upload that failed.
+ */
+test(
+  'archives a 3MF imported into an encrypted revision branch, and keeps a failed archive pending until it is retried',
+  { tag: '@ci-smoke' },
+  async ({ page, browser }) => {
+    test.setTimeout(300_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const contentWrites = watchPlaintextContentWrites(page);
+    const server = createE2eeServer({ projectsEnabled: true });
+    await serveAccount(page, server);
+    const projectIds = () =>
+      (
+        server.db
+          .prepare('SELECT id FROM projects WHERE storage_format = 2')
+          .all() as { id: string }[]
+      ).map((row) => row.id);
+
+    await page.goto('/');
+    const seeded = await seedE2eeDevice(page, server);
+    const settings = await openEncryptionSettings(page);
+    const toggle = settings.getByRole('checkbox', {
+      name: 'Encrypt new projects'
+    });
+    await expect(toggle).toBeEnabled();
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    await page.keyboard.press('Escape');
+    await expect(settings).toHaveCount(0);
+
+    await page.getByLabel('Project name').fill('Secret plate');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    const saved = page.getByRole('status', { name: 'Saved', exact: true });
+    await expect(saved).toBeVisible({ timeout: SYNC_BUDGET_MS });
+
+    // The file the issue imported: this project's own 3MF export.
+    const fileMenu = page.locator('details.file-menu');
+    await fileMenu.locator('summary').click();
+    await fileMenu.getByRole('button', { name: /Export mesh/ }).click();
+    const exportDialog = page.getByRole('dialog', { name: /Export mesh/ });
+    await exportDialog.getByRole('radio', { name: '3MF', exact: true }).check();
+    // Bounded on its own: a missed download would otherwise spend the whole
+    // test budget, on every retry.
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await exportDialog
+      .getByRole('button', { name: 'Export 3MF', exact: true })
+      .click();
+    const stream = await (await downloadPromise).createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    const plate = Buffer.concat(chunks);
+    expect(plate.subarray(0, 2).toString('latin1')).toBe('PK');
+
+    // A named revision, branched into a project of its own.
+    await page.keyboard.press('ControlOrMeta+s');
+    const savedRow = page.locator('.revision-row', { hasText: 'Manual save' });
+    await expect(savedRow).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await expect(saved).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    const [sourceId] = projectIds();
+    expect(projectIds()).toHaveLength(1);
+    await savedRow.hover();
+    await savedRow
+      .getByRole('button', { name: 'Branch Manual save into a new project' })
+      .click();
+    await expect(page.getByRole('contentinfo')).toContainText('Branched', {
+      timeout: SYNC_BUDGET_MS
+    });
+    await page.getByTitle('Back to projects').click();
+    await page
+      .locator('.start-tile-open', { hasText: 'Secret plate (copy)' })
+      .click();
+    await expectBodyCount(page, 1);
+    await expect(saved).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    // The branch is an encrypted project of the account, like its source.
+    const branchId = projectIds().find((id) => id !== sourceId);
+    expect(projectIds()).toHaveLength(2);
+    expect(branchId).toBeTruthy();
+
+    // The account cannot take the mesh for now.
+    let refuseMesh = true;
+    const blobStarts: string[] = [];
+    await page.route('**/api/e2ee/projects/*/blobs/uploads', (route) => {
+      const { kind } = route.request().postDataJSON() as { kind: string };
+      if (kind !== 'thumbnail') blobStarts.push(kind);
+      if (kind === 'mesh-payload' && refuseMesh) {
+        return route.fulfill({
+          status: 503,
+          json: { error: 'Storage is unavailable.' }
+        });
+      }
+      return route.fallback();
+    });
+    const meshBlobs = () =>
+      server.db
+        .prepare(
+          "SELECT blob_id, project_id FROM e2ee_content_blobs WHERE kind = 'mesh-payload'"
+        )
+        .all() as { blob_id: string; project_id: string }[];
+
+    await page.getByLabel(/^Import STEP or /).setInputFiles({
+      name: 'secret-plate.3mf',
+      mimeType: 'model/3mf',
+      buffer: plate
+    });
+    // The geometry lands; the status says where the mesh is.
+    await expectBodyCount(page, 2);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'from secret-plate.3mf (cloud archive unavailable; mesh saved locally).'
+    );
+    expect(meshBlobs()).toEqual([]);
+    // Visibly pending, with the retry: not "Saved", and the File menu
+    // names the one file still to archive.
+    await expect(
+      page.getByRole('group', { name: 'Workspace status' })
+    ).toContainText('Local source only', { timeout: SYNC_BUDGET_MS });
+    await expect(saved).toHaveCount(0);
+    await expect(fileMenu.locator('summary')).toHaveAccessibleName(
+      /1 import source needs archiving/
+    );
+
+    // The account answers again: the retry stores the mesh, once.
+    refuseMesh = false;
+    await fileMenu.locator('summary').click();
+    await fileMenu
+      .getByRole('button', { name: /Archive local sources/ })
+      .click();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Archive local sources: archived secret-plate.3mf.',
+      { timeout: SYNC_BUDGET_MS }
+    );
+    await expect(saved).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await expect(fileMenu.locator('summary')).not.toHaveAccessibleName(
+      /needs archiving/
+    );
+    await expectBodyCount(page, 2);
+    expect(meshBlobs()).toEqual([
+      { blob_id: expect.any(String), project_id: branchId }
+    ]);
+    const blobId = meshBlobs()[0]!.blob_id;
+    // The branch's saved head names it, so the account keeps it: the
+    // current document version, not only some earlier one.
+    await expect
+      .poll(
+        () =>
+          (
+            server.db
+              .prepare(
+                `SELECT COUNT(*) AS n FROM projects p
+                 JOIN e2ee_project_versions v
+                   ON v.project_id = p.id
+                  AND v.document_version = p.document_version
+                 JOIN e2ee_version_blobs b
+                   ON b.project_id = p.id AND b.version_hash = v.version_hash
+                 WHERE p.id = ? AND b.blob_id = ?`
+              )
+              .get(branchId!, blobId) as { n: number }
+          ).n,
+        { timeout: SYNC_BUDGET_MS }
+      )
+      .toBe(1);
+
+    // The same file again, with the account reachable: stored encrypted at
+    // once, as the blob the account already holds, and the original's
+    // absence is stated as the encrypted project's rule, never as a failed
+    // upload.
+    await page.getByLabel(/^Import STEP or /).setInputFiles({
+      name: 'secret-plate.3mf',
+      mimeType: 'model/3mf',
+      buffer: plate
+    });
+    await expectBodyCount(page, 3);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'from secret-plate.3mf (original file not stored: an encrypted project keeps the imported mesh, not the original file).'
+    );
+    await expect(page.getByRole('contentinfo')).not.toContainText(
+      'upload unavailable'
+    );
+    await expect(saved).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    expect(meshBlobs()).toEqual([{ blob_id: blobId, project_id: branchId }]);
+
+    // Only the mesh was ever offered to the account, and only encrypted:
+    // no upload of the picked file, no artifact, nothing on a plaintext
+    // route.
+    expect([...new Set(blobStarts)]).toEqual(['mesh-payload']);
+    expect(
+      count(
+        server,
+        "SELECT COUNT(*) AS n FROM e2ee_content_blobs WHERE kind NOT IN ('thumbnail', 'mesh-payload')"
+      )
+    ).toBe(0);
+    expect(count(server, 'SELECT COUNT(*) AS n FROM artifacts')).toBe(0);
+    // The encrypted mesh went through the shared upload transport; nothing
+    // else did, and no document or finalize went to a plaintext route.
+    const firstWrites = await contentWrites();
+    expect(firstWrites.plaintext).toEqual([]);
+    expect(firstWrites.encrypted).toContainEqual(
+      expect.stringMatching(/^PUT \/api\/uploads\/[^/]+\/content$/)
+    );
+    const stored = [
+      JSON.stringify(
+        server.db.prepare('SELECT * FROM e2ee_content_blobs').all()
+      ),
+      JSON.stringify(
+        server.db.prepare('SELECT * FROM e2ee_project_versions').all()
+      ),
+      ...[...server.objects.values()].map((bytes) =>
+        Buffer.from(bytes).toString('latin1')
+      )
+    ].join('\n');
+    expect(stored).not.toContain('secret-plate');
+    expect(stored).not.toContain('3dmodel.model');
+
+    // A fresh browser of the same device holds no copy of the mesh: the
+    // branch rebuilds both imports from the one blob it reads and decrypts.
+    const fresh = await browser.newContext();
+    try {
+      const second = await fresh.newPage();
+      second.on('pageerror', (error) => errors.push(error.message));
+      const secondWrites = watchPlaintextContentWrites(second);
+      const blobReads: string[] = [];
+      second.on('request', (request) => {
+        if (new URL(request.url()).pathname.endsWith(`/blobs/${blobId}`)) {
+          blobReads.push(request.method());
+        }
+      });
+      await serveAccount(second, server);
+      await second.goto('/');
+      await writeDevice(second, seeded.device);
+      await second.reload();
+      const card = second.locator('.start-tile-project', {
+        hasText: 'Secret plate (copy)'
+      });
+      await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
+      await card.locator('.start-tile-open').click();
+      await expectBodyCount(second, 3);
+      expect(blobReads).toEqual(['GET']);
+      await expect(second.getByText(/could not be fetched/)).toHaveCount(0);
+      expect((await secondWrites()).plaintext).toEqual([]);
+    } finally {
+      await fresh.close();
+    }
     expect(errors).toEqual([]);
   }
 );

@@ -293,7 +293,38 @@ describe('validated feature commit', () => {
 
     expect(applied).toBe('committed');
     expect(commit).toHaveBeenCalledTimes(1);
-    expect(onStatus).toHaveBeenLastCalledWith(command.label);
+    // A success by its outcome, whatever its builder's warning said.
+    expect(onStatus).toHaveBeenLastCalledWith(command.label, {
+      tone: 'ready'
+    });
+
+    // Review of #2438: the tone is the outcome's, not read from the words.
+    // A success naming "Error Check" is ready; one reporting what it left
+    // out says so with its own tone.
+    await act(async () => {
+      await result.current.run(command, {
+        featureName: 'Approximate profile',
+        featureId: resultFeatureId,
+        resultBodyId,
+        successMessage: 'Duplicated Error Check.'
+      });
+    });
+    expect(onStatus).toHaveBeenLastCalledWith('Duplicated Error Check.', {
+      tone: 'ready'
+    });
+    await act(async () => {
+      await result.current.run(command, {
+        featureName: 'Approximate profile',
+        featureId: resultFeatureId,
+        resultBodyId,
+        successMessage: () => 'Inserted 1 body. Left out: Lug.',
+        successTone: () => 'warning'
+      });
+    });
+    expect(onStatus).toHaveBeenLastCalledWith(
+      'Inserted 1 body. Left out: Lug.',
+      { tone: 'warning' }
+    );
   });
 
   it('rejects a primitive edit when an affected downstream fillet fails', async () => {

@@ -1,5 +1,5 @@
 import { Search } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import {
   allToolsLead,
   allToolsSections,
@@ -37,13 +37,16 @@ export function AllToolsSheet({
   const [reasonSection, setReasonSection] = useState<string | null>(null);
   const reasonRef = useRef<HTMLParagraphElement | null>(null);
   useEffect(() => {
-    if (reasonTurn > 0) reasonRef.current?.scrollIntoView?.({ block: 'nearest' });
+    if (reasonTurn > 0)
+      reasonRef.current?.scrollIntoView?.({ block: 'nearest' });
   }, [reasonTurn]);
   const headingId = useId();
   const sections = allToolsSections(
     query,
     allToolsLead(build.recentTools, build.pinnedTools)
   );
+  // Each tile's place in reading order, so the grid comes in tile by tile.
+  let order = 0;
   return (
     <div className="compact-all-tools">
       <label className="compact-search">
@@ -75,7 +78,7 @@ export function AllToolsSheet({
             {section.tools.map((tool) => {
               const disabled = toolDisabledReason(tool, build.availability);
               return (
-                <li key={tool}>
+                <li key={tool} style={{ '--i': order++ } as CSSProperties}>
                   <button
                     type="button"
                     className={`compact-tool-tile${

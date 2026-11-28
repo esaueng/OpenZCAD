@@ -905,7 +905,8 @@ describe('taking a handle again while its release validates', () => {
     await expect(second).resolves.toBe(true);
     expect(edit.host.commit).toHaveBeenCalledTimes(1);
     expect(edit.host.onStatus).toHaveBeenLastCalledWith(
-      'Adjusted cylinder radius to 7.'
+      'Adjusted cylinder radius to 7.',
+      { tone: 'ready' }
     );
     expect(edit.host.onBusy).toHaveBeenLastCalledWith(false);
   });

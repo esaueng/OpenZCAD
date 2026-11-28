@@ -528,6 +528,34 @@ export function measureOpeningFrame(canvas: HTMLElement): NdcFrame | undefined {
 }
 
 /**
+ * Whether two opening frames frame a model alike: both the whole canvas, or
+ * no edge apart by more than a pixel's worth on a 2000 px canvas.
+ */
+export function sameOpeningFrame(
+  a: NdcFrame | undefined,
+  b: NdcFrame | undefined
+): boolean {
+  if (!a || !b) return a === b;
+  const close = (x: number, y: number) => Math.abs(x - y) < 1e-3;
+  return (
+    close(a.minX, b.minX) &&
+    close(a.maxX, b.maxX) &&
+    close(a.minY, b.minY) &&
+    close(a.maxY, b.maxY)
+  );
+}
+
+/**
+ * Whether the workspace cover still hides `canvas`: the opening fit may
+ * then follow the stage as it settles, since nobody can have moved the
+ * camera yet.
+ */
+export function openingCoverHides(canvas: HTMLElement): boolean {
+  const cover = canvas.closest('.workspace-reveal');
+  return cover !== null && getComputedStyle(cover).visibility === 'hidden';
+}
+
+/**
  * The clear stage a picked target is kept in: what Fit frames into, less the
  * tool palette's open fold too, which hangs outside the column's box. Any
  * band counts — a profile and its arrow fit in far less than a model needs.

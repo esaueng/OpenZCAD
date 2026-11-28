@@ -46,6 +46,9 @@ function isRefusalStatus(status: string): boolean {
   return REFUSAL_PATTERN.test(status);
 }
 
+/** The status row an unwrapped line takes on the stage (quiet-stage.css). */
+const STATUS_ROW_PX = 28;
+
 /** Phones keep the guidance in the bar; its help glyph opens the whole text. */
 const PHONE_QUERY = '(max-width: 520px)';
 
@@ -454,23 +457,64 @@ export function WorkspaceReadout({
   // Held through the fade once a refusal expires: the text stays drawn for
   // that 100ms, wrapped, and the rows above keep clear of it until it goes.
   const refusal = isRefusalStatus(shownStatus) && (shown || quiet);
+  // A refusal or a warning is news to read whatever covers the stage: over
+  // a full compact sheet, where an ordinary status with nothing to tap steps
+  // aside, it keeps its place under the action notice (compact-shell.css,
+  // #2434). Held through the fade as the refusal is, so the notice above
+  // stays clear of it until it has gone.
+  const standing =
+    refusal ||
+    (paced.tone === 'warning' && shownStatus !== '' && (shown || quiet));
+  // Something to tap beside the line (Undo, Turn off section, Take over
+  // editing): over a full compact sheet the notice stands over it.
+  const hasAction = undoShown || statusActionShown || turnOffShown;
   // A wrapped refusal is taller than the 28px row the notice lane allows a
   // status, so the rows stacked above it (the Undo toast) lift by its real
   // height, published as the activity pill publishes its own: on the viewer
   // for the stage's lane, or, over a full compact sheet, on the notice host
-  // that draws the line beside the action notice. The body is taken by a
-  // callback ref: the sheet coming up to full moves the line onto that host
-  // as a new node, which the measure must follow.
+  // that draws the line beside the action notice. A phone wraps every
+  // status, so there a standing warning publishes its height too, and so
+  // does a line with an action: at 320px a long one wraps beside "Turn off
+  // section", and the notice, lifted by the 44px action alone, came down
+  // over the button. On the host the row is the taller of the line and its
+  // action. The body is taken by a callback ref: the sheet coming up to full
+  // moves the line onto that host as a new node, which the measure must
+  // follow.
   const [statusBody, setStatusBody] = useState<HTMLElement | null>(null);
+  // The cut's own line is not drawn over the sheet (compact-shell.css).
+  const lifted = standing || (hasAction && shown && !sectionShown);
   useLayoutEffect(() => {
-    if (!refusal || !statusBody) return;
-    const viewer = statusBody.closest<HTMLElement>('.viewer-area');
+    if (!lifted || !statusBody) return;
+    const viewer = refusal
+      ? statusBody.closest<HTMLElement>('.viewer-area')
+      : null;
+    const host = statusHost?.contains(statusBody) ? statusHost : null;
+    const row = statusBody.parentElement;
+    if (!viewer && !host) return;
+    const actions = () =>
+      row
+        ? Array.from(
+            row.querySelectorAll<HTMLElement>(':scope > .workspace-toast-undo')
+          )
+        : [];
     const measure = () => {
       const height = statusBody.getBoundingClientRect().height;
-      if (height > 0) {
-        const value = `${Math.ceil(height)}px`;
-        viewer?.style.setProperty('--workspace-toast-live-h', value);
-        statusHost?.style.setProperty('--workspace-toast-live-h', value);
+      if (height <= 0) return;
+      if (viewer && refusal)
+        viewer.style.setProperty(
+          '--workspace-toast-live-h',
+          `${Math.ceil(height)}px`
+        );
+      if (host) {
+        const tallest = actions().reduce(
+          (most, action) =>
+            Math.max(most, action.getBoundingClientRect().height),
+          height
+        );
+        host.style.setProperty(
+          '--workspace-toast-live-h',
+          `${Math.ceil(tallest)}px`
+        );
       }
     };
     measure();
@@ -479,12 +523,47 @@ export function WorkspaceReadout({
         ? null
         : new ResizeObserver(measure);
     observer?.observe(statusBody);
+    if (host) for (const action of actions()) observer?.observe(action);
     return () => {
       observer?.disconnect();
       viewer?.style.removeProperty('--workspace-toast-live-h');
-      statusHost?.style.removeProperty('--workspace-toast-live-h');
+      host?.style.removeProperty('--workspace-toast-live-h');
     };
-  }, [refusal, statusBody, statusHost, shownStatus]);
+  }, [lifted, refusal, hasAction, statusBody, statusHost, shownStatus]);
+  // On the stage, a refusal fades in once the Undo toast's glide up to its
+  // row has made room (quiet-stage.css). Taking the place of a status
+  // already drawn, it had no fade to wait: the taller text stood at once and
+  // the toast's foot covered its top lines for the glide (#2434). Such a
+  // refusal starts hidden again, for the stylesheet to fade in after the
+  // glide. The row it replaces is the 28px line, or a refusal's own height.
+  const rowBefore = useRef(0);
+  const [entering, setEntering] = useState(false);
+  useLayoutEffect(() => {
+    if (compactShell || !statusBody) {
+      rowBefore.current = 0;
+      return;
+    }
+    const height = !shown
+      ? 0
+      : refusal
+        ? statusBody.getBoundingClientRect().height
+        : STATUS_ROW_PX;
+    const before = rowBefore.current;
+    rowBefore.current = height;
+    if (refusal && shown && before > 0 && height > before) setEntering(true);
+  }, [compactShell, statusBody, shown, refusal, shownStatus]);
+  // Drawn hidden for a frame, then handed to the delayed fade.
+  useEffect(() => {
+    if (!entering) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setEntering(false));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [entering]);
   const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
   const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
   const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
@@ -655,7 +734,9 @@ export function WorkspaceReadout({
         <footer
           className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}${
             refusal ? ' is-refusal' : ''
-          }`}
+          }${entering && refusal ? ' is-entering' : ''}${
+            standing ? ' is-standing' : ''
+          }${hasAction ? ' has-action' : ''}`}
           role="contentinfo"
           // The cut's own line, a state rather than news: the compact
           // workspace (U12) shows it on View's tray instead.

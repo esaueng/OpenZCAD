@@ -9,8 +9,12 @@
 .numeric-keypad {
   position: absolute;
   /* Exact entry must stay actionable when its anchor lands under the floating
-     Inspector; the control is the active surface for this interaction. */
-  z-index: calc(var(--z-inspector-float) + 2);
+     Inspector, a command's card or a floating window; the control is the
+     active surface for this interaction. A short stage (an iPad on its side
+     with the keyboard up) clamps it beside the card in the right lane
+     (z-panel-float + 8), which covered its Apply (the preview check on
+     #2451); it stands over the rail's flyouts (+10) too, under tooltips. */
+  z-index: calc(var(--z-panel-float) + 11);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -757,6 +761,39 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 10px;
+}
+
+/* ── A section view hiding part of a face offset ───────────
+   Shown only while the cut hides part of the edited face or its preview;
+   wraps on a phone so the whole sentence and its way out stay readable. */
+
+.section-hidden-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  padding: 1px 3px 2px 6px;
+  font-size: var(--fs-xs);
+  color: var(--color-text);
+  /* The bottom lane lets the stage take clicks through it; the note's way
+     out is a control and takes its own. */
+  pointer-events: auto;
+}
+
+.section-hidden-notice-line {
+  display: inline-flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.section-hidden-notice-detail {
+  color: var(--color-text-muted);
 }
 
 /* ── Waiting for the live session (design review I10) ──────

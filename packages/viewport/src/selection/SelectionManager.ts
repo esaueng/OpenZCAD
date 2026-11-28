@@ -353,6 +353,8 @@ export class SelectionManager {
 
   private options: SelectionManagerOptions;
   private hoveredEdgeTarget: EdgeHoverTarget | null = null;
+  /** Whether the last edge hover lit the smooth run (see `applyHover`). */
+  private hoverEdgeRun = true;
   private hoverFaceKey: string | null = null;
   /** Last cursor written, so an unchanged one is not rewritten per frame. */
   private lastCursor: string | null = null;
@@ -439,6 +441,15 @@ export class SelectionManager {
       slot.setXrayEnabled(enabled, slot === this.activeHoverFaceSlot);
     }
     this.options.requestRender();
+  }
+
+  /** The topology ids the edge hover lights now, the hovered edge first. */
+  hoveredEdgeTopologyIds(): string[] {
+    const target = this.hoveredEdgeTarget;
+    if (!target) return [];
+    if (isBatchedEdgeTarget(target)) return target.batch.hoveredTopologyIds;
+    const owner = (target.userData as { topologyId?: string }).topologyId;
+    return owner ? [owner] : [];
   }
 
   setEdgeHover(
@@ -637,8 +648,22 @@ export class SelectionManager {
    * region fill, the topology edge, the face film, the cursor, and — only for
    * whole-body picks, which are imported meshes without face topology — a
    * body-wide emissive lift.
+   *
+   * `edgeRun: false` lights only the edge under the pointer, never the
+   * smooth run it continues into: a step that takes that one edge (the
+   * sketch's Project) must not show more than it will take.
    */
-  applyHover(candidate: PickCandidate | null) {
+  applyHover(
+    candidate: PickCandidate | null,
+    options: { edgeRun?: boolean } = {}
+  ) {
+    const edgeRun = options.edgeRun ?? true;
+    if (edgeRun !== this.hoverEdgeRun) {
+      // The same edge re-hovered keeps what it lit; a change of rule must
+      // relight it, so it is dropped first.
+      this.hoverEdgeRun = edgeRun;
+      this.setEdgeHover(null);
+    }
     this.setRegionHover(candidate?.region ? candidate.hit.object : null);
     const bodyId = candidate?.selection?.bodyId ?? null;
     const canDragFace =
@@ -652,6 +677,7 @@ export class SelectionManager {
         : null;
     let hoveredTopologyIds: readonly string[] = [];
     if (
+      edgeRun &&
       hoveredEdge &&
       isBatchedEdgeTarget(hoveredEdge) &&
       !(
