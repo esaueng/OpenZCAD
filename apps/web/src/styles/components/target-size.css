@@ -139,6 +139,64 @@
   }
 }
 
+/* The sketch rail kept its desktop 30 px icons on a tablet: Rectangle,
+   Line and Finish were 30 × 30 targets packed 2 px apart on an iPad, in the
+   loop every model starts with. On a tablet they (and Finish, the column's
+   foot) are drawn at 44 px like the Build rail's, down to the 556 px page
+   an iPad at its largest text size lays out. A phone (520 px and narrower,
+   or on its side) keeps the 30 px column, which is all its width and
+   height have room for beside the stage. */
+@media (pointer: coarse) and (min-width: 521px) and (min-height: 541px) {
+  .workspace-column .sketch-rail button,
+  .workspace-column .sketch-rail button.sketch-dof-chip,
+  .workspace-column-footer .workspace-column-finish {
+    width: 44px;
+    height: 44px;
+  }
+
+  .workspace-column .sketch-rail button svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .workspace-column .sketch-rail button.sketch-dof-chip {
+    font-size: 11px;
+    line-height: 12px;
+  }
+
+  /* The type strips beside the rail (Corner, Center, 3-point …). */
+  .workspace-column .sketch-rail :is(.sketch-type-tile, .sketch-type-cycle) {
+    height: 44px;
+  }
+}
+
+/* One 44 px column of the rail's sixteen tools and Finish is about 810 px
+   tall, more than an iPad held sideways (or zoomed by a larger text size)
+   has between the top islands and the readout, where Finish would scroll
+   out of reach. There the rail takes two columns, as the Build rail does
+   under 900 px. */
+@media (pointer: coarse) and (min-width: 521px) and (min-height: 541px) and (max-height: 1100px) {
+  .workspace.column-layout.has-column:has(.workspace-column .sketch-rail) {
+    --column-w: calc(var(--rail-w) * 2);
+  }
+
+  .workspace-column .sketch-rail {
+    display: grid;
+    grid-template-columns: repeat(2, 44px);
+    justify-content: center;
+    gap: 2px 4px;
+  }
+
+  .workspace-column .sketch-rail-group {
+    display: contents;
+  }
+
+  .workspace-column .sketch-rail-divider {
+    grid-column: 1 / -1;
+    justify-self: center;
+  }
+}
+
 /* A phone on its side (no taller than 540 px) has no room for 44 px rows:
    the three-column tool rail ran past the bottom of the screen and clipped
    Tools. It keeps the 40 px targets it had; an iPad is never this short. */

@@ -14,6 +14,7 @@ import {
   type ParameterDefinition
 } from './forms/parameterDefinition';
 import {
+  keypadCeiling,
   keypadFloor,
   NumericKeypad,
   operationTagLabel,
@@ -1414,6 +1415,25 @@ describe('the operation switch, away from the pick', () => {
     }
   });
 
+  it('stays under the finger when the typed value’s preview hides the pick', () => {
+    // The iPad review: a fillet's first key hid the edge it rounds, the
+    // pick left the screen, and the control docked with Apply 48 px away.
+    stubPhone(false);
+    const view = mount(edge, 'Fillet ▾');
+    try {
+      const keypad = view.keypad();
+      act(() => view.anchor.current?.({ x: 500, y: 300 }));
+      const { left, top } = keypad.style;
+      fireEvent.click(within(keypad).getByRole('button', { name: '5' }));
+      act(() => view.anchor.current?.(null));
+      expect(keypad).not.toHaveAttribute('data-placement', 'docked');
+      expect(keypad.style.left).toBe(left);
+      expect(keypad.style.top).toBe(top);
+    } finally {
+      view.done();
+    }
+  });
+
   it('carries the Total/Offset switch of a face offset too', () => {
     stubPhone(true);
     const view = mount(
@@ -1574,6 +1594,27 @@ describe('the keypad on a touch screen', () => {
     }
   });
 
+  it('folds the pad away for the system keyboard a touch on the field asks for', () => {
+    // The iPad review: on its side, the keyboard and the pad's keys did not
+    // both fit, and the clamped pad rose under the top bar.
+    matchPointer(true);
+    try {
+      const { input } = setup('10');
+      expect(screen.getByRole('button', { name: '5' })).toBeInTheDocument();
+      fireEvent.pointerDown(input, { pointerType: 'touch' });
+      expect(screen.queryByRole('button', { name: '5' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Keypad' })).toHaveAttribute(
+        'aria-expanded',
+        'false'
+      );
+      // The toggle brings the keys back.
+      fireEvent.click(screen.getByRole('button', { name: 'Keypad' }));
+      expect(screen.getByRole('button', { name: '5' })).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('raises the digits again once the pad is folded away', () => {
     matchPointer(true);
     try {
@@ -1628,6 +1669,55 @@ describe('the keypad floor', () => {
     withVisualViewport(undefined, () => {
       expect(keypadFloor(hostOf(800))).toBe(800);
     });
+  });
+});
+
+describe('the keypad ceiling', () => {
+  function rectAt(top: number, bottom: number) {
+    return () =>
+      ({
+        top,
+        bottom,
+        left: 0,
+        right: 0,
+        width: 0,
+        height: bottom - top,
+        x: 0,
+        y: top,
+        toJSON() {}
+      }) as DOMRect;
+  }
+
+  it('stands under the top bar, whose islands are drawn over the stage', () => {
+    // An iPad on its side with the keyboard up: the keypad rose under the
+    // project's name and the mode switch.
+    const workspace = document.createElement('div');
+    workspace.className = 'app-shell';
+    const bar = document.createElement('header');
+    bar.className = 'topbar';
+    bar.getBoundingClientRect = rectAt(10, 50);
+    const host = document.createElement('div');
+    host.getBoundingClientRect = rectAt(0, 440);
+    workspace.append(bar, host);
+    document.body.append(workspace);
+    try {
+      expect(keypadCeiling(host)).toBe(50);
+      // A host that starts below the bar has nothing over its top.
+      host.getBoundingClientRect = rectAt(60, 440);
+      expect(keypadCeiling(host)).toBe(0);
+    } finally {
+      workspace.remove();
+    }
+  });
+
+  it('is the host’s top where there is no top bar', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    try {
+      expect(keypadCeiling(host)).toBe(0);
+    } finally {
+      host.remove();
+    }
   });
 });
 
@@ -1942,6 +2032,52 @@ describe('the keypad in the compact sheet', () => {
         expect(options).toEqual({ preventScroll: true });
       }
     } finally {
+      cleanup();
+      host.remove();
+    }
+  });
+
+  it('keeps its keys when a touch on the field asks for the system keyboard', () => {
+    // The sheet rides above the keyboard: folding its keys (as the stage's
+    // keypad does) left them folded after the keyboard went away (review on
+    // #2451).
+    const host = document.createElement('div');
+    document.body.append(host);
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: query === '(pointer: coarse)',
+          media: query,
+          addEventListener() {},
+          removeEventListener() {}
+        }) as unknown as MediaQueryList
+    );
+    try {
+      render(
+        <CompactOverlayHostContext.Provider value={host}>
+          <NumericKeypad
+            request={{
+              kind: 'offset',
+              label: 'Height',
+              initial: '5',
+              unitKind: 'length'
+            }}
+            units="mm"
+            scope={{}}
+            anchorRef={{ current: null }}
+            onPreview={vi.fn()}
+            onCommit={vi.fn()}
+            onCancel={() => undefined}
+          />
+        </CompactOverlayHostContext.Provider>
+      );
+      fireEvent.pointerDown(screen.getByRole('textbox'), {
+        pointerType: 'touch'
+      });
+      expect(screen.getByRole('button', { name: '7' })).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
       cleanup();
       host.remove();
     }

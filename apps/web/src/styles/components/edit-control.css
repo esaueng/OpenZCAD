@@ -9,8 +9,12 @@
 .numeric-keypad {
   position: absolute;
   /* Exact entry must stay actionable when its anchor lands under the floating
-     Inspector; the control is the active surface for this interaction. */
-  z-index: calc(var(--z-inspector-float) + 2);
+     Inspector, a command's card or a floating window; the control is the
+     active surface for this interaction. A short stage (an iPad on its side
+     with the keyboard up) clamps it beside the card in the right lane
+     (z-panel-float + 8), which covered its Apply (the preview check on
+     #2451); it stands over the rail's flyouts (+10) too, under tooltips. */
+  z-index: calc(var(--z-panel-float) + 11);
   display: flex;
   flex-direction: column;
   gap: 4px;
