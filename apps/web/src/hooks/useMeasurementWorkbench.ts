@@ -301,8 +301,20 @@ export function useMeasurementWorkbench({
     };
   }, [modelingLocked, measuring, measurementApi]);
 
+  /**
+   * The committed exact bodies last seen for the open project, in the unit
+   * they were stored in. A stored-unit conversion (or its undo) gives every
+   * Boolean face and edge a new identity; the first refresh in the new unit
+   * re-attaches each kept target from what it was on these (#2361).
+   */
+  const lastExactBodiesRef = useRef<{
+    projectId: string;
+    unit: UnitSystem;
+    bodies: BodyRepresentation[];
+  } | null>(null);
+
   useEffect(() => {
-    if (!doc || !exactGeometryReady || geometryPending || !measurementApi) {
+    if (!doc || !exactGeometryReady || geometryPending) {
       return;
     }
     // Stored rows and worker bodies can arrive in either order. Re-resolve on
@@ -314,16 +326,35 @@ export function useMeasurementWorkbench({
     const bodies = Object.values(representations).filter(
       (body) => !body.consumed
     );
+    const last = lastExactBodiesRef.current;
+    // Recorded even before the measurement library loads, so a conversion
+    // made before the first Measure still has the bodies it converted from.
+    lastExactBodiesRef.current = {
+      projectId: doc.projectId,
+      unit: doc.units,
+      bodies
+    };
+    const previous =
+      last?.projectId === doc.projectId && last.unit !== doc.units
+        ? { unit: last.unit, bodies: last.bodies }
+        : undefined;
+    if (!measurementApi) {
+      // Keep the old-unit bodies until the library can use them.
+      if (previous) lastExactBodiesRef.current = last;
+      return;
+    }
     // I03: rows kept in another stored unit (before a unit conversion, or
     // after its undo) are rescaled to the bodies' unit before re-measuring.
     setMeasurements((current) =>
       measurementApi.refreshMeasurements(current, bodies, doc.version, {
         force: true,
-        unit: doc.units
+        unit: doc.units,
+        ...(previous ? { previous } : {})
       })
     );
   }, [
     representations,
+    doc?.projectId,
     doc?.version,
     doc?.units,
     exactGeometryReady,

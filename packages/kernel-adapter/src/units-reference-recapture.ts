@@ -61,10 +61,8 @@ import {
   type FeatureId,
   type EdgeWitnessV1,
   type FaceGeometry,
-  type Vector3,
   type FaceWitnessV1,
   type ProjectDocument,
-  type QuantizedTopologyPoint,
   type SketchRegionProfileReference,
   type TopologyReferenceV5,
   type UnitSystem
@@ -75,10 +73,7 @@ import {
 // (the geometry worker never got past loading the kernel), so the adapter
 // factory is imported when a build runs, after `exact.ts` has loaded.
 import type { ExactKernelAdapter, ExactKernelAdapterOptions } from './exact';
-import type {
-  BlendEdgeOrientation,
-  BlendOrientationReport
-} from './blend-orientation';
+import type { BlendOrientationReport } from './blend-orientation';
 import {
   claimReferenceRecapture,
   referenceRecaptureFeature,
@@ -93,297 +88,41 @@ import type { RemusKernel } from './remus-runtime';
 import {
   topologyHashOfWitness,
   type LegacyTopologyHashReference,
-  type TopologyLineageIdentity,
   type TopologyResolutionCandidate,
   type TopologyResolutionResult
 } from './topology-lineage';
+import {
+  blendOrientationCorrespondence,
+  edgeEndCorrespondence,
+  faceCentroidSlack,
+  matchScaledTopology,
+  nearScaledVector,
+  positionTolerance,
+  RECAPTURE_WINDOW_QUANTA,
+  UNIT_CONVERSION_MEASURE_RTOL,
+  type EdgeEndCorrespondence,
+  type SourceTopologyEntity,
+  type TopologyMatch
+} from './units-witness-match';
 
-// ---------------------------------------------------------------------------
-// The scaled-witness window
-// ---------------------------------------------------------------------------
-
-/**
- * How far a re-captured witness integer may sit from the scaled source one,
- * in quanta of the coarser of the two units. Rounding puts each witness
- * within half a quantum of its exact value, so the scaled source integer
- * carries half a source quantum (k/2 target quanta) of error and the target
- * integer half a target quantum: one coarse quantum covers both, and the
- * second covers the kernel's own floating-point differences between the two
- * builds. Two entities closer than this are not told apart, and the match
- * refuses as ambiguous (plan §3.5).
- */
-export const RECAPTURE_WINDOW_QUANTA = 2;
-
-/**
- * Direction components use ADR-011's 1000-times-finer direction quantum and
- * do not scale; they get the same two-quantum allowance for kernel noise.
- */
-const DIRECTION_WINDOW = 2;
-
-/** The window for scaled lengths and positions, in target quanta. */
-export function recaptureWindow(factor: number): number {
-  return RECAPTURE_WINDOW_QUANTA * Math.max(1, factor);
-}
-
-function near(target: number, source: number, factor: number): boolean {
-  return Math.abs(target - source * factor) <= recaptureWindow(factor);
-}
-
-function nearPoint(
-  target: QuantizedTopologyPoint,
-  source: QuantizedTopologyPoint,
-  factor: number
-): boolean {
-  return target.every((value, axis) => near(value, source[axis]!, factor));
-}
-
-function nearDirection(
-  target: QuantizedTopologyPoint | null,
-  source: QuantizedTopologyPoint | null
-): boolean {
-  if (target === null || source === null) return target === source;
-  return target.every(
-    (value, axis) => Math.abs(value - source[axis]!) <= DIRECTION_WINDOW
-  );
-}
-
-function nearNullablePoint(
-  target: QuantizedTopologyPoint | null,
-  source: QuantizedTopologyPoint | null,
-  factor: number
-): boolean {
-  if (target === null || source === null) return target === source;
-  return nearPoint(target, source, factor);
-}
-
-/**
- * Whether `target` (measured in the converted build) is `source` (measured in
- * the source build) scaled by `factor`, within the re-capture window.
- * Categorical parts (curve and surface class, closure, analytic kind) must be
- * equal. An open edge's endpoints are compared as an unordered pair: their
- * stored order sorts quantized coordinates, and scaling can reorder a tie.
- */
-export function scaledWitnessMatches(
-  kind: 'face' | 'edge',
-  source: FaceWitnessV1 | EdgeWitnessV1,
-  target: FaceWitnessV1 | EdgeWitnessV1,
-  factor: number
-): boolean {
-  if (kind === 'edge') {
-    const from = source as EdgeWitnessV1;
-    const to = target as EdgeWitnessV1;
-    if (
-      from.curveType !== to.curveType ||
-      from.closed !== to.closed ||
-      !near(to.length, from.length, factor)
-    )
-      return false;
-    if (from.closed && to.closed)
-      return (
-        nearPoint(to.center, from.center, factor) &&
-        nearDirection(to.axis, from.axis)
-      );
-    if (from.closed || to.closed) return false;
-    const [a, b] = from.endpoints;
-    const [c, d] = to.endpoints;
-    return (
-      nearPoint(to.midpoint, from.midpoint, factor) &&
-      ((nearPoint(c, a, factor) && nearPoint(d, b, factor)) ||
-        (nearPoint(c, b, factor) && nearPoint(d, a, factor)))
-    );
-  }
-  const from = source as FaceWitnessV1;
-  const to = target as FaceWitnessV1;
-  if (
-    from.surfaceType !== to.surfaceType ||
-    from.closure.u !== to.closure.u ||
-    from.closure.v !== to.closure.v ||
-    from.analytic.kind !== to.analytic.kind ||
-    !near(to.perimeter, from.perimeter, factor) ||
-    !nearNullablePoint(to.centroid, from.centroid, factor)
-  )
-    return false;
-  if (from.analytic.kind === 'plane' && to.analytic.kind === 'plane')
-    return (
-      nearDirection(to.analytic.normal, from.analytic.normal) &&
-      near(to.analytic.offset, from.analytic.offset, factor)
-    );
-  if (from.analytic.kind === 'cylinder' && to.analytic.kind === 'cylinder')
-    return (
-      nearDirection(to.analytic.axis, from.analytic.axis) &&
-      nearPoint(to.analytic.axisFoot, from.analytic.axisFoot, factor) &&
-      near(to.analytic.radius, from.analytic.radius, factor)
-    );
-  return true;
-}
-
-/**
- * Which way a matched open edge's witness ends correspond: `same` when the
- * converted end 0 is the source end 0 scaled, `swapped` when it is the
- * source end 1 (the quantized sort reordered a near tie), `ambiguous` when
- * both pairings fit (ends within the window of each other). Null for a
- * closed edge or a face. Only meaningful for a pair that
- * {@link scaledWitnessMatches} accepted.
- */
-export type EdgeEndCorrespondence = 'same' | 'swapped' | 'ambiguous';
-
-export function edgeEndCorrespondence(
-  source: FaceWitnessV1 | EdgeWitnessV1,
-  target: FaceWitnessV1 | EdgeWitnessV1,
-  factor: number
-): EdgeEndCorrespondence | null {
-  if (!('curveType' in source) || !('curveType' in target)) return null;
-  if (source.closed || target.closed) return null;
-  const [a, b] = source.endpoints;
-  const [c, d] = target.endpoints;
-  const same = nearPoint(c, a, factor) && nearPoint(d, b, factor);
-  const swapped = nearPoint(c, b, factor) && nearPoint(d, a, factor);
-  return same && swapped
-    ? 'ambiguous'
-    : same
-      ? 'same'
-      : swapped
-        ? 'swapped'
-        : null;
-}
-
-/**
- * Tolerance on one scaled position component, in target units: the kernel's
- * 1e-6 model-unit tolerance plus 1e-9 of the component's own magnitude for
- * floating-point growth. Per component, so a large coordinate on one axis
- * never widens the check on another.
- */
-export function positionTolerance(expected: number): number {
-  return 1e-6 + 1e-9 * Math.abs(expected);
-}
-
-function nearScaledPosition(
-  target: readonly number[],
-  source: readonly number[],
-  factor: number
-): boolean {
-  return target.every((value, axis) => {
-    const expected = source[axis]! * factor;
-    return Math.abs(value - expected) <= positionTolerance(expected);
-  });
-}
-
-/**
- * How a blended edge of the converted build is oriented against the same
- * edge of the source build (`blend-orientation.ts`): `same` when its native
- * start, curve samples, end and face order are the source's scaled by
- * `factor`; `reversed` when the edge runs the other way or lists its faces
- * the other way round; `ambiguous` when both readings fit (the samples or
- * faces cannot be told apart); `unmatched` when neither does.
- */
-export type BlendOrientationCorrespondence =
-  'same' | 'reversed' | 'ambiguous' | 'unmatched';
-
-export function blendOrientationCorrespondence(
-  source: BlendEdgeOrientation,
-  target: BlendEdgeOrientation,
-  factor: number
-): BlendOrientationCorrespondence {
-  const forward = source.samples.every((sample, index) =>
-    nearScaledPosition(target.samples[index]!, sample, factor)
-  );
-  const backward = source.samples.every((sample, index) =>
-    nearScaledPosition(
-      target.samples[source.samples.length - 1 - index]!,
-      sample,
-      factor
-    )
-  );
-  const faces = (order: (index: number) => number) =>
-    source.faces.length === target.faces.length &&
-    source.faces.every((face, index) =>
-      scaledWitnessMatches('face', face, target.faces[order(index)]!, factor)
-    );
-  const facesKept = faces((index) => index);
-  const facesSwapped = source.faces.length === 2 && faces((index) => 1 - index);
-  if (forward && facesKept && !backward && !facesSwapped) return 'same';
-  if ((forward && backward) || (facesKept && facesSwapped)) return 'ambiguous';
-  if (backward || facesSwapped) return 'reversed';
-  return 'unmatched';
-}
-
-/**
- * A lineage name with every embedded imported-STEP name reduced to its
- * family. An import names its topology by the witness hash (ADR-013 K0.6),
- * which a conversion changes, and later features nest those names
- * (`boolean.face.target.import.step.face.…`).
- */
-export function lineageNameFamily(name: string): string {
-  return name.replace(
-    /import\.step\.(face|edge)\.[0-9a-f]{8}/g,
-    'import.step.$1.*'
-  );
-}
-
-function sameLineage(
-  source: TopologyLineageIdentity,
-  target: TopologyLineageIdentity
-): boolean {
-  return (
-    source.producingFeatureId === target.producingFeatureId &&
-    lineageNameFamily(source.lineageName) ===
-      lineageNameFamily(target.lineageName)
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Matching one lookup
-// ---------------------------------------------------------------------------
-
-/** What the source build resolved one stored identity to. */
-export interface SourceTopologyEntity {
-  kind: 'face' | 'edge';
-  witness: FaceWitnessV1 | EdgeWitnessV1;
-  /** Absent when the entity carried no name (hash resolution). */
-  lineage?: TopologyLineageIdentity;
-}
-
-export type TopologyMatch<C> =
-  | { status: 'matched'; candidate: C }
-  | { status: 'missing' | 'ambiguous'; count: number };
-
-/**
- * The one candidate that is `source` scaled by `factor`: same kind, witness
- * within the window, and the same lineage name (family) when the source was
- * named, or no name when it was not. Refuses unless exactly one qualifies.
- */
-export function matchScaledTopology<
-  C extends {
-    kind: 'face' | 'edge';
-    witness: FaceWitnessV1 | EdgeWitnessV1;
-    lineage?: TopologyLineageIdentity;
-  }
->(
-  source: SourceTopologyEntity,
-  candidates: readonly C[],
-  factor: number
-): TopologyMatch<C> {
-  const matches = candidates.filter(
-    (candidate) =>
-      candidate.kind === source.kind &&
-      (source.lineage
-        ? candidate.lineage !== undefined &&
-          sameLineage(source.lineage, candidate.lineage)
-        : candidate.lineage === undefined) &&
-      scaledWitnessMatches(
-        source.kind,
-        source.witness,
-        candidate.witness,
-        factor
-      )
-  );
-  if (matches.length === 1)
-    return { status: 'matched', candidate: matches[0]! };
-  return {
-    status: matches.length === 0 ? 'missing' : 'ambiguous',
-    count: matches.length
-  };
-}
+export {
+  blendOrientationCorrespondence,
+  edgeEndCorrespondence,
+  lineageNameFamily,
+  matchScaledTopology,
+  nearScaledVector,
+  positionTolerance,
+  recaptureWindow,
+  RECAPTURE_WINDOW_QUANTA,
+  scaledEdgeGeometryMatches,
+  scaledFaceGeometryMatches,
+  scaledWitnessMatches,
+  UNIT_CONVERSION_MEASURE_RTOL,
+  type BlendOrientationCorrespondence,
+  type EdgeEndCorrespondence,
+  type SourceTopologyEntity,
+  type TopologyMatch
+} from './units-witness-match';
 
 /** What the source build resolved one profile reference to. */
 export interface SourceProfileEntity {
@@ -1439,9 +1178,6 @@ export function compareBlendOrientations(
 // Oracle 2: the geometry
 // ---------------------------------------------------------------------------
 
-/** Relative tolerance on volume (×k³) and area (×k²), plan §6 step 2. */
-export const UNIT_CONVERSION_MEASURE_RTOL = 1e-6;
-
 /**
  * Bounding-box tolerance in target units: the kernel's 1e-6 model-unit
  * direct-edit tolerance (`DIRECT_EDIT_TOLERANCE`), plus 1e-9 of the box's
@@ -1756,33 +1492,14 @@ function compareFaces(
   const source = measuredFaces(from);
   const converted = measuredFaces(to);
   if (!source || !converted) return { faces: 0, sampledFaces: 0 };
-  const vector = (value: Vector3 | undefined): number[] | undefined =>
-    value ? [value.x, value.y, value.z] : undefined;
   // Positions here tell faces apart; the box and volume checks carry the
   // precision. An imported body's vertices carry the import's own noise
   // (about 1e-6 mm on a 40 mm plate brought back from inches), so each
   // position gets 1e-6 of the body's scale, and a centroid integrated over
   // an inscribed polygon (a curved boundary) twice that. A blend built
   // mirrored moves a trimmed face's centroid by a fraction of the blend.
-  const slack = (face: MeasuredFace) =>
-    (face.centroidProvenance === 'exact' ? 1e-6 : 2e-6) * scale;
-  const close = (
-    to: Vector3 | undefined,
-    from: Vector3 | undefined,
-    k: number,
-    allowance: number
-  ) => {
-    const a = vector(from);
-    const b = vector(to);
-    if ((a === undefined) !== (b === undefined)) return false;
-    if (!a || !b) return true;
-    return b.every((value, axis) => {
-      const expected = a[axis]! * k;
-      return (
-        Math.abs(value - expected) <= positionTolerance(expected) + allowance
-      );
-    });
-  };
+  const slack = (face: MeasuredFace) => faceCentroidSlack(face, scale);
+  const close = nearScaledVector;
   // A tessellated face's area is not comparable across units (see
   // TessellatedBodyRecord), so across the builds it is matched instead by
   // the kernel's surface and trimmed-face distance, within the bounding

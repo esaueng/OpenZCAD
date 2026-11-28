@@ -12,6 +12,11 @@ import type {
 } from '@openzcad/shared';
 import { millimetresPerUnit } from '@openzcad/shared';
 import {
+  matchScaledTopology,
+  scaledEdgeGeometryMatches,
+  scaledFaceGeometryMatches
+} from '@openzcad/kernel-adapter/units-witness-match';
+import {
   centralDistance,
   maximumDistance,
   parallelDistance,
@@ -271,7 +276,19 @@ export interface Measurement {
    * from the vertex pick, so the corner is well defined over the full 0-180.
    */
   angleConvention?: AngleConvention;
+  /**
+   * The document revision whose geometry produced `result`. A refresh that
+   * cannot re-measure the row (it went stale or unresolved) keeps it, so a
+   * retained number always names the model it was read from, never a later
+   * revision that has no such geometry (#2360).
+   */
   sourceRevision: number;
+  /**
+   * The revision the row was last re-resolved against, when that attempt
+   * did not produce `result` (status `stale` or `unresolved`). Absent on
+   * a current row, whose `sourceRevision` is also the revision checked.
+   */
+  checkedRevision?: number;
   sourceUnit: UnitSystem;
   visible: boolean;
   annotation?: MeasurementAnnotation;
@@ -1964,6 +1981,7 @@ function hasValidTargetArity(measurement: Measurement): boolean {
  */
 export const MEASUREMENT_UNIT_FREE_FIELDS: readonly string[] = [
   'sourceRevision',
+  'checkedRevision',
   'targets.*.hash',
   'targets.*.reference',
   'targets.*.direction'
@@ -2039,48 +2057,252 @@ export function measurementInUnit(
   };
 }
 
+/** The face or edge entries of `body` a target of `kind` can name. */
+function topologyEntries(
+  body: BodyRepresentation,
+  kind: 'face' | 'edge'
+): readonly (FaceTopology | EdgeTopology)[] {
+  return (kind === 'face' ? body.topology?.faces : body.topology?.edges) ?? [];
+}
+
+/** The size the geometry oracle scales its position allowances by. */
+function bodyScale(body: BodyRepresentation): number {
+  const { min, max } = body.bbox;
+  return Math.max(
+    1,
+    ...[min.x, min.y, min.z, max.x, max.y, max.z].map((value) =>
+      Math.abs(value)
+    )
+  );
+}
+
+/** The bodies a row was last measured on, in the unit they are stored in. */
+export interface MeasurementSourceBodies {
+  unit: UnitSystem;
+  bodies: readonly BodyRepresentation[];
+}
+
+/**
+ * I03 (#2361): a kept target carried across a stored-unit conversion.
+ *
+ * Every ADR-011 hash, and the lineage name of an imported face, is a
+ * fingerprint of geometry quantized in DOCUMENT units, so converting the
+ * document gives those faces and edges new identities. The document's own
+ * references are re-captured by the kernel for exactly this reason; a kept
+ * measurement lives beside the document and never reached that map, so its
+ * rows on a Boolean result came back `not-found` on the same solid, scaled.
+ *
+ * This re-attaches the target to the one entity of the converted body that
+ * is the entity it named before, scaled by `factor`, by the evidence the
+ * conversion itself verified: a named entity by the kernel re-capture's
+ * witness rule (`matchScaledTopology`, lineage family included), an
+ * unnamed one by the geometry oracle's rule for its surface or curve
+ * (`scaledFaceGeometryMatches`, `scaledEdgeGeometryMatches`). What it was
+ * before comes from `previous`, the bodies the row was last measured on in
+ * its old unit; without them (a row first refreshed after a reload), only a
+ * stored witness can carry it. It is not proximity rebinding: it runs only in
+ * the refresh that rescales the row to a new stored unit, under that
+ * conversion's exact scale, and anything but exactly one match leaves the
+ * target as it was, to resolve by identity or report itself unresolved.
+ */
+function reattachedAcrossUnits(
+  target: MeasurementTarget,
+  bodies: readonly BodyRepresentation[],
+  factor: number,
+  previous: readonly BodyRepresentation[] | undefined
+): MeasurementTarget {
+  if (target.kind === 'body') return target;
+  const kind = target.kind;
+  const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
+  if (!body) return target;
+  const selection = selectionForTarget(target);
+  const lookup = (on: BodyRepresentation) =>
+    kind === 'edge' ? resolveEdge(on, selection) : resolveFace(on, selection);
+  // Still the same quantized geometry: nothing to re-attach.
+  const direct = lookup(body);
+  if (direct.ok && direct.via === 'hash') return target;
+  const before = previous?.find(
+    (candidate) => candidate.bodyId === target.bodyId
+  );
+  const was = before ? lookup(before) : null;
+  const source = was?.ok ? was.entry : null;
+  const named = source ? source.reference : target.reference;
+  const entries = topologyEntries(body, kind);
+  let entry: FaceTopology | EdgeTopology | null = null;
+  if (named?.kind === kind) {
+    const match = matchScaledTopology(
+      {
+        kind,
+        witness: named.witness,
+        lineage: {
+          producingFeatureId: named.producingFeatureId,
+          lineageName: named.lineageName
+        }
+      },
+      entries.flatMap((candidate) =>
+        candidate.reference?.kind === kind
+          ? [
+              {
+                kind,
+                witness: candidate.reference.witness,
+                lineage: {
+                  producingFeatureId: candidate.reference.producingFeatureId,
+                  lineageName: candidate.reference.lineageName
+                },
+                entry: candidate
+              }
+            ]
+          : []
+      ),
+      factor
+    );
+    if (match.status === 'matched') entry = match.candidate.entry;
+  } else if (source) {
+    const scale = bodyScale(body);
+    const matches = entries.filter(
+      (candidate) =>
+        !candidate.reference &&
+        (kind === 'face'
+          ? (source as FaceTopology).geometry !== undefined &&
+            (candidate as FaceTopology).geometry !== undefined &&
+            scaledFaceGeometryMatches(
+              (source as FaceTopology).geometry!,
+              (candidate as FaceTopology).geometry!,
+              factor,
+              scale
+            )
+          : scaledEdgeGeometryMatches(
+              source as EdgeTopology,
+              candidate as EdgeTopology,
+              factor,
+              scale
+            ))
+    );
+    if (matches.length === 1) entry = matches[0]!;
+  }
+  if (!entry) return target;
+  const { reference: _stale, ...rest } = target;
+  return {
+    ...rest,
+    topologyId: entry.topologyId,
+    hash: entry.hash,
+    ...(entry.reference ? { reference: entry.reference } : {})
+  };
+}
+
+/** The revision a row was last judged against, re-measured or not. */
+function checkedRevisionOf(measurement: Measurement): number {
+  return measurement.checkedRevision ?? measurement.sourceRevision;
+}
+
+/**
+ * A row this refresh could not re-measure. Its number and `sourceRevision`
+ * stay the receipt of the model that produced them; `checkedRevision`
+ * records the revision that was tried (#2360). Its annotation goes: that is
+ * world-space geometry of the model that produced the number, and drawing it
+ * over a model that no longer has that geometry (a suppressed body, say) put
+ * witness lines over empty space. A reopened project never has it to draw,
+ * so dropping it here is what makes the two agree (#2359).
+ */
+function unmeasuredRow(
+  measurement: Measurement,
+  status: 'stale' | 'unresolved',
+  reason: TopologyResolutionReason | undefined,
+  checkedRevision: number
+): Measurement {
+  const {
+    annotation: _annotation,
+    reason: _reason,
+    checkedRevision: _checked,
+    ...rest
+  } = measurement;
+  return {
+    ...rest,
+    status,
+    ...(reason ? { reason } : {}),
+    checkedRevision
+  };
+}
+
+/** Whether `measurement` already is {@link unmeasuredRow}'s answer. */
+function isUnmeasuredRow(
+  measurement: Measurement,
+  status: 'stale' | 'unresolved',
+  reason: TopologyResolutionReason | undefined,
+  checkedRevision: number
+): boolean {
+  return (
+    measurement.status === status &&
+    measurement.reason === reason &&
+    checkedRevisionOf(measurement) === checkedRevision &&
+    measurement.annotation === undefined
+  );
+}
+
 /**
  * Re-resolve only by authoritative body/topology identity; never proximity.
  *
  * `options.unit` is the unit `bodies` are stored in (the document's
  * `units`). A row kept in another unit is first rescaled to it
- * ({@link measurementInUnit}) and then re-measured, whatever its revision.
+ * ({@link measurementInUnit}), its targets re-attached across the conversion
+ * ({@link reattachedAcrossUnits}; `options.previous` are the bodies the list
+ * was last refreshed against, when they were stored in another unit), and
+ * then re-measured, whatever its revision.
  */
 export function refreshMeasurements(
   list: readonly Measurement[],
   bodies: readonly BodyRepresentation[],
   sourceRevision: number,
-  options: { force?: boolean; unit?: UnitSystem } = {}
+  options: {
+    force?: boolean;
+    unit?: UnitSystem;
+    previous?: MeasurementSourceBodies;
+  } = {}
 ): Measurement[] {
   let changed = false;
   const refreshedList = list.map((original) => {
-    const measurement =
+    const rescaled =
       options.unit === undefined
         ? original
         : measurementInUnit(original, options.unit);
+    const measurement =
+      rescaled === original || !hasValidTargetArity(rescaled)
+        ? rescaled
+        : {
+            ...rescaled,
+            targets: rescaled.targets.map((target) =>
+              reattachedAcrossUnits(
+                target,
+                bodies,
+                millimetresPerUnit(original.sourceUnit) /
+                  millimetresPerUnit(rescaled.sourceUnit),
+                options.previous?.unit === original.sourceUnit
+                  ? options.previous.bodies
+                  : undefined
+              )
+            )
+          };
     if (measurement !== original) changed = true;
     if (
       !options.force &&
       measurement === original &&
-      measurement.sourceRevision === sourceRevision
+      checkedRevisionOf(measurement) === sourceRevision
     ) {
       return measurement;
     }
     if (!hasValidTargetArity(measurement)) {
       if (
-        measurement.status === 'unresolved' &&
-        measurement.reason === 'not-found' &&
-        measurement.sourceRevision === sourceRevision
+        isUnmeasuredRow(measurement, 'unresolved', 'not-found', sourceRevision)
       ) {
         return measurement;
       }
       changed = true;
-      return {
-        ...measurement,
-        status: 'unresolved' as const,
-        sourceRevision,
-        reason: 'not-found' as const
-      };
+      return unmeasuredRow(
+        measurement,
+        'unresolved',
+        'not-found',
+        sourceRevision
+      );
     }
     const purpose: MeasurementMode =
       measurement.kind === 'distance' ||
@@ -2101,27 +2323,20 @@ export function refreshMeasurements(
     if (targets.some((target) => target === null)) {
       // The topology may still be there and merely unusable for this kind of
       // measurement (`stale`), or genuinely gone/ambiguous (`unresolved`).
-      const failure = firstTargetFailure(measurement, bodies);
-      const status: MeasurementStatus = failure ? 'unresolved' : 'stale';
-      // `sourceRevision` advances even though no value was recomputed. Without
-      // this the row never matches the short-circuit at the top of the loop, so
-      // it re-evaluates on EVERY refresh — including the ones triggered by
-      // merely hiding a body, which is how a once-stale row could go on to
-      // demote itself against a body list it was never meant to be judged by.
-      if (
-        measurement.status === status &&
-        measurement.reason === (failure ?? undefined) &&
-        measurement.sourceRevision === sourceRevision
-      ) {
+      const failure = firstTargetFailure(measurement, bodies) ?? undefined;
+      const status = failure ? 'unresolved' : 'stale';
+      // `checkedRevision` advances even though no value was recomputed.
+      // Without this the row never matches the short-circuit at the top of the
+      // loop, so it re-evaluates on EVERY refresh — including the ones
+      // triggered by merely hiding a body, which is how a once-stale row could
+      // go on to demote itself against a body list it was never meant to be
+      // judged by. `sourceRevision` does not: it names the model the retained
+      // number was read from.
+      if (isUnmeasuredRow(measurement, status, failure, sourceRevision)) {
         return measurement;
       }
       changed = true;
-      return {
-        ...measurement,
-        status,
-        sourceRevision,
-        reason: failure ?? undefined
-      };
+      return unmeasuredRow(measurement, status, failure, sourceRevision);
     }
     const resolved = targets as MeasurementTarget[];
     let refreshed: Measurement | null = null;
@@ -2189,22 +2404,13 @@ export function refreshMeasurements(
       // number.
       return retainRowState(measurement, refreshed);
     }
-    if (
-      measurement.status === 'stale' &&
-      measurement.reason === undefined &&
-      measurement.sourceRevision === sourceRevision
-    ) {
+    if (isUnmeasuredRow(measurement, 'stale', undefined, sourceRevision)) {
       return measurement;
     }
     changed = true;
     // Every target resolved, yet no measurement could be rebuilt from them —
     // the topology is present but no longer supports this kind of figure.
-    return {
-      ...measurement,
-      status: 'stale' as const,
-      sourceRevision,
-      reason: undefined
-    };
+    return unmeasuredRow(measurement, 'stale', undefined, sourceRevision);
   });
   return changed ? refreshedList : (list as Measurement[]);
 }
@@ -2479,7 +2685,13 @@ export function measurementToViewportAnnotation(
   selected: boolean,
   bodies: readonly BodyRepresentation[] = []
 ): MeasurementViewportAnnotation | null {
-  if (!measurement.visible || !measurement.annotation) {
+  // An unresolved row's number belongs to geometry the model no longer
+  // has, so nothing is drawn for it, whatever it still carries (#2359).
+  if (
+    !measurement.visible ||
+    !measurement.annotation ||
+    measurement.status === 'unresolved'
+  ) {
     return null;
   }
   const formatted = formatMeasurement(measurement, options);
@@ -2535,10 +2747,13 @@ export function measurementsToCsv(
 ): string {
   const rows = list.map((entry) => {
     const resultUnit = unitLabel(entry.result.dimension, options.unit);
+    // #2356: the number and the kind it is filed under agree. A circle read
+    // as a radius exports `radius`, so a sheet that groups rows by kind
+    // never reads half a diameter as one.
+    const asRadius =
+      entry.kind === 'diameter' && options.radialDisplay === 'radius';
     const value = convertedValue(
-      entry.kind === 'diameter' && options.radialDisplay === 'radius'
-        ? entry.result.value / 2
-        : entry.result.value,
+      asRadius ? entry.result.value / 2 : entry.result.value,
       entry.result.dimension,
       entry.sourceUnit,
       options.unit
@@ -2550,7 +2765,7 @@ export function measurementsToCsv(
         : convertedValue(value, 'length', entry.sourceUnit, options.unit);
     const secondary = entry.result.secondary;
     return [
-      entry.kind,
+      asRadius ? 'radius' : entry.kind,
       entry.label,
       entry.targets[0]?.label ?? '',
       entry.targets[1]?.label ?? '',
@@ -2571,13 +2786,14 @@ export function measurementsToCsv(
       entry.quality,
       entry.status,
       entry.sourceRevision,
+      entry.checkedRevision ?? entry.sourceRevision,
       entry.note ?? ''
     ]
       .map((value) => delimitedCell(value, ','))
       .join(',');
   });
   return [
-    'kind,label,target_a,target_b,value,unit,delta_x,delta_y,delta_z,secondary_value,secondary_unit,quality,status,source_revision,note',
+    'kind,label,target_a,target_b,value,unit,delta_x,delta_y,delta_z,secondary_value,secondary_unit,quality,status,source_revision,checked_revision,note',
     ...rows
   ].join('\n');
 }

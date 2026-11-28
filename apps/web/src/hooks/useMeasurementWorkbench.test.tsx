@@ -392,6 +392,98 @@ describe('measurement picks', () => {
   });
 });
 
+describe('measurements across a stored-unit conversion', () => {
+  it('carries an unnamed face from the bodies it was measured on (#2361)', async () => {
+    const doc = createProjectDocument('Converted', toUserId('user_measure'));
+    // An unnamed planar face (a Boolean's split face publishes no lineage),
+    // so only its ADR-011 hash names it, and the conversion changes that.
+    const plate = (scale: number, hash: number): BodyRepresentation => ({
+      bodyId: toBodyId('body-1'),
+      name: 'Union',
+      source: 'primitive',
+      mesh: {
+        kind: 'mesh',
+        vertices: new Float32Array(),
+        indices: new Uint32Array()
+      },
+      faceCount: 1,
+      color: '#fff',
+      exportableStep: true,
+      consumed: false,
+      volume: 48 * scale ** 3,
+      bbox: {
+        min: { x: 0, y: 0, z: 0 },
+        max: { x: 4 * scale, y: 6 * scale, z: 2 * scale }
+      },
+      topology: {
+        faces: [
+          {
+            topologyId: `face:${hash}`,
+            hash,
+            triangleStart: 0,
+            triangleCount: 2,
+            geometry: {
+              surfaceType: 'plane',
+              area: 24 * scale ** 2,
+              center: { x: 2 * scale, y: 3 * scale, z: 2 * scale },
+              centroid: { x: 2 * scale, y: 3 * scale, z: 2 * scale },
+              centroidProvenance: 'exact',
+              normal: { x: 0, y: 0, z: 1 }
+            }
+          }
+        ],
+        edges: []
+      }
+    });
+    const mm = plate(1, 21);
+    const { createSmartMeasurement } = await import('../lib/measurements');
+    const stored = createSmartMeasurement(
+      mm,
+      { bodyId: mm.bodyId, kind: 'face', topologyId: 'face:21', hash: 21 },
+      { x: 2, y: 3, z: 2 },
+      doc.version,
+      'mm'
+    )!;
+    expect(stored.kind).toBe('face-area');
+    load.mockResolvedValue(record(doc.projectId, [stored]));
+    const initialProps = input({
+      doc,
+      modelingLocked: true,
+      exactGeometryReady: true,
+      representations: { 'body-1': mm },
+      renderedRepresentations: { 'body-1': mm },
+      viewerBodies: [mm]
+    });
+    const { result, rerender } = renderHook(
+      (props: MeasurementWorkbenchInput) => useMeasurementWorkbench(props),
+      { initialProps }
+    );
+    await waitFor(() =>
+      expect(result.current.measurements[0]?.status).toBe('current')
+    );
+
+    // Converted to inches: one new revision, the same face scaled, new hash.
+    const inch = plate(1 / 25.4, 921);
+    rerender({
+      ...initialProps,
+      doc: { ...doc, units: 'inch', version: doc.version + 1 },
+      representations: { 'body-1': inch },
+      renderedRepresentations: { 'body-1': inch },
+      viewerBodies: [inch]
+    });
+    await waitFor(() =>
+      expect(result.current.measurements[0]).toMatchObject({
+        status: 'current',
+        sourceUnit: 'inch',
+        sourceRevision: doc.version + 1
+      })
+    );
+    const [row] = result.current.measurements;
+    expect(row!.targets[0]!.hash).toBe(921);
+    expect(row!.result.value).toBeCloseTo(24 / 25.4 ** 2, 12);
+  });
+});
+
 describe('measurement annotations', () => {
   it('suspends saved measurements during staged edits without persisting transient state', async () => {
     const doc = createProjectDocument(

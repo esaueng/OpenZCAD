@@ -309,6 +309,16 @@ function parseMeasurement(value: unknown): Measurement | null {
     if (typeof value.note !== 'string') return null;
     parsed.note = value.note;
   }
+  if (value.checkedRevision !== undefined) {
+    if (
+      typeof value.checkedRevision !== 'number' ||
+      !Number.isInteger(value.checkedRevision) ||
+      value.checkedRevision < 0
+    ) {
+      return null;
+    }
+    parsed.checkedRevision = value.checkedRevision;
+  }
   if (value.reason !== undefined) {
     if (!isOneOf(value.reason, REASONS)) return null;
     parsed.reason = value.reason;

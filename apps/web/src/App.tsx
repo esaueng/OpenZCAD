@@ -2112,6 +2112,7 @@ import {
   loadLocalProject,
   loadLocalSaveState,
   loadProjectMeasurements,
+  copyProjectMeasurements,
   loadProjectThumbnail,
   loadSourceBlob,
   purgeExpiredLocalProjects,
@@ -19489,6 +19490,41 @@ export function App() {
     }
   }
 
+  /**
+   * #2363: a duplicate keeps its source's kept measurements, written before
+   * the copy can open so its Measure list is the source's. This device's
+   * record first; with `fromAccount`, the account's when this device has
+   * none (a project measured elsewhere). The copy's own sync uploads it when
+   * it opens. Resolves the sentence to add to the status when they could not
+   * be copied, or null.
+   */
+  async function copyDuplicateMeasurements(
+    sourceProjectId: string,
+    copyProjectId: string,
+    fromAccount = false
+  ): Promise<string | null> {
+    try {
+      if (await copyProjectMeasurements(sourceProjectId, copyProjectId))
+        return null;
+      if (!fromAccount) return null;
+      const { projectMeasurementCloudApi } =
+        await import('./lib/measurementCloudSync');
+      const { record } =
+        await projectMeasurementCloudApi.loadProjectMeasurements(
+          sourceProjectId
+        );
+      if (record)
+        await saveProjectMeasurements({
+          ...record,
+          projectId: copyProjectId,
+          updatedAt: new Date().toISOString()
+        });
+      return null;
+    } catch {
+      return 'Its kept measurements could not be copied; they are still in the original.';
+    }
+  }
+
   /** Best effort: a save state left behind still reads "not stored". */
   async function copyDuplicateSaveStates(
     sourceProjectId: string,
@@ -19717,6 +19753,15 @@ export function App() {
           // Kept on the device too, so the copy opens offline exactly like the
           // original it was made from.
           await saveLocalProject(localCopy).catch(() => undefined);
+          // A branch starts from a save state; the readings were kept on the
+          // head, so only a plain copy of the head carries them.
+          const measurementWarning = saveState
+            ? null
+            : await copyDuplicateMeasurements(
+                project.projectId,
+                localCopy.projectId,
+                true
+              );
           // With the save states it lists, where this device holds them: the
           // account stores only the copy's own (F018). An encrypted copy
           // keeps the source's blob ids, which a re-homed save state would not.
@@ -19770,7 +19815,8 @@ export function App() {
               saveState
                 ? `Branched ${project.name} from “${saveState.reason}” as ${response.project.name}.`
                 : `Duplicated ${project.name} as ${response.project.name}.`,
-              ...(pictureWarning ? [pictureWarning] : [])
+              ...(pictureWarning ? [pictureWarning] : []),
+              ...(measurementWarning ? [measurementWarning] : [])
             ].join(' ')
           );
           return response.project.projectId;
@@ -19832,6 +19878,9 @@ export function App() {
         sortOrder: projectOrganization(project).sortOrder
       };
       await saveLocalProject(copy);
+      const measurementWarning = saveState
+        ? null
+        : await copyDuplicateMeasurements(project.projectId, copy.projectId);
       // The copy lists the source's saves; store their documents with it, so
       // they open here as they do in the source (F018).
       await copyDuplicateSaveStates(project.projectId, copy);
@@ -19847,7 +19896,9 @@ export function App() {
       setStatus(
         saveState
           ? `Branched ${project.name} from “${saveState.reason}” as ${copy.name}.`
-          : `Duplicated ${project.name} as ${copy.name}.`
+          : [`Duplicated ${project.name} as ${copy.name}.`, measurementWarning]
+              .filter(Boolean)
+              .join(' ')
       );
       return copy.projectId;
     } catch (error) {
