@@ -264,7 +264,10 @@ describe('the compact library', () => {
     );
     // Where the click does come, it lands on the row slid back under the
     // finger: it opens nothing and archives nothing twice.
-    fireEvent.click(row.querySelector('.start-tile-open')!);
+    fireEvent.click(row.querySelector('.start-tile-open')!, {
+      clientX: 323,
+      clientY: 210
+    });
     expect(shown.onOpen).not.toHaveBeenCalled();
     expect(shown.onMoveToShelf).toHaveBeenCalledTimes(1);
 

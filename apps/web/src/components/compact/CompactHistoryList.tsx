@@ -499,7 +499,7 @@ function CompactHistoryRow({
       },
       onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
         if (taps.release(event) !== id || open !== side) return;
-        taps.ran();
+        taps.ran(event);
         run();
       },
       onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) =>
