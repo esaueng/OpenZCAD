@@ -1,0 +1,5 @@
+---
+row: K10
+---
+
+Remus 2026.1.173 (`d69ed9c`, remus#2023) sections a sphere or torus face that a Split plane crosses between its edges, so a curved Split that was a capability boundary now builds exact halves at their closed forms (PR #2399, `test/cad-workflow-coupon.test.ts` S7/S8): an R5 sphere at z = 1 (176π/3 above, 108π below; the former `it.fails` pin), z = −1 and z = 0 (250π/3 each), and an R10 r3 torus through its tube at z = 1 (2πR times the circular segment) and through its axis at x = 0 (90π² each). Tangent and missing planes stay typed refusals with no adapter cause: the sphere at z = 5 and z = 6, the torus at z = 3, z = 6 (`invalid_input`) and x = 13 (`unsupported`). Still refused upstream: a tilted plane that crosses a hemisphere clear of the equator (`unsupported`; the half-space fallback does not conserve volume), a plane through the torus tube on one side of the axis that crosses no edge (x = 7 or tilted, `quality_refused`), and, per the upstream release, a sphere converted to B-spline faces. `exact-split-contact.ts` still claims no cause on any curved body.
