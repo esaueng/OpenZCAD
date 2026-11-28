@@ -271,6 +271,10 @@ export function BottomSheet({
     const active = document.activeElement;
     if (!sheet || !(active instanceof HTMLElement)) return;
     if (!sheet.contains(active)) return;
+    // A field being typed into, which the keyboard shortened the sheet
+    // over: any other control is left where the page put it. Draw's
+    // Properties, opened on its Paper control, scrolled its Name away.
+    if (!isTextField(active)) return;
     const body = active.closest<HTMLElement>('.compact-sheet-body');
     if (body) revealInside(body, active);
   }, []);

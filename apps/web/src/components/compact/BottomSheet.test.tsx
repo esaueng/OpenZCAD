@@ -905,6 +905,44 @@ describe('BottomSheet at peek on its row', () => {
   });
 });
 
+describe('BottomSheet focus reveal', () => {
+  it('leaves a focused control that is not a text field where it is', () => {
+    // The preview check: Draw's Properties opened on its Paper control, and
+    // the reveal scrolled the Name field above it out of sight.
+    vi.useFakeTimers({ toFake: ['requestAnimationFrame'] });
+    try {
+      render(
+        <Harness hasRoot initial={[{ type: 'set-detent', detent: 'half' }]}>
+          <button type="button">Paper</button>
+        </Harness>
+      );
+      const control = screen.getByRole('button', { name: 'Paper' });
+      const body = control.closest<HTMLElement>('.compact-sheet-body')!;
+      control.focus();
+      const rect = (top: number, bottom: number) =>
+        ({
+          top,
+          bottom,
+          left: 0,
+          right: 0,
+          width: 0,
+          height: bottom - top
+        }) as DOMRect;
+      vi.spyOn(body, 'getBoundingClientRect').mockReturnValue(rect(400, 560));
+      vi.spyOn(control, 'getBoundingClientRect').mockReturnValue(
+        rect(600, 640)
+      );
+      act(() => {
+        window.dispatchEvent(new Event('resize'));
+        vi.advanceTimersToNextFrame();
+      });
+      expect(body.scrollTop).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('revealInside', () => {
   const box = (top: number, bottom: number) =>
     ({

@@ -511,10 +511,18 @@
    finger at the grip. A press anywhere on the row that is not one of its
    controls drags the sheet too (its surface), so the drag region is the
    whole row, while a row of tools wider than the sheet still scrolls. */
-.compact-sheet.is-row {
-  /* Vertical drags move the sheet; a row of tools wider than the sheet
-     still scrolls sideways. */
+/* Vertical drags move the sheet; a row of tools wider than the sheet still
+   scrolls sideways. Set on every element of the row: the sheet's body is a
+   scroller, and the browser reads touch-action only up to the nearest one,
+   so on the sheet alone a swipe up from the row was the browser's to take
+   and the drag was cancelled (the preview check). */
+.compact-sheet.is-row,
+.compact-sheet.is-row * {
   touch-action: pan-x;
+}
+
+.compact-sheet.is-row .compact-sheet-grabber {
+  touch-action: none;
 }
 
 .compact-sheet.is-row > .compact-sheet-head {
@@ -535,10 +543,13 @@
   border-radius: var(--compact-sheet-radius) var(--compact-sheet-radius) 0 0;
 }
 
+/* The body starts under the grip, so the 12px strip is the grabber's to
+   take: padded instead, the body covered it. */
 .compact-sheet.is-row > .compact-sheet-body {
   position: relative;
   z-index: 2;
-  padding-top: 12px;
+  margin-top: 12px;
+  padding-top: 0;
   padding-bottom: var(--sp-2);
 }
 
