@@ -492,6 +492,20 @@ export default function CompactWorkspace({
           return true;
         }
       : undefined;
+  // What that pull shows as it comes up: All tools, tile by tile under the
+  // finger, so letting go only settles what is already in view.
+  const rowRaisePreview =
+    onRowRaise && build
+      ? {
+          title: 'All tools',
+          content: <AllToolsSheet build={build} onLaunch={() => undefined} />
+        }
+      : undefined;
+  // A page over a sheet that holds only its tray, pulled down to peek, goes
+  // back to the tray's row: the pull down undoes the pull up, rather than
+  // leaving the page's head over a sliver of it.
+  const onPageLower =
+    trayOnly && state.stack.length > 0 ? () => closePages() : undefined;
   // A page leaving a sheet that holds only its tray takes it back to peek,
   // wherever the page found it: a page opened over a raised sheet left the
   // tray standing at half over blank space when it went.
@@ -942,6 +956,8 @@ export default function CompactWorkspace({
           companions={companions}
           onHeight={onHeight}
           onRowRaise={onRowRaise}
+          rowRaisePreview={rowRaisePreview}
+          onPageLower={onPageLower}
         >
           {/* The mode's tray first: the row the sheet shows at peek. A
               running command's bar brings its own row, which stands in for

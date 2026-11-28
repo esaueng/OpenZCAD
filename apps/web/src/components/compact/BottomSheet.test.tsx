@@ -865,6 +865,97 @@ describe('BottomSheet at peek on its row', () => {
     expect(sheet().dataset.detent).toBe('half');
   });
 
+  it('draws the page a pulled-up row opens as it comes up, and a pull down goes back to the row', () => {
+    // The owner: pulled up, Build's row should show All tools coming in
+    // under the finger, and pulled back down, its quick row again.
+    const onPageLower = vi.fn();
+    function Morph() {
+      const { state, dispatch } = useSheet(true);
+      useEffect(() => {
+        dispatch({ type: 'set-detent', detent: 'peek' });
+      }, [dispatch]);
+      return (
+        <BottomSheet
+          label="Workspace sheet"
+          state={state}
+          dispatch={dispatch}
+          hasRoot
+          renderPage={renderPage}
+          onRowRaise={(detent) => {
+            dispatch({ type: 'push', page: page('tools'), detent });
+            return true;
+          }}
+          rowRaisePreview={{ title: 'Tools', content: <p>Preview tile</p> }}
+          onPageLower={
+            state.stack.length > 0
+              ? () => {
+                  onPageLower();
+                  dispatch({ type: 'close' });
+                }
+              : undefined
+          }
+        >
+          <p>Row surface</p>
+        </BottomSheet>
+      );
+    }
+    render(<Morph />);
+    const surface = screen.getByText('Row surface');
+    const box = vi
+      .spyOn(sheet(), 'getBoundingClientRect')
+      .mockReturnValue(rect(64));
+    vi.spyOn(sheet().parentElement!, 'getBoundingClientRect').mockReturnValue(
+      rect(800)
+    );
+    expect(sheet().querySelector('.compact-sheet-raise')).toBeNull();
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 1, clientY: 700 });
+    fireEvent.pointerMove(surface, { pointerId: 1, clientY: 560 });
+    // 204px of an 800px stage: (204 - 64) / (400 - 64) of the way to half.
+    expect(sheet()).toHaveClass('is-raising');
+    expect(sheet().style.getPropertyValue('--sheet-raise')).toBe('0.417');
+    const preview = sheet().querySelector('.compact-sheet-raise')!;
+    expect(preview).toHaveAttribute('aria-hidden', 'true');
+    expect(preview).toHaveTextContent('Tools');
+    expect(preview).toHaveTextContent('Preview tile');
+    fireEvent.pointerMove(surface, { pointerId: 1, clientY: 340 });
+    fireEvent.pointerUp(surface, { pointerId: 1, clientY: 340 });
+    // Let go, the page it showed stands without an entrance of its own.
+    expect(sheet().dataset.detent).toBe('half');
+    expect(screen.getByRole('heading', { name: 'Tools' })).toBeInTheDocument();
+    expect(sheet()).not.toHaveClass('is-raising');
+    expect(sheet().querySelector('.compact-sheet-raise')).toBeNull();
+    expect(sheet().dataset.nav).toBe('drag');
+
+    // Pulled back down: the row shows through as the page goes, and at
+    // peek the page is put away.
+    box.mockReturnValue(rect(400));
+    const grabber = screen.getByRole('slider', { name: 'Sheet height' });
+    fireEvent.pointerDown(grabber, { button: 0, pointerId: 2, clientY: 400 });
+    fireEvent.pointerMove(grabber, { pointerId: 2, clientY: 600 });
+    expect(sheet()).toHaveClass('is-lowering');
+    expect(sheet().style.getPropertyValue('--sheet-raise')).toBe('0.405');
+    fireEvent.pointerUp(grabber, { pointerId: 2, clientY: 700 });
+    expect(onPageLower).toHaveBeenCalledTimes(1);
+    expect(sheet().dataset.detent).toBe('peek');
+    expect(sheet()).toHaveClass('is-row');
+    expect(screen.queryByRole('heading', { name: 'Tools' })).toBeNull();
+    expect(sheet().dataset.nav).toBe('drag');
+
+    // By the slider's keys: up opens the page, down to peek puts it away,
+    // each with its entrance.
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Sheet height' }), {
+      key: 'ArrowUp'
+    });
+    expect(screen.getByRole('heading', { name: 'Tools' })).toBeInTheDocument();
+    expect(sheet().dataset.nav).toBe('push');
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Sheet height' }), {
+      key: 'ArrowDown'
+    });
+    expect(onPageLower).toHaveBeenCalledTimes(2);
+    expect(sheet().dataset.detent).toBe('peek');
+    expect(sheet().dataset.nav).toBe('pop');
+  });
+
   it('opens a page of fields on its grabber, not the keyboard', () => {
     // The space review: Draw's Properties focused the sheet name, and the
     // keyboard left the drawing a sliver beside it.

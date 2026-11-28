@@ -413,6 +413,19 @@ describe('AppShell in the compact workspace', () => {
     );
     expect(sheet).toHaveAttribute('data-detent', 'full');
     expect(within(sheet).getByRole('heading', { name: 'All tools' }));
+    // Brought back down, past half to peek: the quick row again, not All
+    // tools' head over a sliver of its grid.
+    const down = within(sheet).getByRole('slider', { name: 'Sheet height' });
+    fireEvent.keyDown(down, { key: 'ArrowDown' });
+    expect(sheet).toHaveAttribute('data-detent', 'half');
+    expect(within(sheet).getByRole('heading', { name: 'All tools' }));
+    fireEvent.keyDown(down, { key: 'ArrowDown' });
+    await waitFor(() => expect(sheet).toHaveAttribute('data-detent', 'peek'));
+    expect(within(sheet).queryByRole('heading', { name: 'All tools' })).toBe(
+      null
+    );
+    expect(sheet).toHaveClass('is-row');
+    expect(within(sheet).getByRole('group', { name: 'Build tray' }));
   });
 
   it("stands Build's tray at peek and opens All tools as a page", async () => {
