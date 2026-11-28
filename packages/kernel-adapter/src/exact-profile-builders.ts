@@ -81,6 +81,10 @@ import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { fuseUniformSolid } from './exact-boolean-helpers';
 import { requireValidSolid } from './kernel-validation';
 import {
+  helicalCoilOverlap,
+  helicalSectionExtent
+} from './exact-helical-clearance';
+import {
   GEOMETRY_EPSILON,
   cross,
   dot,
@@ -3506,6 +3510,20 @@ export function buildHelicalSweep(
         ? `Helical sweep requires no more than ${MAX_HELICAL_SWEEP_TURNS} turns and a non-zero pitch.`
         : `Helical sweep requires a positive radius, no more than ${MAX_HELICAL_SWEEP_TURNS} turns, and a non-zero pitch.`
     );
+  }
+  if (inPlace) {
+    // The kernel refuses coils that would overlap, but reads the profile's
+    // span from a few points on each curve and can fall short of it; the
+    // span is measured here from the curves themselves first (#2188).
+    const extent = helicalSectionExtent(
+      kernel,
+      face,
+      [origin.x, origin.y, origin.z],
+      [direction.x, direction.y, direction.z],
+      pitch
+    );
+    const overlap = extent ? helicalCoilOverlap(extent, pitch, turns) : null;
+    if (overlap) throw new Error(overlap);
   }
   const solid = inPlace
     ? // Exact curved surfaces, wound about the axis from where the profile

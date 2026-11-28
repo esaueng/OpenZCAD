@@ -75,6 +75,12 @@ export interface InPlaceOptionValue {
   suffix?: string;
   /** The value as a number, which arrow keys and a scrub step from. */
   value?: number;
+  /**
+   * `text` is the number rounded for display, short of the value held
+   * (1.001 turns shown as 1). Typing that same text is then an entry of its
+   * own, not the held value entered again.
+   */
+  rounded?: boolean;
   /** One arrow-key or scrub step. */
   step?: number;
   min?: number;
@@ -1174,6 +1180,13 @@ function ValueField({
   const dropOnBlur = useRef(false);
   // Focus coming back from the define offer: the entry is as it stands.
   const returning = useRef(false);
+  // Whether the entry was typed since the field took focus. A field that
+  // shows its value rounded reads the same before and after "1" is typed
+  // over a held 1.001, so only this tells the entry from the display (#2190).
+  const typed = useRef(false);
+  /** The text says nothing new: what is held, shown and left as it was. */
+  const holdsAlready = (text: string) =>
+    text.trim() === field.text.trim() && !(field.rounded && typed.current);
   const shown = draft ?? field.text;
   const number = Number(shown);
   const suffix = field.suffix ? ` ${field.suffix}` : '';
@@ -1201,7 +1214,7 @@ function ValueField({
           ? `${label} was not applied: ${unreadable.text.replace(/\.$/, '')}.`
           : `${label} was not applied.`;
   const commit = (text: string): boolean => {
-    if (text.trim() === field.text.trim()) {
+    if (holdsAlready(text)) {
       // The held value entered again stands: a refusal left by an entry
       // given up goes with it, though there is nothing to set.
       setRefused(false);
@@ -1210,6 +1223,7 @@ function ValueField({
     }
     const accepted = onCommit(field.id, text);
     setRefused(!accepted);
+    if (accepted) typed.current = false;
     return accepted;
   };
   // The missing name defined (here or in Parameters), the entry is offered
@@ -1230,7 +1244,7 @@ function ValueField({
   // Done applies the entry in progress before it finishes (see the bar).
   const flushEntry = useRef<() => EntryFlush>(() => 'none');
   flushEntry.current = () => {
-    if (draft === null || draft.trim() === field.text.trim()) return 'none';
+    if (draft === null || holdsAlready(draft)) return 'none';
     if (!commit(draft)) return 'refused';
     setDraft(null);
     return 'applied';
@@ -1245,6 +1259,7 @@ function ValueField({
   }, [pendingEntries]);
   /** The entry given up: the field holds its value again, refusal gone. */
   const giveUp = () => {
+    typed.current = false;
     setDraft(null);
     setRefused(false);
     onRestore?.(field.id);
@@ -1307,8 +1322,15 @@ function ValueField({
             returning.current = false;
             return;
           }
+          typed.current = false;
           setDraft(field.text);
           event.currentTarget.select();
+        }}
+        onInput={() => {
+          // Every keystroke, a paste or a cut. Not onChange: React holds
+          // that back when the text ends up as it was, which is exactly
+          // "1" typed over a selected "1".
+          typed.current = true;
         }}
         onChange={(event) => {
           setDraft(event.target.value);
@@ -1326,6 +1348,7 @@ function ValueField({
             onRestore?.(field.id);
           }
           dropOnBlur.current = false;
+          typed.current = false;
           setDraft(null);
           setRefused(false);
         }}

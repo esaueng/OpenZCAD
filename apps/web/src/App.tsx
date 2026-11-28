@@ -31235,18 +31235,23 @@ export function App() {
               ? inPlaceShownName
               : undefined);
         const displayed = displayedValue(value, number);
+        const inShownUnit = (amount: number) =>
+          value.unit === 'length' && value.suffix === undefined
+            ? inPlaceShown(amount)
+            : amount;
+        const raw = inPlace.raws[value.id];
+        const text = raw ?? formatNumber(inShownUnit(displayed));
         return {
           id: value.id,
           label: labelOf(value),
-          text:
-            inPlace.raws[value.id] ??
-            formatNumber(
-              value.unit === 'length' && value.suffix === undefined
-                ? inPlaceShown(displayed)
-                : displayed
-            ),
+          text,
           ...(suffix ? { suffix } : {}),
           value: number,
+          // The number shown is short of the one held (1.001 turns as 1):
+          // that text typed in is then a new entry, not the value again.
+          ...(raw === undefined && Number(text) !== inShownUnit(number)
+            ? { rounded: true }
+            : {}),
           step: inPlaceValueStep(value, number),
           ...(value.min === undefined ? {} : { min: value.min }),
           ...(value.max === undefined ? {} : { max: value.max }),

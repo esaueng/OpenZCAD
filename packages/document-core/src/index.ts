@@ -3824,6 +3824,17 @@ export function sweepProfile(
   );
 }
 
+/**
+ * Why an edit to the stored `radius` of a coil wound in place is refused
+ * (#2120). That coil runs through its profile: the kernel reads its radius
+ * from where the profile sits, and the field only records the distance when
+ * the coil was made. An edit to it used to apply, as one undo step, and
+ * change nothing. A faceted helix is built at its `radius` and takes one.
+ */
+export function recordedCoilRadiusRefusal(name: string): string {
+  return `${name} is wound through its profile, so its radius is the profile's distance from the axis and \`radius\` only records it. Move the profile in its sketch, or the axis, to change the coil's radius.`;
+}
+
 export function helicalSweepProfile(
   document: ProjectDocument,
   input: HelicalSweepInput

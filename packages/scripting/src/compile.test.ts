@@ -4,6 +4,8 @@ import {
   addSketchFeature,
   createProjectDocument,
   extrudeSketch,
+  findSketch,
+  helicalSweepProfile,
   setParameter
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
@@ -157,6 +159,94 @@ describe('compileHistoryEdit', () => {
       { kind: 'delete_feature', featureId: pad },
       { kind: 'delete_parameter', name: 'spare' }
     ]);
+  });
+
+  describe("a helical sweep's radius (#2120)", () => {
+    function spring(construction?: 'in-place'): ProjectDocument {
+      const wire = addSketchFeature(
+        createProjectDocument('Spring', toUserId('user_edit')),
+        {
+          name: 'Wire',
+          planeRef: { type: 'canonical', plane: 'XZ', offset: 0 },
+          objects: [
+            { objectKind: 'circle', centerX: 12, centerY: 0, radius: 1.5 }
+          ]
+        }
+      );
+      return helicalSweepProfile(wire.document, {
+        name: 'Spring',
+        profile: {
+          sketchId: wire.sketchId,
+          profile: {
+            all: true,
+            sourceEntityIds: [
+              ...findSketch(wire.document, wire.sketchId)!.objectIds
+            ]
+          }
+        },
+        axisOrigin: { x: 0, y: 0, z: 0 },
+        axisDirection: { x: 0, y: 0, z: 1 },
+        radius: 12,
+        pitch: 5.25,
+        turns: 6.25,
+        ...(construction ? { construction } : {})
+      }).document;
+    }
+    const wider = (text: string) => text.replace('radius: 12,', 'radius: 20,');
+
+    it('is refused on a coil wound in place, where it would change nothing', () => {
+      // The edit applied as one undo step and exported a byte-identical
+      // STEP: the coil runs through its profile, wherever `radius` says.
+      const result = edit(spring('in-place'), wider);
+      expect(result.proposal).toBeNull();
+      expect(errorsOf(result)).toEqual([
+        "Spring is wound through its profile, so its radius is the profile's distance from the axis and `radius` only records it. Move the profile in its sketch, or the axis, to change the coil's radius."
+      ]);
+      // Beside another change too: the whole step is held, not half applied.
+      expect(
+        errorsOf(
+          edit(spring('in-place'), (text) =>
+            wider(text).replace('turns: 6.25,', 'turns: 8,')
+          )
+        )
+      ).toHaveLength(1);
+    });
+
+    it('leaves the rest of a coil wound in place editable', () => {
+      const result = edit(spring('in-place'), (text) =>
+        text.replace('pitch: 5.25,', 'pitch: 6,')
+      );
+      expect(errorsOf(result)).toEqual([]);
+      expect(result.proposal?.operations).toEqual([
+        expect.objectContaining({ kind: 'update_feature', data: { pitch: 6 } })
+      ]);
+    });
+
+    it('is applied to a faceted helix, which is built at its radius', () => {
+      const result = edit(spring(), wider);
+      expect(errorsOf(result)).toEqual([]);
+      expect(result.proposal?.operations).toEqual([
+        expect.objectContaining({
+          kind: 'update_feature',
+          data: { radius: 20 }
+        })
+      ]);
+      expect(result.summary).toEqual(['Edit Spring: radius']);
+    });
+
+    it('is applied when the same edit makes the coil a faceted helix', () => {
+      const result = edit(spring('in-place'), (text) =>
+        wider(text).replace(/\n {2}construction: "in-place",/, '')
+      );
+      expect(errorsOf(result)).toEqual([]);
+      expect(result.proposal?.operations).toEqual([
+        expect.objectContaining({
+          kind: 'update_feature',
+          data: { radius: 20 },
+          clearData: ['construction']
+        })
+      ]);
+    });
   });
 
   it('refuses what the text does not edit, at the statement', () => {

@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { parseCadPatchProposal } from '@openzcad/ai-contracts';
 import {
+  addSketchFeature,
   createProjectDocument,
+  findFeature,
   findSketch,
+  helicalSweepProfile,
   holeBody,
   type ExtrudeInput
 } from '@openzcad/document-core';
@@ -315,6 +318,77 @@ describe('AI modeling command translation', () => {
       /already consumed/
     );
     expect(manager.document.featureOrder).toHaveLength(2);
+  });
+
+  it('refuses a new radius for a coil wound in place, and applies one to a faceted helix (#2120)', () => {
+    const radiusEdit = (construction?: 'in-place') => {
+      const wire = addSketchFeature(
+        createProjectDocument('Spring', toUserId('user_ai')),
+        {
+          name: 'Wire',
+          planeRef: { type: 'canonical', plane: 'XZ', offset: 0 },
+          objects: [
+            { objectKind: 'circle', centerX: 12, centerY: 0, radius: 1.5 }
+          ]
+        }
+      );
+      const { document } = helicalSweepProfile(wire.document, {
+        name: 'Spring',
+        profile: {
+          sketchId: wire.sketchId,
+          profile: {
+            all: true,
+            sourceEntityIds: [
+              ...findSketch(wire.document, wire.sketchId)!.objectIds
+            ]
+          }
+        },
+        axisOrigin: { x: 0, y: 0, z: 0 },
+        axisDirection: { x: 0, y: 0, z: 1 },
+        radius: 12,
+        pitch: 5.25,
+        turns: 6.25,
+        ...(construction ? { construction } : {})
+      });
+      const featureId = document.featureOrder.at(-1)!;
+      const proposal = (data: Record<string, unknown>) =>
+        parseCadPatchProposal({
+          proposalId: 'proposal_coil_radius',
+          summary: 'Widen the spring.',
+          assumptions: [],
+          operations: [
+            { kind: 'update_feature', featureId, data, clearData: [] }
+          ]
+        });
+      return { document, featureId, proposal };
+    };
+
+    // Wound in place the coil runs through its profile: the stored radius
+    // builds nothing, so the edit would be accepted and change nothing.
+    const exact = radiusEdit('in-place');
+    expect(() =>
+      commandsForCadPatch(exact.document, exact.proposal({ radius: 20 }))
+    ).toThrow(/wound through its profile.*Move the profile in its sketch/);
+    // The record written back as it stands, beside a real change, is no edit.
+    const pitched = applyCandidate(
+      exact.document,
+      commandsForCadPatch(
+        exact.document,
+        exact.proposal({ radius: 12, pitch: 6 })
+      )
+    );
+    expect(findFeature(pitched, exact.featureId)).toMatchObject({
+      data: { radius: 12, pitch: 6, construction: 'in-place' }
+    });
+
+    const faceted = radiusEdit();
+    const widened = applyCandidate(
+      faceted.document,
+      commandsForCadPatch(faceted.document, faceted.proposal({ radius: 20 }))
+    );
+    expect(findFeature(widened, faceted.featureId)).toMatchObject({
+      data: { radius: 20 }
+    });
   });
 });
 

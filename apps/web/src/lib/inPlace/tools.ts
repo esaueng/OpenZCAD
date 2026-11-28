@@ -2046,7 +2046,7 @@ const HELIX_SIZE_OPTION: OptionSpec = {
     {
       value: 'height',
       label: 'Height & turns',
-      tip: 'How tall the coil stands; the pitch follows'
+      tip: 'How far the coil climbs along its axis; the pitch follows'
     },
     {
       value: 'pitch',
@@ -2070,7 +2070,19 @@ const HELIX_GROW_OPTION: OptionSpec = {
 
 /** A stored value with its sign turned, an expression kept as one. */
 function negated(value: ParamValue): ParamValue {
-  return typeof value === 'number' ? -value : `-(${value})`;
+  if (typeof value !== 'number') return `-(${value})`;
+  return value === 0 ? 0 : -value;
+}
+
+/**
+ * Whether the coil's pitch runs against its axis. A height is a size with
+ * no direction, so a coil sized by height takes its direction from the pitch
+ * it had: the one typed before the switch, or the one an edit stores.
+ */
+function pitchRunsBack(
+  numbers: Readonly<Record<string, number>> | undefined
+): boolean {
+  return (numbers?.pitch ?? 0) < 0;
 }
 
 /** One stored value over another, an expression kept as one. */
@@ -2086,13 +2098,34 @@ function divided(top: ParamValue, bottom: ParamValue): ParamValue {
  * should grow up from its profile unless asked otherwise.
  */
 function pointedUp(direction: Vector3): Vector3 {
+  return runsDown(direction) ? reversed(direction) : direction;
+}
+
+/** Whether a direction runs down, by the part {@link pointedUp} reads. */
+export function runsDown(direction: Vector3): boolean {
   const lead =
     Math.abs(direction.z) > 1e-9
       ? direction.z
       : Math.abs(direction.y) > 1e-9
         ? direction.y
         : direction.x;
-  return lead < 0 ? reversed(direction) : direction;
+  return lead < 0;
+}
+
+/**
+ * Whether Grows asks for the coil's axis turned round. A picked line is
+ * pointed up first, so only Down turns it. An axis that is `kept` as it is
+ * (a typed one, or the stored one of the coil being edited) already runs
+ * the way the edit opened on, which `savedGrow` records: a coil saved
+ * growing down reopens on Down, and only choosing Up turns it (#2119).
+ * Before, it reopened on Up, and Down turned the saved axis back upward.
+ */
+function growTurnsAxis(
+  options: Readonly<Record<string, string>>,
+  kept: boolean
+): boolean {
+  const grow = options.grow ?? 'up';
+  return kept ? grow !== (options.savedGrow ?? 'up') : grow === 'down';
 }
 
 /** A direction turned round, with no negative zeros in what is stored. */
@@ -2112,7 +2145,8 @@ function onSavedAxis(axis: RevolveAxisCandidate | null, ctx: InPlaceContext) {
 
 /**
  * Which way the coil climbs, as a unit vector: the stored axis as stored, a
- * typed one as typed, a picked line pointed up; Down reverses each.
+ * typed one as typed, a picked line pointed up; Grows turns each round as
+ * {@link growTurnsAxis} reads it.
  */
 function helixClimb(
   axisLine: RevolveAxisCandidate,
@@ -2120,11 +2154,9 @@ function helixClimb(
   ctx: InPlaceContext
 ): Vector3 {
   const direction = unit(axisLine.direction);
-  const along =
-    options.axisMode === 'typed' || onSavedAxis(axisLine, ctx)
-      ? direction
-      : pointedUp(direction);
-  return options.grow === 'down' ? reversed(along) : along;
+  const kept = options.axisMode === 'typed' || onSavedAxis(axisLine, ctx);
+  const along = kept ? direction : pointedUp(direction);
+  return growTurnsAxis(options, kept) ? reversed(along) : along;
 }
 
 /**
@@ -2305,7 +2337,9 @@ const helicalSweep: InPlaceToolSpec = {
       initial: 15,
       min: 0,
       exclusive: true,
-      note: 'How tall the coil stands, end to end'
+      // #2118: the rise of the coil's path, pitch × turns. The spring is
+      // taller than this by the profile's own height along the axis.
+      note: 'How far the coil climbs along its axis, from its first section to its last. The profile adds its own height to the spring.'
     },
     {
       id: 'pitch',
@@ -2361,7 +2395,7 @@ const helicalSweep: InPlaceToolSpec = {
     if (!(turns > 0)) return null;
     const round = (value: number) => Math.round(value * 1000) / 1000;
     return state.options.size === 'pitch'
-      ? `Stands ${round(Math.abs(state.numbers.pitch ?? 5) * turns)} ${units} tall`
+      ? `Climbs ${round(Math.abs(state.numbers.pitch ?? 5) * turns)} ${units} along its axis`
       : `Each turn climbs ${round((state.numbers.height ?? 15) / turns)} ${units}`;
   },
   defaults(slots, ctx, numbers): Record<string, number> {
@@ -2379,14 +2413,16 @@ const helicalSweep: InPlaceToolSpec = {
   },
   optionCarries(optionId, value, state) {
     // A switch keeps the coil as it stands: its pitch from its height, or
-    // its height from its pitch.
+    // its height from its pitch. The height has no sign, so the way the
+    // pitch runs along the axis stays with the pitch (#2191).
     if (optionId !== 'size') return null;
     const turns = state.numbers.turns ?? 3;
     if (!(turns > 0)) return null;
     const carried: Record<string, { value: number; from: string }> = {};
     if (value === 'pitch') {
+      const climb = (state.numbers.height ?? 15) / turns;
       carried.pitch = {
-        value: (state.numbers.height ?? 15) / turns,
+        value: pitchRunsBack(state.numbers) ? -climb : climb,
         from: 'height'
       };
     } else {
@@ -2461,6 +2497,9 @@ const helicalSweep: InPlaceToolSpec = {
       pitch = values.pitch ?? 5;
     } else {
       pitch = divided(values.height ?? 15, turns);
+      // Sized by height, a coil whose pitch ran against its axis still
+      // does: only the pitch says which way, so its sign is kept (#2191).
+      if (pitchRunsBack(numbers)) pitch = negated(pitch);
       // An untouched edit writes the pitch back as stored, not as a
       // height divided again (which can drift in the last digit).
       const before = saved ? ctx.evaluate?.(saved.pitch) : null;
@@ -2475,7 +2514,7 @@ const helicalSweep: InPlaceToolSpec = {
         pitch = saved.pitch;
       }
     }
-    const down = options.grow === 'down';
+    const down = growTurnsAxis(options, true);
     let axisOrigin: ParametricVector3;
     let axisDirection: ParametricVector3;
     if (options.axisMode === 'typed') {

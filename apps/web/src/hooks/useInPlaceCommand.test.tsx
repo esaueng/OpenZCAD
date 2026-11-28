@@ -862,6 +862,42 @@ describe('useInPlaceCommand: helical sweep', () => {
       expect(built.at(-1)).toMatchObject({ pitch: 10, turns: 3 })
     );
   });
+
+  it('keeps a pitch that runs against the axis through the sizing switch', async () => {
+    // #2191: Height has no sign, so the switch built +4.2 from a −4.2 pitch
+    // and the coil turned round with no direction edit.
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('helical-sweep', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    act(() => hook.result.current.setOption('size', 'pitch'));
+    act(() => {
+      hook.result.current.setValue('pitch', -4.2);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ pitch: -4.2, turns: 3 })
+    );
+    const axis = (built.at(-1) as { axisDirection: unknown }).axisDirection;
+    act(() => hook.result.current.setOption('size', 'height'));
+    // The height reads as a size; the coil still runs the way it did.
+    expect(hook.result.current.values.height).toBeCloseTo(12.6);
+    await waitFor(() =>
+      expect((built.at(-1) as { pitch: number }).pitch).toBeCloseTo(-4.2)
+    );
+    // Stretched by its height, it grows the same way.
+    act(() => {
+      hook.result.current.setValue('height', 21);
+    });
+    await waitFor(() =>
+      expect((built.at(-1) as { pitch: number }).pitch).toBeCloseTo(-7)
+    );
+    // And back: the pitch row shows the sign it kept.
+    act(() => hook.result.current.setOption('size', 'pitch'));
+    expect(hook.result.current.values.pitch).toBeCloseTo(-7);
+    await waitFor(() =>
+      expect((built.at(-1) as { pitch: number }).pitch).toBeCloseTo(-7)
+    );
+    expect(built.at(-1)).toMatchObject({ axisDirection: axis, turns: 3 });
+  });
 });
 
 describe('useInPlaceCommand: thread', () => {

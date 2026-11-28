@@ -825,6 +825,109 @@ describe('InPlaceCommandBar', () => {
     expect(field).toHaveValue('20');
   });
 
+  describe('a value shown rounded', () => {
+    // #2190: a helical sweep stored at 1.001 turns shows "1". Typing 1 over
+    // it read as the held value entered again and was dropped, while 1.0
+    // was taken; the stored feature stayed at 1.001.
+    function turnsField(onValueCommit: (id: string, text: string) => boolean) {
+      render(
+        <InPlaceCommandBar
+          title="Helical sweep"
+          hint="Drag the arrow for the pitch"
+          canFinish
+          values={[
+            {
+              id: 'turns',
+              label: 'Turns',
+              text: '1',
+              value: 1.001,
+              rounded: true,
+              step: 0.1,
+              min: 0,
+              max: 200
+            }
+          ]}
+          onValueCommit={onValueCommit}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+      return screen.getByRole('textbox', { name: 'Turns' });
+    }
+
+    it.each(['1', '1.0'])('takes %s typed over a held 1.001', (entry) => {
+      const onValueCommit = vi.fn(() => true);
+      const field = turnsField(onValueCommit);
+      expect(field).toHaveValue('1');
+      fireEvent.focus(field);
+      fireEvent.input(field, { target: { value: entry } });
+      fireEvent.blur(field);
+      expect(onValueCommit).toHaveBeenCalledOnce();
+      expect(onValueCommit).toHaveBeenCalledWith('turns', entry);
+    });
+
+    it('takes the same text on Enter, once', () => {
+      const onValueCommit = vi.fn(() => true);
+      const field = turnsField(onValueCommit);
+      fireEvent.focus(field);
+      fireEvent.input(field, { target: { value: '1' } });
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(onValueCommit).toHaveBeenCalledOnce();
+      expect(onValueCommit).toHaveBeenCalledWith('turns', '1');
+      // Leaving the field afterwards enters nothing a second time.
+      fireEvent.blur(field);
+      expect(onValueCommit).toHaveBeenCalledOnce();
+    });
+
+    it('leaves the held value alone when the field is only visited', () => {
+      const onValueCommit = vi.fn(() => true);
+      const field = turnsField(onValueCommit);
+      fireEvent.focus(field);
+      fireEvent.keyDown(field, { key: 'Enter' });
+      fireEvent.blur(field);
+      // And when an entry is given up with Escape.
+      fireEvent.focus(field);
+      fireEvent.input(field, { target: { value: '1' } });
+      fireEvent.keyDown(field, { key: 'Escape' });
+      fireEvent.blur(field);
+      expect(onValueCommit).not.toHaveBeenCalled();
+      expect(field).toHaveValue('1');
+    });
+
+    it('applies the same text typed in when Done is pressed', () => {
+      const onValueCommit = vi.fn(() => true);
+      const field = turnsField(onValueCommit);
+      fireEvent.focus(field);
+      fireEvent.input(field, { target: { value: '1' } });
+      // The press applies the entry before the field loses focus.
+      fireEvent.pointerDown(screen.getByRole('button', { name: /Done/ }), {
+        button: 0
+      });
+      expect(onValueCommit).toHaveBeenCalledOnce();
+      expect(onValueCommit).toHaveBeenCalledWith('turns', '1');
+    });
+  });
+
+  it('keeps a value shown exactly when its own text is typed again', () => {
+    const onValueCommit = vi.fn(() => true);
+    render(
+      <InPlaceCommandBar
+        title="Helical sweep"
+        hint="Drag the arrow for the pitch"
+        canFinish
+        values={[{ id: 'turns', label: 'Turns', text: '3', value: 3 }]}
+        onValueCommit={onValueCommit}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    const field = screen.getByRole('textbox', { name: 'Turns' });
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '3' } });
+    fireEvent.blur(field);
+    expect(onValueCommit).not.toHaveBeenCalled();
+  });
+
   it('steps a value with the arrow keys, within its limits', () => {
     const onValueCommit = vi.fn(() => true);
     render(

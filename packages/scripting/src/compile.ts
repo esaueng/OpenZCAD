@@ -8,6 +8,7 @@ import type {
   ProjectDocument,
   SketchId
 } from '@openzcad/shared';
+import { recordedCoilRadiusRefusal } from '@openzcad/document-core';
 import { publishScript } from './script';
 import {
   historyModelOf,
@@ -411,6 +412,19 @@ class Compiler {
         );
         return;
       }
+    }
+    // A coil wound in place runs through its profile: the kernel reads its
+    // radius from where the profile sits, and the stored `radius` only
+    // records that distance. An edit to it would apply and change nothing
+    // (#2120), so it is refused with what does move the coil. A faceted
+    // helix is built at its `radius` and keeps the field.
+    if (
+      stored.featureKind === 'helical-sweep' &&
+      'radius' in data &&
+      after.construction === 'in-place'
+    ) {
+      this.refuse(feature.featureId, recordedCoilRadiusRefusal(feature.name));
+      return;
     }
     if (stored.featureKind === 'custom-feature' && 'script' in data) {
       const before = (stored.data as { script: CustomFeatureScript }).script;

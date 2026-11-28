@@ -340,6 +340,122 @@ test('a faceted helix rebuilds exact from its edit, its height dragged', async (
   );
 });
 
+test('an exact coil takes a typed turn count over its rounded text, and keeps its direction through the sizing switch', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  const start = addSketchFeature(
+    createProjectDocument('Exact coil options', toUserId('user_e2e')),
+    {
+      name: 'Wire',
+      plane: 'XZ',
+      offset: 0,
+      // Sketch +Y runs down world Z here: the wire stands at (27.6, 0, −11.2).
+      object: {
+        objectKind: 'circle',
+        radius: 1.5,
+        centerX: 27.6,
+        centerY: 11.2
+      }
+    }
+  );
+  const sketch = findSketch(start.document, start.sketchId)!;
+  const [profile] = computeSketchProfileAnalysis(
+    sketch.objectIds.map((id) => {
+      const node = start.document.nodes[id];
+      if (node?.kind !== 'sketch-object')
+        throw new Error('Expected an object.');
+      return { id, data: node.data };
+    }),
+    (value) => resolveParamValue(value, {}, 'dimension')
+  ).profiles;
+  // #2190 and #2191's coil: wound in place about an oblique axis, its pitch
+  // running against the axis, at a turn count that shows rounded.
+  const axisOrigin = { x: 18, y: 0, z: -4 };
+  const axisDirection = { x: 0.6, y: 0, z: 0.8 };
+  const document = helicalSweepProfile(start.document, {
+    name: 'Spring',
+    profile: {
+      sketchId: start.sketchId,
+      profile: {
+        profileId: profile!.profileId,
+        regionFingerprint: profile!.regionFingerprint,
+        samplePoint: profile!.samplePoint,
+        sourceArea: profile!.area,
+        sourceEntityIds: profile!.sourceEntityIds
+      }
+    },
+    axisOrigin,
+    axisDirection,
+    radius: 12,
+    pitch: -4.2,
+    turns: 1.001,
+    construction: 'in-place'
+  }).document;
+  await openDocument(page, document);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+    timeout: 30_000
+  });
+  await revealModelPanel(page, 'History');
+  await page
+    .locator('.feature-row', { hasText: 'Spring' })
+    .locator('.feature-row-main')
+    .click();
+  const bar = page.getByRole('group', { name: 'Edit Spring command' });
+  await expect(bar).toBeVisible();
+  await bar.locator('summary').click();
+  // A reversed pitch reopens as a pitch, signed; 1.001 turns shows as 1.
+  await expect(bar.getByRole('radio', { name: 'Pitch & turns' })).toBeChecked();
+  await expect(bar.getByRole('textbox', { name: 'Pitch' })).toHaveValue('-4.2');
+  const turns = bar.getByRole('textbox', { name: 'Turns' });
+  await expect(turns).toHaveValue('1');
+  await expect(bar).toContainText('Climbs 4.204 mm along its axis');
+  // Typed over the selected text, "1" leaves the field reading as it did.
+  await turns.click();
+  await page.keyboard.type('1');
+  await page.keyboard.press('Tab');
+  await expect(bar).toContainText('Climbs 4.2 mm along its axis');
+  // Sized by height instead: a size, with the coil still running back.
+  await bar.getByRole('radio', { name: 'Height & turns' }).click();
+  await expect(bar.getByRole('textbox', { name: 'Height' })).toHaveValue('4.2');
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const saved = await exportedDocument(page);
+  const helix = listFeaturesInOrder(saved).find(
+    (feature) => feature.data.featureKind === 'helical-sweep'
+  )!;
+  if (helix.data.featureKind !== 'helical-sweep')
+    throw new Error('Expected a helix.');
+  expect(helix.data).toMatchObject({
+    turns: 1,
+    pitch: -4.2,
+    axisOrigin,
+    axisDirection,
+    construction: 'in-place'
+  });
+  // Built from what was saved, the far cap stands 4.2 mm back along the axis.
+  const derived = await rebuilt(saved);
+  const caps = (
+    derived.bodyRepresentations[helix.bodyId!]!.topology?.faces ?? []
+  ).filter((face) => face.geometry?.surfaceType === 'plane');
+  expect(caps).toHaveLength(2);
+  const along = caps
+    .map((cap) => cap.geometry!.centroid!)
+    .map(
+      (centre) =>
+        (centre.x - axisOrigin.x) * axisDirection.x +
+        (centre.z - axisOrigin.z) * axisDirection.z
+    )
+    .sort((a, b) => a - b);
+  expect(along[0]).toBeCloseTo(-4.2, 6);
+  expect(along[1]).toBeCloseTo(0, 6);
+});
+
 test('a picked straight sweep takes a typed twist and end scale, exactly (M04, v132)', async ({
   page
 }) => {

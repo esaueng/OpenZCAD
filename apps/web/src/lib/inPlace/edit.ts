@@ -43,6 +43,7 @@ import {
   filletEdgeRuns,
   filletSelectionVertices,
   filletVertexValueId,
+  runsDown,
   type BodyPick,
   type CurvePick,
   type EdgePick,
@@ -566,6 +567,11 @@ export function inPlaceEditSeed(
           choice: { saved: true }
         });
         seed.slots.axisId = 'saved';
+        // Grows reads the way the stored axis runs, and remembers it: the
+        // axis goes back as stored unless the choice changes (#2119).
+        const grow = runsDown(direction) ? 'down' : 'up';
+        seed.options.grow = grow;
+        seed.options.savedGrow = grow;
       } else {
         missing.push('axis');
       }

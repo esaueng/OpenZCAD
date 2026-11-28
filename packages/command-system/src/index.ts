@@ -189,6 +189,7 @@ import {
   withParameterKinds,
   type HelicalSweepInput,
   helicalSweepProfile,
+  recordedCoilRadiusRefusal,
   holeBody,
   type HoleInput,
   gearBody,
@@ -5443,8 +5444,22 @@ export function commandsForCadPatch(
         });
       }
       case 'update_feature': {
-        if (!findFeature(projectedDocument, operation.featureId)) {
+        const target = findFeature(projectedDocument, operation.featureId);
+        if (!target) {
           throw new Error(`Feature ${operation.featureId} not found.`);
+        }
+        // #2120: a coil wound in place takes its radius from its profile,
+        // so a new stored one would be accepted and change nothing.
+        if (
+          target.data.featureKind === 'helical-sweep' &&
+          'radius' in operation.data &&
+          operation.data.radius !== target.data.radius &&
+          !operation.clearData.includes('construction') &&
+          ('construction' in operation.data
+            ? operation.data.construction
+            : target.data.construction) === 'in-place'
+        ) {
+          throw new Error(recordedCoilRadiusRefusal(target.name));
         }
         return commandFactories.updateFeature({
           featureId: operation.featureId,

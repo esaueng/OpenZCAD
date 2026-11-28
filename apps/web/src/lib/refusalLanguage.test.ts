@@ -223,6 +223,16 @@ describe('plainRefusal', () => {
         'The conical end would collapse at that distance. Try a smaller offset.'
       ],
       [
+        // #2189: the kernel's own refusal of a coil pitched too finely.
+        'invalid input: helical sweep coils would overlap: the profile spans 2.993766783018019 along the axis, at least the pitch 2.99',
+        'The coils would overlap: one turn must climb further than the profile is tall. Increase Pitch or Height, or wind less than one full turn.'
+      ],
+      [
+        // #2188: the adapter's, from the profile's exact span.
+        'helical sweep coils would overlap: the profile spans 3 along the axis, leaving no clearance at the pitch 2.997',
+        'The coils would overlap: one turn must climb further than the profile is tall. Increase Pitch or Height, or wind less than one full turn.'
+      ],
+      [
         'resize blend: radial resize intersects nonincident meridian boundaries 2 and 7',
         'That diameter would make parts of the body overlap.'
       ],
