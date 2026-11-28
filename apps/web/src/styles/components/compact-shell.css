@@ -402,6 +402,12 @@
   transition: height 320ms cubic-bezier(0.32, 1.25, 0.5, 1);
 }
 
+/* A page lowered to peek keeps its head (Back, the title, Close) over a
+   row of its own: the 64px peek is the workspace's row alone (.is-row). */
+.compact-sheet[data-detent='peek']:not(.is-row) {
+  height: 104px;
+}
+
 .compact-sheet[hidden] {
   display: none;
 }
@@ -501,9 +507,10 @@
 
 /* Peek on the workspace's own row (BottomSheet's asRow): the sheet is
    that row under a 12px grip. The head keeps only its grabber, the height
-   slider: a 44px band behind the row's top, so a finger's worth of it is
-   there to drag and focus. The row lets every press between its controls
-   through to it; the sheet's own surface drags below that. */
+   slider: a 44px band behind the row's top, for the keyboard and a
+   finger at the grip. A press anywhere on the row that is not one of its
+   controls drags the sheet too (its surface), so the drag region is the
+   whole row, while a row of tools wider than the sheet still scrolls. */
 .compact-sheet.is-row {
   /* Vertical drags move the sheet; a row of tools wider than the sheet
      still scrolls sideways. */
@@ -533,36 +540,6 @@
   z-index: 2;
   padding-top: 12px;
   padding-bottom: var(--sp-2);
-  pointer-events: none;
-}
-
-.compact-sheet.is-row
-  > .compact-sheet-body
-  :is(.compact-tray-slot, .compact-command-row) {
-  pointer-events: none;
-  background: transparent;
-}
-
-.compact-sheet.is-row
-  > .compact-sheet-body
-  :is(
-    button,
-    a[href],
-    input,
-    select,
-    textarea,
-    label,
-    summary,
-    [role='button'],
-    [role='tab'],
-    [role='slider'],
-    [role='switch'],
-    [role='checkbox'],
-    [role='radio'],
-    [role='menuitem'],
-    [tabindex]:not([tabindex='-1'])
-  ) {
-  pointer-events: auto;
 }
 
 .compact-sheet-grip {
@@ -1296,17 +1273,21 @@
 
 /* Backspace stands as a fifth column beside the digits, the four rows
    tall, rather than a 44px row of its own under them: the pad is a row
-   shorter and keeps that much more of the model in view (space review). */
-.app-shell[data-shell='compact'] .numeric-keypad .keypad-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(
-      var(--compact-target),
-      0.8fr
-    );
-}
+   shorter and keeps that much more of the model in view (space review).
+   Not in the landscape side sheet, whose 250px width would squeeze five
+   columns under 44px: there it keeps its row. */
+@media not all and (orientation: landscape) and (max-height: 500px) {
+  .app-shell[data-shell='compact'] .numeric-keypad .keypad-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(
+        var(--compact-target),
+        0.8fr
+      );
+  }
 
-.app-shell[data-shell='compact'] .numeric-keypad .keypad-key:last-child {
-  grid-column: 5;
-  grid-row: 1 / span 4;
+  .app-shell[data-shell='compact'] .numeric-keypad .keypad-key:last-child {
+    grid-column: 5;
+    grid-row: 1 / span 4;
+  }
 }
 
 /* A card whose work is a handle on the model (a region's Extrude) gives

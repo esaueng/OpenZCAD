@@ -198,8 +198,8 @@ export function BottomSheet({
     moved: boolean;
     /**
      * A tap (no drag) is nothing: started on the row's surface, or on the
-     * grabber at peek, where it fills the gaps between the row's controls
-     * and a tap there would raise the sheet into blank space.
+     * grabber at peek, where a tap would raise a sheet that holds only its
+     * row into blank space.
      */
     tapIsNothing?: boolean;
   } | null>(null);
@@ -421,7 +421,8 @@ export function BottomSheet({
   // tool's row): the sheet is that row and a grip. Its Close would do
   // nothing there (the content keeps it at peek) and its Back has no page,
   // so the head is only the grabber: a 44px band behind the row, drawn as
-  // a grip above it, that takes every press between the row's controls.
+  // a grip above it. A press on the row that is not one of its controls
+  // drags the sheet too (its surface).
   const asRow = detent === 'peek' && page === null && hasRoot;
   const hostHeight = () =>
     sheetRef.current?.parentElement?.getBoundingClientRect().height ?? 0;
