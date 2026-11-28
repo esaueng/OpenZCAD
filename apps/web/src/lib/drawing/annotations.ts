@@ -137,7 +137,35 @@ export function sectionBodyKey(viewId: DrawingViewId, bodyId: string): string {
   return `${viewId}#section:${bodyId}`;
 }
 
-/** The body `view` draws for `bodyId`: its cut body when it is a section. */
+/**
+ * F06: where a view that draws another configuration row than the active
+ * one finds the model body it draws for `bodyId` (that row's, not the
+ * active row's) in an {@link AnnotationBodies} map. The key is present, with
+ * no body under it when that row does not build the body, exactly when the
+ * view draws another row: such a view never measures the active row's body
+ * in its place.
+ */
+export function rowViewBodyKey(viewId: DrawingViewId, bodyId: string): string {
+  return `${viewId}#row:${bodyId}`;
+}
+
+/**
+ * The whole model body `view` draws for `bodyId` (a section's uncut body):
+ * its configuration row's when it draws another row (F06), else the active
+ * row's.
+ */
+export function viewModelBody(
+  bodies: AnnotationBodies,
+  view: Pick<DrawingView, 'viewId'> | undefined,
+  bodyId: string
+): SourceBody | undefined {
+  if (view) {
+    const key = rowViewBodyKey(view.viewId, bodyId);
+    if (Object.prototype.hasOwnProperty.call(bodies, key)) return bodies[key];
+  }
+  return bodies[bodyId];
+}
+
 /** M01: a hole's callout data by the hole's feature id, else null. */
 export type HoleCalloutLookup = (featureId: FeatureId) => HoleCallout | null;
 
@@ -202,7 +230,7 @@ export function annotationBody(
     const placed = bodies[explodedBodyKey(view.viewId, bodyId)];
     if (placed) return placed;
   }
-  return bodies[bodyId];
+  return viewModelBody(bodies, view, bodyId);
 }
 
 export type AnnotationBreak =
@@ -858,7 +886,7 @@ function lookupFace(
   view: DrawingView,
   bodies: AnnotationBodies
 ): FaceLookup {
-  const body = bodies[ref.bodyId];
+  const body = viewModelBody(bodies, view, ref.bodyId);
   if (!body || body.consumed) return { ok: false, reason: 'body-missing' };
   if (!view.bodyIds.includes(ref.bodyId))
     return { ok: false, reason: 'not-in-view' };

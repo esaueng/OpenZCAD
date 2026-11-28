@@ -29,6 +29,7 @@ import {
   edgeEndsInPageOrder,
   referenceTrust,
   resolveDrawingAnnotation,
+  viewModelBody,
   type SheetBom,
   type AnnotationBodies,
   type HoleCalloutLookup,
@@ -151,7 +152,8 @@ export function pickableFaces(
       return toPage(p.u, p.v);
     };
     for (const bodyId of view.bodyIds) {
-      const body = bodies[bodyId];
+      // F06: a view on another configuration row offers that row's faces.
+      const body = viewModelBody(bodies, view, bodyId);
       if (!body?.topology || body.consumed) continue;
       const { faces, edges } = body.topology;
       for (const face of faces) {
@@ -819,7 +821,9 @@ export function edgeRefFor(
 export function faceRefFor(
   bodies: AnnotationBodies,
   bodyId: BodyId,
-  face: FaceTopology
+  face: FaceTopology,
+  /** The view picked in: one on another configuration row reads its row's body. */
+  view?: Pick<DrawingView, 'viewId'>
 ): DrawingFaceRef | null {
   const full: DrawingFaceRef = {
     bodyId,
@@ -833,7 +837,7 @@ export function faceRefFor(
     drawingFaceRefError(full) === null
       ? full
       : { bodyId, hash: face.hash };
-  const found = resolveFace(bodies[bodyId], ref);
+  const found = resolveFace(viewModelBody(bodies, view, bodyId), ref);
   return found.ok && found.entry === face ? ref : null;
 }
 
@@ -1341,7 +1345,7 @@ function applyFacePick(
         ? 'Re-pick in the view this annotation belongs to.'
         : 'Pick in the same view as the first pick.'
     };
-  const ref = faceRefFor(bodies, hit.bodyId, hit.face);
+  const ref = faceRefFor(bodies, hit.bodyId, hit.face, hit.view);
   if (!ref)
     return {
       ok: false,

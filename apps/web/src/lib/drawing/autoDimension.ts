@@ -228,13 +228,28 @@ const NEAR_REACH_MM = [5, 8, 12] as const;
 const AXES: readonly AuditAxis[] = ['x', 'y', 'z'];
 
 export function planAutoDimensions(
-  sheet: DrawingSheet,
-  views: readonly ComposedView[],
-  bodies: AnnotationBodies,
+  source: DrawingSheet,
+  sourceViews: readonly ComposedView[],
+  sourceBodies: AnnotationBodies,
   units: UnitSystem,
   createId: () => DrawingAnnotationId = createDrawingAnnotationId
 ): AutoDimensionPlan {
-  const state = readDimensionState(sheet, bodies, units);
+  const state = readDimensionState(source, sourceBodies, units);
+  // F06: planned against each body as the views drawing it draw it, a view
+  // on another configuration row its row's (`auditGeometry`); what it
+  // returns names the model's bodies again.
+  const { sheet, bodies, keyOf, bodyOf, keyed } = state.geometry;
+  const views = keyed
+    ? sourceViews.map((entry) => ({
+        ...entry,
+        view: {
+          ...entry.view,
+          bodyIds: entry.view.bodyIds.map(
+            (id) => keyOf(entry.view.viewId, id) as BodyId
+          )
+        }
+      }))
+    : sourceViews;
   const skipped: AutoDimensionSkip[] = state.audit.unmeasurable.map(
     (finding) => ({ ...finding })
   );
@@ -289,9 +304,12 @@ export function planAutoDimensions(
     `${viewId}|${bodyId}`;
   for (const annotation of sheet.annotations ?? []) {
     if (!isDrawingDimension(annotation)) continue;
-    const bodyId = drawingAnnotationBodyId(annotation);
-    if (!bodyId) continue;
-    const key = holdKey(annotation.viewId, bodyId);
+    const modelBodyId = drawingAnnotationBodyId(annotation);
+    if (!modelBodyId) continue;
+    const key = holdKey(
+      annotation.viewId,
+      keyOf(annotation.viewId, modelBodyId)
+    );
     held.set(key, (held.get(key) ?? 0) + 1);
   }
   const holding = (context: ViewContext, bodyId: string) =>
@@ -918,7 +936,16 @@ export function planAutoDimensions(
     }
   }
 
-  const placed = placeAll(sheet, views, contexts, planned, bodies, units, k);
+  const placed = placeAll(
+    source,
+    sourceViews,
+    contexts,
+    planned,
+    bodies,
+    sourceBodies,
+    units,
+    k
+  );
   for (const entry of placed.unplaced)
     skipped.push({
       bodyId: entry.bodyId,
@@ -940,8 +967,12 @@ export function planAutoDimensions(
     .filter((entry) => !entry.visible)
     .map((entry) => entry.subject);
   return {
-    annotations: kept.map((entry) => entry.annotation),
-    skipped,
+    annotations: kept.map((entry) =>
+      keyed ? withModelBodyIds(entry.annotation, bodyOf) : entry.annotation
+    ),
+    skipped: keyed
+      ? skipped.map((entry) => ({ ...entry, bodyId: bodyOf(entry.bodyId) }))
+      : skipped,
     onHiddenLines: kept.filter((entry) => !entry.visible).length,
     sectionAdvice: sectionAdvice(
       inside,
@@ -958,6 +989,23 @@ export function planAutoDimensions(
       )
     )
   };
+}
+
+/**
+ * A planned annotation with the model body ids its references name, in
+ * place of the keys `auditGeometry` read them under.
+ */
+function withModelBodyIds<T>(value: T, bodyOf: (key: string) => string): T {
+  if (Array.isArray(value))
+    return value.map((entry: unknown) => withModelBodyIds(entry, bodyOf)) as T;
+  if (value === null || typeof value !== 'object') return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value))
+    out[key] =
+      key === 'bodyId' && typeof entry === 'string'
+        ? bodyOf(entry)
+        : withModelBodyIds(entry, bodyOf);
+  return out as T;
 }
 
 /** "Add a section to dimension a, b and 2 more." */
@@ -1887,7 +1935,10 @@ function placeAll(
   views: readonly ComposedView[],
   contexts: readonly ViewContext[],
   planned: readonly Planned[],
+  /** What planned dimensions are resolved against (`auditGeometry`). */
   bodies: AnnotationBodies,
+  /** What the sheet's own annotations are resolved against. */
+  sheetBodies: AnnotationBodies,
   units: UnitSystem,
   k: number
 ): { annotations: Planned[]; unplaced: Planned[] } {
@@ -1911,10 +1962,10 @@ function placeAll(
   const taken: Footprint[] = [];
   const resolutions = markHiddenLeaders(
     sheet,
-    resolveSheetAnnotations(sheet, bodies, units),
+    resolveSheetAnnotations(sheet, sheetBodies, units),
     views,
     units,
-    bodies
+    sheetBodies
   );
   for (const annotation of sheet.annotations ?? []) {
     const resolution = resolutions.get(annotation.annotationId);

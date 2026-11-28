@@ -227,6 +227,8 @@ import {
   type SheetPictureLookup,
   sectionBodyKey,
   explodedBodyKey,
+  rowViewBodyKey,
+  type SheetBom,
   type AnnotationBox,
   type AnnotationResolution
 } from '../lib/drawing/annotations';
@@ -402,6 +404,16 @@ export interface DrawingWorkspaceProps {
     plane: ReturnType<typeof drawingSectionCut>,
     signal: AbortSignal
   ) => Promise<Record<string, SectionBodyInput>>;
+  /**
+   * F06: the bodies a configuration row's document builds, as `bodies`
+   * holds the active row's: what dimensions on a view drawing that row
+   * measure. Absent, such a view draws but measures nothing, so a
+   * dimension on it is broken rather than read from the active row.
+   */
+  requestBodies?: (
+    document: ProjectDocument,
+    signal: AbortSignal
+  ) => Promise<Readonly<Record<string, BodyRepresentation | undefined>>>;
   /** Why drawing edits are refused, or null. */
   editDisabledReason: string | null;
   onCommand: (command: AnyCommand) => boolean;
@@ -549,6 +561,34 @@ function viewIntentKey(view: DrawingView): string {
   return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}${cut}${aux}${row}${exploded}`;
 }
 
+/**
+ * F06: `sheet` as a kept drawing's projection keys read it: each view on
+ * the row it drew when kept, by that drawing's configuration table and model
+ * content, rather than the model's current active row.
+ */
+function keptProjectionSheet(
+  sheet: DrawingSheet,
+  kept: Pick<KeptDrawing, 'configurations' | 'configurationKey'>
+): DrawingSheet {
+  return projectionSheet(
+    sheet,
+    viewConfigurationRows(
+      sheet,
+      kept.configurations ? { configurations: kept.configurations } : {}
+    ),
+    kept.configurationKey
+  );
+}
+
+/** `view` with the row its counterpart in `keyed` carries (`projectionSheet`). */
+function keyedLike(keyed: DrawingSheet, view: DrawingView): DrawingView {
+  const counterpart = keyed.views.find((entry) => entry.viewId === view.viewId);
+  const { configurationId: _own, ...rest } = view;
+  return counterpart?.configurationId
+    ? { ...rest, configurationId: counterpart.configurationId }
+    : rest;
+}
+
 function projectionKey(fingerprint: string, view: DrawingView): string {
   return `${fingerprint}|${viewIntentKey(view)}`;
 }
@@ -579,6 +619,8 @@ let retainedProjections: {
   selectedSheetId?: DrawingSheetId;
   cache: Map<string, ViewState>;
   kept: Map<DrawingSheetId, KeptDrawing[]>;
+  /** F06: other configuration rows' bodies, by cache key (`useRowBodies`). */
+  rowBodies: Map<string, RowBodiesState>;
 } | null = null;
 
 /**
@@ -619,11 +661,33 @@ interface KeptDrawing {
   holes: HoleCalloutLookup;
   /** AS03 (v114): where its exploded views placed the parts it drew. */
   explodedMatrices: ReadonlyMap<BodyId, readonly number[]> | null;
+  /**
+   * The parts list its balloons and tables numbered, so a kept sheet's
+   * parts list and balloons stay those of the assembly its views drew.
+   */
+  bom: SheetBom | undefined;
+  /**
+   * F06: the configuration table and model content it was drawn at, so
+   * each view finds the row it drew then (`keptKeyView`), not the row the
+   * model has since switched to.
+   */
+  configurations: ProjectDocument['configurations'];
+  configurationKey: string;
+  /** F06: each other row's bodies its views measured, by cache key. */
+  rowBodies: ReadonlyMap<
+    string,
+    Readonly<Record<string, BodyRepresentation | undefined>>
+  >;
 }
 
 function retainedFor(projectId: string) {
   if (retainedProjections?.projectId !== projectId)
-    retainedProjections = { projectId, cache: new Map(), kept: new Map() };
+    retainedProjections = {
+      projectId,
+      cache: new Map(),
+      kept: new Map(),
+      rowBodies: new Map()
+    };
   return retainedProjections;
 }
 
@@ -1152,6 +1216,101 @@ function useViewProjections(
       if (entry) states.set(view.viewId, entry);
     }
   return states;
+}
+
+type RowBodies = Readonly<Record<string, BodyRepresentation | undefined>>;
+
+type RowBodiesState =
+  | { state: 'loading' }
+  | { state: 'ready'; bodies: RowBodies }
+  | { state: 'error'; message: string };
+
+/**
+ * F06: the bodies of each other configuration row the sheet on screen
+ * draws, by its views' cache key (`projectionViewCacheKey`: the row and
+ * the model content): what dimensions on those views measure, as `bodies`
+ * is for the active row's. Kept with the projections while Draw is closed;
+ * a key no sheet draws any more is dropped, so a model edit builds again.
+ */
+function useRowBodies(
+  /** The keys the sheet on screen draws. */
+  keys: ReadonlySet<string>,
+  /** The keys any sheet draws, which the cache keeps. */
+  retained: ReadonlySet<string>,
+  ready: boolean,
+  document: ProjectDocument,
+  request: DrawingWorkspaceProps['requestBodies']
+): ReadonlyMap<string, RowBodiesState> {
+  const cache = retainedFor(document.projectId).rowBodies;
+  const latest = useRef({ document, request });
+  latest.current = { document, request };
+  const lifetime = useRef<AbortController | null>(null);
+  /** The loading markers this workspace put in the cache (see `markers`). */
+  const markers = useRef(new Set<RowBodiesState>());
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const owned = new AbortController();
+    lifetime.current = owned;
+    const own = markers.current;
+    return () => {
+      owned.abort();
+      lifetime.current = null;
+      for (const [key, entry] of cache) if (own.has(entry)) cache.delete(key);
+      own.clear();
+    };
+  }, [cache]);
+  const wanted = [...keys].sort().join('\n');
+  const kept = [...retained].sort().join('\n');
+  const hasRequest = latest.current.request !== undefined;
+  useEffect(() => {
+    for (const key of [...cache.keys()])
+      if (!retained.has(key)) cache.delete(key);
+    const { document: current, request: build } = latest.current;
+    if (!ready || !build || !lifetime.current) return;
+    const { signal } = lifetime.current;
+    for (const key of keys) {
+      if (cache.has(key)) continue;
+      const marker: RowBodiesState = { state: 'loading' };
+      cache.set(key, marker);
+      markers.current.add(marker);
+      const row = key.split(ROW_SEPARATOR)[0]!;
+      const settle = (entry: RowBodiesState | null) => {
+        markers.current.delete(marker);
+        if (cache.get(key) !== marker) return;
+        if (entry) cache.set(key, entry);
+        else cache.delete(key);
+        if (!signal.aborted) setRevision((value) => value + 1);
+      };
+      build(documentForConfiguration(current, row), signal).then(
+        (bodies) => settle({ state: 'ready', bodies }),
+        (error: unknown) =>
+          settle(
+            error instanceof Error && error.name === 'AbortError'
+              ? null
+              : {
+                  state: 'error',
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : 'This configuration could not be built.'
+                }
+          )
+      );
+    }
+    // The key lists stand for the sets.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wanted, kept, ready, hasRequest, cache]);
+  return useMemo(
+    () =>
+      new Map(
+        [...keys].flatMap((key) => {
+          const entry = cache.get(key);
+          return entry ? [[key, entry] as const] : [];
+        })
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [wanted, revision, cache]
+  );
 }
 
 /** A view's name in the editor: its orientation, or "Section A-A". */
@@ -4102,12 +4261,39 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     props.requestSection,
     explodedMatrices
   );
+  // F06: what the sheet's views on other configuration rows measure, by
+  // their cache key: each row's own bodies, never the active row's.
+  const rowKeys = useMemo(
+    () =>
+      new Set(
+        (sheet ? (keySheets.get(sheet.sheetId)?.views ?? []) : []).flatMap(
+          (view) => projectionViewCacheKey(view) ?? []
+        )
+      ),
+    [sheet, keySheets]
+  );
+  const retainedRowKeys = useMemo(
+    () =>
+      new Set(
+        [...keySheets.values()].flatMap((entry) =>
+          entry.views.flatMap((view) => projectionViewCacheKey(view) ?? [])
+        )
+      ),
+    [keySheets]
+  );
+  const liveRowBodies = useRowBodies(
+    rowKeys,
+    retainedRowKeys,
+    status?.kind === 'ready',
+    document,
+    props.requestBodies
+  );
   const keptDrawings = keptDrawingsFor(document.projectId);
   // M01: a hole's callout data, read from the document by its feature id,
   // for a diameter on its bore to call it out (standard, thread). Bound to
   // this document, so a drawing kept with it keeps reading it.
   // D02 v80: the assembly's BOM table, which parts lists and balloons read.
-  const bomTable = useMemo(() => sheetBom(document), [document]);
+  const liveBomTable = useMemo(() => sheetBom(document), [document]);
   // D02 v92: the project's pictures, which sheet images show.
   const pictures = useMemo(() => sheetPictures(document), [document]);
   // D07 v98: datum letters across every sheet, which frames may name.
@@ -4132,33 +4318,99 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           ?.find((entry) => entry.fingerprint === sheet.source.fingerprint) ??
         null)
       : null;
+  // F06: a kept drawing's views keyed by the configuration table and model
+  // content it was drawn at, so each finds the row it drew then: a model
+  // since switched to another row neither hands a view on the old active row
+  // the drawing of another nor loses a view pinned to the new one.
+  const keptKeySheet = useMemo(
+    () =>
+      keptDrawing && sheet
+        ? keptProjectionSheet(sheet, keptDrawing)
+        : null,
+    [keptDrawing, sheet]
+  );
+  /** A view as the drawing on screen keys it (`keyView`, or as kept). */
+  const drawnKeyView = useCallback(
+    (view: DrawingView): DrawingView => {
+      if (!keptKeySheet) return sheet ? keyView(sheet.sheetId, view) : view;
+      return keyedLike(keptKeySheet, view);
+    },
+    [keptKeySheet, sheet, keyView]
+  );
+  const hasRowBodies = props.requestBodies !== undefined;
   const projections = useMemo(() => {
-    if (!keptDrawing || !sheet) return liveProjections;
+    if (!sheet) return liveProjections;
+    if (!keptDrawing) {
+      if (rowKeys.size === 0 || !hasRowBodies) return liveProjections;
+      // F06: a view on another row is drawn once what it measures is in,
+      // so it is never dimensioned or exported from the active row's bodies.
+      const states = new Map(liveProjections);
+      for (const view of sheet.views) {
+        const key = projectionViewCacheKey(keyView(sheet.sheetId, view));
+        if (!key || states.get(view.viewId)?.state !== 'ready') continue;
+        const rows = liveRowBodies.get(key);
+        if (rows?.state === 'ready') continue;
+        states.set(
+          view.viewId,
+          rows?.state === 'error'
+            ? { state: 'error', message: rows.message }
+            : { state: 'projecting' }
+        );
+      }
+      return states;
+    }
     const states = new Map<DrawingViewId, ViewState>();
     for (const view of sheet.views) {
       const projection = keptDrawing.projections.get(
-        viewIntentKey(keyView(sheet.sheetId, view))
+        viewIntentKey(drawnKeyView(view))
       );
       if (projection) states.set(view.viewId, { state: 'ready', projection });
     }
     return states;
-  }, [keptDrawing, sheet, liveProjections, keyView]);
+  }, [
+    keptDrawing,
+    sheet,
+    liveProjections,
+    keyView,
+    drawnKeyView,
+    rowKeys,
+    hasRowBodies,
+    liveRowBodies
+  ]);
   /** The bodies the drawing on screen measures: the kept model's, if kept. */
   const modelBodies = keptDrawing?.bodies ?? bodies;
+  /**
+   * F06: the bodies a view on another configuration row measures, the kept
+   * drawing's if kept; null for a view on the active row. Nothing while a
+   * row's bodies are not in: never the active row's in their place.
+   */
+  const rowBodiesOf = useCallback(
+    (view: DrawingView): RowBodies | null => {
+      const key = projectionViewCacheKey(drawnKeyView(view));
+      if (!key) return null;
+      if (keptDrawing) return keptDrawing.rowBodies.get(key) ?? {};
+      const entry = liveRowBodies.get(key);
+      return entry?.state === 'ready' ? entry.bodies : {};
+    },
+    [drawnKeyView, keptDrawing, liveRowBodies]
+  );
   /** Its holes' callouts, likewise: the kept document's, if kept. */
   const holeCallouts = keptDrawing?.holes ?? liveHoleCallouts;
+  // D02 v80: likewise its parts list, which a kept sheet's balloons and
+  // tables number as the assembly its views drew.
+  const bomTable = keptDrawing ? keptDrawing.bom : liveBomTable;
   // M01: the cosmetic threads each view draws, from the same model. A
   // projected or detail view draws its source's configuration row, so the
   // row is read as its projection reads it (`keyView`).
   const viewThreads = useCallback(
     (view: DrawingView) =>
       viewCosmeticThreads(
-        sheet ? keyView(sheet.sheetId, view) : view,
+        drawnKeyView(view),
         modelBodies,
         holeCallouts,
         drawingViewFrame(view).direction
       ),
-    [sheet, keyView, modelBodies, holeCallouts]
+    [drawnKeyView, modelBodies, holeCallouts]
   );
   const liveBodies = useMemo(
     () =>
@@ -4219,10 +4471,23 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       ({ view, projection }) => view.section && projection.sectionEdges
     );
     const exploded = drawnViews.filter(({ view }) => view.exploded);
-    if (sections.length === 0 && exploded.length === 0) return modelBodies;
+    const rowViews = new Map(
+      (shownSheet?.views ?? []).flatMap((view) => {
+        const rows = rowBodiesOf(view);
+        return rows ? [[view.viewId, { view, rows }] as const] : [];
+      })
+    );
+    if (sections.length === 0 && exploded.length === 0 && rowViews.size === 0)
+      return modelBodies;
     const merged: Record<string, BodyRepresentation | undefined> = {
       ...modelBodies
     };
+    // F06: a view on another configuration row measures that row's bodies
+    // (`rowViewBodyKey`); a body its row does not build is absent there,
+    // never stood in for by the active row's.
+    for (const { view, rows } of rowViews.values())
+      for (const bodyId of view.bodyIds)
+        merged[rowViewBodyKey(view.viewId, bodyId)] = rows[bodyId];
     // AS03 (v114): an exploded view's notes and balloons measure its parts
     // where it draws them, from the model the drawing on screen is of.
     const placements = keptDrawing?.explodedMatrices ?? explodedMatrices;
@@ -4238,7 +4503,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       }
     for (const { view, projection } of sections)
       for (const [bodyId, edges] of Object.entries(projection.sectionEdges!)) {
-        const body = modelBodies[bodyId];
+        // Cut from its own row's body: one the active row does not build
+        // (or builds otherwise) still measures its cut (F06).
+        const body = (rowViews.get(view.viewId)?.rows ?? modelBodies)[bodyId];
         if (!body) continue;
         merged[sectionBodyKey(view.viewId, bodyId)] = {
           ...body,
@@ -4246,7 +4513,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         };
       }
     return merged;
-  }, [drawnViews, modelBodies, keptDrawing, explodedMatrices]);
+  }, [
+    drawnViews,
+    shownSheet,
+    rowBodiesOf,
+    modelBodies,
+    keptDrawing,
+    explodedMatrices
+  ]);
   // Each complete drawing of a ready sheet is kept, by view intent, with the
   // bodies it measured: it outlives this workspace, so a model edit made in
   // Build leaves the sheet as it was drawn until someone Updates it. Views
@@ -4256,15 +4530,21 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     if (!shownSheet || status?.kind !== 'ready') return;
     if (drawnViews.length !== shownSheet.views.length) return;
     const previous = keptDrawings.get(shownSheet.sheetId) ?? [];
-    const projections = new Map(
-      previous.find((entry) => entry.fingerprint === status.fingerprint)
-        ?.projections
+    const same = previous.find(
+      (entry) => entry.fingerprint === status.fingerprint
     );
+    const projections = new Map(same?.projections);
     for (const { view, projection } of drawnViews)
       projections.set(
         viewIntentKey(keyView(shownSheet.sheetId, view)),
         projection
       );
+    // F06: with the other rows' bodies its views measure now; only those,
+    // since a sheet whose views all draw other rows keeps its fingerprint
+    // through every model edit.
+    const rowBodies = new Map<string, RowBodies>();
+    for (const [key, entry] of liveRowBodies)
+      if (entry.state === 'ready') rowBodies.set(key, entry.bodies);
     keptDrawings.set(
       shownSheet.sheetId,
       [
@@ -4273,7 +4553,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           bodies,
           projections,
           holes: liveHoleCallouts,
-          explodedMatrices
+          explodedMatrices,
+          bom: liveBomTable,
+          configurations: document.configurations,
+          configurationKey,
+          rowBodies
         },
         ...previous.filter((entry) => entry.fingerprint !== status.fingerprint)
       ].slice(0, KEPT_DRAWINGS_PER_SHEET)
@@ -4286,22 +4570,28 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     keptDrawings,
     liveHoleCallouts,
     keyView,
-    explodedMatrices
+    explodedMatrices,
+    liveBomTable,
+    document.configurations,
+    configurationKey,
+    liveRowBodies
   ]);
   // While the model rebuilds the sheet shows its last drawing faded instead
   // of empty outlines; it is only ever seen, never picked from, annotated or
   // exported, since the rebuild may not leave the model it was drawn from.
   const ghostViews: ComposedView[] = useMemo(() => {
     if (!shownSheet || status?.kind !== 'pending') return [];
-    const last = keptDrawings.get(shownSheet.sheetId)?.[0]?.projections;
+    const last = keptDrawings.get(shownSheet.sheetId)?.[0];
     if (!last) return [];
+    // Each view as that drawing keyed it (F06), as a kept sheet's are.
+    const keyed = keptProjectionSheet(shownSheet, last);
     return shownSheet.views.flatMap((view) => {
-      const projection = last.get(
-        viewIntentKey(keyView(shownSheet.sheetId, view))
+      const projection = last.projections.get(
+        viewIntentKey(keyedLike(keyed, view))
       );
       return projection ? [{ view, projection }] : [];
     });
-  }, [shownSheet, status, keptDrawings, keyView]);
+  }, [shownSheet, status, keptDrawings]);
   // Every annotation against the model the sheet draws: the current one, or
   // the kept one of a sheet not yet updated. Only a drawn sheet draws or
   // reports them. A leader whose edge its view no longer draws at all is

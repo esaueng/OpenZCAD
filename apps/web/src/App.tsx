@@ -43963,6 +43963,15 @@ export function App() {
                     })
                   )
                 }
+                requestBodies={(source, signal) =>
+                  solvedDrawingSource(source)
+                    .then((solved) =>
+                      geometry.syncOnce(solved, undefined, undefined, {
+                        signal
+                      })
+                    )
+                    .then((derived) => derived.bodyRepresentations)
+                }
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message, options) => setStatus(message, options)}
