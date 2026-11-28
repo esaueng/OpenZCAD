@@ -112,8 +112,11 @@ declare global {
         done: boolean;
         /** The unconsumed bodies drawn, in draw order. */
         bodyIds: string[];
-        /** Their volumes, NaN where the drawn body carries none. */
-        volumes: number[];
+        /**
+         * Their volumes, `undefined` where the drawn body carries none. A
+         * volume that is carried, NaN included, is kept as published.
+         */
+        volumes: (number | undefined)[];
       }[];
     };
   }
@@ -229,7 +232,7 @@ async function startFrameSampler(page: Page, title: string) {
         `[aria-label="${title} command"] .in-place-command-done`
       );
       let bodyIds: string[] = [];
-      let volumes: number[] = [];
+      let volumes: (number | undefined)[] = [];
       canvas.dispatchEvent(
         new CustomEvent('openzcad:e2e-render-policy', {
           detail: {
@@ -245,8 +248,10 @@ async function startFrameSampler(page: Page, title: string) {
                 (body) => !body.consumed
               );
               bodyIds = drawn.map((body) => body.bodyId);
-              volumes = drawn.map(
-                (body) => Math.round((body.volume ?? Number.NaN) * 100) / 100
+              volumes = drawn.map((body) =>
+                body.volume === undefined
+                  ? undefined
+                  : Math.round(body.volume * 100) / 100
               );
             }
           }
@@ -451,8 +456,8 @@ test('Cell 1: Subtract roles reverse in two Objects clicks, and only the B − A
   expect(stale.every((sample) => sample.doneFound)).toBe(true);
   // While only the stale reply had landed: Done never enabled, and the two
   // whole bodies drawn on every frame: Block and Post by their own ids (a
-  // Subtract result is a new body), measuring 2000 and 3000 wherever the
-  // drawn body carries its volume.
+  // Subtract result is a new body), measuring exactly 2000 and 3000
+  // wherever the drawn body carries its volume (a carried NaN fails).
   expect(stale.filter((sample) => sample.done)).toEqual([]);
   expect(
     stale.filter(
@@ -460,7 +465,7 @@ test('Cell 1: Subtract roles reverse in two Objects clicks, and only the B − A
         JSON.stringify(sample.bodyIds) !== JSON.stringify([block, post]) ||
         sample.volumes.some(
           (volume, index) =>
-            !Number.isNaN(volume) && volume !== [2000, 3000][index]
+            volume !== undefined && volume !== [2000, 3000][index]
         )
     )
   ).toEqual([]);

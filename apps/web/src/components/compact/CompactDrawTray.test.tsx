@@ -242,7 +242,12 @@ describe('CompactDrawTray (U12 slice 9)', () => {
     // still make of that tap lands on the tray drawn in Done's place, and
     // opens nothing there.
     const done = within(row).getByRole('button', { name: 'Done' });
-    const lift = { pointerId: 9, pointerType: 'touch', clientX: 10, clientY: 10 };
+    const lift = {
+      pointerId: 9,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10
+    };
     fireEvent.pointerDown(done, lift);
     fireEvent.pointerUp(done, lift);
     expect(onDone).toHaveBeenCalledTimes(3);
@@ -251,7 +256,9 @@ describe('CompactDrawTray (U12 slice 9)', () => {
       name: 'Export'
     });
     fireEvent.click(shown);
-    expect(within(panel()).queryByRole('heading', { name: 'Export' })).toBeNull();
+    expect(
+      within(panel()).queryByRole('heading', { name: 'Export' })
+    ).toBeNull();
     // The next tap is a tap again.
     fireEvent.pointerDown(shown, { ...lift, pointerId: 10 });
     fireEvent.click(shown);
@@ -408,5 +415,65 @@ describe('CompactDrawTray (U12 slice 9)', () => {
     expect(control.onRename).not.toHaveBeenCalled();
     fireEvent.click(page.getByRole('button', { name: 'Sheet 2' }));
     expect(control.onSelect).toHaveBeenCalledWith('b');
+  });
+
+  it('deletes a sheet on the lift of the tap after a flick', async () => {
+    const control = sheets();
+    const { rerender } = render(
+      shell({ sheets: control, sheet: content(), run: null })
+    );
+    fireEvent.click(
+      within(await tray()).getByRole('button', { name: 'Sheets' })
+    );
+    const page = within(panel());
+    // A mouse, the keyboard and a screen reader click.
+    fireEvent.click(
+      await page.findByRole('button', { name: 'Delete Sheet 2' })
+    );
+    expect(control.onDelete).toHaveBeenCalledTimes(1);
+    expect(control.onDelete).toHaveBeenLastCalledWith('b');
+
+    // A finger's tap just after the grabber was flicked to full: on Linux
+    // and ChromeOS the browser makes no click of it, as the flick flung.
+    // Delete runs on the lift (review case: the sheet stayed).
+    const finger = {
+      pointerId: 7,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10
+    };
+    const remove = page.getByRole('button', { name: 'Delete Sheet 2' });
+    fireEvent.pointerDown(remove, finger);
+    fireEvent.pointerUp(remove, finger);
+    expect(control.onDelete).toHaveBeenCalledTimes(2);
+    // The row goes with its sheet: the click the browser may still make of
+    // that tap lands on what is drawn in its place, and runs nothing there.
+    const rest = sheets({
+      sheets: [{ sheetId: 'a', name: 'Sheet 1' }] as unknown as DrawingSheet[],
+      onDelete: control.onDelete,
+      onSelect: control.onSelect
+    });
+    rerender(shell({ sheets: rest, sheet: content(), run: null }));
+    const first = page.getByRole('button', { name: 'Sheet 1' });
+    fireEvent.click(first);
+    expect(control.onSelect).not.toHaveBeenCalled();
+    expect(control.onDelete).toHaveBeenCalledTimes(2);
+
+    // A finger that slid off its press, or a sheet that cannot be edited,
+    // deletes nothing.
+    const one = page.getByRole('button', { name: 'Delete Sheet 1' });
+    fireEvent.pointerDown(one, { ...finger, pointerId: 8 });
+    fireEvent.pointerUp(one, { ...finger, pointerId: 8, clientY: 60 });
+    expect(control.onDelete).toHaveBeenCalledTimes(2);
+    rerender(
+      shell({
+        sheets: { ...rest, editDisabledReason: 'Read only' },
+        sheet: content(),
+        run: null
+      })
+    );
+    fireEvent.pointerDown(one, { ...finger, pointerId: 9 });
+    fireEvent.pointerUp(one, { ...finger, pointerId: 9 });
+    expect(control.onDelete).toHaveBeenCalledTimes(2);
   });
 });

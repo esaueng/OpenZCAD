@@ -328,6 +328,39 @@ function ViewsPage({
   );
 }
 
+/**
+ * Buttons a finger or pen runs as it lifts, not on the click the browser
+ * may make of the tap. The press before such a tap is often a drag that
+ * flings: on the sheet (a section line, a detail circle, a pan), or on the
+ * panel's grabber, flicked up to full. Chromium on Linux and ChromeOS
+ * drops the tap that stops a fling, as it does after a row's swipe
+ * (`SwipeActionTaps`): pointer events arrive, no click does. A click that
+ * does follow a run on the lift is swallowed, so nothing runs twice. A
+ * mouse, the keyboard and a screen reader click.
+ *
+ * Not disposed as the button goes: an action that removes its row (Done,
+ * Delete) runs on the lift, and the click that may follow must still be
+ * swallowed then, not land on what is drawn in its place. The swallow ends
+ * itself on that click, the next press or a key.
+ */
+function useLiftTaps<K extends string>() {
+  const [taps] = useState(() => new SwipeActionTaps<K>());
+  return (key: K, action: () => void) => ({
+    onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+      taps.press();
+      taps.pressAction(event, key);
+    },
+    onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (taps.release(event) !== key) return;
+      taps.ran();
+      action();
+    },
+    onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) =>
+      taps.cancel(event),
+    onClick: action
+  });
+}
+
 function SheetRow({
   sheet,
   index,
@@ -343,6 +376,7 @@ function SheetRow({
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
+  const tapAction = useLiftTaps<'delete'>();
   const renaming = draft !== null;
   useEffect(() => {
     if (renaming) input.current?.focus();
@@ -466,7 +500,9 @@ function SheetRow({
           aria-label={`Delete ${name}`}
           disabled={!editable}
           title={why}
-          onClick={() => control.onDelete(sheetId)}
+          {...tapAction('delete', () => {
+            if (editable) control.onDelete(sheetId);
+          })}
         >
           <Trash2 size={20} aria-hidden="true" />
         </button>
@@ -635,35 +671,12 @@ function EmptyRow({ control }: { control: CompactDrawSheets }) {
 }
 
 /**
- * The running tool's row: its icon, its step, Cancel and Done.
- *
- * A finger or pen runs Cancel and Done as it lifts, not on the click the
- * browser may make of the tap: the press before it is often a drag on the
- * sheet (a section line, a detail circle, a pan), which flings, and
- * Chromium on Linux and ChromeOS drops the tap that stops a fling, as it
- * does after a row's swipe (`SwipeActionTaps`). A mouse, the keyboard and
- * a screen reader click.
+ * The running tool's row: its icon, its step, Cancel and Done, which a
+ * finger or pen runs as it lifts (`useLiftTaps`): the press before them is
+ * often a drag on the sheet (a section line, a detail circle, a pan).
  */
 function RunRow({ run }: { run: CompactDrawRun }) {
-  // Not disposed as the row goes: Cancel and Done end the tool, and the
-  // row with it, on the lift, and the click that may follow must still be
-  // swallowed then, not land on the tray button drawn in Done's place. The
-  // swallow ends itself on that click, the next press or a key.
-  const [taps] = useState(() => new SwipeActionTaps<'cancel' | 'done'>());
-  const tapAction = (key: 'cancel' | 'done', action: () => void) => ({
-    onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
-      taps.press();
-      taps.pressAction(event, key);
-    },
-    onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (taps.release(event) !== key) return;
-      taps.ran();
-      action();
-    },
-    onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) =>
-      taps.cancel(event),
-    onClick: action
-  });
+  const tapAction = useLiftTaps<'cancel' | 'done'>();
   return (
     <div
       className="compact-tray-row compact-draw-run"

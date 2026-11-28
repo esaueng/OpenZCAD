@@ -249,17 +249,15 @@ const annotationCount = (page: Page) =>
   canvas(page).locator('.drawing-annotation-hit').count();
 
 /**
- * One finger dragged across the screen, as a touch. By default it lifts on
- * the move, a flick: on Aura (Linux, ChromeOS) Chromium's gesture layer then
- * starts a fling, and the next tap only stops it, with no mousedown, mouseup
- * or click (see `dropTapAfterFling`). `settle` rests the finger where it
- * ends before lifting, as a deliberate drag does, so no fling starts.
+ * One finger dragged across the screen, as a touch. It lifts on the move, a
+ * flick: on Aura (Linux, ChromeOS) Chromium's gesture layer then starts a
+ * fling, and the next tap only stops it, with no mousedown, mouseup or
+ * click (see `dropTapAfterFling`).
  */
 async function touchDrag(
   page: Page,
   from: { x: number; y: number },
-  to: { x: number; y: number },
-  { settle = false }: { settle?: boolean } = {}
+  to: { x: number; y: number }
 ) {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Input.dispatchTouchEvent', {
@@ -276,15 +274,6 @@ async function touchDrag(
         }
       ]
     });
-  }
-  if (settle) {
-    // Past the velocity tracker's window, held still: the lift has no speed.
-    await page.waitForTimeout(150);
-    await cdp.send('Input.dispatchTouchEvent', {
-      type: 'touchMove',
-      touchPoints: [to]
-    });
-    await page.waitForTimeout(150);
   }
   await cdp.send('Input.dispatchTouchEvent', {
     type: 'touchEnd',
@@ -926,13 +915,13 @@ test.describe('Draw in the compact sheet', () => {
           await grabber.press('End');
         } else {
           const grip = (await grabber.boundingBox())!;
-          // Dragged and held, not flicked: the Delete tap below must not be
-          // the tap that stops a fling.
+          // Flicked, so the Delete tap below is the tap that stops a fling:
+          // on Linux and ChromeOS it makes no click, and Delete runs on its
+          // lift (review case: the sheet stayed).
           await touchDrag(
             page,
             { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 },
-            { x: grip.x + grip.width / 2, y: 4 },
-            { settle: true }
+            { x: grip.x + grip.width / 2, y: 4 }
           );
         }
         await expect(sheet(page)).toHaveAttribute('data-detent', 'full');
