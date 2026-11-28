@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -268,6 +270,165 @@ describe('WorkspaceReadout', () => {
       rect.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it('keeps a warning standing over a full compact sheet through its fade', () => {
+    // #2434: over a full sheet a status with nothing to tap steps aside,
+    // and a refusal or warning went with it. Marked as standing, it keeps
+    // its place and publishes its height on the notice host for the notice
+    // above, held until its fade has run.
+    vi.useFakeTimers();
+    const rect = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        return new DOMRect(
+          0,
+          0,
+          0,
+          this.classList.contains('workspace-toast-body') ? 40.3 : 0
+        );
+      });
+    const host = document.createElement('div');
+    host.className = 'compact-notice-host';
+    document.body.append(host);
+    try {
+      const view = (
+        status: string,
+        tone: 'ready' | 'warning',
+        statusAt: number
+      ) => (
+        <CompactNoticeHostContext.Provider value={host}>
+          <CompactStatusHostContext.Provider value={host}>
+            <div className="viewer-area">
+              <WorkspaceReadout
+                {...SUMMARY}
+                status={status}
+                statusAt={statusAt}
+                statusImmediate
+                tone={tone}
+                onOpenLog={vi.fn()}
+              />
+            </div>
+          </CompactStatusHostContext.Provider>
+        </CompactNoticeHostContext.Provider>
+      );
+      const warning = 'Rebuild finished with 1 warning.';
+      const { rerender } = render(view(warning, 'warning', Date.now()));
+      const toast = screen.getByRole('contentinfo');
+      expect(host).toContainElement(toast);
+      expect(toast).toHaveClass('is-standing');
+      expect(toast).not.toHaveClass('is-refusal');
+      expect(host.style.getPropertyValue('--workspace-toast-live-h')).toBe(
+        '41px'
+      );
+      // Expired: fading out, still standing, the notice still clear of it.
+      rerender(view(warning, 'warning', 0));
+      expect(toast).toHaveClass('hidden');
+      expect(toast).toHaveClass('is-standing');
+      expect(host.style.getPropertyValue('--workspace-toast-live-h')).toBe(
+        '41px'
+      );
+      act(() => {
+        vi.advanceTimersByTime(OVERLAY_EXIT_MS);
+      });
+      expect(toast).not.toHaveClass('is-standing');
+      expect(host.style.getPropertyValue('--workspace-toast-live-h')).toBe('');
+      // An ordinary status may still step aside.
+      rerender(view('Added box.', 'ready', Date.now()));
+      expect(toast).not.toHaveClass('hidden');
+      expect(toast).not.toHaveClass('is-standing');
+      expect(host.style.getPropertyValue('--workspace-toast-live-h')).toBe('');
+    } finally {
+      rect.mockRestore();
+      vi.useRealTimers();
+      host.remove();
+    }
+  });
+
+  it('spares a standing status where a full compact sheet hides the rest', () => {
+    // #2434: the rule that sends an actionless status aside over a full
+    // sheet hid a refused reorder entirely, and the notice's lifts were
+    // written as a :has() inside :has(), which no browser accepts, so
+    // every one of them was dropped.
+    const css = readFileSync(
+      resolve(__dirname, '../styles/components/compact-shell.css'),
+      'utf8'
+    ).replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+      selectors: match[1]!
+        .split(/,(?![^(]*\))/)
+        .map((selector) => selector.replace(/\s+/g, ' ').trim()),
+      body: match[2]!
+    }));
+    const nestedHas = (selector: string) => {
+      for (
+        let at = selector.indexOf(':has(');
+        at >= 0;
+        at = selector.indexOf(':has(', at + 1)
+      ) {
+        let depth = 0;
+        let end = at + 4;
+        for (; end < selector.length; end += 1) {
+          if (selector[end] === '(') depth += 1;
+          else if (selector[end] === ')' && --depth === 0) break;
+        }
+        if (selector.slice(at + 5, end).includes(':has(')) return true;
+      }
+      return false;
+    };
+    expect(
+      rules.flatMap(({ selectors }) => selectors).filter(nestedHas)
+    ).toEqual([]);
+    const stepAside = rules.filter(
+      ({ selectors, body }) =>
+        /opacity:\s*0/.test(body) &&
+        selectors.some((selector) =>
+          selector.includes('.compact-notice-host .workspace-toast:')
+        )
+    );
+    expect(stepAside).toHaveLength(1);
+    for (const selector of stepAside[0]!.selectors) {
+      expect(selector).toMatch(
+        /:not\(:has\(\.workspace-toast-undo\), \.is-standing\)/
+      );
+    }
+    const lift = rules.find(({ selectors }) =>
+      selectors.some((selector) =>
+        selector.includes(
+          '.compact-notice-host:has( .workspace-toast.is-standing:not(.has-action, .ready, [data-section-line]) ) .toast'
+        )
+      )
+    );
+    expect(lift?.body).toMatch(
+      /margin-bottom:\s*calc\(var\(--workspace-toast-live-h, 28px\) \+ var\(--sp-1\)\)/
+    );
+  });
+
+  it('marks a status line that draws an action', () => {
+    // The notice over a full compact sheet lifts by the action's row; the
+    // line says it has one by class, since :has() cannot nest (#2434).
+    const { rerender } = render(
+      <WorkspaceReadout
+        {...SUMMARY}
+        status="Added box."
+        statusImmediate
+        tone="running"
+        onUndo={vi.fn()}
+        onOpenLog={vi.fn()}
+      />
+    );
+    const toast = screen.getByRole('contentinfo');
+    expect(toast).toHaveClass('has-action');
+    rerender(
+      <WorkspaceReadout
+        {...SUMMARY}
+        status="Added box."
+        statusImmediate
+        tone="running"
+        onOpenLog={vi.fn()}
+      />
+    );
+    expect(toast).not.toHaveClass('has-action');
   });
 
   it('distinguishes committed body counts from an unapplied preview', () => {

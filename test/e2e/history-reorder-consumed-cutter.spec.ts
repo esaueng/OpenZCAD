@@ -22,7 +22,16 @@ import {
 declare global {
   interface Window {
     __holdRebuild?: { hold: boolean; held: number; release(): void };
+    __noticeFrames?: { stop: boolean; frames: NoticeFrame[] };
   }
+}
+
+interface NoticeFrame {
+  /** How opaque the refusal is drawn: its own and every ancestor's. */
+  opacity: number;
+  text: string;
+  notice: { top: number; bottom: number };
+  refusal: { top: number; bottom: number };
 }
 
 /**
@@ -286,17 +295,75 @@ async function noticeBoxes(page: Page) {
 }
 
 /**
+ * Records, every animation frame until stopped, where the action notice and
+ * the status line stand and how opaque the line is drawn, so the frames of
+ * a fade-in can be read back.
+ */
+async function watchNoticeFrames(page: Page) {
+  await page.evaluate(() => {
+    const watch = { stop: false, frames: [] as NoticeFrame[] };
+    window.__noticeFrames = watch;
+    const drawn = (element: Element) => {
+      let opacity = 1;
+      for (
+        let node: Element | null = element;
+        node;
+        node = node.parentElement
+      ) {
+        opacity *= Number(getComputedStyle(node).opacity);
+      }
+      return opacity;
+    };
+    const tick = () => {
+      if (watch.stop) return;
+      const notice = document.querySelector('.toast');
+      const body = document.querySelector('.workspace-toast-body');
+      if (notice && body) {
+        const n = notice.getBoundingClientRect();
+        const r = body.getBoundingClientRect();
+        watch.frames.push({
+          opacity: drawn(body),
+          text: body.textContent ?? '',
+          notice: { top: n.top, bottom: n.bottom },
+          refusal: { top: r.top, bottom: r.bottom }
+        });
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+async function stopNoticeFrames(page: Page) {
+  return page.evaluate(() => {
+    const watch = window.__noticeFrames!;
+    watch.stop = true;
+    return watch.frames;
+  });
+}
+
+/**
  * Review of #2413: a refusal wraps, so its row is taller than the one the
  * notice lane allowed a status, and a visible Undo notice stacked over it
  * covered its last lines. The notice stands clear of the whole refusal, on
- * the regular stage and on a phone.
+ * the regular stage and on a phone, in every frame the refusal is drawn
+ * (#2434: on the regular stage it faded in while the notice was still
+ * gliding up).
+ *
+ * #2434: with the compact sheet at full height, a status with nothing to
+ * tap steps aside, and the refusal went with it: the refused reorder said
+ * nothing. It stands at the sheet's foot, under the notice, which lifts
+ * clear of it.
  */
 for (const size of [
-  { width: 1440, height: 900, compact: false },
-  { width: 390, height: 844, compact: true }
+  { width: 1440, height: 900, compact: false, full: false },
+  { width: 390, height: 844, compact: true, full: false },
+  { width: 390, height: 844, compact: true, full: true }
 ]) {
   test(
-    `keeps a visible Undo clear of a wrapped refusal at ${size.width}×${size.height}`,
+    `keeps a visible Undo clear of a wrapped refusal at ${size.width}×${size.height}${
+      size.full ? ' over a full sheet' : ''
+    }`,
     { tag: '@ci-smoke' },
     async ({ page }) => {
       test.setTimeout(180_000);
@@ -333,6 +400,12 @@ for (const size of [
           .getByRole('button', { name: 'Panels', exact: true })
           .click();
         rows = sheet.locator('.compact-row');
+        if (size.full) {
+          await sheet
+            .getByRole('slider', { name: 'Sheet height' })
+            .press('End');
+          await expect(sheet).toHaveAttribute('data-detent', 'full');
+        }
       } else {
         await page
           .getByRole('button', { name: 'History panel', exact: true })
@@ -354,12 +427,17 @@ for (const size of [
       const notice = page.locator('.toast', { hasText: 'Duplicated' });
       await expect(notice).toBeVisible({ timeout: 30_000 });
       if (!size.compact) await notice.hover();
+      await watchNoticeFrames(page);
       await grip(page, PLACEMENT).press('ArrowDown');
       const line = status.locator('.workspace-toast-body > [role="status"]');
       await expect(line).toHaveText(REFUSAL);
       await expect(notice).toBeVisible();
 
       const boxes = await noticeBoxes(page);
+      const frames = (await stopNoticeFrames(page)).filter(
+        (frame) => frame.text.includes(REFUSAL) && frame.opacity > 0.01
+      );
+      expect(frames.length).toBeGreaterThan(0);
       expect(boxes.notice).not.toBeNull();
       expect(boxes.refusal).not.toBeNull();
       const {
@@ -379,16 +457,18 @@ for (const size of [
       expect(refusal.right).toBeLessThanOrEqual(viewport.width);
       // The notice covers none of it: over it on the regular stage, and on
       // a phone (the line at the stage's top) under it or over it.
-      if (size.compact) {
-        expect(
-          undo.bottom <= refusal.top || undo.top >= refusal.bottom,
-          JSON.stringify(boxes)
-        ).toBe(true);
-      } else {
-        expect(undo.bottom, JSON.stringify(boxes)).toBeLessThanOrEqual(
-          refusal.top
-        );
-      }
+      // Over a full sheet both stand at its foot, the notice over the line.
+      const clear = (frame: Pick<NoticeFrame, 'notice' | 'refusal'>) =>
+        size.compact && !size.full
+          ? frame.notice.bottom <= frame.refusal.top + 0.5 ||
+            frame.notice.top >= frame.refusal.bottom - 0.5
+          : frame.notice.bottom <= frame.refusal.top + 0.5;
+      expect(clear({ notice: undo, refusal }), JSON.stringify(boxes)).toBe(
+        true
+      );
+      // And in every frame it was drawn, the fade-in's first among them.
+      const covered = frames.filter((frame) => !clear(frame));
+      expect(covered, JSON.stringify(covered.slice(0, 3))).toEqual([]);
       expect(errors).toEqual([]);
     }
   );

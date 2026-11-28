@@ -454,17 +454,28 @@ export function WorkspaceReadout({
   // Held through the fade once a refusal expires: the text stays drawn for
   // that 100ms, wrapped, and the rows above keep clear of it until it goes.
   const refusal = isRefusalStatus(shownStatus) && (shown || quiet);
+  // A refusal or a warning is news to read whatever covers the stage: over
+  // a full compact sheet, where an ordinary status with nothing to tap steps
+  // aside, it keeps its place under the action notice (compact-shell.css,
+  // #2434). Held through the fade as the refusal is, so the notice above
+  // stays clear of it until it has gone.
+  const standing =
+    refusal ||
+    (paced.tone === 'warning' && shownStatus !== '' && (shown || quiet));
   // A wrapped refusal is taller than the 28px row the notice lane allows a
   // status, so the rows stacked above it (the Undo toast) lift by its real
   // height, published as the activity pill publishes its own: on the viewer
   // for the stage's lane, or, over a full compact sheet, on the notice host
-  // that draws the line beside the action notice. The body is taken by a
-  // callback ref: the sheet coming up to full moves the line onto that host
-  // as a new node, which the measure must follow.
+  // that draws the line beside the action notice. A phone wraps every
+  // status, so there a standing warning publishes its height too. The body
+  // is taken by a callback ref: the sheet coming up to full moves the line
+  // onto that host as a new node, which the measure must follow.
   const [statusBody, setStatusBody] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => {
-    if (!refusal || !statusBody) return;
-    const viewer = statusBody.closest<HTMLElement>('.viewer-area');
+    if (!standing || !statusBody) return;
+    const viewer = refusal
+      ? statusBody.closest<HTMLElement>('.viewer-area')
+      : null;
     const measure = () => {
       const height = statusBody.getBoundingClientRect().height;
       if (height > 0) {
@@ -484,7 +495,7 @@ export function WorkspaceReadout({
       viewer?.style.removeProperty('--workspace-toast-live-h');
       statusHost?.style.removeProperty('--workspace-toast-live-h');
     };
-  }, [refusal, statusBody, statusHost, shownStatus]);
+  }, [standing, refusal, statusBody, statusHost, shownStatus]);
   const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
   const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
   const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
@@ -655,6 +666,10 @@ export function WorkspaceReadout({
         <footer
           className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}${
             refusal ? ' is-refusal' : ''
+          }${standing ? ' is-standing' : ''}${
+            undoShown || statusActionShown || (section && turnOffShown)
+              ? ' has-action'
+              : ''
           }`}
           role="contentinfo"
           // The cut's own line, a state rather than news: the compact
