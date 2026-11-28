@@ -1935,6 +1935,105 @@ describe('DrawingWorkspace', () => {
       ).not.toHaveProperty('tolerance');
     });
 
+    it('keeps tolerances’ meaning across a change of the sheet’s units (v156, #2162, #2238)', async () => {
+      const sheet = dimensioned();
+      const linear = sheet.annotations![0] as DrawingLinearDimension;
+      // As every pre-v156 sheet stores them: in the printed units, unstated.
+      sheet.annotations = [
+        {
+          ...linear,
+          tolerance: { kind: 'deviation', upper: 0.1, lower: -0.05 }
+        },
+        {
+          annotationId: 'dann_f' as DrawingAnnotationId,
+          kind: 'feature-control-frame',
+          viewId: linear.viewId,
+          attachedTo: linear.annotationId,
+          characteristic: 'flatness',
+          amount: 0.1,
+          placementMm: { x: 0, y: 0 }
+        }
+      ];
+      const { onCommand } = setup({ sheet });
+      const panel = screen.getByRole('complementary', {
+        name: 'Drawing properties'
+      });
+      await userEvent.selectOptions(
+        within(panel).getByRole('combobox', { name: 'Dimension units' }),
+        'inch'
+      );
+      const command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.sheet.update');
+      expect(command.payload).toEqual({
+        sheetId: sheet.sheetId,
+        format: { units: 'inch' },
+        pinToleranceUnits: 'mm'
+      });
+    });
+
+    it('shows a millimetre tolerance in inches and restates an edit in inches (v156)', async () => {
+      const sheet: DrawingSheet = {
+        ...dimensioned(),
+        format: { units: 'inch' }
+      };
+      const linear = sheet.annotations![0] as DrawingLinearDimension;
+      sheet.annotations = [
+        {
+          ...linear,
+          tolerance: {
+            kind: 'deviation',
+            upper: 0.1,
+            lower: -0.05,
+            units: 'mm'
+          }
+        },
+        {
+          annotationId: 'dann_f' as DrawingAnnotationId,
+          kind: 'feature-control-frame',
+          viewId: linear.viewId,
+          attachedTo: linear.annotationId,
+          characteristic: 'flatness',
+          amount: 0.1,
+          units: 'mm',
+          placementMm: { x: 0, y: 0 }
+        }
+      ];
+      const { onCommand } = setup({ sheet });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      // 10 mm +0.1/−0.05 mm, printed in inches.
+      const drawn = await within(canvas).findByRole('button', {
+        name: 'Horizontal dimension 0.394 +0.0039/-0.0020'
+      });
+      await within(canvas).findByRole('button', {
+        name: 'Feature control frame Flatness | 0.0039'
+      });
+      await userEvent.click(drawn);
+      const upper = screen.getByRole<HTMLInputElement>('spinbutton', {
+        name: 'Tolerance upper'
+      });
+      expect(upper.value).toBe('0.003937');
+      expect(
+        screen.getByRole<HTMLInputElement>('spinbutton', {
+          name: 'Tolerance lower'
+        }).value
+      ).toBe('-0.001969');
+      await userEvent.clear(upper);
+      await userEvent.type(upper, '0.005{Enter}');
+      const command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.update');
+      expect(
+        (command.payload as { annotation: DrawingLinearDimension }).annotation
+          .tolerance
+      ).toEqual({
+        kind: 'deviation',
+        upper: 0.005,
+        lower: -0.001969,
+        units: 'inch'
+      });
+    });
+
     it('states a frame’s characteristic, tolerance and datums (D07 v98)', async () => {
       const sheet = dimensioned();
       const linear = sheet.annotations![0] as DrawingLinearDimension;

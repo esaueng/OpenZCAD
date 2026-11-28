@@ -606,7 +606,14 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // unknown command on replay and rebuild every later edit in the old unit,
 // so it must refuse the document. Builds on v153.
 // v155 records how an Offset Face edit resolves a history-free rim.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 155 as const;
+// v156 adds D02/D07 tolerance units (`units` on a drawing dimension's length
+// tolerance and on a feature control frame, and `pinToleranceUnits` on a
+// drawing.sheet.update): the unit a stored amount is in, so changing a
+// sheet's dimension units converts it rather than reinterpreting it. An
+// older client would read a stated inch tolerance as a millimetre one, 25.4x
+// off, so it must refuse the document. Absent keeps the pre-v156 meaning
+// (the sheet's printed units). Builds on v155.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 156 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {

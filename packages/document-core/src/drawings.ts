@@ -17,7 +17,9 @@ import {
   type DrawingView,
   type DrawingViewId,
   DRAWING_EXPLODED_VIEW_ANNOTATIONS,
-  type ProjectDocument
+  pinDrawingToleranceUnits,
+  type ProjectDocument,
+  type UnitSystem
 } from '@openzcad/shared';
 import {
   assertDrawingExplodedViewSchema,
@@ -54,6 +56,14 @@ export interface DrawingSheetUpdateInput {
    * or an empty record clears them back to every default.
    */
   format?: DrawingSheetFormat | null;
+  /**
+   * v156: the units the sheet printed in before this update, stated on each
+   * of its length tolerances and frame amounts that state none (see
+   * `pinDrawingToleranceUnits`), so a `format` that changes the printed
+   * units converts them rather than reinterpreting them. Absent (every
+   * update before v156) states nothing.
+   */
+  pinToleranceUnits?: UnitSystem;
 }
 
 export interface DrawingSheetDeleteInput {
@@ -275,6 +285,11 @@ export function updateDrawingSheet(
       if (input.titleBlockLayout === null) delete sheet.titleBlockLayout;
       else sheet.titleBlockLayout = input.titleBlockLayout;
     }
+    if (input.pinToleranceUnits !== undefined && sheet.annotations)
+      sheet.annotations = pinDrawingToleranceUnits(
+        sheet.annotations,
+        input.pinToleranceUnits
+      );
     if (input.format !== undefined) {
       if (input.format === null || Object.keys(input.format).length === 0)
         delete sheet.format;
