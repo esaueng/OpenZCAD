@@ -1327,6 +1327,15 @@
   --lane-status: 40px;
 }
 
+/* A refusal wraps (workspace-column.css) and publishes its real height
+   (WorkspaceReadout), plus the 12px row gap, as the pill below does. It
+   keeps the class through its exit fade, still drawn and still wrapped, so
+   the row holds until it has gone, not only while it is up (.hidden). The
+   pill below, which hides the status while it is up, still takes the row. */
+.viewer-area:has(.workspace-toast.is-refusal) .toast {
+  --lane-status: calc(var(--workspace-toast-live-h, 28px) + 12px);
+}
+
 /* Tracks --activity-pill-h in activity-pill.css, plus the 12px row gap; an
    ending that wraps publishes its real height (ActivityPill) instead.
    The lane in the selector matches the specificity of the two rules above,
@@ -3862,6 +3871,7 @@ button.command-rail.is-suggested {
   --tour-bottom: initial;
   --tour-lane-bottom: initial;
   --workspace-guidance-h: initial;
+  --workspace-toast-live-h: initial;
   --workspace-tour-claim: initial;
 
   min-height: 0;
@@ -5002,6 +5012,15 @@ button.model-panel-grip[aria-expanded='true'] {
   .viewer-area:has(.in-place-command):has(.workspace-toast:not(.hidden))
   .toast {
   --lane-status: calc(var(--in-place-command-h, 38px) + 50px);
+}
+
+/* The same 50px with the status row at a wrapped refusal's real height. */
+:where(.workspace:not(.with-assistant))
+  .viewer-area:has(.in-place-command):has(.workspace-toast.is-refusal)
+  .toast {
+  --lane-status: calc(
+    var(--in-place-command-h, 38px) + var(--workspace-toast-live-h, 28px) + 22px
+  );
 }
 
 .in-place-command {

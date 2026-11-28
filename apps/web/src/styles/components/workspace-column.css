@@ -304,6 +304,27 @@
   white-space: nowrap;
 }
 
+/* A refusal says what to do instead in its last clause, after the steps it
+   names: on one line the toast cut that off ("…already replaced…") at any
+   desktop width (#2334). It wraps and is read whole, as every status already
+   is on a phone (quiet-stage.css); the row above it lifts by its real height
+   (WorkspaceReadout). The body is a button here, so its lines start together
+   rather than centring. */
+.workspace-toast.is-refusal .workspace-toast-body {
+  box-sizing: border-box;
+  height: auto;
+  min-height: 28px;
+  padding-block: 5px;
+  text-align: start;
+}
+
+.workspace-toast.is-refusal .workspace-toast-body > span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  /* Where supported, no last line of one word. */
+  text-wrap: pretty;
+}
+
 /* How many messages a burst passed over; the activity log holds them. */
 .workspace-toast-body > .workspace-toast-more {
   flex: 0 0 auto;
