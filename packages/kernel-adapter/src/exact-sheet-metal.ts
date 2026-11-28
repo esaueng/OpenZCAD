@@ -2328,9 +2328,19 @@ export interface SheetScale {
  * staying on an original a Split or a Boolean keeps, and never onto a copy
  * or a mirror. A Scale the build refused scaled nothing.
  *
- * Refuses, instead of guessing, a sheet with no single scale: one a Split
- * divided and a Scale then enlarged only in part, or one whose body the
- * build does not hold where the history says it is.
+ * Refuses, instead of guessing, a sheet with no known single scale:
+ *
+ * - One a feature combined with other material (a boolean with another
+ *   body, an add extrude, a rib: `BodyPiece.merge`) before a Scale. The ids
+ *   then say which body the sheet went into, not where in it or whether any
+ *   of it is left, so a Scale of that body, or of a part a later Split,
+ *   cut or intersect kept of it, may have scaled the sheet, some of it, or
+ *   only the other material. A Scale before the merge still applies, and a
+ *   merged sheet no Scale follows exports as built.
+ * - One a Split divided and a Scale then enlarged only in part: its pieces
+ *   must carry the same Scale features, not merely equal factors, since two
+ *   Scales about their own pivots are not one scale of the sheet.
+ * - One whose body the build does not hold where the history says it is.
  */
 export function sheetScalesAfter(
   document: ProjectDocument,
@@ -2363,6 +2373,17 @@ export function sheetScalesAfter(
       later.data.featureKind === 'boolean' &&
       factorOf(later.data.activeWhen, 'boolean activation') === 0
   }).map((piece) => ({ ...piece, scales: piece.transforms.flatMap(scaleOf) }));
+  for (const piece of pieces) {
+    if (!piece.merge) continue;
+    const [scale] = piece.transforms
+      .slice(piece.merge.transformsBefore)
+      .flatMap(scaleOf);
+    if (!scale) continue;
+    const merge = piece.merge.feature.name;
+    throw new Error(
+      `"${merge}" combines "${feature.name}" with other material, so its flat pattern cannot tell whether "${scale.name}" after it scaled the sheet or only that material. Scale the sheet before "${merge}", or suppress "${scale.name}".`
+    );
+  }
   const [first, ...rest] = pieces;
   if (!first) return [];
   for (const other of rest) {

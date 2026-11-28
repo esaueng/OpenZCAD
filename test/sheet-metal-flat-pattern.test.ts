@@ -1126,6 +1126,152 @@ describe(
       expect(flatPatternExtents(pattern).width).toBeCloseTo(L_BLANK * 2, 6);
     });
 
+    /** A 20 cube from `x` to `x + 20`, y 10 to 30, standing on z = 0. */
+    const stock = (document: ProjectDocument, name: string, x: number) => {
+      const withBox = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      });
+      const bodyId = withBox.bodyOrder.at(-1)!;
+      return {
+        document: transformBody(withBox, {
+          name: `Move ${name}`,
+          targetBodyId: bodyId,
+          translation: { x, y: 10, z: 0 }
+        }).document,
+        bodyId
+      };
+    };
+    /** The bracket joined to stock from x = -8 to x = 12. */
+    const withStock = (base: ProjectDocument, bracketBodyId: BodyId) => {
+      const block = stock(base, 'Stock', -8);
+      return booleanBodies(block.document, {
+        name: 'Union 1',
+        operation: 'union',
+        targetBodyIds: [bracketBodyId, block.bodyId]
+      });
+    };
+    const mergeRefusal =
+      '"Union 1" combines "Bracket" with other material, so its flat pattern cannot tell whether "Scale 1" after it scaled the sheet or only that material. Scale the sheet before "Union 1", or suppress "Scale 1".';
+
+    // Re-check finding 1: the Boolean result's id outlives the sheet in it.
+    it('refuses a Scale after a Boolean merged the sheet with stock, even where no sheet is left', async () => {
+      const bracket = lBracket();
+      const union = withStock(bracket.document, bracket.bodyId);
+      // No Scale after the merge: the blank as built, the Boolean named.
+      const plain = await adapter.sheetMetalFlatPattern(
+        union.document,
+        bracket.featureId
+      );
+      expect(scales(plain)).toEqual([]);
+      expect(flatPatternExtents(plain).width).toBeCloseTo(L_BLANK, 6);
+      expect(plain.changedBy.map((entry) => entry.name)).toContain('Union 1');
+      // Two tools that keep only the stock left of the bracket, x -8 to -2.
+      const first = stock(union.document, 'Tool A', -22);
+      const second = stock(first.document, 'Tool B', -22);
+      const kept = booleanBodies(second.document, {
+        name: 'Intersect 1',
+        operation: 'intersect',
+        targetBodyIds: [union.bodyId, first.bodyId, second.bodyId]
+      });
+      const stockVolume = 6 * 20 * 20;
+      expect(await volumeOf(kept.document, kept.bodyId)).toBeCloseTo(
+        stockVolume,
+        3
+      );
+      const scaled = scaleOf(kept.document, kept.bodyId, 2);
+      // The build doubled stock only: no sheet material was scaled.
+      expect(await volumeOf(scaled, kept.bodyId)).toBeCloseTo(
+        stockVolume * 8,
+        3
+      );
+      await expect(
+        adapter.sheetMetalFlatPattern(scaled, bracket.featureId)
+      ).rejects.toThrow(mergeRefusal);
+      // The plain union doubled is refused too: the rule does not guess.
+      await expect(
+        adapter.sheetMetalFlatPattern(
+          scaleOf(union.document, union.bodyId, 2),
+          bracket.featureId
+        )
+      ).rejects.toThrow(mergeRefusal);
+    });
+
+    // Re-check finding 2: the sheet is wholly in the other half.
+    it('names the merge, not a partial scale, when a Scale follows a Split of the merged body', async () => {
+      const bracket = lBracket();
+      const union = withStock(bracket.document, bracket.bodyId);
+      const split = addSplitFeature(union.document, {
+        name: 'Split 1',
+        targetBodyId: union.bodyId,
+        plane: {
+          origin: { x: -4, y: 0, z: 0 },
+          normal: { x: 1, y: 0, z: 0 }
+        }
+      });
+      // The negative half is stock only, x -8 to -4.
+      const stockVolume = 4 * 20 * 20;
+      expect(await volumeOf(split.document, split.secondBodyId)).toBeCloseTo(
+        stockVolume,
+        3
+      );
+      const scaled = scaleOf(split.document, split.secondBodyId, 2);
+      expect(await volumeOf(scaled, split.secondBodyId)).toBeCloseTo(
+        stockVolume * 8,
+        3
+      );
+      const refusal = await adapter
+        .sheetMetalFlatPattern(scaled, bracket.featureId)
+        .then(
+          () => null,
+          (error: Error) => error.message
+        );
+      expect(refusal).toBe(mergeRefusal);
+      expect(refusal).not.toContain('scales only part');
+      // A Scale before the merge is the sheet's own and still applies.
+      const early = scaleOf(bracket.document, bracket.bodyId, 2);
+      const merged = withStock(early, bracket.bodyId);
+      await volumeOf(merged.document, merged.bodyId);
+      const pattern = await adapter.sheetMetalFlatPattern(
+        merged.document,
+        bracket.featureId
+      );
+      expect(scales(pattern)).toEqual([['Scale 1', 2]]);
+      expect(flatPatternExtents(pattern).width).toBeCloseTo(L_BLANK * 2, 6);
+    });
+
+    // Re-check finding 3: equal factors are not one scale of the sheet.
+    it('refuses two separate Scales of the two halves at one factor', async () => {
+      const bracket = lBracket();
+      const split = addSplitFeature(bracket.document, {
+        name: 'Split 1',
+        targetBodyId: bracket.bodyId,
+        plane: flangePlane
+      });
+      const sheetVolume =
+        (await volumeOf(split.document, split.bodyId)) +
+        (await volumeOf(split.document, split.secondBodyId));
+      // Each half doubled about its own pivot: the halves no longer meet.
+      const one = scaleOf(split.document, split.bodyId, 2, 'Scale A');
+      const both = transformBody(one, {
+        name: 'Scale B',
+        targetBodyId: split.secondBodyId,
+        translation: { x: 0, y: 0, z: 0 },
+        scale: 2,
+        pivot: { x: -50, y: 0, z: 0 }
+      }).document;
+      expect(
+        (await volumeOf(both, split.bodyId)) +
+          (await volumeOf(both, split.secondBodyId))
+      ).toBeCloseTo(sheetVolume * 8, 3);
+      await expect(
+        adapter.sheetMetalFlatPattern(both, bracket.featureId)
+      ).rejects.toThrow(
+        '"Scale A" scales only part of what "Bracket" became, so its flat pattern has no single scale. Scale the whole sheet before it is divided, or suppress "Scale A".'
+      );
+    });
+
     it('samples a curved cutout to the chord budget of the scaled part', async () => {
       const [cx, cy, rx, ry] = [20, 15, 8, 4];
       const plate = sheet(

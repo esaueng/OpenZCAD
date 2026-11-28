@@ -20,5 +20,10 @@ following the sheet's body as the build assigns its ids (`bodyPiecesAfter`,
 or failed edit's pass-through, staying on an original a Split or a Boolean
 keeps; a sheet a Split divided and a Scale enlarged only in part is refused
 instead of exported at a guessed scale, and curved cutouts are sampled to the
-0.02 mm chord budget of the scaled part. The files hint names the unit in
+0.02 mm chord budget of the scaled part. Once a feature combines the sheet
+with other material (a Boolean with another body, an add extrude, a rib, a
+pattern) the ids no longer say where the sheet's own material is, so a Scale
+after it is refused by name, naming the merging feature, while a Scale
+before it still applies and a merged sheet with no later Scale exports as
+built. The files hint names the unit in
 words ("Files are at 1:1 scale in inches").

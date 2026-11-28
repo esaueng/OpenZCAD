@@ -5,7 +5,9 @@ import {
   toUserId,
   type BodyId,
   type FeatureId,
-  type ProjectDocument
+  type FeatureNode,
+  type ProjectDocument,
+  type SketchId
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
@@ -25,6 +27,7 @@ import {
   mirrorBody,
   moveFeature,
   newHistoryForks,
+  patternBody,
   setNodeMetadata,
   transformBody
 } from './index';
@@ -971,5 +974,179 @@ describe('bodyPiecesAfter', () => {
         })
       ).toEqual([[box.bodyId, true, []]]);
     }
+  });
+
+  /** Each piece as `[bodyId, merging feature or null, transforms before it]`. */
+  const merges = (
+    document: ProjectDocument,
+    originId: FeatureId,
+    outcomes: Parameters<typeof bodyPiecesAfter>[2] = built
+  ) =>
+    bodyPiecesAfter(
+      document,
+      listFeaturesInOrder(document).find(
+        (feature) => feature.featureId === originId
+      )!,
+      outcomes
+    ).map((piece) => [
+      piece.bodyId,
+      piece.merge?.feature.name ?? null,
+      piece.merge?.transformsBefore ?? null
+    ]);
+
+  // PR #2415 re-check: once a body is combined with other material the ids
+  // no longer say where its own material is, so the piece records the merge.
+  it('marks a piece a boolean combined with another body, and counts the transforms before it', () => {
+    const box = block('Block');
+    const other = block('Other', box.document);
+    const early = scale(other.document, 'Scale early', box.bodyId);
+    for (const operation of ['union', 'intersect', 'subtract'] as const) {
+      const merged = booleanBodies(early, {
+        name: 'Boolean 1',
+        operation,
+        targetBodyIds: [box.bodyId, other.bodyId]
+      });
+      const document = scale(merged.document, 'Scale late', merged.bodyId);
+      expect(pieces(document, box.featureId)).toEqual([
+        [merged.bodyId, true, ['Scale early', 'Scale late']]
+      ]);
+      expect(merges(document, box.featureId)).toEqual([
+        [merged.bodyId, 'Boolean 1', 1]
+      ]);
+      // Switched off, failed or suppressed, it combined nothing.
+      const boolean = listFeaturesInOrder(document).find(
+        (feature) => feature.name === 'Boolean 1'
+      )!;
+      for (const skipped of [
+        merges(document, box.featureId, { ...built, inactive: () => true }),
+        merges(document, box.featureId, {
+          ...built,
+          failed: (feature) => feature.featureId === boolean.featureId
+        }),
+        merges(
+          flagged(document, boolean.featureId, FEATURE_SUPPRESSED_METADATA_KEY),
+          box.featureId
+        )
+      ]) {
+        expect(skipped).toEqual([[merged.bodyId, null, null]]);
+      }
+    }
+    // Kept, the block is still a body of its own material.
+    const kept = booleanBodies(early, {
+      name: 'Boolean 1',
+      operation: 'union',
+      targetBodyIds: [box.bodyId, other.bodyId],
+      keepOriginals: 'all'
+    });
+    expect(merges(kept.document, box.featureId)).toEqual([
+      [box.bodyId, null, null]
+    ]);
+  });
+
+  it('does not mark a union of the halves a Split made, and marks one that takes in another body', () => {
+    const box = block('Block');
+    const other = block('Other', box.document);
+    const split = addSplitFeature(other.document, {
+      name: 'Split 1',
+      targetBodyId: box.bodyId,
+      plane
+    });
+    const rejoined = booleanBodies(split.document, {
+      name: 'Union 1',
+      operation: 'union',
+      targetBodyIds: [split.bodyId, split.secondBodyId]
+    });
+    expect(merges(rejoined.document, box.featureId)).toEqual([
+      [rejoined.bodyId, null, null],
+      [rejoined.bodyId, null, null]
+    ]);
+    // The first merge is the one recorded, not a later one.
+    const withOther = booleanBodies(rejoined.document, {
+      name: 'Union 2',
+      operation: 'union',
+      targetBodyIds: [rejoined.bodyId, other.bodyId]
+    });
+    const again = block('Third', withOther.document);
+    const twice = booleanBodies(again.document, {
+      name: 'Union 3',
+      operation: 'union',
+      targetBodyIds: [withOther.bodyId, again.bodyId]
+    });
+    expect(merges(twice.document, box.featureId)).toEqual([
+      [twice.bodyId, 'Union 2', 0],
+      [twice.bodyId, 'Union 2', 0]
+    ]);
+    // One half joined to another body: only that half is merged.
+    const half = booleanBodies(split.document, {
+      name: 'Union 1',
+      operation: 'union',
+      targetBodyIds: [other.bodyId, split.secondBodyId]
+    });
+    expect(merges(half.document, box.featureId)).toEqual([
+      [split.bodyId, null, null],
+      [half.bodyId, 'Union 1', 0]
+    ]);
+  });
+
+  it('marks an add extrude and a pattern of the body, not a cut or a fillet', () => {
+    const box = block('Block');
+    /** An extrude onto `target`: a primitive's node with extrude data. */
+    const extrude = (
+      name: string,
+      operation: 'add' | 'cut' | 'intersect',
+      inPlace = false
+    ) => {
+      const made = block(name, box.document);
+      const node = listFeaturesInOrder(made.document).find(
+        (feature) => feature.featureId === made.featureId
+      )!;
+      const bodyId = inPlace ? box.bodyId : made.bodyId;
+      const feature: FeatureNode = {
+        ...node,
+        bodyId,
+        featureKind: 'extrude',
+        data: {
+          featureKind: 'extrude',
+          sketchId: 'sketch_profile' as SketchId,
+          distance: 5,
+          operation,
+          targetBodyId: box.bodyId
+        }
+      };
+      return {
+        document: {
+          ...made.document,
+          nodes: { ...made.document.nodes, [node.id]: feature }
+        },
+        bodyId
+      };
+    };
+    for (const inPlace of [false, true]) {
+      const added = extrude('Extrude 1', 'add', inPlace);
+      expect(
+        merges(scale(added.document, 'Scale 1', added.bodyId), box.featureId)
+      ).toEqual([[added.bodyId, 'Extrude 1', 0]]);
+    }
+    for (const operation of ['cut', 'intersect'] as const) {
+      const removed = extrude('Extrude 1', operation);
+      expect(merges(removed.document, box.featureId)).toEqual([
+        [removed.bodyId, null, null]
+      ]);
+    }
+    const repeated = patternBody(box.document, {
+      name: 'Pattern 1',
+      targetBodyId: box.bodyId,
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 20
+    });
+    expect(merges(repeated.document, box.featureId)).toEqual([
+      [repeated.bodyId, 'Pattern 1', 0]
+    ]);
+    const rounded = fillet(box.document, 'Fillet 1', box.bodyId);
+    expect(merges(rounded.document, box.featureId)).toEqual([
+      [rounded.bodyId, null, null]
+    ]);
   });
 });
