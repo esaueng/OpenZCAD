@@ -413,6 +413,19 @@ describe('AppShell in the compact workspace', () => {
     );
     expect(sheet).toHaveAttribute('data-detent', 'full');
     expect(within(sheet).getByRole('heading', { name: 'All tools' }));
+    // Brought back down, past half to peek: the quick row again, not All
+    // tools' head over a sliver of its grid.
+    const down = within(sheet).getByRole('slider', { name: 'Sheet height' });
+    fireEvent.keyDown(down, { key: 'ArrowDown' });
+    expect(sheet).toHaveAttribute('data-detent', 'half');
+    expect(within(sheet).getByRole('heading', { name: 'All tools' }));
+    fireEvent.keyDown(down, { key: 'ArrowDown' });
+    await waitFor(() => expect(sheet).toHaveAttribute('data-detent', 'peek'));
+    expect(within(sheet).queryByRole('heading', { name: 'All tools' })).toBe(
+      null
+    );
+    expect(sheet).toHaveClass('is-row');
+    expect(within(sheet).getByRole('group', { name: 'Build tray' }));
   });
 
   it("stands Build's tray at peek and opens All tools as a page", async () => {
@@ -832,6 +845,29 @@ describe('AppShell in the compact workspace', () => {
     expect(screen.getByRole('heading', { name: '2 faces' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
     expect(onClearSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts the pick’s page away when the pick clears under it', async () => {
+    // The motion review: a tap on empty stage cleared the pick and left a
+    // blank Nothing picked page over the stage.
+    const { container, rerender } = render(
+      shell(chrome({ selectionLabel: '1 cylindrical face' }))
+    );
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Selection: 1 cylindrical face'
+      })
+    );
+    expect(
+      screen.getByRole('heading', { name: '1 cylindrical face' })
+    ).toBeVisible();
+    rerender(shell(chrome({ selectionLabel: null })));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('heading', { name: 'Nothing picked' })
+      ).toBeNull()
+    );
+    expect(container.querySelector('.compact-sheet [data-page]')).toBeNull();
   });
 
   it('opens the panel sheet from More, and shuts it with Back', async () => {

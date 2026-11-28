@@ -547,3 +547,75 @@ it('removes a name that reads like the refusal as the name, without attribution'
     'Chamfer could not be created on 1 selected edge with distance 1.5 in. Try a smaller distance: distance 0.985 in builds here.'
   );
 });
+
+// Without the typed records (a committed document keeps only the strings),
+// a warning is the selected step's only when its lead names that step alone:
+// "Fillet 1" is not blamed for "Fillet 10", and a name two steps share
+// blames neither.
+describe('an untyped warning on the History details', () => {
+  function named(first: string, second: string, warning: string) {
+    const { document, plate, fillet } = plateAndFillet();
+    const renamed = withFeature(
+      withFeature(document, plate.id, (feature) => ({
+        ...feature,
+        name: first
+      })),
+      fillet.id,
+      (feature) => ({ ...feature, name: second })
+    );
+    return {
+      document: {
+        ...renamed,
+        derived: { ...renamed.derived, warnings: [warning] }
+      } as ProjectDocument,
+      plate,
+      fillet
+    };
+  }
+  const show = (document: ProjectDocument, selectedId: string) =>
+    render(
+      <FeatureHistoryPanel
+        document={document}
+        selectedId={selectedId}
+        failure={null}
+        onSelect={vi.fn()}
+        onDismissFailure={vi.fn()}
+      />
+    );
+
+  it('does not give "Fillet 10"\'s warning to "Fillet 1"', () => {
+    const { document, plate, fillet } = named(
+      'Fillet 1',
+      'Fillet 10',
+      'Feature "Fillet 10": Fillet radius is too large.'
+    );
+    const { unmount } = show(document, plate.id);
+    expect(screen.queryByText('Needs repair')).toBeNull();
+    unmount();
+    show(document, fillet.id);
+    expect(screen.getByText('Needs repair')).toBeVisible();
+  });
+
+  it('blames neither step when a rename gives both the same name', () => {
+    const { document, plate, fillet } = named(
+      'Round corners',
+      'Round corners',
+      'Feature "Round corners": Fillet radius is too large.'
+    );
+    const { unmount } = show(document, plate.id);
+    expect(screen.queryByText('Needs repair')).toBeNull();
+    unmount();
+    show(document, fillet.id);
+    expect(screen.queryByText('Needs repair')).toBeNull();
+  });
+
+  it("does not let a name that prefixes another's lead take its warning", () => {
+    const { document, plate } = named(
+      'Rough',
+      'Rough": Chamfer',
+      'Feature "Rough": Chamfer": Chamfer could not be created.'
+    );
+    show(document, plate.id);
+    expect(screen.queryByText('Needs repair')).toBeNull();
+  });
+});

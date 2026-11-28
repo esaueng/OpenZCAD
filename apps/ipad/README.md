@@ -3,8 +3,9 @@
 This native Swift/WKWebView app runs on iPad and iPhone (one universal
 target, `TARGETED_DEVICE_FAMILY = 1,2`) and packages the existing React
 workspace and verified Remus WASM kernel. Its local projects use the existing document
-format, feature history, undo, and persistent IndexedDB store. This is an
-offline app: account login, cloud synchronization, native encryption keys,
+format, feature history, undo, and persistent IndexedDB store. It works fully
+offline; signing in connects it to the same cloud account as the web app
+([Cloud account](#cloud-account)). Passkey unlock of encrypted projects,
 Pencil double-tap/squeeze, and App Store review are not included. Release
 builds go to internal TestFlight ([setup](../../docs/ios-testflight.md)).
 
@@ -104,13 +105,52 @@ do not establish physical iPad or iPhone GPU/WASM memory budgets, Apple Pencil
 hardware behavior, or low-memory recovery. Those remain real-device acceptance
 work under L02/W01.
 
+## Cloud account
+
+Sign-in follows ADR-026 (proposed in PR #2182): the app reuses the macOS
+app's PKCE device authorization at `/api/auth/desktop/*` as client
+`openzcad-ios`, against `https://zcad.app` only.
+
+- **Signing in.** Settings › Account › Sign in shows an 8-character code
+  (copied to this device's pasteboard for ten minutes), then opens the
+  approval page in a private `ASWebAuthenticationSession` sheet. After the
+  email code and the app code there, Swift redeems the attempt with its PKCE
+  verifier and closes the sheet (`NativeSignIn` in
+  `Sources/NativeBridge.swift`).
+- **Where the session lives.** The refresh token is a Keychain item
+  (`ios-refresh`, after first unlock, this device only); the access token is
+  in memory. Neither enters the WebView (`Sources/NativeSession.swift`).
+- **Cloud requests.** The web app fetches `/api/*` on its own origin;
+  `BundleServer` hands those to `ApiProxy`, which admits only the workspace,
+  mirrors the desktop's route allowlist, rebuilds each request (content type
+  and share token only, no `Origin` or cookies), attaches the bearer where the
+  desktop does, and makes responses non-executable
+  (`Sources/ApiProxy.swift`). A project write carries a single-use
+  `x-openzcad-prepared` handle; one without the header is refused.
+- **Message handler.** `openzcadNative` answers `capabilities` and
+  `session.status|signIn|signOut|prepare` (schema version 1) to the
+  workspace's main frame only. The page CSP refuses every frame.
+- **Cloud switch.** Builds before this forced the web app's cloud switch off
+  on every load; the first launch with the session releases it once, and the
+  person's own choice in Settings applies from then on. UI tests keep it off.
+
+WebKit facts this relies on, pinned by `Tests/NativeTransportProbeTests.swift`:
+the private origin is a secure context with WebCrypto, and a scheme task
+receives string and byte bodies whole but a `Blob` body empty (the web side
+sends bytes). WebKit stores non-extractable WebCrypto keys in IndexedDB only
+in a signed build, so simulator runs are signed to run locally.
+
 ## Not done yet
 
 - **App Store release.** Release builds ship to internal TestFlight as
   OpenZCAD (`app.esau.openzcad.ios`) from the manual TestFlight workflow; see
   [iPhone and iPad builds on TestFlight](../../docs/ios-testflight.md). Debug
   builds keep the prototype identity. App Store review is not started.
-- **Sign-in and sync.** The app stays offline-only until the native
-  AuthenticationServices sign-in bridge (U12 slice 13, behind its ADR).
+- **Passkeys.** Unlocking encrypted projects with a passkey needs the
+  `passkey.*` operations and the associated-domains entitlement (ADR-026,
+  step 4). Until then `capabilities` reports passkeys unsupported, and the
+  recovery key or another device unlocks.
+- **Sign-in on a real device.** Simulator tests stub the cloud; the
+  `openzcad-ios` client is admitted by the Worker in PR #2442.
 - **Real-iPhone memory and GPU budgets.** Device evidence under W01; the
   simulator cannot show them.

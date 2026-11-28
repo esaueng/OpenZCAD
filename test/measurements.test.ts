@@ -56,7 +56,11 @@ function measuredBody(): BodyRepresentation {
     bodyId: 'body-1' as BodyRepresentation['bodyId'],
     name: 'Bracket',
     source: 'primitive',
-    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
+    mesh: {
+      kind: 'mesh',
+      vertices: Float32Array.from([]),
+      indices: Uint32Array.from([])
+    },
     faceCount: 2,
     color: '#fff',
     exportableStep: true,
@@ -257,12 +261,40 @@ describe('measurement workbench records', () => {
     };
     const [header, row] = measurementsToCsv([measurement], DISPLAY).split('\n');
     expect(header).toContain('target_a,target_b,value,unit');
-    expect(header).toContain('quality,status,source_revision,note');
+    expect(header).toContain(
+      'quality,status,source_revision,checked_revision,note'
+    );
     expect(row).toContain('"Plate, left · Edge ""A"""');
     expect(row).toContain(',84,mm,');
     // The CSV carries the precise tier, not the collapsed display label, so an
     // exported figure stays auditable after the row that produced it is gone.
-    expect(row).toContain(',exact-kernel,current,1,');
+    expect(row).toContain(',exact-kernel,current,1,1,');
+  });
+
+  it('files a circle read as a radius under the radius kind (#2356)', () => {
+    const rim = createSmartMeasurement(
+      measuredBody(),
+      selection('edge', 'edge:circle', 13),
+      { x: 7, y: 4, z: 5 },
+      4,
+      'mm'
+    )!;
+    expect(rim.kind).toBe('diameter');
+    const exported = (radialDisplay: 'diameter' | 'radius') => {
+      const [header, row] = measurementsToCsv([rim], {
+        ...DISPLAY,
+        radialDisplay
+      }).split('\n');
+      const columns = header!.split(',');
+      const cells = row!.split(',');
+      return {
+        kind: cells[columns.indexOf('kind')],
+        value: Number(cells[columns.indexOf('value')])
+      };
+    };
+    // The number and the quantity it is filed under agree in both modes.
+    expect(exported('diameter')).toEqual({ kind: 'diameter', value: 8 });
+    expect(exported('radius')).toEqual({ kind: 'radius', value: 4 });
   });
 
   it('neutralizes spreadsheet formulas in copied and CSV labels', () => {

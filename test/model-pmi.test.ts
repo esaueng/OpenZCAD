@@ -260,8 +260,10 @@ describe('D07 model PMI (schema v106)', () => {
       face,
       { x: 1, y: 2, z: 0 },
       pmi,
-      'inch'
+      'inch',
+      m.bottom.geometry
     );
+    // The flat bottom takes flatness (#2321).
     expect(frame).toMatchObject({ characteristic: 'flatness', amount: 0.004 });
     expect(
       modelPmiSetError({ annotations: [...pmi.annotations, datum, frame] })

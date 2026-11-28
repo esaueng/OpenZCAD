@@ -76,24 +76,32 @@ export class FeatureSuppressionRefusal extends FeatureBuildError {
  */
 export function featureFailureReason(
   feature: FeatureNode,
-  derived: ProjectDocument['derived']
+  derived: ProjectDocument['derived'],
+  roster?: readonly string[]
 ): string | null {
-  return featureFailure(feature, derived)?.reason ?? null;
+  return featureFailure(feature, derived, roster)?.reason ?? null;
 }
 
 /**
  * {@link featureFailureReason} with the refusal's typed record beside it,
  * when the rebuild classified one.
+ *
+ * `roster` is every feature's name in the document. A `derived` without typed
+ * records can name a feature only by its name, and the roster keeps a name
+ * another feature shares, or a lead another name also fits, from blaming the
+ * wrong one (`warningForFeature`).
  */
 export function featureFailure(
   feature: FeatureNode,
-  derived: ProjectDocument['derived']
+  derived: ProjectDocument['derived'],
+  roster?: readonly string[]
 ): Pick<RefusedDependent, 'reason' | 'kernelRefusal'> | null {
   const warning = refusingWarningDetail(
     feature.name,
     derived.warnings,
     derived.featureWarnings,
-    feature.featureId
+    feature.featureId,
+    roster
   );
   if (warning) {
     return warning.kernelRefusal
@@ -144,8 +152,9 @@ export function suppressionRefusal(
   dependents.sort(
     (a, b) => (order.get(a.featureId) ?? 0) - (order.get(b.featureId) ?? 0)
   );
+  const roster = graph.features.map((feature) => feature.name);
   const refused = dependents.flatMap((feature): RefusedDependent[] => {
-    const failure = featureFailure(feature, derived);
+    const failure = featureFailure(feature, derived, roster);
     return failure
       ? [{ featureId: feature.featureId, name: feature.name, ...failure }]
       : [];

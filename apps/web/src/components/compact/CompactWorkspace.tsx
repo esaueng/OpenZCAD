@@ -492,6 +492,20 @@ export default function CompactWorkspace({
           return true;
         }
       : undefined;
+  // What that pull shows as it comes up: All tools, tile by tile under the
+  // finger, so letting go only settles what is already in view.
+  const rowRaisePreview =
+    onRowRaise && build
+      ? {
+          title: 'All tools',
+          content: <AllToolsSheet build={build} onLaunch={() => undefined} />
+        }
+      : undefined;
+  // A page over a sheet that holds only its tray, pulled down to peek, goes
+  // back to the tray's row: the pull down undoes the pull up, rather than
+  // leaving the page's head over a sliver of it.
+  const onPageLower =
+    trayOnly && state.stack.length > 0 ? () => closePages() : undefined;
   // A page leaving a sheet that holds only its tray takes it back to peek,
   // wherever the page found it: a page opened over a raised sheet left the
   // tray standing at half over blank space when it went.
@@ -511,6 +525,30 @@ export default function CompactWorkspace({
       dispatch({ type: 'set-detent', detent: 'peek' });
     }
   }, [dispatch, stackDepth, trayOnly]);
+
+  // The pick cleared under its page (a tap on empty stage, an undo): the
+  // page would only say Nothing picked over the stage, so it goes, and the
+  // tray comes back to be picked from again.
+  const selectionOpen = state.stack.some((page) => page.key === 'selection');
+  const picked = selectionLabel !== null && selectionLabel !== undefined;
+  useEffect(() => {
+    if (selectionOpen && !picked) dispatch({ type: 'close' });
+  }, [dispatch, picked, selectionOpen]);
+
+  // A new mode's tray comes in, rather than its row of tools swapping in
+  // one cut under the finger that chose it.
+  const traySlotRef = useRef<HTMLDivElement | null>(null);
+  const lastMode = useRef(workspaceMode);
+  useEffect(() => {
+    if (lastMode.current === workspaceMode) return;
+    lastMode.current = workspaceMode;
+    const slot = traySlotRef.current;
+    if (!slot) return;
+    slot.classList.remove('is-entering');
+    // Restarts the entrance when modes change again before it ends.
+    void slot.offsetWidth;
+    slot.classList.add('is-entering');
+  }, [workspaceMode]);
 
   // The panel sheet follows the workspace's open panel (every route to a
   // panel sets it), and a sheet put away by Back, Close or Escape shuts it.
@@ -942,6 +980,9 @@ export default function CompactWorkspace({
           companions={companions}
           onHeight={onHeight}
           onRowRaise={onRowRaise}
+          rowRaisePreview={rowRaisePreview}
+          onPageLower={onPageLower}
+          holdFittingRow={trayOnly}
         >
           {/* The mode's tray first: the row the sheet shows at peek. A
               running command's bar brings its own row, which stands in for
@@ -950,6 +991,12 @@ export default function CompactWorkspace({
           {trayShown ? (
             <CompactTrayContext.Provider value={traySlot}>
               <div
+                ref={traySlotRef}
+                onAnimationEnd={(event) => {
+                  if (event.target === event.currentTarget) {
+                    event.currentTarget.classList.remove('is-entering');
+                  }
+                }}
                 className={`compact-tray-slot${
                   hasModeTray && !hasSheetContent && !commandRowPresent
                     ? ' is-alone'

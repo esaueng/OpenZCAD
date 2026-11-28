@@ -49,6 +49,30 @@ export interface StatusEntry {
    * that happened to the model, so the activity log leaves it out.
    */
   unlogged?: boolean;
+  /**
+   * The outcome's own tone, set where the outcome is known: a success that
+   * names a feature ("Duplicated Error Check.") is not a warning for the
+   * words in that name. Without it the tone is read from the text.
+   */
+  tone?: 'ready' | 'warning';
+}
+
+/** What reads as a refusal or a failure in a status with no tone of its own. */
+const WARNING_STATUS_PATTERN =
+  /fail|error|invalid|unable|denied|cannot|can't|not changed|not applied|no change|refus/i;
+
+/**
+ * A status's tone: the outcome's own, where it was set with one, or else
+ * read from the text, where a refusal is a warning, not a "ready" dot
+ * (design review I77).
+ */
+export function statusEntryTone(
+  entry: Pick<StatusEntry, 'text' | 'tone'>
+): 'ready' | 'warning' {
+  return (
+    entry.tone ??
+    (WARNING_STATUS_PATTERN.test(entry.text) ? 'warning' : 'ready')
+  );
 }
 
 export function statusExpiresAt(entry: {

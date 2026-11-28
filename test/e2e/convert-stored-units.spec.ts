@@ -418,6 +418,61 @@ test('a kept measurement and the camera follow the conversion, its undo and a re
   expect(errors).toEqual([]);
 });
 
+test('Convert a copy says so when the kept measurements could not be copied', async ({
+  page
+}) => {
+  // #2433: the copy's own status line named the failure, and the final
+  // outcome replaced it without it.
+  test.setTimeout(240_000);
+  await stubApi(page);
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ status: 401, json: { error: 'Not signed in' } })
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Copy warning');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'box');
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled(
+    READY
+  );
+  await switchWorkspace(page, 'View');
+  await page
+    .getByRole('toolbar', { name: 'View tools' })
+    .getByRole('button', { name: 'Measure' })
+    .click();
+  await setSelectionFilter(page, 'Edge');
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+  await keepMeasurement(page);
+  await keptReading(page, 'mm');
+  // The list is written back debounced.
+  await page.waitForTimeout(700);
+  // From here on this device refuses to store a measurement record.
+  await page.evaluate(() => {
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (
+      this: IDBObjectStore,
+      ...args: Parameters<IDBObjectStore['put']>
+    ) {
+      if (this.name === 'projectMeasurements')
+        throw new DOMException('Refused for the test.', 'QuotaExceededError');
+      return put.apply(this, args);
+    };
+  });
+
+  await switchWorkspace(page, 'Build');
+  const dialog = await openConversion(page);
+  await dialog.getByRole('button', { name: 'Convert a copy' }).click();
+  await expect(dialog.getByRole('status')).toContainText(
+    'Copy warning is unchanged.',
+    CHECKED
+  );
+  await expect(dialog.getByRole('status')).toContainText(
+    'Its kept measurements could not be copied; they are still in the original.'
+  );
+});
+
 test('an undo or a reload straight after converting keeps the same view', async ({
   page
 }) => {

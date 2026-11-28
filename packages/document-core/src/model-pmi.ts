@@ -1,6 +1,7 @@
 import {
   assertModelPmiSet,
   deepClone,
+  renameModelDatumReferences,
   type ModelPmiAnnotation,
   type ModelPmiId,
   type ProjectDocument
@@ -19,6 +20,14 @@ export interface ModelPmiAddInput {
 /** The entry as it should now be, whole; its id names the one replaced. */
 export interface ModelPmiUpdateInput {
   annotation: ModelPmiAnnotation;
+  /**
+   * #2375 (schema v157): on a datum feature whose letter changes, every
+   * frame that named its old letter names the new one, each reference
+   * keeping its slot and modifier, in the same command (one undo step).
+   * Absent, only the entry changes: a log written before v157 replays as
+   * it was recorded.
+   */
+  followReferences?: true;
 }
 
 export interface ModelPmiDeleteInput {
@@ -70,9 +79,20 @@ export function updateModelPmi(
   input: ModelPmiUpdateInput
 ): ProjectDocument {
   return withModelPmi(document, (annotations) => {
-    annotations[pmiIndex(annotations, input.annotation.pmiId)] = deepClone(
-      input.annotation
-    );
+    const index = pmiIndex(annotations, input.annotation.pmiId);
+    const previous = annotations[index]!;
+    annotations[index] = deepClone(input.annotation);
+    if (
+      input.followReferences === true &&
+      previous.kind === 'datum-feature' &&
+      input.annotation.kind === 'datum-feature' &&
+      previous.letter !== input.annotation.letter
+    )
+      return renameModelDatumReferences(
+        annotations,
+        previous.letter,
+        input.annotation.letter
+      );
     return annotations;
   });
 }

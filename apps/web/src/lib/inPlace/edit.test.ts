@@ -31,6 +31,7 @@ import {
   inPlaceEditMovedBodies,
   inPlaceEditFacePick,
   inPlaceEditObjects,
+  inPlaceEditOwnRefusal,
   inPlaceEditOperandRefusal,
   inPlaceEditRestDocument,
   inPlaceEditSeed,
@@ -2098,6 +2099,152 @@ describe('an untouched edit writes the feature back as stored', () => {
     const armed = inPlaceEditSeed(feature(data, 'body_f' as BodyId), EDIT_CTX)!;
     expect(armed.seed.slots.edges.map((edge) => edge.hash)).toEqual([21]);
     expect(armed.seed.notice).toMatch(/no longer resolves/);
+  });
+
+  describe('a feature whose target body is not built', () => {
+    const missing = {
+      family: 'reference' as const,
+      category: 'invalid_input',
+      code: 'target_body_unavailable'
+    };
+    const gone: InPlaceEditContext = {
+      ...EDIT_CTX,
+      face: () => null,
+      anyFace: () => null,
+      edge: () => null,
+      body: () => null,
+      ownRefusal: missing
+    };
+    const chamfer: FeatureData = {
+      featureKind: 'chamfer',
+      targetBodyId: BODY,
+      edgeHashes: [21, 22],
+      distance: 1.5
+    };
+
+    // A revision that keeps the geometry (an Objects folder, a display-unit
+    // change rebinding sketch geometry) copies the derived container but
+    // carries the rebuild's warning list, and so its typed records, over.
+    it('reads the typed refusal across a copy of the same rebuild', () => {
+      const id = 'feature_chamfer' as FeatureId;
+      const rebuilt = {
+        warnings: ['Feature "Chamfer": The target body is unavailable.']
+      } as unknown as ProjectDocument['derived'];
+      const attribution = {
+        derived: rebuilt,
+        featureWarnings: [
+          {
+            featureId: id,
+            featureName: 'Chamfer',
+            kind: 'refusal' as const,
+            message: 'Feature "Chamfer": The target body is unavailable.',
+            kernelRefusal: missing
+          }
+        ]
+      };
+      expect(inPlaceEditOwnRefusal(id, rebuilt, attribution)).toEqual(missing);
+      expect(inPlaceEditOwnRefusal(id, { ...rebuilt }, attribution)).toEqual(
+        missing
+      );
+      // Another rebuild's records are not read as this one's.
+      expect(
+        inPlaceEditOwnRefusal(
+          id,
+          { ...rebuilt, warnings: [...rebuilt.warnings] },
+          attribution
+        )
+      ).toBeNull();
+      expect(inPlaceEditOwnRefusal(id, rebuilt, null)).toBeNull();
+    });
+
+    it('chamfer: opens with its typed refusal and no pick to make', () => {
+      const armed = inPlaceEditSeed(feature(chamfer, BODY), gone)!;
+      expect(armed.tool).toBe('chamfer');
+      expect(armed.seed.targetMissing).toEqual(missing);
+      expect(armed.seed.slots.edges).toEqual([]);
+      // No "pick it again" over a body that is not there.
+      expect(armed.seed.notice).toBeNull();
+      // The stored size still seeds its value.
+      expect(armed.seed.values.distance).toBe(1.5);
+    });
+
+    it.each<[string, FeatureData]>([
+      [
+        'fillet',
+        {
+          featureKind: 'fillet',
+          targetBodyId: BODY,
+          edgeHashes: [21],
+          radius: 1
+        }
+      ],
+      [
+        'hole',
+        {
+          featureKind: 'hole',
+          targetBodyId: BODY,
+          faceHash: 11,
+          style: 'simple',
+          diameter: 4,
+          depthMode: 'through',
+          position: { u: 0, v: 0 }
+        }
+      ],
+      [
+        'thread',
+        {
+          featureKind: 'thread',
+          targetBodyId: BODY,
+          faceHash: 31,
+          profile: 'printable',
+          clearance: 0.1
+        }
+      ],
+      [
+        'shell',
+        {
+          featureKind: 'shell',
+          targetBodyId: BODY,
+          openingFaceHashes: [11],
+          thickness: 1
+        }
+      ],
+      [
+        'draft',
+        {
+          featureKind: 'draft',
+          targetBodyId: BODY,
+          faceHashes: [11],
+          angleDeg: 3,
+          pullDirection: { x: 0, y: 0, z: 1 },
+          neutralPoint: { x: 0, y: 0, z: 0 }
+        }
+      ]
+    ])('%s: is blocked the same way', (_kind, data) => {
+      const armed = inPlaceEditSeed(feature(data, BODY), gone)!;
+      expect(armed.seed.targetMissing).toEqual(missing);
+      expect(armed.seed.slots.faces).toEqual([]);
+      expect(armed.seed.slots.edges).toEqual([]);
+      expect(armed.seed.notice).toBeNull();
+    });
+
+    it('chamfer: another refusal code edits as before', () => {
+      const armed = inPlaceEditSeed(feature(chamfer, BODY), {
+        ...EDIT_CTX,
+        ownRefusal: { ...missing, code: 'blend_failed' }
+      })!;
+      expect(armed.seed.targetMissing).toBeUndefined();
+      expect(armed.seed.slots.edges.map((edge) => edge.hash)).toEqual([21, 22]);
+    });
+
+    it('chamfer: with no typed refusal a lost edge still asks for a pick', () => {
+      const armed = inPlaceEditSeed(feature(chamfer, BODY), {
+        ...gone,
+        ownRefusal: null
+      })!;
+      expect(armed.seed.targetMissing).toBeUndefined();
+      expect(armed.seed.notice).toMatch(/no longer resolves/);
+    });
   });
 
   it('chamfer: a stored second distance is its shape', () => {

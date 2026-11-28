@@ -613,6 +613,137 @@ describe('desktop authorization', () => {
     ).rejects.toThrow('expired');
   });
 
+  it('admits the iPhone and iPad client at every layer, bound to its own id (ADR-026)', async () => {
+    const session: AuthSession = {
+      userId: toUserId('user_ios_test'),
+      displayName: 'person',
+      email: 'person@example.com',
+      mode: 'email-code'
+    };
+    const fixture = desktopAuthD1(session);
+    const env = desktopAuthEnv(fixture.db);
+    const state = 's'.repeat(43);
+    const verifier = 'v'.repeat(43);
+    const started = await startDesktopAuthorization(
+      new Request('https://zcad.app/api/auth/desktop/start'),
+      {
+        clientId: 'openzcad-ios',
+        state,
+        codeChallenge: await codeChallenge(verifier)
+      },
+      env
+    );
+    expect(fixture.attempts.get(started.attemptId)?.client_id).toBe(
+      'openzcad-ios'
+    );
+    await approveDesktopAuthorization(started, session, env);
+    // An attempt started by one client cannot be redeemed as another.
+    await expect(
+      exchangeDesktopAuthorization(
+        { ...started, clientId: 'openzcad-macos', state, verifier },
+        env
+      )
+    ).rejects.toMatchObject({ code: 'DESKTOP_AUTH_INVALID' });
+    const issued = await exchangeDesktopAuthorization(
+      { ...started, clientId: 'openzcad-ios', state, verifier },
+      env
+    );
+    if (issued.status !== 'authorized') throw new Error('expected tokens');
+    expect([...fixture.access.values()].map((row) => row.client_id)).toEqual([
+      'openzcad-ios'
+    ]);
+
+    // The access-token validator admits the iOS token for ordinary APIs.
+    const bearer = (token: string) =>
+      worker.fetch(
+        new Request('https://zcad.app/api/session', {
+          headers: { authorization: `Bearer ${token}` }
+        }),
+        env
+      );
+    const ordinary = await bearer(issued.accessToken);
+    expect(ordinary.status).toBe(200);
+    expect(await ordinary.json()).toMatchObject({ userId: session.userId });
+
+    // The refresh path rotates it under the same client.
+    const rotated = await refreshDesktopAuthorization(
+      { clientId: 'openzcad-ios', refreshToken: issued.refreshToken },
+      env
+    );
+    expect((await bearer(rotated.accessToken)).status).toBe(200);
+
+    // Presenting it as another client revokes the whole session.
+    await expect(
+      refreshDesktopAuthorization(
+        { clientId: 'openzcad-macos', refreshToken: rotated.refreshToken },
+        env
+      )
+    ).rejects.toThrow('expired');
+    expect((await bearer(rotated.accessToken)).status).toBe(401);
+  });
+
+  it('refuses a client id outside the native allowlist at every layer', async () => {
+    const session: AuthSession = {
+      userId: toUserId('user_unknown_client_test'),
+      displayName: 'person',
+      email: 'person@example.com',
+      mode: 'email-code'
+    };
+    const fixture = desktopAuthD1(session);
+    const env = desktopAuthEnv(fixture.db);
+    const state = 's'.repeat(43);
+    const verifier = 'v'.repeat(43);
+    for (const clientId of ['openzcad-android', 'OPENZCAD-IOS', '', null]) {
+      await expect(
+        startDesktopAuthorization(
+          new Request('https://zcad.app/api/auth/desktop/start'),
+          { clientId, state, codeChallenge: await codeChallenge(verifier) },
+          env
+        )
+      ).rejects.toMatchObject({ code: 'DESKTOP_AUTH_CLIENT_INVALID' });
+      await expect(
+        exchangeDesktopAuthorization(
+          { attemptId: 'a'.repeat(36), clientId, state, verifier },
+          env
+        )
+      ).rejects.toMatchObject({ code: 'DESKTOP_AUTH_CLIENT_INVALID' });
+      await expect(
+        refreshDesktopAuthorization(
+          { clientId, refreshToken: 'r'.repeat(43) },
+          env
+        )
+      ).rejects.toMatchObject({ code: 'DESKTOP_AUTH_CLIENT_INVALID' });
+    }
+    expect(fixture.attempts.size).toBe(0);
+
+    // A stored token whose client left the allowlist stops authenticating.
+    const started = await startDesktopAuthorization(
+      new Request('https://zcad.app/api/auth/desktop/start'),
+      {
+        clientId: 'openzcad-ios',
+        state,
+        codeChallenge: await codeChallenge(verifier)
+      },
+      env
+    );
+    await approveDesktopAuthorization(started, session, env);
+    const issued = await exchangeDesktopAuthorization(
+      { ...started, clientId: 'openzcad-ios', state, verifier },
+      env
+    );
+    if (issued.status !== 'authorized') throw new Error('expected tokens');
+    for (const row of fixture.access.values())
+      row.client_id = 'openzcad-android';
+    await expect(
+      authenticateRequest(
+        new Request('https://zcad.app/api/session', {
+          headers: { authorization: `Bearer ${issued.accessToken}` }
+        }),
+        env
+      )
+    ).rejects.toThrow('expired');
+  });
+
   it('fails closed when the desktop rollout flag is absent', async () => {
     await expect(
       startDesktopAuthorization(

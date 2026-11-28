@@ -615,7 +615,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older client would read a stated inch tolerance as a millimetre one, 25.4x
 // off, so it must refuse the document. Absent keeps the pre-v156 meaning
 // (the sheet's printed units). Builds on v155.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 156 as const;
+// v157 adds `followReferences` on a `pmi.update` (#2375): renaming a model
+// datum feature carries its new letter to every frame that names it, in the
+// same command. An older client would replay only the datum and leave those
+// frames naming a datum the model no longer declares, so it must refuse the
+// document. Additive: earlier documents open unchanged. Builds on v156.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 157 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {

@@ -35,7 +35,8 @@ export interface DirectEditCommitOptions {
   /** The edit landed; the target body is the new selection. */
   onCommitted(bodyId: BodyId): void;
   onBusy(busy: boolean): void;
-  onStatus(message: string): void;
+  /** `tone`, when given, is the outcome's own (StatusEntry.tone). */
+  onStatus(message: string, options?: { tone?: 'ready' | 'warning' }): void;
 }
 
 /**
@@ -312,7 +313,7 @@ export function useDirectEditCommit(
           });
         host.onCommitted(targetBodyId);
         onSuccess?.();
-        host.onStatus(successMessage);
+        host.onStatus(successMessage, { tone: 'ready' });
         return true;
       } catch (error) {
         // Set aside meanwhile: its refusal is no longer anyone's to show.
