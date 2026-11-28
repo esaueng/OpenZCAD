@@ -22598,7 +22598,7 @@ export function App() {
           ? 'Preparing this device’s copy of the project…'
           : 'Preparing complete project backup…'
       );
-      const { createProjectBackup, downloadBackupFile } =
+      const { backupRetentionNote, createProjectBackup, downloadBackupFile } =
         await import('./lib/projectBackupTransfer');
       const text = await createProjectBackup(
         snapshot,
@@ -22628,7 +22628,7 @@ export function App() {
         // Only what this device holds: files kept only in the account
         // (archived exports, save states never opened here) are not in it.
         setStatus(
-          `Exported this device’s copy of ${snapshot.name}. Files stored only in your account are not included.`
+          `Exported this device’s copy of ${snapshot.name}. Files stored only in your account are not included.${backupRetentionNote(snapshot)}`
         );
         sink.finish({
           tone: 'ok',
@@ -22636,7 +22636,9 @@ export function App() {
           landed: true
         });
       } else {
-        setStatus(`Exported complete project ${snapshot.name}.`);
+        setStatus(
+          `Exported complete project ${snapshot.name}.${backupRetentionNote(snapshot)}`
+        );
         sink.finish({ tone: 'ok', message: 'complete project', landed: true });
       }
     } catch (error) {

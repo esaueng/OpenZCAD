@@ -33,6 +33,7 @@ import {
   setEncryptedBlobReader
 } from './e2ee/blobReferences';
 import {
+  backupRetentionNote,
   createProjectBackup,
   readBackupResponse
 } from './projectBackupTransfer';
@@ -818,4 +819,176 @@ it('refuses a backup copy whose embedded mesh states payload units (I03)', async
   expect(() => importProjectCopy(backup, toUserId('new-owner'))).toThrow(
     /invalid imported mesh data/
   );
+});
+
+/** A STEP payload, distinct per `tag`. */
+function stepBytes(tag: string): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(
+    `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('${tag}'),'2;1');\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;`
+  );
+}
+
+/** The backup with one byte of source `sha256` changed, its length and checksum kept. */
+function withCorruptedSource(text: string, sha256: string): string {
+  const backup = JSON.parse(text) as {
+    sources: { sha256: string; base64: string }[];
+  };
+  const source = backup.sources.find((entry) => entry.sha256 === sha256)!;
+  const bytes = Buffer.from(source.base64, 'base64');
+  bytes[bytes.length - 2] = bytes[bytes.length - 2]! ^ 0xff;
+  source.base64 = bytes.toString('base64');
+  return JSON.stringify(backup);
+}
+
+it('labels an IGES import source as its STEP translation, and restores the same import (#2380)', async () => {
+  const translation = stepBytes('IGES B-rep restated');
+  const native = stepBytes('native');
+  const translationRef = await putSourceBlob(translation);
+  const nativeRef = await putSourceBlob(native);
+  let document = createProjectDocument('IGES plate', toUserId('owner'));
+  document = importStepBody(document, {
+    name: 'Plate',
+    sourceName: 'plate.igs',
+    artifactId: 'artifact_local_plate',
+    stepSourceRef: translationRef
+  }).document;
+  document = importStepBody(document, {
+    name: 'Block',
+    sourceName: 'block.step',
+    artifactId: 'artifact_local_block',
+    stepSourceRef: nativeRef
+  }).document;
+  await saveLocalProject(document);
+  const text = await createProjectBackup(document, false);
+  const backup = await parseProjectBackup(text);
+  const bySha = new Map(
+    backup.sources!.map((source) => [source.sha256, source])
+  );
+  const igesSource = bySha.get(translationRef.checksumSha256)!;
+  const stepSource = bySha.get(nativeRef.checksumSha256)!;
+  // The recorded format is the format of the stored bytes, and the IGES
+  // import says its original file is not among them.
+  expect(backupFileBytes(igesSource)).toEqual(translation);
+  expect(igesSource.contentType).toBe('model/step');
+  expect(igesSource.translatedFrom).toEqual({
+    format: 'iges',
+    sourceName: 'plate.igs'
+  });
+  // A native STEP import holds the bytes that were imported, and says no more.
+  expect(backupFileBytes(stepSource)).toEqual(native);
+  expect(stepSource.contentType).toBe('model/step');
+  expect(stepSource).not.toHaveProperty('translatedFrom');
+  expect(backupRetentionNote(document)).toBe(
+    ' plate.igs is included as its exact STEP translation; the original IGES file is not stored.'
+  );
+
+  const copy = importProjectCopy(backup, toUserId('new-owner'));
+  globalThis.indexedDB = new IDBFactory();
+  await saveImportedProject(copy);
+  const reopened = (await loadLocalProject(copy.document.projectId))!;
+  const imports = (candidate: typeof document) =>
+    Object.values(candidate.nodes)
+      .filter((node) => node.kind === 'feature')
+      .map((node) =>
+        node.kind === 'feature' && node.data.featureKind === 'imported-step'
+          ? {
+              name: node.name,
+              sourceName: node.data.sourceName,
+              stepSourceRef: node.data.stepSourceRef,
+              solidIndices: node.data.solidIndices
+            }
+          : null
+      );
+  expect(imports(reopened)).toEqual(imports(document));
+  expect(await loadSourceBlob(translationRef.checksumSha256)).toEqual(
+    translation
+  );
+  expect(await loadSourceBlob(nativeRef.checksumSha256)).toEqual(native);
+  // And the restored project backs up to the same labelled sources.
+  const again = await parseProjectBackup(
+    await createProjectBackup(reopened, false)
+  );
+  expect(again.sources).toEqual(backup.sources);
+});
+
+it('restores a backup written before sources carried a content type', async () => {
+  const ref = await putSourceBlob(stepBytes('legacy'));
+  const document = importStepBody(
+    createProjectDocument('Legacy IGES', toUserId('owner')),
+    {
+      name: 'Plate',
+      sourceName: 'plate.iges',
+      artifactId: 'artifact_local_plate',
+      stepSourceRef: ref
+    }
+  ).document;
+  await saveLocalProject(document);
+  const legacy = JSON.parse(await createProjectBackup(document, false)) as {
+    sources: Record<string, unknown>[];
+  };
+  for (const source of legacy.sources) {
+    delete source.contentType;
+    delete source.translatedFrom;
+  }
+  const backup = await parseProjectBackup(JSON.stringify(legacy));
+  const copy = importProjectCopy(backup, toUserId('new-owner'));
+  globalThis.indexedDB = new IDBFactory();
+  await saveImportedProject(copy);
+  expect(await loadSourceBlob(ref.checksumSha256)).toEqual(stepBytes('legacy'));
+});
+
+it('names the import whose source is damaged, for each of several (#2098)', async () => {
+  const first = await putSourceBlob(stepBytes('first'));
+  const second = await putSourceBlob(stepBytes('second'));
+  let document = createProjectDocument('Two imports', toUserId('owner'));
+  document = importStepBody(document, {
+    name: 'Reference A',
+    sourceName: 'a.step',
+    artifactId: 'artifact_local_a',
+    stepSourceRef: first
+  }).document;
+  document = importStepBody(document, {
+    name: 'Reference B',
+    sourceName: 'b.step',
+    artifactId: 'artifact_local_b',
+    stepSourceRef: second
+  }).document;
+  await saveLocalProject(document);
+  const text = await createProjectBackup(document, false);
+  await expect(
+    parseProjectBackup(withCorruptedSource(text, first.checksumSha256))
+  ).rejects.toThrow(
+    'Damaged STEP source: Reference A. Export a new backup from the original project if you still have it.'
+  );
+  await expect(
+    parseProjectBackup(withCorruptedSource(text, second.checksumSha256))
+  ).rejects.toThrow('Damaged STEP source: Reference B.');
+  // A source nothing uses is identified by its position and checksum.
+  const unused = JSON.parse(text) as {
+    sources: { sha256: string; base64: string; logicalBytes: number }[];
+  };
+  const stray = stepBytes('stray');
+  unused.sources.push({
+    sha256: await checksum(stray),
+    base64: Buffer.from(stray).toString('base64'),
+    logicalBytes: stray.length
+  });
+  const straySha = unused.sources[2]!.sha256;
+  await expect(
+    parseProjectBackup(withCorruptedSource(JSON.stringify(unused), straySha))
+  ).rejects.toThrow(
+    `Damaged source blob 3 of 3 (SHA-256 ${straySha.slice(0, 12)}…)`
+  );
+});
+
+it('names a damaged mesh payload by its import (#2098)', async () => {
+  const { document, ref } = await referencedMeshProject();
+  const text = await createProjectBackup(document, false);
+  const mesh = Object.values(document.nodes).find(
+    (node) =>
+      node.kind === 'feature' && node.data.featureKind === 'imported-mesh'
+  )!;
+  await expect(
+    parseProjectBackup(withCorruptedSource(text, ref.checksumSha256))
+  ).rejects.toThrow(`Damaged mesh data: ${mesh.name}.`);
 });
