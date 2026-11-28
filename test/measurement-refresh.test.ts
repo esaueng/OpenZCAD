@@ -10,11 +10,19 @@ import {
   createDistanceMeasurement,
   createEdgeTotalMeasurement,
   createSmartMeasurement,
+  formatMeasurement,
+  measurementsToCsv,
   measurementTargetFromSelection,
+  measurementToViewportAnnotation,
   refreshMeasurements,
   type Measurement,
+  type MeasurementDisplayOptions,
   type MeasurementTarget
 } from '../apps/web/src/lib/measurements';
+import {
+  buildMeasurementRecord,
+  parseStoredMeasurements
+} from '../apps/web/src/lib/measurementStore';
 
 /**
  * What happens to a measurement when the model underneath it changes.
@@ -25,6 +33,11 @@ import {
  */
 
 const BODY_ID = 'body-1' as BodyId;
+const DISPLAY: MeasurementDisplayOptions = {
+  unit: 'mm',
+  precision: 2,
+  radialDisplay: 'diameter'
+};
 
 function bodyWith(
   faces: NonNullable<BodyRepresentation['topology']>['faces'],
@@ -34,7 +47,11 @@ function bodyWith(
     bodyId: BODY_ID,
     name: 'Plate',
     source: 'primitive',
-    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
+    mesh: {
+      kind: 'mesh',
+      vertices: Float32Array.from([]),
+      indices: Uint32Array.from([])
+    },
     faceCount: faces.length,
     color: '#fff',
     exportableStep: true,
@@ -255,9 +272,9 @@ describe('an identity that stops being unique', () => {
 });
 
 describe('the refresh short-circuit', () => {
-  it('advances sourceRevision on the failing branch too', () => {
+  it('advances checkedRevision on the failing branch too', () => {
     // The bug this pins: the failing branch returned the row with its ORIGINAL
-    // sourceRevision, so it never matched the equality check at the top of the
+    // revision, so it never matched the equality check at the top of the
     // loop and re-evaluated on every single refresh thereafter — including the
     // ones triggered by merely hiding a body, which is how a row could go on
     // demoting itself against a body list it was never meant to be judged by.
@@ -271,7 +288,9 @@ describe('the refresh short-circuit', () => {
     )!;
 
     const broken = refreshMeasurements([measured], [], 2);
-    expect(broken[0]!.sourceRevision).toBe(2);
+    expect(broken[0]!.checkedRevision).toBe(2);
+    // #2360: the retained number still names the revision that produced it.
+    expect(broken[0]!.sourceRevision).toBe(1);
 
     // Same revision, so the row is returned untouched by identity — proof the
     // short-circuit now covers failed rows rather than only successful ones.
@@ -476,5 +495,121 @@ describe('topology that no longer supports its measurement kind', () => {
     const again = refreshMeasurements(stale, [collapsed], 1, { force: true });
     expect(again).toBe(stale);
     expect(again[0]).toBe(stale[0]);
+  });
+});
+
+describe('a kept row whose target goes away', () => {
+  function keptFace(): Measurement {
+    const measured = createSmartMeasurement(
+      bodyWith([planarFace(21, 10)]),
+      { bodyId: BODY_ID, kind: 'face', hash: 21 },
+      { x: 5, y: 5, z: 10 },
+      1,
+      'mm'
+    )!;
+    expect(measured.annotation).toBeDefined();
+    return measured;
+  }
+
+  it('keeps the revision that produced its number (#2360)', () => {
+    const kept = keptFace();
+    // A model edit removes the face; a later unrelated edit advances the
+    // document again.
+    const removed = refreshMeasurements([kept], [], 2, { force: true });
+    const later = refreshMeasurements(removed, [], 3, { force: true });
+    for (const [row, checked] of [
+      [removed[0]!, 2],
+      [later[0]!, 3]
+    ] as const) {
+      expect(row.status).toBe('unresolved');
+      expect(row.result).toEqual(kept.result);
+      expect(row.sourceRevision).toBe(1);
+      expect(row.checkedRevision).toBe(checked);
+    }
+    const csv = measurementsToCsv(later, DISPLAY).split('\n');
+    const header = csv[0]!.split(',');
+    const cells = csv[1]!.split(',');
+    expect(cells[header.indexOf('status')]).toBe('unresolved');
+    expect(cells[header.indexOf('source_revision')]).toBe('1');
+    expect(cells[header.indexOf('checked_revision')]).toBe('3');
+    // Both survive the store.
+    const stored = parseStoredMeasurements(
+      JSON.parse(
+        JSON.stringify(
+          buildMeasurementRecord(
+            'p',
+            later,
+            DISPLAY,
+            '2026-11-28T00:00:00.000Z'
+          )
+        )
+      )
+    );
+    expect(stored?.measurements[0]).toMatchObject({
+      sourceRevision: 1,
+      checkedRevision: 3
+    });
+    // The face comes back: re-measured, so both name the same revision again.
+    const back = refreshMeasurements(
+      later,
+      [bodyWith([planarFace(21, 10)])],
+      4,
+      {
+        force: true
+      }
+    );
+    expect(back[0]).toMatchObject({ status: 'current', sourceRevision: 4 });
+    expect(back[0]!.checkedRevision).toBeUndefined();
+  });
+
+  it('stops drawing its callout as soon as it cannot resolve (#2359)', () => {
+    const kept = keptFace();
+    expect(
+      measurementToViewportAnnotation(kept, DISPLAY, false)
+    ).not.toBeNull();
+    // The body is suppressed: the row keeps its last value for the dock, but
+    // nothing of the old geometry is left to draw over the empty space.
+    const [suppressed] = refreshMeasurements([kept], [], 2, { force: true });
+    expect(suppressed!.status).toBe('unresolved');
+    expect(formatMeasurement(suppressed!, DISPLAY).value).toBe(
+      formatMeasurement(kept, DISPLAY).value
+    );
+    expect(suppressed!.annotation).toBeUndefined();
+    expect(
+      measurementToViewportAnnotation(suppressed!, DISPLAY, true)
+    ).toBeNull();
+    // As after a reopen, which never stored the annotation either.
+    const reopened = parseStoredMeasurements(
+      JSON.parse(
+        JSON.stringify(
+          buildMeasurementRecord(
+            'p',
+            [suppressed!],
+            DISPLAY,
+            '2026-11-28T00:00:00.000Z'
+          )
+        )
+      )
+    )!.measurements[0]!;
+    expect(reopened).toEqual(suppressed);
+    // An unresolved row never draws, whatever it carries.
+    expect(
+      measurementToViewportAnnotation(
+        { ...kept, status: 'unresolved' },
+        DISPLAY,
+        false
+      )
+    ).toBeNull();
+    // Undo restores the body: the callout comes back with a live reading.
+    const [restored] = refreshMeasurements(
+      [suppressed!],
+      [bodyWith([planarFace(21, 10)])],
+      3,
+      { force: true }
+    );
+    expect(restored!.status).toBe('current');
+    expect(
+      measurementToViewportAnnotation(restored!, DISPLAY, false)
+    ).not.toBeNull();
   });
 });

@@ -2112,6 +2112,7 @@ import {
   loadLocalProject,
   loadLocalSaveState,
   loadProjectMeasurements,
+  copyProjectMeasurements,
   loadProjectThumbnail,
   loadSourceBlob,
   purgeExpiredLocalProjects,
@@ -12090,6 +12091,7 @@ export function App() {
     setRadialDisplay,
     measurementHydratedProjectId,
     measurementDisplay,
+    flushMeasurementPersistence,
     previewMeasurement,
     clearMeasurementPicks,
     chooseMeasurementReading,
@@ -19489,6 +19491,55 @@ export function App() {
     }
   }
 
+  /**
+   * #2363: a duplicate keeps its source's kept measurements, written before
+   * the copy can open so its Measure list is the source's. This device's
+   * record first. With `toAccount` (an account copy), the account's when
+   * this device has none (a project measured elsewhere), and the copy's
+   * account record is seeded too before the copy is reported ready, so
+   * another device opening it reads them (#2433). Resolves the sentence to
+   * add to the status when they could not be copied, or null. `flushed`
+   * false (the source's latest measurement change did not reach this
+   * device's record before the copy read it) is said too (#2433).
+   */
+  async function copyDuplicateMeasurements(
+    sourceProjectId: string,
+    copyProjectId: string,
+    { toAccount = false, flushed = true } = {}
+  ): Promise<string | null> {
+    const unflushed = flushed
+      ? null
+      : 'Its latest measurement change could not be saved first, so the copy may not have it.';
+    try {
+      if (!toAccount) {
+        await copyProjectMeasurements(sourceProjectId, copyProjectId);
+        return unflushed;
+      }
+      const { copyMeasurementsToAccountCopy, projectMeasurementCloudApi } =
+        await import('./lib/measurementCloudSync');
+      const where = await copyMeasurementsToAccountCopy({
+        api: projectMeasurementCloudApi,
+        sourceProjectId,
+        copyProjectId,
+        copyLocal: copyProjectMeasurements,
+        loadLocal: loadProjectMeasurements,
+        saveLocal: saveProjectMeasurements
+      });
+      return (
+        [
+          unflushed,
+          where === 'device'
+            ? 'Its kept measurements are on this device only until the copy is opened here.'
+            : null
+        ]
+          .filter(Boolean)
+          .join(' ') || null
+      );
+    } catch {
+      return 'Its kept measurements could not be copied; they are still in the original.';
+    }
+  }
+
   /** Best effort: a save state left behind still reads "not stored". */
   async function copyDuplicateSaveStates(
     sourceProjectId: string,
@@ -19614,12 +19665,23 @@ export function App() {
        * reads it the same way, since its head's map does not name it.
        */
       recovered?: boolean;
+      /**
+       * Told the sentence the status gives when the kept measurements could
+       * not be copied, so a caller reporting its own outcome (Convert a
+       * copy) can carry it.
+       */
+      onMeasurementWarning?: (warning: string) => void;
     } = {}
   ): Promise<string | null> {
     const madeBy = session?.userId ?? null;
     setBusy(true);
     try {
       await flushPendingLocalSave();
+      // A reading kept a moment ago may still be waiting on the workbench's
+      // debounce; the copy reads the device record (#2433).
+      const measurementsFlushed = await flushMeasurementPersistence(
+        project.projectId
+      );
       const openDocument = managerRef.current?.document;
       const deviceOnlySaveState = Boolean(
         saveState &&
@@ -19717,6 +19779,17 @@ export function App() {
           // Kept on the device too, so the copy opens offline exactly like the
           // original it was made from.
           await saveLocalProject(localCopy).catch(() => undefined);
+          // A branch starts from a save state; the readings were kept on the
+          // head, so only a plain copy of the head carries them.
+          const measurementWarning = saveState
+            ? null
+            : await copyDuplicateMeasurements(
+                project.projectId,
+                localCopy.projectId,
+                { toAccount: true, flushed: measurementsFlushed }
+              );
+          if (measurementWarning)
+            options.onMeasurementWarning?.(measurementWarning);
           // With the save states it lists, where this device holds them: the
           // account stores only the copy's own (F018). An encrypted copy
           // keeps the source's blob ids, which a re-homed save state would not.
@@ -19770,7 +19843,8 @@ export function App() {
               saveState
                 ? `Branched ${project.name} from “${saveState.reason}” as ${response.project.name}.`
                 : `Duplicated ${project.name} as ${response.project.name}.`,
-              ...(pictureWarning ? [pictureWarning] : [])
+              ...(pictureWarning ? [pictureWarning] : []),
+              ...(measurementWarning ? [measurementWarning] : [])
             ].join(' ')
           );
           return response.project.projectId;
@@ -19832,6 +19906,13 @@ export function App() {
         sortOrder: projectOrganization(project).sortOrder
       };
       await saveLocalProject(copy);
+      const measurementWarning = saveState
+        ? null
+        : await copyDuplicateMeasurements(project.projectId, copy.projectId, {
+            flushed: measurementsFlushed
+          });
+      if (measurementWarning)
+        options.onMeasurementWarning?.(measurementWarning);
       // The copy lists the source's saves; store their documents with it, so
       // they open here as they do in the source (F018).
       await copyDuplicateSaveStates(project.projectId, copy);
@@ -19847,7 +19928,9 @@ export function App() {
       setStatus(
         saveState
           ? `Branched ${project.name} from “${saveState.reason}” as ${copy.name}.`
-          : `Duplicated ${project.name} as ${copy.name}.`
+          : [`Duplicated ${project.name} as ${copy.name}.`, measurementWarning]
+              .filter(Boolean)
+              .join(' ')
       );
       return copy.projectId;
     } catch (error) {
@@ -28893,8 +28976,14 @@ export function App() {
       projects.find((summary) => summary.projectId === current.projectId) ??
       summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION);
     onStep('copying');
+    // The copy's status line is replaced by this run's outcome, so a
+    // measurement-copy warning rides along in it (#2433).
+    let measurementWarning = '';
     const copyId = await handleDuplicateProject(project, undefined, {
-      branchReason: unitsConvertCopyBranchReason(to)
+      branchReason: unitsConvertCopyBranchReason(to),
+      onMeasurementWarning: (warning) => {
+        measurementWarning = ` ${warning}`;
+      }
     });
     if (!copyId)
       return unitsConversionRefusalOf(
@@ -28905,10 +28994,10 @@ export function App() {
     if (opened?.projectId !== copyId)
       return {
         ...unitsConversionRefusalOf(
-          'The copy was made but did not open. Open it from the project list and convert it there.'
+          `The copy was made but did not open. Open it from the project list and convert it there.${measurementWarning}`
         )
       };
-    const notConverted = `The copy “${opened.name}” is open, still stored in ${CONVERT_UNIT_WORDS[opened.units]}. ${project.name} is unchanged.`;
+    const notConverted = `The copy “${opened.name}” is open, still stored in ${CONVERT_UNIT_WORDS[opened.units]}. ${project.name} is unchanged.${measurementWarning}`;
     onStep('checking');
     const preparation = await prepareStoredUnitsConversionRef.current(
       to,
@@ -28924,7 +29013,7 @@ export function App() {
     onStep('converting');
     const outcome = await convertStoredUnitsInPlaceRef.current(preparation);
     if (!outcome.ok) return { ...outcome, context: notConverted };
-    const message = `Made “${opened.name}” and converted it to ${CONVERT_UNIT_WORDS[to]}. ${project.name} is unchanged. “${unitsConvertCheckpointName(preparation.payload.from, to)}” was saved in the copy first.${copyLineageNote(opened, project.name)}`;
+    const message = `Made “${opened.name}” and converted it to ${CONVERT_UNIT_WORDS[to]}. ${project.name} is unchanged. “${unitsConvertCheckpointName(preparation.payload.from, to)}” was saved in the copy first.${copyLineageNote(opened, project.name)}${measurementWarning}`;
     setStatus(message);
     return { ok: true, message };
   }

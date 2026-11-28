@@ -265,3 +265,101 @@ export function watchProjectMeasurements({
     }
   };
 }
+
+export interface AccountCopyMeasurementOptions {
+  api: ProjectMeasurementCloudApi;
+  sourceProjectId: string;
+  copyProjectId: string;
+  /** Copies this device's source record to the copy; whether there was one. */
+  copyLocal(sourceProjectId: string, copyProjectId: string): Promise<boolean>;
+  loadLocal(projectId: string): Promise<StoredMeasurementRecord | null>;
+  saveLocal(record: StoredMeasurementRecord): Promise<void>;
+  now?: () => string;
+}
+
+/**
+ * Where an account copy's kept measurements ended up: `none` when the source
+ * had none, `account` when the copy's account record holds them, and
+ * `device` when only this device does (seeding the account failed).
+ */
+export type AccountCopyMeasurementResult = 'none' | 'account' | 'device';
+
+/**
+ * Writes `record` as the account's measurement record for its project only
+ * when the account holds none: a compare-and-set on the revision the read
+ * saw, so a record another device created meanwhile is never replaced.
+ * Resolves the record the account ends up holding.
+ */
+async function createProjectMeasurementsIfAbsent(
+  api: ProjectMeasurementCloudApi,
+  record: StoredMeasurementRecord
+): Promise<StoredMeasurementRecord> {
+  for (let attempt = 0; attempt < MAX_CONFLICT_RETRIES; attempt += 1) {
+    const remote = await api.loadProjectMeasurements(record.projectId);
+    if (remote.record) return remote.record;
+    try {
+      const saved = await api.saveProjectMeasurements({
+        projectId: record.projectId,
+        expectedRevision: remote.revision,
+        record
+      });
+      return saved.record ?? record;
+    } catch (error) {
+      if (
+        !error ||
+        typeof error !== 'object' ||
+        !('code' in error) ||
+        error.code !== 'MEASUREMENT_REVISION_CONFLICT'
+      ) {
+        throw error;
+      }
+      // Someone wrote the copy's record first: the next read adopts it.
+    }
+  }
+  const settled = await api.loadProjectMeasurements(record.projectId);
+  if (settled.record) return settled.record;
+  throw new Error("The account kept changing the copy's measurements.");
+}
+
+/**
+ * #2363, #2433: gives an account copy its source's kept measurements, on
+ * this device and in the account, before the copy is reported ready.
+ *
+ * This device's source record first; the account's when this device has
+ * none. The account record is then seeded through the copy's own route (an
+ * encrypted copy's is the encrypted store), so another device opening the
+ * copy reads the copied list. The seed only ever CREATES that record: the
+ * copy is in the account before it is seeded, so another device may open it
+ * and keep a reading first, and the seed's later timestamp would win the
+ * whole-list reconciliation and replace that reading. A record the account
+ * already holds for the copy wins, and this device takes it.
+ *
+ * Rejects when the copy could not be given them at all.
+ */
+export async function copyMeasurementsToAccountCopy({
+  api,
+  sourceProjectId,
+  copyProjectId,
+  copyLocal,
+  loadLocal,
+  saveLocal,
+  now = () => new Date().toISOString()
+}: AccountCopyMeasurementOptions): Promise<AccountCopyMeasurementResult> {
+  if (!(await copyLocal(sourceProjectId, copyProjectId))) {
+    const { record } = await api.loadProjectMeasurements(sourceProjectId);
+    if (!record) return 'none';
+    await saveLocal({ ...record, projectId: copyProjectId, updatedAt: now() });
+  }
+  try {
+    const seeded = await loadLocal(copyProjectId);
+    if (!seeded) return 'none';
+    const held = await createProjectMeasurementsIfAbsent(api, seeded);
+    if (
+      measurementRecordContentKey(held) !== measurementRecordContentKey(seeded)
+    )
+      await saveLocal(held);
+    return 'account';
+  } catch {
+    return 'device';
+  }
+}

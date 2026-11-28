@@ -1689,6 +1689,43 @@ export function loadProjectMeasurements(
 }
 
 /**
+ * #2363: gives `copyProjectId` the measurements kept on `sourceProjectId`.
+ *
+ * A duplicate keeps every node id, so each kept target's body and topology
+ * identity names the same geometry in the copy as in the source: the record
+ * is copied as stored, every row and field included (unresolved rows too, so
+ * they can still be repaired there), with only the project it belongs to and
+ * the time this device wrote it replaced. It is copied raw rather than parsed
+ * and rewritten, so a row or field this build cannot read is carried, not
+ * dropped. Resolves whether the source had a record. Rejects when its record
+ * is not one (the copy then has none, and the caller says so).
+ */
+export async function copyProjectMeasurements(
+  sourceProjectId: string,
+  copyProjectId: string,
+  updatedAt: string = new Date().toISOString()
+): Promise<boolean> {
+  const stored = await projectTransaction<unknown>(
+    'readonly',
+    sourceProjectId,
+    MEASUREMENT_STORE_NAME,
+    (store, projectId) => store.get(projectId) as IDBRequest<unknown>
+  );
+  if (stored === undefined) return false;
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored))
+    throw new Error(
+      'Stored measurements use an unsupported or malformed format.'
+    );
+  await projectTransaction(
+    'readwrite',
+    copyProjectId,
+    MEASUREMENT_STORE_NAME,
+    (store, projectId) => store.put({ ...stored, projectId, updatedAt })
+  );
+  return true;
+}
+
+/**
  * Records that this device and the account now hold the same version of
  * `projectId`. Everything the conflict machinery decides is measured from here.
  */
