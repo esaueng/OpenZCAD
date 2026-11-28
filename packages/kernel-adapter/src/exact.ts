@@ -5888,15 +5888,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         build,
         featureId,
         millimetresPerUnit(document.units),
-        // A later Scale the build refused scaled nothing.
-        (id) =>
-          !build.featureWarnings.some(
-            (entry) =>
-              entry.featureId === id &&
-              (entry.kind === 'build-failed' ||
-                entry.kind === 'refusal' ||
-                entry.kind === 'suppressed')
-          )
+        {
+          // A later feature the build refused: a Scale scaled nothing, an
+          // edit handed its input through.
+          failed: (id) =>
+            build.featureWarnings.some(
+              (entry) => entry.featureId === id && entry.kind === 'build-failed'
+            ),
+          live: (bodyId) =>
+            build.shapes.has(bodyId) && !build.consumed.has(bodyId)
+        }
       );
     });
   }

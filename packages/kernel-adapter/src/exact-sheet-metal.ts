@@ -54,6 +54,7 @@ import {
   type SketchId
 } from '@openzcad/shared';
 import {
+  bodyPiecesAfter,
   findSketch,
   listFeaturesInOrder,
   resolveParamValue
@@ -2298,76 +2299,106 @@ export function featuresChangingBodyAfter(
 }
 
 /**
+ * What {@link sheetScalesAfter} reads from the finished build, so the scale
+ * it reports is the one the build applied.
+ */
+export interface SheetHistoryOutcome {
+  /** The build ran this feature and it failed. */
+  failed(featureId: FeatureId): boolean;
+  /** The build ended with this body in the model, unconsumed. */
+  live(bodyId: BodyId): boolean;
+}
+
+/** A Scale already in a flat pattern (#2122). */
+export interface SheetScale {
+  featureId: FeatureId;
+  name: string;
+  factor: number;
+}
+
+/**
  * #2122: the uniform scales later in-place Scale features (a Move with a
- * factor) apply to the sheet's own body, following it through each feature
- * that rewrites it. A copy or a mirror leaves the sheet as built and is not
- * followed, nor is a body the sheet went into as a tool. A uniform scale
- * develops exactly: thickness, radii, allowances and bend lines all grow by
- * the factor and angles and K-factors stay, so the scaled part's blank is
- * the sheet's blank scaled. `built` says whether a feature built; one the
- * build refused scaled nothing.
+ * factor) apply to the sheet's own body. A uniform scale develops exactly:
+ * thickness, radii, allowances and bend lines all grow by the factor and
+ * angles and K-factors stay, so the scaled part's blank is the sheet's blank
+ * scaled.
+ *
+ * The sheet is followed by `bodyPiecesAfter`, which reads the ids as the
+ * build assigns them: through a suppressed or failed edit's pass-through,
+ * staying on an original a Split or a Boolean keeps, and never onto a copy
+ * or a mirror. A Scale the build refused scaled nothing.
+ *
+ * Refuses, instead of guessing, a sheet with no single scale: one a Split
+ * divided and a Scale then enlarged only in part, or one whose body the
+ * build does not hold where the history says it is.
  */
 export function sheetScalesAfter(
   document: ProjectDocument,
   scope: Record<string, number>,
   feature: FeatureNode,
-  built: (featureId: FeatureId) => boolean
-): { featureId: FeatureId; name: string; factor: number }[] {
-  if (!feature.bodyId) return [];
-  let body: BodyId = feature.bodyId;
-  const scales: { featureId: FeatureId; name: string; factor: number }[] = [];
-  let reached = false;
-  for (const later of listFeaturesInOrder(document)) {
-    if (later.featureId === feature.featureId) {
-      reached = true;
-      continue;
+  history: SheetHistoryOutcome
+): SheetScale[] {
+  const factorOf = (value: ParamValue | undefined, label: string) => {
+    if (value === undefined) return null;
+    try {
+      return resolveParamValue(value, scope, label, document.units);
+    } catch {
+      return null;
     }
-    if (
-      !reached ||
-      isFeatureManuallySuppressed(later) ||
-      isFeatureRollbackSuppressed(later)
-    ) {
-      continue;
+  };
+  const scaleOf = (later: FeatureNode): SheetScale[] => {
+    const factor = isInPlaceTransform(later.data)
+      ? factorOf(later.data.transform.scale, 'scale')
+      : null;
+    return factor !== null &&
+      Number.isFinite(factor) &&
+      factor > 0 &&
+      factor !== 1
+      ? [{ featureId: later.featureId, name: later.name, factor }]
+      : [];
+  };
+  const pieces = bodyPiecesAfter(document, feature, {
+    failed: (later) => history.failed(later.featureId),
+    inactive: (later) =>
+      later.data.featureKind === 'boolean' &&
+      factorOf(later.data.activeWhen, 'boolean activation') === 0
+  }).map((piece) => ({ ...piece, scales: piece.transforms.flatMap(scaleOf) }));
+  const [first, ...rest] = pieces;
+  if (!first) return [];
+  for (const other of rest) {
+    const length = Math.max(first.scales.length, other.scales.length);
+    for (let index = 0; index < length; index += 1) {
+      const [a, b] = [first.scales[index], other.scales[index]];
+      if (a?.featureId === b?.featureId) continue;
+      const partial = (a ?? b)!.name;
+      throw new Error(
+        `"${partial}" scales only part of what "${feature.name}" became, so its flat pattern has no single scale. Scale the whole sheet before it is divided, or suppress "${partial}".`
+      );
     }
-    const data = later.data;
-    if (isInPlaceTransform(data)) {
-      if (
-        data.targetBodyId !== body ||
-        data.transform.scale === undefined ||
-        !built(later.featureId)
-      ) {
-        continue;
-      }
-      let factor: number;
-      try {
-        factor = resolveParamValue(
-          data.transform.scale,
-          scope,
-          'scale',
-          document.units
-        );
-      } catch {
-        continue;
-      }
-      if (Number.isFinite(factor) && factor > 0 && factor !== 1) {
-        scales.push({ featureId: later.featureId, name: later.name, factor });
-      }
-      continue;
-    }
-    // A copy or a mirror: the sheet itself stays as built.
-    if (later.featureKind === 'transform' || later.featureKind === 'mirror') {
-      continue;
-    }
-    const record = data as unknown as Record<string, unknown>;
-    const targets: unknown[] = [
-      record.targetBodyId,
-      ...(Array.isArray(record.targetBodyIds)
-        ? (record.targetBodyIds as unknown[])
-        : [])
-    ];
-    if (later.bodyId && targets.includes(body)) body = later.bodyId;
   }
-  return scales;
+  // The history says where the sheet is; the build holds the bodies. Where
+  // they disagree, a Scale on the sheet may have gone unseen.
+  if (pieces.some((piece) => piece.live && !history.live(piece.bodyId))) {
+    const features = listFeaturesInOrder(document);
+    const at = features.findIndex(
+      (entry) => entry.featureId === feature.featureId
+    );
+    const scale = features
+      .slice(at + 1)
+      .find(
+        (later) =>
+          !isFeatureManuallySuppressed(later) &&
+          !isFeatureRollbackSuppressed(later) &&
+          !history.failed(later.featureId) &&
+          scaleOf(later).length > 0
+      );
+    if (scale) {
+      throw new Error(
+        `"${feature.name}" could not be followed through the features after it, so its flat pattern cannot tell whether "${scale.name}" scaled it. Suppress the Scale steps to export the sheet as built.`
+      );
+    }
+  }
+  return first.scales;
 }
 
 type Point2 = readonly [number, number];
@@ -2511,7 +2542,7 @@ export interface SheetMetalFlatPattern {
    * (outline, bend lines, thickness, radii, allowances) is the scaled
    * part's, so a file never carries the pre-scale blank.
    */
-  scaledBy: { featureId: FeatureId; name: string; factor: number }[];
+  scaledBy: SheetScale[];
 }
 
 function requireSheetMetal(
@@ -2571,12 +2602,12 @@ export function sheetMetalFlatPattern(
   build: SheetMetalBuildState,
   featureId: FeatureId,
   modelUnitMm: number,
-  built: (featureId: FeatureId) => boolean = () => true
+  history: SheetHistoryOutcome = { failed: () => false, live: () => true }
 ): SheetMetalFlatPattern {
   const input = rebuildInput(kernel, document, scope, build, featureId);
   const { feature } = input;
   const plan = planSheetMetal(input);
-  const scaledBy = sheetScalesAfter(document, scope, feature, built);
+  const scaledBy = sheetScalesAfter(document, scope, feature, history);
   const s = scaledBy.reduce((product, entry) => product * entry.factor, 1);
   const top = Array.from(kernel.getSolidFaces(plan.flat)).find((face) => {
     if (kernel.getSurfaceType(face) !== 'plane') return false;
@@ -2595,7 +2626,9 @@ export function sheetMetalFlatPattern(
     u: [1, 0, 0] as const,
     v: [0, 1, 0] as const,
     scale: 1,
-    sampleDeflection: dxfSampleDeflection(modelUnitMm)
+    // A curve is sampled before it is scaled, so the chord budget is the
+    // scaled part's: 0.02 mm in the file, not 0.02 mm times the factor.
+    sampleDeflection: dxfSampleDeflection(modelUnitMm) / s
   };
   const outer = kernel.getFaceOuterWire(top);
   const wires = Array.from(kernel.getFaceWires(top));

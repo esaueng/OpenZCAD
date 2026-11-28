@@ -174,6 +174,139 @@ export function featureConsumedBodyIds(feature: FeatureNode): BodyId[] {
 }
 
 /**
+ * One piece of a body's material where the later history left it (see
+ * {@link bodyPiecesAfter}).
+ */
+export interface BodyPiece {
+  /** The id the piece ended under. */
+  bodyId: BodyId;
+  /**
+   * False once a feature took the piece out of the model without putting it
+   * in its result: a subtract's tool, or an operand of a boolean that is
+   * switched off. `bodyId` is then the id it was last live under.
+   */
+  live: boolean;
+  /**
+   * The in-place transforms (a Move, a Scale) that built on this piece, in
+   * history order.
+   */
+  transforms: FeatureNode[];
+}
+
+/**
+ * What only a build knows about a later feature, for {@link bodyPiecesAfter}.
+ */
+export interface BodyPieceOutcomes {
+  /**
+   * The build ran this feature and it failed. A failed feature hands its
+   * input through exactly as a manually suppressed one does (ADR-017,
+   * November 2026) and changes nothing else.
+   */
+  failed(feature: FeatureNode): boolean;
+  /**
+   * A boolean switched off (`activeWhen` resolves to zero): its result is
+   * its first operand unchanged, and its other consumed operands are gone.
+   */
+  inactive(feature: FeatureNode): boolean;
+}
+
+/**
+ * Where the body `origin` made is by the end of the history: every piece of
+ * its material, under the id it now has, with the in-place transforms
+ * applied to it on the way. Follows the ids as the build assigns them, from
+ * the same per-kind table ({@link replacedInputBodyId},
+ * {@link featureConsumedBodyIds}) the build's pass-through and the fork check
+ * read:
+ *
+ * - A feature that replaces the body (a hole, a cut, a boolean's first
+ *   operand) carries the piece to its result id. Manually suppressed or
+ *   failed, it still does: the build passes the input through under that id.
+ *   A rollback-paused feature does nothing.
+ * - A feature that keeps the body (a boolean's kept operand, a Split with
+ *   "Keep original", a mirror, a copy) leaves the piece under its own id. The
+ *   result holds a copy of the material, which is not followed, as a mirrored
+ *   or transformed copy is not.
+ * - A Split that consumes the body yields two pieces, one per half.
+ * - A union or an intersect carries every operand it consumes into its
+ *   result, so one body can hold several pieces. A subtract's consumed tool
+ *   ends: its material is no longer in the model.
+ * - An in-place transform is recorded on each piece under its target; a
+ *   direct edit changes the body under the same id and is not recorded.
+ *
+ * A step that builds on a body an earlier one already replaced (a history
+ * fork) works on a stale copy and is not followed either.
+ */
+export function bodyPiecesAfter(
+  document: ProjectDocument,
+  origin: FeatureNode,
+  outcomes: BodyPieceOutcomes
+): BodyPiece[] {
+  if (!origin.bodyId) return [];
+  // Each piece is its list of transforms; a body holds one or more pieces.
+  const live = new Map<BodyId, FeatureNode[][]>([[origin.bodyId, [[]]]]);
+  const ended: BodyPiece[] = [];
+  const take = (bodyId: BodyId): FeatureNode[][] | undefined => {
+    const pieces = live.get(bodyId);
+    live.delete(bodyId);
+    return pieces;
+  };
+  const give = (bodyId: BodyId, pieces: FeatureNode[][]) =>
+    live.set(bodyId, [...(live.get(bodyId) ?? []), ...pieces]);
+  let reached = false;
+  for (const feature of listFeaturesInOrder(document)) {
+    if (feature.featureId === origin.featureId) {
+      reached = true;
+      continue;
+    }
+    if (!reached || isFeatureRollbackSuppressed(feature)) continue;
+    const data = feature.data;
+    const replaced = featureReplacedInputBody(feature);
+    if (isFeatureManuallySuppressed(feature) || outcomes.failed(feature)) {
+      // Pass-through: the input stands, unchanged, under the result id.
+      const pieces = replaced === null ? undefined : take(replaced);
+      if (pieces && feature.bodyId) give(feature.bodyId, pieces);
+      continue;
+    }
+    if (isInPlaceTransform(data)) {
+      for (const piece of live.get(data.targetBodyId) ?? []) {
+        piece.push(feature);
+      }
+      continue;
+    }
+    for (const bodyId of featureConsumedBodyIds(feature)) {
+      const pieces = take(bodyId);
+      if (!pieces) continue;
+      if (bodyId === replaced && feature.bodyId) {
+        give(feature.bodyId, pieces);
+      } else if (data.featureKind === 'split' && feature.bodyId) {
+        give(feature.bodyId, pieces);
+        give(
+          data.secondBodyId,
+          pieces.map((piece) => [...piece])
+        );
+      } else if (
+        data.featureKind === 'boolean' &&
+        data.operation !== 'subtract' &&
+        feature.bodyId &&
+        !outcomes.inactive(feature)
+      ) {
+        give(feature.bodyId, pieces);
+      } else {
+        ended.push(
+          ...pieces.map((transforms) => ({ bodyId, live: false, transforms }))
+        );
+      }
+    }
+  }
+  return [
+    ...ended,
+    ...[...live].flatMap(([bodyId, pieces]) =>
+      pieces.map((transforms) => ({ bodyId, live: true, transforms }))
+    )
+  ];
+}
+
+/**
  * One branch in the feature history: `featureId` builds on, or edits in
  * place, `bodyId` after the earlier feature `consumerFeatureId` already
  * replaced it. Both run, so both results are on screen: the history has
