@@ -17,6 +17,7 @@ import {
   type FeatureData,
   type FeatureId,
   type FeatureNode,
+  type FeatureWarning,
   type ModelingPlaneReference,
   type ParamValue,
   type ParametricVector3,
@@ -121,6 +122,12 @@ export interface InPlaceEditContext {
   datumPlaneUsable?(featureId: FeatureId): boolean;
   /** A body's display mesh vertices (x, y, z, …), for its exact box. */
   bodyVertices?(bodyId: BodyId): ArrayLike<number> | null;
+  /**
+   * The typed record of the edited feature's own refused rebuild in the
+   * model on screen, if it has one: a missing target body
+   * (`target_body_unavailable`) leaves nothing to pick.
+   */
+  ownRefusal?: FeatureWarning['kernelRefusal'] | null;
   /** A datum axis's line, for a turn the model shows already made. */
   datumAxis?(
     featureId: FeatureId
@@ -176,7 +183,29 @@ export interface InPlaceEditSeed {
    * approximate, so its factor is typed on a chip rather than dragged.
    */
   reshapedLater?: true;
+  /**
+   * The feature's own typed refusal when its target body is not built where
+   * it stands (`target_body_unavailable`) and every pick it takes lies on
+   * that body: the edit takes no picks and builds nothing, and the bar says
+   * why and how to recover (`editTargetMissingSentence`).
+   */
+  targetMissing?: NonNullable<FeatureWarning['kernelRefusal']>;
 }
+
+/**
+ * Commands whose every pick lies on the feature's one target body, edges or
+ * faces: with that body not built there is nothing in the viewport to pick.
+ * A boolean, a Mirror or a Split names bodies the user may pick again, so
+ * those are left to the usual re-pick.
+ */
+const TARGET_BODY_PICK_TOOLS: ReadonlySet<InPlaceToolId> = new Set([
+  'fillet',
+  'chamfer',
+  'hole',
+  'thread',
+  'shell',
+  'draft'
+]);
 
 /**
  * The in-place tool that edits a stored feature, or null for one that still
@@ -255,6 +284,39 @@ export function featureEditsInPlace(feature: FeatureNode): boolean {
 function zeroVector(vector: ParametricVector3): boolean {
   return [vector.x, vector.y, vector.z].every(
     (value) => value === 0 || value === '0'
+  );
+}
+
+/**
+ * The edited feature's own typed refusal in `derived`, read from the typed
+ * records this session recorded for a rebuild (`attribution`, kept beside
+ * the document because a committed rebuild stores only warning strings).
+ * The rebuild is recognised by its warning list as well as its container:
+ * a revision that keeps the geometry (an Objects folder, a display-unit
+ * change rebinding sketch geometry) copies `derived` but carries the list,
+ * and its records, over.
+ */
+export function inPlaceEditOwnRefusal(
+  featureId: FeatureId,
+  derived: ProjectDocument['derived'],
+  attribution: {
+    derived: ProjectDocument['derived'];
+    featureWarnings: readonly FeatureWarning[];
+  } | null
+): FeatureWarning['kernelRefusal'] | null {
+  if (
+    !attribution ||
+    (attribution.derived !== derived &&
+      attribution.derived.warnings !== derived.warnings)
+  )
+    return null;
+  return (
+    attribution.featureWarnings.find(
+      (warning) =>
+        warning.featureId === featureId &&
+        (warning.kind === 'build-failed' || warning.kind === 'refusal') &&
+        warning.kernelRefusal !== undefined
+    )?.kernelRefusal ?? null
   );
 }
 
@@ -1103,6 +1165,16 @@ export function inPlaceEditSeed(
     }
     default:
       return null;
+  }
+  if (
+    TARGET_BODY_PICK_TOOLS.has(tool) &&
+    ctx.ownRefusal?.code === 'target_body_unavailable'
+  ) {
+    // Nothing resolved and nothing can be picked: no slot is held, and no
+    // "pick it again" notice asks for a pick on a body that is not there.
+    seed.targetMissing = ctx.ownRefusal;
+    seed.slots = { ...seed.slots, faces: [], edges: [], bodies: [] };
+    return { tool, seed };
   }
   if (tool === 'scale' && ctx.laterReshapes) {
     seed.reshapedLater = true;
@@ -2272,7 +2344,10 @@ export function inPlaceEditObjects<
   document: ProjectDocument,
   edit: Pick<InPlaceEditSeed, 'featureId' | 'data' | 'ownBodyIds'>,
   shown?: Readonly<Record<string, { consumed?: boolean }>> | null
-): { representations: Record<string, T>; pickOnly: ReadonlySet<string> } | null {
+): {
+  representations: Record<string, T>;
+  pickOnly: ReadonlySet<string>;
+} | null {
   if (edit.data.featureKind !== 'boolean') return null;
   const feature = listFeaturesInOrder(document).find(
     (candidate) => candidate.featureId === edit.featureId

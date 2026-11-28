@@ -39,13 +39,35 @@ export class PreviewRefusalError extends Error {
   }
 }
 
-/** Returns a kernel warning attributed to one named feature, without its prefix. */
+/**
+ * Returns a kernel warning attributed to one named feature, without its prefix.
+ *
+ * Untyped warnings carry no feature id, only the adapter's `Feature "<name>":`
+ * lead, so this is the attribution of last resort. `roster` is the name of
+ * every feature in the document. With it, a warning is claimed only when the
+ * lead names this feature and nothing else: a name another feature shares, or
+ * a lead another feature's name also fits (`Rough` and `Rough": Chamfer` both
+ * fit `Feature "Rough": Chamfer": …`), leaves the warning unattributed — it
+ * stays on the document-level Diagnostics list rather than being pinned to a
+ * guess.
+ */
 export function warningForFeature(
   featureName: string,
-  warnings: readonly string[]
+  warnings: readonly string[],
+  roster?: readonly string[]
 ): string | null {
   const prefix = `Feature "${featureName}":`;
-  const match = warnings.find((warning) => warning.startsWith(prefix));
+  if (roster && roster.filter((name) => name === featureName).length !== 1) {
+    return null;
+  }
+  const match = warnings.find(
+    (warning) =>
+      warning.startsWith(prefix) &&
+      !roster?.some(
+        (name) =>
+          name !== featureName && warning.startsWith(`Feature "${name}":`)
+      )
+  );
   if (!match) {
     return null;
   }
@@ -101,11 +123,17 @@ export function refusingWarning(
   featureName: string,
   warnings: readonly string[],
   featureWarnings?: readonly FeatureWarning[],
-  featureId?: FeatureId
+  featureId?: FeatureId,
+  roster?: readonly string[]
 ): string | null {
   return (
-    refusingWarningDetail(featureName, warnings, featureWarnings, featureId)
-      ?.reason ?? null
+    refusingWarningDetail(
+      featureName,
+      warnings,
+      featureWarnings,
+      featureId,
+      roster
+    )?.reason ?? null
   );
 }
 
@@ -132,12 +160,17 @@ export function withoutFeatureName(
  * presenter matching the sentence. A rebuild that predates the channel — or
  * a refusal the kernel did not categorise — carries no category, and the copy
  * falls back exactly as it did.
+ *
+ * Without typed records the warning is matched by name alone, which is where
+ * `roster` (every feature's name) keeps an ambiguous lead from being claimed;
+ * see `warningForFeature`.
  */
 export function refusingWarningDetail(
   featureName: string,
   warnings: readonly string[],
   featureWarnings?: readonly FeatureWarning[],
-  featureId?: FeatureId
+  featureId?: FeatureId,
+  roster?: readonly string[]
 ): {
   reason: string;
   category?: string;
@@ -145,7 +178,7 @@ export function refusingWarningDetail(
   kernelRefusal?: FeatureWarning['kernelRefusal'];
 } | null {
   if (!featureWarnings) {
-    const reason = warningForFeature(featureName, warnings);
+    const reason = warningForFeature(featureName, warnings, roster);
     return reason === null ? null : { reason };
   }
   const failure = featureWarnings.find(

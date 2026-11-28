@@ -78,7 +78,10 @@ export function FeatureHistoryPanel({
           selected.name,
           document.derived.warnings,
           featureWarnings ?? document.derived.featureWarnings,
-          selected.featureId
+          selected.featureId,
+          // Untyped warnings name a feature only by its name: claimed only
+          // when that name is this feature's alone.
+          graph.features.map((feature) => feature.name)
         )
       : null;
   // With the document's unit after a blend's sizes, as the bar shows them.

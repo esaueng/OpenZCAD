@@ -2112,6 +2112,7 @@ import {
   loadLocalProject,
   loadLocalSaveState,
   loadProjectMeasurements,
+  copyProjectMeasurements,
   loadProjectThumbnail,
   loadSourceBlob,
   purgeExpiredLocalProjects,
@@ -2267,6 +2268,7 @@ import {
   inPlaceEditObjects,
   inPlaceEditOperandRefusal,
   inPlaceEditRestDocument,
+  inPlaceEditOwnRefusal,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
@@ -2343,6 +2345,7 @@ import {
   rollbackMarkerMove,
   rowResume,
   rowResumeAlreadyFailing,
+  withFeatureAttribution,
   validateHistoryResume,
   type RollbackMarkerMove,
   type RowResume
@@ -2378,6 +2381,10 @@ import {
   type ToastAction,
   type ToastModel
 } from './lib/toasts';
+import {
+  stepPmiOmissionClause,
+  stepPmiOmissionNote
+} from './lib/pmi/stepPmiDisclosure';
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
 import {
   keptOffsetValue,
@@ -12090,6 +12097,7 @@ export function App() {
     setRadialDisplay,
     measurementHydratedProjectId,
     measurementDisplay,
+    flushMeasurementPersistence,
     previewMeasurement,
     clearMeasurementPicks,
     chooseMeasurementReading,
@@ -14438,7 +14446,14 @@ export function App() {
           (datum) => datum.featureId === featureId
         ),
       datumAxis: (featureId) => current.derived.datumAxes?.[featureId] ?? null,
-      bodyVertices: (bodyId) => representations[bodyId]?.mesh.vertices ?? null
+      bodyVertices: (bodyId) => representations[bodyId]?.mesh.vertices ?? null,
+      // The feature's own typed refusal in the rebuild `current` carries:
+      // a missing target body leaves its edit nothing to pick.
+      ownRefusal: inPlaceEditOwnRefusal(
+        feature.featureId,
+        current.derived,
+        featureAttribution
+      )
     });
   }
 
@@ -19489,6 +19504,55 @@ export function App() {
     }
   }
 
+  /**
+   * #2363: a duplicate keeps its source's kept measurements, written before
+   * the copy can open so its Measure list is the source's. This device's
+   * record first. With `toAccount` (an account copy), the account's when
+   * this device has none (a project measured elsewhere), and the copy's
+   * account record is seeded too before the copy is reported ready, so
+   * another device opening it reads them (#2433). Resolves the sentence to
+   * add to the status when they could not be copied, or null. `flushed`
+   * false (the source's latest measurement change did not reach this
+   * device's record before the copy read it) is said too (#2433).
+   */
+  async function copyDuplicateMeasurements(
+    sourceProjectId: string,
+    copyProjectId: string,
+    { toAccount = false, flushed = true } = {}
+  ): Promise<string | null> {
+    const unflushed = flushed
+      ? null
+      : 'Its latest measurement change could not be saved first, so the copy may not have it.';
+    try {
+      if (!toAccount) {
+        await copyProjectMeasurements(sourceProjectId, copyProjectId);
+        return unflushed;
+      }
+      const { copyMeasurementsToAccountCopy, projectMeasurementCloudApi } =
+        await import('./lib/measurementCloudSync');
+      const where = await copyMeasurementsToAccountCopy({
+        api: projectMeasurementCloudApi,
+        sourceProjectId,
+        copyProjectId,
+        copyLocal: copyProjectMeasurements,
+        loadLocal: loadProjectMeasurements,
+        saveLocal: saveProjectMeasurements
+      });
+      return (
+        [
+          unflushed,
+          where === 'device'
+            ? 'Its kept measurements are on this device only until the copy is opened here.'
+            : null
+        ]
+          .filter(Boolean)
+          .join(' ') || null
+      );
+    } catch {
+      return 'Its kept measurements could not be copied; they are still in the original.';
+    }
+  }
+
   /** Best effort: a save state left behind still reads "not stored". */
   async function copyDuplicateSaveStates(
     sourceProjectId: string,
@@ -19614,12 +19678,23 @@ export function App() {
        * reads it the same way, since its head's map does not name it.
        */
       recovered?: boolean;
+      /**
+       * Told the sentence the status gives when the kept measurements could
+       * not be copied, so a caller reporting its own outcome (Convert a
+       * copy) can carry it.
+       */
+      onMeasurementWarning?: (warning: string) => void;
     } = {}
   ): Promise<string | null> {
     const madeBy = session?.userId ?? null;
     setBusy(true);
     try {
       await flushPendingLocalSave();
+      // A reading kept a moment ago may still be waiting on the workbench's
+      // debounce; the copy reads the device record (#2433).
+      const measurementsFlushed = await flushMeasurementPersistence(
+        project.projectId
+      );
       const openDocument = managerRef.current?.document;
       const deviceOnlySaveState = Boolean(
         saveState &&
@@ -19717,6 +19792,17 @@ export function App() {
           // Kept on the device too, so the copy opens offline exactly like the
           // original it was made from.
           await saveLocalProject(localCopy).catch(() => undefined);
+          // A branch starts from a save state; the readings were kept on the
+          // head, so only a plain copy of the head carries them.
+          const measurementWarning = saveState
+            ? null
+            : await copyDuplicateMeasurements(
+                project.projectId,
+                localCopy.projectId,
+                { toAccount: true, flushed: measurementsFlushed }
+              );
+          if (measurementWarning)
+            options.onMeasurementWarning?.(measurementWarning);
           // With the save states it lists, where this device holds them: the
           // account stores only the copy's own (F018). An encrypted copy
           // keeps the source's blob ids, which a re-homed save state would not.
@@ -19770,7 +19856,8 @@ export function App() {
               saveState
                 ? `Branched ${project.name} from “${saveState.reason}” as ${response.project.name}.`
                 : `Duplicated ${project.name} as ${response.project.name}.`,
-              ...(pictureWarning ? [pictureWarning] : [])
+              ...(pictureWarning ? [pictureWarning] : []),
+              ...(measurementWarning ? [measurementWarning] : [])
             ].join(' ')
           );
           return response.project.projectId;
@@ -19832,6 +19919,13 @@ export function App() {
         sortOrder: projectOrganization(project).sortOrder
       };
       await saveLocalProject(copy);
+      const measurementWarning = saveState
+        ? null
+        : await copyDuplicateMeasurements(project.projectId, copy.projectId, {
+            flushed: measurementsFlushed
+          });
+      if (measurementWarning)
+        options.onMeasurementWarning?.(measurementWarning);
       // The copy lists the source's saves; store their documents with it, so
       // they open here as they do in the source (F018).
       await copyDuplicateSaveStates(project.projectId, copy);
@@ -19847,7 +19941,9 @@ export function App() {
       setStatus(
         saveState
           ? `Branched ${project.name} from “${saveState.reason}” as ${copy.name}.`
-          : `Duplicated ${project.name} as ${copy.name}.`
+          : [`Duplicated ${project.name} as ${copy.name}.`, measurementWarning]
+              .filter(Boolean)
+              .join(' ')
       );
       return copy.projectId;
     } catch (error) {
@@ -21996,9 +22092,17 @@ export function App() {
       // `imported-mesh` feature — so a body from one of these files autosaves,
       // reopens, rebuilds and exports exactly like an imported STL.
       let mesh;
+      // OBJ and PLY state no unit (3MF and glTF do, and arrive converted).
+      // The unit is settled before the import runs, from the file's raw
+      // extent, because the import's translator, tessellation and rebuild
+      // check all depend on the numbers they read: reading an inch file as
+      // millimetres and enlarging the result could change its triangles
+      // (#2096).
+      let reading: UnitSystem | null = null;
       try {
         const {
           importMeshFileInDisposableWorker,
+          inspectUnitlessMeshInDisposableWorker,
           meshImportFormatForFileName
         } = await import('./lib/meshImportWorkerClient');
         const format = meshImportFormatForFileName(file.name);
@@ -22006,38 +22110,42 @@ export function App() {
           refuseImportOnCard(file.name, unsupportedImportMessage(file.name));
           return;
         }
+        if (format === 'obj' || format === 'ply') {
+          reading = await readUnitlessImportAs({
+            fileName: file.name,
+            kind: 'mesh',
+            extent: await inspectUnitlessMeshInDisposableWorker(file, format),
+            documentUnits: doc.units
+          });
+          if (!reading) {
+            setStatus(`${file.name} was not imported: you cancelled it.`);
+            return;
+          }
+        }
         // The open document's units, not millimetres: the import runs the
         // rebuild this document will run, and it has to run it on the numbers
         // this document will store.
-        mesh = await importMeshFileInDisposableWorker(file, format, doc.units);
+        mesh = await importMeshFileInDisposableWorker(
+          file,
+          format,
+          doc.units,
+          undefined,
+          reading ?? undefined
+        );
       } catch (error) {
         trackDetail('error_import');
         setStatus(errorMessage(error, `${file.name} import failed.`));
         return;
       }
-      // OBJ and PLY state no unit (3MF and glTF do, and arrive converted).
-      const importUnits = await import('./lib/importUnits');
-      if (!mesh.sourceUnit && importUnits.isUnitlessMeshFileName(file.name)) {
-        const reading = await readUnitlessImportAs({
-          fileName: file.name,
-          kind: 'mesh',
-          extent: importUnits.meshExtent(mesh.vertices),
-          documentUnits: doc.units
-        });
-        if (!reading) {
-          setStatus(`${file.name} was not imported: you cancelled it.`);
-          return;
-        }
-        mesh = { ...mesh, assumedUnits: reading };
-        if (reading !== 'mm') {
-          // A uniform enlargement: the worker's rebuild check, run on the
-          // millimetre reading, still holds for every larger unit.
-          mesh = {
-            ...mesh,
-            vertices: importUnits.verticesReadAs(mesh.vertices, reading),
-            sourceUnit: importUnits.IMPORT_UNIT_LABELS[reading].toLowerCase()
-          };
-        }
+      if (reading) {
+        const { IMPORT_UNIT_LABELS } = await import('./lib/importUnits');
+        mesh = {
+          ...mesh,
+          assumedUnits: reading,
+          ...(reading === 'mm'
+            ? {}
+            : { sourceUnit: IMPORT_UNIT_LABELS[reading].toLowerCase() })
+        };
       }
       await commitImportedMesh({
         file,
@@ -23024,7 +23132,17 @@ export function App() {
     produce(options: {
       signal: AbortSignal;
       onState(state: GeometryWorkerState): void;
-    }): Promise<{ save(): Promise<boolean>; warnings: number }>;
+    }): Promise<{
+      save(): Promise<boolean>;
+      warnings: number;
+      /**
+       * #2258/#2321: what the file says about its model PMI: one
+       * "<entry> — <reason>" per entry left out, one "face type not
+       * verified: …" per form tolerance written on a freeform face. Said
+       * after the outcome, and the card waits to be read.
+       */
+      pmiWarnings?: readonly string[];
+    }>;
     /** The status once the file is saved, when not the export's own. */
     completed?(bodies: string): string;
     /**
@@ -23084,16 +23202,23 @@ export function App() {
         ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
         : '';
       const bodies = `${countLabel(exportBodyIds.length, 'body', 'bodies')}${hiddenNote}`;
+      const pmiWarnings = produced.pmiWarnings ?? [];
+      const pmiNote = stepPmiOmissionNote(pmiWarnings);
       const outcome =
         produced.warnings > 0
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
           : input.completed
             ? input.completed(bodies)
             : `Exported ${bodies} to ${input.fileName}.`;
+      const said = pmiNote ? `${outcome} ${pmiNote}` : outcome;
       setStatus(
-        exportWithheldMessage ? `${outcome} ${exportWithheldMessage}` : outcome
+        exportWithheldMessage ? `${said} ${exportWithheldMessage}` : said
       );
-      sink.finish({ tone: 'ok', message: bodies, landed: true });
+      sink.finish({
+        tone: pmiNote ? 'warning' : 'ok',
+        message: stepPmiOmissionClause(bodies, pmiWarnings),
+        landed: true
+      });
     } catch (error) {
       if (signal.aborted) {
         cancelled();
@@ -23324,6 +23449,10 @@ export function App() {
     }
     const source = doc;
     const { bodyIds, allShownBodies, rowName } = target;
+    // #2258: a selected body's file leaves the rest of the model's PMI out
+    // of scope; a whole-model file names PMI it cannot place.
+    const bodySelection =
+      !allShownBodies && exportScopeInfo?.selection === true;
     const fileName = `${exportStemFor(rowName)}.step`;
     await runExportJob({
       fileName,
@@ -23339,6 +23468,7 @@ export function App() {
         const result = await geometry.exportModel('step', exported, bodyIds, {
           ...options,
           ...(allShownBodies ? { allShownBodies: true } : {}),
+          ...(bodySelection ? { bodySelection: true } : {}),
           fileName,
           units: exportUnitsFor(doc.units),
           stepProtocol: appSettingsRef.current.files.stepProtocol
@@ -23346,9 +23476,11 @@ export function App() {
         if (!('text' in result)) {
           throw new Error('The STEP export returned no text.');
         }
+        // The STEP's only warnings are about its model PMI (#2258/#2321).
         return {
           save: () => saveCadTextFile(fileName, 'step', result.text),
-          warnings: result.warnings.length
+          warnings: 0,
+          pmiWarnings: result.warnings
         };
       }
     });
@@ -28881,8 +29013,14 @@ export function App() {
       projects.find((summary) => summary.projectId === current.projectId) ??
       summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION);
     onStep('copying');
+    // The copy's status line is replaced by this run's outcome, so a
+    // measurement-copy warning rides along in it (#2433).
+    let measurementWarning = '';
     const copyId = await handleDuplicateProject(project, undefined, {
-      branchReason: unitsConvertCopyBranchReason(to)
+      branchReason: unitsConvertCopyBranchReason(to),
+      onMeasurementWarning: (warning) => {
+        measurementWarning = ` ${warning}`;
+      }
     });
     if (!copyId)
       return unitsConversionRefusalOf(
@@ -28893,10 +29031,10 @@ export function App() {
     if (opened?.projectId !== copyId)
       return {
         ...unitsConversionRefusalOf(
-          'The copy was made but did not open. Open it from the project list and convert it there.'
+          `The copy was made but did not open. Open it from the project list and convert it there.${measurementWarning}`
         )
       };
-    const notConverted = `The copy “${opened.name}” is open, still stored in ${CONVERT_UNIT_WORDS[opened.units]}. ${project.name} is unchanged.`;
+    const notConverted = `The copy “${opened.name}” is open, still stored in ${CONVERT_UNIT_WORDS[opened.units]}. ${project.name} is unchanged.${measurementWarning}`;
     onStep('checking');
     const preparation = await prepareStoredUnitsConversionRef.current(
       to,
@@ -28912,7 +29050,7 @@ export function App() {
     onStep('converting');
     const outcome = await convertStoredUnitsInPlaceRef.current(preparation);
     if (!outcome.ok) return { ...outcome, context: notConverted };
-    const message = `Made “${opened.name}” and converted it to ${CONVERT_UNIT_WORDS[to]}. ${project.name} is unchanged. “${unitsConvertCheckpointName(preparation.payload.from, to)}” was saved in the copy first.${copyLineageNote(opened, project.name)}`;
+    const message = `Made “${opened.name}” and converted it to ${CONVERT_UNIT_WORDS[to]}. ${project.name} is unchanged. “${unitsConvertCheckpointName(preparation.payload.from, to)}” was saved in the copy first.${copyLineageNote(opened, project.name)}${measurementWarning}`;
     setStatus(message);
     return { ok: true, message };
   }
@@ -36689,12 +36827,21 @@ export function App() {
       ready,
       attributedFeatureWarnings()
     );
+    // Every feature's name: a warning without a typed record is blamed on
+    // a feature only when its name is that feature's alone.
+    const roster = listFeaturesInOrder(document).map((entry) => entry.name);
+    // The baseline reads the typed records of the committed rebuild, so a
+    // failure is known by its feature id, as the candidate's is; a shared
+    // name then neither hides a new failure nor raises an old one.
     const alreadyFailing = rowResumeAlreadyFailing(
       resume,
-      ready ? document.derived : null,
+      ready
+        ? withFeatureAttribution(document.derived, featureAttribution)
+        : null,
       rollbackFailingRef.current?.projectId === document.projectId
         ? rollbackFailingRef.current.featureIds
-        : undefined
+        : undefined,
+      roster
     );
     let refusal: HistoryResumeRefusal | null = null;
     let candidate: ProjectDocument['derived'] | null = null;
@@ -36705,7 +36852,12 @@ export function App() {
         validateDerived: (derived) => {
           candidate = derived;
           try {
-            validateHistoryResume(resume.checked, derived, alreadyFailing);
+            validateHistoryResume(
+              resume.checked,
+              derived,
+              alreadyFailing,
+              roster
+            );
           } catch (error) {
             if (error instanceof HistoryResumeRefusal) refusal = error;
             throw error;
@@ -36861,11 +37013,21 @@ export function App() {
     if (!owner || move.commands.length === 0) return;
     const document = owner.document;
     setPendingResume(null);
+    // Every feature's name: a warning without a typed record is blamed on
+    // a feature only when its name is that feature's alone.
+    const roster = listFeaturesInOrder(document).map((entry) => entry.name);
     if (move.paused.length > 0) {
       // Remember what the model already could not build before the pause,
-      // judged on the rebuild of this very version only.
+      // judged on the rebuild of this very version only, by its typed
+      // records when this session has them (see `resumeRow`).
       const failing = geometry.isReadyFor(document)
-        ? new Set(failingFeatureIds(move.paused, document.derived))
+        ? new Set(
+            failingFeatureIds(
+              move.paused,
+              withFeatureAttribution(document.derived, featureAttribution),
+              roster
+            )
+          )
         : new Set<FeatureId>();
       const known =
         rollbackFailingRef.current?.projectId === document.projectId
@@ -36901,7 +37063,12 @@ export function App() {
         targets: [],
         validateDerived: (derived) => {
           try {
-            validateHistoryResume(move.resumed, derived, alreadyFailing);
+            validateHistoryResume(
+              move.resumed,
+              derived,
+              alreadyFailing,
+              roster
+            );
           } catch (error) {
             if (error instanceof HistoryResumeRefusal) {
               refusal = error;

@@ -6,6 +6,7 @@ import type { StoredMeasurementRecord } from '../apps/web/src/lib/measurementRec
 import { parseStoredMeasurements } from '../apps/web/src/lib/measurementStore';
 import {
   MEASUREMENT_POLL_INTERVAL_MS,
+  copyMeasurementsToAccountCopy,
   measurementRecordContentKey,
   syncProjectMeasurements,
   watchProjectMeasurements,
@@ -522,5 +523,205 @@ describe('measurement polling and page visibility', () => {
     release();
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
     watcher.stop();
+  });
+});
+
+describe('an account copy of a measured project (#2433)', () => {
+  /** A per-project account store with the route's revision rule. */
+  function accountOf(records: Record<string, StoredMeasurementRecord>) {
+    const store = new Map<string, ProjectMeasurementSnapshot>(
+      Object.entries(records).map(([id, value]) => [
+        id,
+        { revision: 1, record: structuredClone(value) }
+      ])
+    );
+    const read = (id: string): ProjectMeasurementSnapshot =>
+      structuredClone(store.get(id) ?? { revision: 0, record: null });
+    const cloud: ProjectMeasurementCloudApi = {
+      loadProjectMeasurements: vi.fn(async (id: string) => read(id)),
+      saveProjectMeasurements: vi.fn(async (input: SaveInput) => {
+        if (input.expectedRevision !== read(input.projectId).revision)
+          throw revisionConflict();
+        store.set(input.projectId, {
+          revision: input.expectedRevision + 1,
+          record: structuredClone(input.record)
+        });
+        return read(input.projectId);
+      })
+    };
+    return { cloud, read };
+  }
+
+  function deviceOf(records: Record<string, StoredMeasurementRecord>) {
+    const store = new Map(Object.entries(structuredClone(records)));
+    return {
+      store,
+      copyLocal: vi.fn(async (from: string, to: string) => {
+        const found = store.get(from);
+        if (!found) return false;
+        store.set(to, {
+          ...structuredClone(found),
+          projectId: to,
+          updatedAt: '2026-11-28T10:00:00.000Z'
+        });
+        return true;
+      }),
+      loadLocal: vi.fn(async (id: string) =>
+        structuredClone(store.get(id) ?? null)
+      ),
+      saveLocal: vi.fn(async (value: StoredMeasurementRecord) => {
+        store.set(value.projectId, structuredClone(value));
+      })
+    };
+  }
+
+  const kept = record('2026-11-27T09:00:00.000Z', 'Kept volume');
+
+  it('seeds the account copy, so another device opening it reads the list', async () => {
+    const account = accountOf({});
+    const device = deviceOf({ project_sync: kept });
+    await expect(
+      copyMeasurementsToAccountCopy({
+        api: account.cloud,
+        sourceProjectId: 'project_sync',
+        copyProjectId: 'project_copy',
+        ...device
+      })
+    ).resolves.toBe('account');
+    const seeded = account.read('project_copy').record;
+    expect(seeded?.projectId).toBe('project_copy');
+    expect(seeded?.measurements.map((row) => row.label)).toEqual([
+      'Kept volume'
+    ]);
+    // This device's copy and the account's agree, so opening it here
+    // neither pushes nor pulls.
+    expect(measurementRecordContentKey(seeded!)).toBe(
+      measurementRecordContentKey(device.store.get('project_copy')!)
+    );
+    // Another device opens the copy with nothing of its own: it takes the
+    // copied list rather than starting an empty one that would win later.
+    const second = await syncProjectMeasurements(
+      account.cloud,
+      'project_copy',
+      null
+    );
+    expect(second.source).toBe('cloud');
+    expect(second.record?.measurements.map((row) => row.label)).toEqual([
+      'Kept volume'
+    ]);
+  });
+
+  it('copies the account record when this device has none, and seeds it', async () => {
+    const account = accountOf({ project_sync: kept });
+    const device = deviceOf({});
+    await expect(
+      copyMeasurementsToAccountCopy({
+        api: account.cloud,
+        sourceProjectId: 'project_sync',
+        copyProjectId: 'project_copy',
+        ...device,
+        now: () => '2026-11-28T11:00:00.000Z'
+      })
+    ).resolves.toBe('account');
+    expect(device.store.get('project_copy')?.updatedAt).toBe(
+      '2026-11-28T11:00:00.000Z'
+    );
+    expect(account.read('project_copy').record?.measurements).toHaveLength(1);
+  });
+
+  it('reports a copy only this device holds when the account refuses it', async () => {
+    const account = accountOf({});
+    vi.mocked(account.cloud.saveProjectMeasurements).mockRejectedValue(
+      new Error('offline')
+    );
+    const device = deviceOf({ project_sync: kept });
+    await expect(
+      copyMeasurementsToAccountCopy({
+        api: account.cloud,
+        sourceProjectId: 'project_sync',
+        copyProjectId: 'project_copy',
+        ...device
+      })
+    ).resolves.toBe('device');
+    expect(device.store.get('project_copy')?.measurements).toHaveLength(1);
+  });
+
+  it('never replaces a reading another device kept on the copy first', async () => {
+    // Another device opened the copy before the seed and kept a reading.
+    // Its record is older than this device's seed, which would win the
+    // whole-list timestamp rule; the seed only creates a missing record.
+    const theirs = {
+      ...record('2026-11-28T09:30:00.000Z', 'Their reading'),
+      projectId: 'project_copy'
+    };
+    const account = accountOf({ project_copy: theirs });
+    const device = deviceOf({ project_sync: kept });
+    await expect(
+      copyMeasurementsToAccountCopy({
+        api: account.cloud,
+        sourceProjectId: 'project_sync',
+        copyProjectId: 'project_copy',
+        ...device
+      })
+    ).resolves.toBe('account');
+    expect(account.cloud.saveProjectMeasurements).not.toHaveBeenCalled();
+    expect(
+      account.read('project_copy').record?.measurements.map((row) => row.label)
+    ).toEqual(['Their reading']);
+    // This device takes the account's record, as it would on open.
+    expect(
+      device.store.get('project_copy')?.measurements.map((row) => row.label)
+    ).toEqual(['Their reading']);
+  });
+
+  it('yields to a reading kept on the copy while the seed was in flight', async () => {
+    const theirs = {
+      ...record('2026-11-28T09:30:00.000Z', 'Their reading'),
+      projectId: 'project_copy'
+    };
+    const account = accountOf({});
+    const save = account.cloud.saveProjectMeasurements;
+    // The other device's write lands between the seed's read and its write.
+    let raced = false;
+    account.cloud.saveProjectMeasurements = vi.fn(async (input: SaveInput) => {
+      if (!raced) {
+        raced = true;
+        await save({
+          projectId: 'project_copy',
+          expectedRevision: 0,
+          record: theirs
+        });
+      }
+      return save(input);
+    });
+    const device = deviceOf({ project_sync: kept });
+    await expect(
+      copyMeasurementsToAccountCopy({
+        api: account.cloud,
+        sourceProjectId: 'project_sync',
+        copyProjectId: 'project_copy',
+        ...device
+      })
+    ).resolves.toBe('account');
+    expect(
+      account.read('project_copy').record?.measurements.map((row) => row.label)
+    ).toEqual(['Their reading']);
+    expect(
+      device.store.get('project_copy')?.measurements.map((row) => row.label)
+    ).toEqual(['Their reading']);
+  });
+
+  it('has nothing to seed when neither holds a record', async () => {
+    const account = accountOf({});
+    const device = deviceOf({});
+    await expect(
+      copyMeasurementsToAccountCopy({
+        api: account.cloud,
+        sourceProjectId: 'project_sync',
+        copyProjectId: 'project_copy',
+        ...device
+      })
+    ).resolves.toBe('none');
+    expect(account.cloud.saveProjectMeasurements).not.toHaveBeenCalled();
   });
 });

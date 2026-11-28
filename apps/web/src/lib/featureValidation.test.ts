@@ -371,6 +371,78 @@ describe('a verdict with warning attribution', () => {
   });
 });
 
+// An untyped warning (a committed document's, whose typed records were not
+// kept) names its feature only by the `Feature "<name>":` lead. It belongs to
+// a feature only when that lead is the feature's name and no other's; an
+// ambiguous one stays a document-level warning instead of a guessed blame.
+describe('an untyped warning names its feature exactly', () => {
+  const fillet10 = 'Feature "Fillet 10": Fillet radius is too large.';
+
+  it('does not give "Fillet 10"\'s warning to "Fillet 1"', () => {
+    const roster = ['Fillet 1', 'Fillet 10'];
+    expect(warningForFeature('Fillet 1', [fillet10], roster)).toBeNull();
+    expect(warningForFeature('Fillet 1', [fillet10])).toBeNull();
+    expect(warningForFeature('Fillet 10', [fillet10], roster)).toBe(
+      'Fillet radius is too large.'
+    );
+    expect(
+      refusingWarningDetail(
+        'Fillet 1',
+        [fillet10],
+        undefined,
+        undefined,
+        roster
+      )
+    ).toBeNull();
+  });
+
+  it('leaves a warning unattributed when a rename gives two features its name', () => {
+    // "Fillet 10" renamed to "Fillet 1": the lead fits both now.
+    const warning = 'Feature "Fillet 1": Fillet radius is too large.';
+    const roster = ['Fillet 1', 'Fillet 1'];
+    expect(warningForFeature('Fillet 1', [warning], roster)).toBeNull();
+    expect(
+      refusingWarningDetail('Fillet 1', [warning], undefined, undefined, roster)
+    ).toBeNull();
+  });
+
+  it("does not let a name that is a prefix of another's lead take its warning", () => {
+    // "Rough" is renamed from something else; the other feature's name
+    // holds `": `, so its lead starts with Rough's.
+    const roster = ['Rough', 'Rough": Chamfer'];
+    const theirs = 'Feature "Rough": Chamfer": Chamfer could not be created.';
+    expect(warningForFeature('Rough', [theirs], roster)).toBeNull();
+    // The lead fits both names, so neither is blamed for it.
+    expect(warningForFeature('Rough": Chamfer', [theirs], roster)).toBeNull();
+    // A lead only Rough's name fits is still Rough's.
+    const own = 'Feature "Rough": Box could not be created.';
+    expect(warningForFeature('Rough', [theirs, own], roster)).toBe(
+      'Box could not be created.'
+    );
+  });
+
+  it('still prefers the typed record, by feature id', () => {
+    const id = toFeatureId('feat_fillet_1');
+    const message = 'Feature "Fillet 1": Fillet radius is too large.';
+    expect(
+      refusingWarningDetail(
+        'Fillet 1',
+        [message],
+        [
+          {
+            featureId: id,
+            featureName: 'Fillet 1',
+            kind: 'build-failed',
+            message
+          }
+        ],
+        id,
+        ['Fillet 1', 'Fillet 1']
+      )?.reason
+    ).toBe('Fillet radius is too large.');
+  });
+});
+
 // Review of #2405: a feature name holding quotes was not stripped, so the
 // name's own "with distance 2" took the refused size's unit.
 describe('the refusing warning without its feature name', () => {

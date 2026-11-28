@@ -129,6 +129,35 @@ export function rowResume(
 }
 
 /**
+ * `derived` with the typed records this session recorded for it
+ * (`attribution`, kept beside the document because a committed rebuild
+ * stores only warning strings), or `derived` as it is when they belong to
+ * another rebuild. A Resume baseline reads it, so a failure is known by its
+ * feature id as the candidate's is, and a name two features share neither
+ * hides a new failure nor reports an old one again.
+ *
+ * The rebuild is recognised by its warning list, not the container: a
+ * revision that keeps the geometry (a display-unit change rebinding sketch
+ * geometry, say) copies `derived` but carries the same list over, and its
+ * records with it.
+ */
+export function withFeatureAttribution(
+  derived: ProjectDocument['derived'],
+  attribution: {
+    derived: ProjectDocument['derived'];
+    featureWarnings: readonly NonNullable<
+      ProjectDocument['derived']['featureWarnings']
+    >[number][];
+  } | null
+): ProjectDocument['derived'] {
+  return attribution &&
+    (attribution.derived === derived ||
+      attribution.derived.warnings === derived.warnings)
+    ? { ...derived, featureWarnings: [...attribution.featureWarnings] }
+    : derived;
+}
+
+/**
  * The checked features a row resume is not blamed for: later features that
  * already fail in `derived`, the rebuild of the document before the resume
  * (null when that rebuild is not in yet, so none is known), and the row
@@ -137,10 +166,14 @@ export function rowResume(
 export function rowResumeAlreadyFailing(
   resume: RowResume,
   derived: ProjectDocument['derived'] | null,
-  rollbackFailing: ReadonlySet<FeatureId> = new Set()
+  rollbackFailing: ReadonlySet<FeatureId> = new Set(),
+  roster?: readonly string[]
 ): Set<FeatureId> {
+  // Give `derived` its typed records where they exist: a warning string
+  // whose name two features share is pinned on neither (`roster`), so a
+  // baseline without them can only over-report a failure as new.
   const failing = new Set(
-    derived ? failingFeatureIds(resume.checked.slice(1), derived) : []
+    derived ? failingFeatureIds(resume.checked.slice(1), derived, roster) : []
   );
   if (
     isFeatureRollbackSuppressed(resume.feature) &&
@@ -153,14 +186,19 @@ export function rowResumeAlreadyFailing(
 /**
  * The features that do not build in `derived`, among `features`. Recorded
  * when a rollback pauses them, so a later resume does not blame itself for
- * a failure the model already had.
+ * a failure the model already had. `roster` is every feature's name in the
+ * document, so an untyped warning is not pinned to a feature by a name it
+ * shares (`featureFailure`).
  */
 export function failingFeatureIds(
   features: readonly FeatureNode[],
-  derived: ProjectDocument['derived']
+  derived: ProjectDocument['derived'],
+  roster?: readonly string[]
 ): FeatureId[] {
   return features
-    .filter((feature) => featureFailureReason(feature, derived) !== null)
+    .filter(
+      (feature) => featureFailureReason(feature, derived, roster) !== null
+    )
     .map((feature) => feature.featureId);
 }
 
@@ -172,11 +210,12 @@ export function failingFeatureIds(
 export function resumeFailures(
   resumed: readonly FeatureNode[],
   derived: ProjectDocument['derived'],
-  alreadyFailing: ReadonlySet<FeatureId> = new Set()
+  alreadyFailing: ReadonlySet<FeatureId> = new Set(),
+  roster?: readonly string[]
 ): RefusedDependent[] {
   return resumed.flatMap((feature): RefusedDependent[] => {
     if (alreadyFailing.has(feature.featureId)) return [];
-    const failure = featureFailure(feature, derived);
+    const failure = featureFailure(feature, derived, roster);
     return failure
       ? [{ featureId: feature.featureId, name: feature.name, ...failure }]
       : [];
@@ -207,9 +246,10 @@ export class HistoryResumeRefusal extends Error {
 export function validateHistoryResume(
   resumed: readonly FeatureNode[],
   derived: ProjectDocument['derived'],
-  alreadyFailing?: ReadonlySet<FeatureId>
+  alreadyFailing?: ReadonlySet<FeatureId>,
+  roster?: readonly string[]
 ): void {
-  const failures = resumeFailures(resumed, derived, alreadyFailing);
+  const failures = resumeFailures(resumed, derived, alreadyFailing, roster);
   if (failures.length) throw new HistoryResumeRefusal(failures);
 }
 
