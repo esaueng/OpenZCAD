@@ -1336,6 +1336,33 @@
   --lane-status: calc(var(--workspace-toast-live-h, 28px) + 12px);
 }
 
+/* The Undo toast glides up to that row (motion.css) as the refusal comes:
+   faded in together, the refusal's first lines showed under the toast's
+   foot for the glide's first frames (#2434). It fades in once the glide
+   has made room, and leaves without waiting. A phone's line stands at the
+   stage's top, clear of the notice, and needs no wait; with motion reduced
+   the glide is a jump (tokens.css), made before the fade. */
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-reduced-motion='true'])
+    .app-shell:not([data-shell='compact'])
+    .viewer-area:has(.toast:not(.closing))
+    .workspace-toast.is-refusal:not(.hidden) {
+    transition-delay: var(--dur-base);
+  }
+
+  /* A taller refusal taking the place of a status already drawn had no
+     fade to delay: it stood at once, under the toast's foot. It is drawn
+     hidden for a frame (.is-entering, WorkspaceReadout), then fades in as
+     above. */
+  html:not([data-reduced-motion='true'])
+    .app-shell:not([data-shell='compact'])
+    .viewer-area:has(.toast:not(.closing))
+    .workspace-toast.is-refusal.is-entering:not(.hidden) {
+    opacity: 0;
+    transition: none;
+  }
+}
+
 /* Tracks --activity-pill-h in activity-pill.css, plus the 12px row gap; an
    ending that wraps publishes its real height (ActivityPill) instead.
    The lane in the selector matches the specificity of the two rules above,

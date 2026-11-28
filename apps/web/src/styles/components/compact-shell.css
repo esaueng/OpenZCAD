@@ -1452,10 +1452,12 @@
 
 /* The status line ("Added box." and its Undo) joins the notice while the
    sheet stands at full (WorkspaceReadout.tsx): the stage under the sheet is
-   inert then. At the sheet's foot, only a status with something to tap
-   (Undo, Turn off section, Take over editing) stands over the sheet's
-   content; the rest, and a cut's standing line whose Turn off is not drawn
-   (above), step aside until the sheet comes down. */
+   inert then. At the sheet's foot, a status with something to tap (Undo,
+   Turn off section, Take over editing) stands over the sheet's content, and
+   so does a refusal or a warning (.is-standing, WorkspaceReadout): hidden,
+   a refused History reorder said nothing at all (#2434). The rest, and a
+   cut's standing line whose Turn off is not drawn (above), step aside until
+   the sheet comes down. */
 .app-shell[data-shell='compact'] .compact-notice-host .workspace-toast {
   left: max(var(--sp-2), env(safe-area-inset-left));
   right: max(var(--sp-2), env(safe-area-inset-right));
@@ -1465,43 +1467,62 @@
 
 .app-shell[data-shell='compact']
   .compact-notice-host
-  .workspace-toast:is(:not(:has(.workspace-toast-undo)), [data-section-line]),
+  .workspace-toast:is(
+    :not(:has(.workspace-toast-undo), .is-standing),
+    [data-section-line]
+  ),
 .app-shell[data-shell='compact']
   .compact-notice-host
-  .workspace-toast:is(:not(:has(.workspace-toast-undo)), [data-section-line])
+  .workspace-toast:is(
+    :not(:has(.workspace-toast-undo), .is-standing),
+    [data-section-line]
+  )
   .workspace-toast-body {
   opacity: 0;
   pointer-events: none;
 }
 
 /* A status at work, or a warning, with its action keeps its place while
-   the notice is up: the notice stands over it rather than on it. */
+   the notice is up: the notice stands over it rather than on it. The
+   action is read from the line's class (.has-action, WorkspaceReadout): a
+   :has() inside :has() is not a valid selector, and dropped these rules
+   whole (#2434). The row is the taller of the line and its action, its
+   height published on the host (WorkspaceReadout): at 320px a long line
+   wraps beside "Turn off section", and lifted by the 44px action alone the
+   notice came down over the button. */
 .app-shell[data-shell='compact']
   .compact-notice-host:has(
-    .workspace-toast:not(.hidden, .ready, [data-section-line]):has(
-        .workspace-toast-undo
-      )
+    .workspace-toast.has-action:not(.hidden, .ready, [data-section-line])
   )
   .toast {
-  margin-bottom: calc(var(--compact-target) + var(--sp-1));
+  margin-bottom: calc(
+    max(var(--compact-target), var(--workspace-toast-live-h, 0px)) + var(--sp-1)
+  );
 }
 
-/* A refusal wraps and can stand taller than the 44px row its action takes:
-   the notice lifts by the taller of the two, the refusal's height published
-   on the host (WorkspaceReadout). It keeps the class through its exit fade,
-   still drawn, so the lift holds until it has gone. At peek and half the
-   line stands at the stage's top, clear of the notice (above). */
+/* A refusal or a warning wraps and can stand taller than the 44px row its
+   action takes: the notice lifts by the taller of the two, the line's
+   height published on the host (WorkspaceReadout). With nothing to tap the
+   row is the line alone. It keeps the class through its exit fade, still
+   drawn, so the lift holds until it has gone. At peek and half the line
+   stands at the stage's top, clear of the notice (above). */
 .app-shell[data-shell='compact']
   .compact-notice-host:has(
-    .workspace-toast.is-refusal:not(.ready, [data-section-line]):has(
-        .workspace-toast-undo
-      )
+    .workspace-toast.is-standing.has-action:not(.ready, [data-section-line])
   )
   .toast {
   margin-bottom: calc(
     max(var(--compact-target), var(--workspace-toast-live-h, 28px)) +
       var(--sp-1)
   );
+}
+
+.app-shell[data-shell='compact']
+  .compact-notice-host:has(
+    .workspace-toast.is-standing:not(.has-action, .ready, [data-section-line])
+  )
+  .toast {
+  margin-bottom: calc(var(--workspace-toast-live-h, 28px) + var(--sp-1));
 }
 
 /* As on the regular stage (quiet-stage.css), a settled status only repeats

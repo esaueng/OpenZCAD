@@ -1027,7 +1027,11 @@ import {
   idleWorkspaceHint,
   platformShortcutLabel
 } from './lib/platformShortcut';
-import { retireStatus, type StatusEntry } from './lib/statusLifetime';
+import {
+  retireStatus,
+  statusEntryTone,
+  type StatusEntry
+} from './lib/statusLifetime';
 import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
 import type {
   KeypadHold,
@@ -4316,6 +4320,7 @@ export function App() {
         detail?: string;
         unlogged?: boolean;
         immediate?: boolean;
+        tone?: 'ready' | 'warning';
       }
     ) => {
       const at = Date.now();
@@ -4324,6 +4329,7 @@ export function App() {
         text,
         ...(options?.detail ? { detail: options.detail } : {}),
         ...(options?.unlogged ? { unlogged: true } : {}),
+        ...(options?.tone ? { tone: options.tone } : {}),
         at,
         sticky: options?.sticky ?? false,
         ...(options?.immediate || options?.sticky ? { immediate: true } : {})
@@ -11245,7 +11251,10 @@ export function App() {
     // An Undo, Delete or boolean that ended it already reported its outcome,
     // perhaps offering Undo; keep that and add the notice to it.
     const offersUndo = undoableStatusAt === statusEntry.at;
-    setStatus(offersUndo ? `${statusEntry.text} ${notice}` : notice);
+    setStatus(
+      offersUndo ? `${statusEntry.text} ${notice}` : notice,
+      offersUndo && statusEntry.tone ? { tone: statusEntry.tone } : undefined
+    );
     if (offersUndo) setUndoableStatusAt(lastStatusAtRef.current);
   }, [
     isolationState,
@@ -26277,7 +26286,8 @@ export function App() {
         if (executeCommand(commit.command)) {
           done();
           setStatus(
-            `Copied ${pick.objects.length} projected ${pick.objects.length === 1 ? 'edge' : 'edges'} into the sketch.${left}`
+            `Copied ${pick.objects.length} projected ${pick.objects.length === 1 ? 'edge' : 'edges'} into the sketch.${left}`,
+            { tone: left === '' ? 'ready' : 'warning' }
           );
         }
         return;
@@ -26288,6 +26298,7 @@ export function App() {
         validateDerived: (derived) =>
           assertProjectionsResolve(derived, commit.objectIds),
         successMessage: `Projected ${pick.objects.length} linked ${pick.objects.length === 1 ? 'edge' : 'edges'}.${left}`,
+        successTone: left === '' ? 'ready' : 'warning',
         onSuccess: done,
         onFailure: (message) => setStatus(message)
       });
@@ -39690,9 +39701,10 @@ export function App() {
           {...(statusEntry.detail ? { detail: statusEntry.detail } : {})}
           logged={!statusEntry.unlogged}
           tone={
-            /fail|error|invalid|unable|denied/i.test(status)
+            statusEntry.tone ??
+            (/fail|error|invalid|unable|denied/i.test(status)
               ? 'warning'
-              : 'ready'
+              : 'ready')
           }
           workspace="Projects"
         />
@@ -39769,12 +39781,10 @@ export function App() {
       ? 'warning'
       : !exactGeometryReady
         ? 'running'
-        : // A refusal is a warning, not a "ready" dot (design review I77).
-          /fail|error|invalid|unable|denied|cannot|can't|not changed|not applied|no change|refus/i.test(
-              status
-            )
-          ? 'warning'
-          : 'ready';
+        : // The outcome's own tone where it was set with one: read from
+          // the text, a success naming a feature "Error Check" stood over
+          // a full compact sheet as a warning.
+          statusEntryTone(statusEntry);
 
   // The measurement workbench, only while Measure is on: View and Tweak
   // float it over the stage, Build gives it the command slot so it never
