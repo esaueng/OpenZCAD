@@ -138,7 +138,7 @@ test(
       expect(
         await part.evaluate((element) => {
           const rect = element.getBoundingClientRect();
-          const top = document.elementFromPoint(
+          const top = element.ownerDocument.elementFromPoint(
             rect.left + rect.width / 2,
             rect.top + rect.height / 2
           );
