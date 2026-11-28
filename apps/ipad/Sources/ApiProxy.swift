@@ -76,8 +76,8 @@ struct ApiDestination: Equatable {
               url.user == nil, url.password == nil
         else { throw Refused(reason: "The API path is not allowed.") }
         let segments = url.path(percentEncoded: true).split(separator: "/", omittingEmptySubsequences: false).dropFirst()
-        // No dot segments, encoded or not, and no empty segments, which a
-        // server could normalise into another route.
+        // No dot segments or separators hidden in a segment, encoded or not,
+        // which a server could normalise into another route.
         for segment in segments {
             let decoded = decodedRepeatedly(String(segment))
             if decoded == "." || decoded == ".." || decoded.contains("/") || decoded.contains("\\") {
