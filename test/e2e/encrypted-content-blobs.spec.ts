@@ -90,6 +90,69 @@ async function serveAccount(page: Page, server: E2eeServer) {
   );
 }
 
+/**
+ * Watches every content write `page` sends on a plaintext route: a project
+ * created or saved with its document, a revision, an artifact or import
+ * finalize, a plaintext upload session, and any request on an upload
+ * session that the encrypted blob route did not open. Encrypted blobs use
+ * the same `/api/uploads/:id/…` transport, so a session counts as encrypted
+ * only when `…/blobs/uploads` handed it out; the classification waits for
+ * those answers, which may still be parsing when the upload goes out.
+ */
+function watchPlaintextContentWrites(page: Page) {
+  const writes: { method: string; path: string; session?: string }[] = [];
+  const encryptedSessions = new Set<string>();
+  const answers: Promise<void>[] = [];
+  page.on('request', (request) => {
+    const method = request.method();
+    if (method === 'GET' || method === 'HEAD') return;
+    const path = new URL(request.url()).pathname;
+    const session = /^\/api\/uploads\/([^/]+)\//.exec(path)?.[1];
+    if (
+      session ||
+      path === '/api/uploads' ||
+      path === '/api/projects' ||
+      path === '/api/imports/finalize' ||
+      path.startsWith('/api/artifacts') ||
+      /^\/api\/projects\/[^/]+\/(document|revisions|artifacts)(\/|$)/.test(path)
+    ) {
+      writes.push({
+        method,
+        path,
+        ...(session ? { session: decodeURIComponent(session) } : {})
+      });
+    }
+  });
+  page.on('response', (response) => {
+    if (
+      response.request().method() !== 'POST' ||
+      !new URL(response.url()).pathname.endsWith('/blobs/uploads')
+    ) {
+      return;
+    }
+    answers.push(
+      response
+        .json()
+        .then((body: { session?: { uploadSessionId: string } }) => {
+          if (body.session) encryptedSessions.add(body.session.uploadSessionId);
+        })
+        .catch(() => undefined)
+    );
+  });
+  /** The writes, split by whether an encrypted blob session carried them. */
+  return async () => {
+    await Promise.all(answers);
+    const named = ({ method, path }: (typeof writes)[number]) =>
+      `${method} ${path}`;
+    const encrypted = (write: (typeof writes)[number]) =>
+      write.session !== undefined && encryptedSessions.has(write.session);
+    return {
+      plaintext: writes.filter((write) => !encrypted(write)).map(named),
+      encrypted: writes.filter(encrypted).map(named)
+    };
+  };
+}
+
 /** Whether this browser's own source store holds the bytes. */
 const holdsSource = (page: Page) =>
   page.evaluate(async (checksum) => {
@@ -602,16 +665,7 @@ test(
     test.setTimeout(300_000);
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
-    const plaintextUploads: string[] = [];
-    page.on('request', (request) => {
-      const path = new URL(request.url()).pathname;
-      if (
-        (path === '/api/uploads' || path.startsWith('/api/artifacts')) &&
-        request.method() !== 'GET'
-      ) {
-        plaintextUploads.push(`${request.method()} ${path}`);
-      }
-    });
+    const contentWrites = watchPlaintextContentWrites(page);
     const server = createE2eeServer({ projectsEnabled: true });
     await serveAccount(page, server);
     const projectIds = () =>
@@ -646,7 +700,9 @@ test(
     await fileMenu.getByRole('button', { name: /Export mesh/ }).click();
     const exportDialog = page.getByRole('dialog', { name: /Export mesh/ });
     await exportDialog.getByRole('radio', { name: '3MF', exact: true }).check();
-    const downloadPromise = page.waitForEvent('download');
+    // Bounded on its own: a missed download would otherwise spend the whole
+    // test budget, on every retry.
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
     await exportDialog
       .getByRole('button', { name: 'Export 3MF', exact: true })
       .click();
@@ -742,20 +798,27 @@ test(
       { blob_id: expect.any(String), project_id: branchId }
     ]);
     const blobId = meshBlobs()[0]!.blob_id;
-    // The branch's saved head names it, so the account keeps it.
+    // The branch's saved head names it, so the account keeps it: the
+    // current document version, not only some earlier one.
     await expect
       .poll(
         () =>
           (
             server.db
               .prepare(
-                'SELECT COUNT(*) AS n FROM e2ee_version_blobs WHERE blob_id = ?'
+                `SELECT COUNT(*) AS n FROM projects p
+                 JOIN e2ee_project_versions v
+                   ON v.project_id = p.id
+                  AND v.document_version = p.document_version
+                 JOIN e2ee_version_blobs b
+                   ON b.project_id = p.id AND b.version_hash = v.version_hash
+                 WHERE p.id = ? AND b.blob_id = ?`
               )
-              .get(blobId) as { n: number }
+              .get(branchId!, blobId) as { n: number }
           ).n,
         { timeout: SYNC_BUDGET_MS }
       )
-      .toBeGreaterThan(0);
+      .toBe(1);
 
     // The same file again, with the account reachable: stored encrypted at
     // once, as the blob the account already holds, and the original's
@@ -787,7 +850,13 @@ test(
       )
     ).toBe(0);
     expect(count(server, 'SELECT COUNT(*) AS n FROM artifacts')).toBe(0);
-    expect(plaintextUploads).toEqual([]);
+    // The encrypted mesh went through the shared upload transport; nothing
+    // else did, and no document or finalize went to a plaintext route.
+    const firstWrites = await contentWrites();
+    expect(firstWrites.plaintext).toEqual([]);
+    expect(firstWrites.encrypted).toContainEqual(
+      expect.stringMatching(/^PUT \/api\/uploads\/[^/]+\/content$/)
+    );
     const stored = [
       JSON.stringify(
         server.db.prepare('SELECT * FROM e2ee_content_blobs').all()
@@ -808,6 +877,7 @@ test(
     try {
       const second = await fresh.newPage();
       second.on('pageerror', (error) => errors.push(error.message));
+      const secondWrites = watchPlaintextContentWrites(second);
       const blobReads: string[] = [];
       second.on('request', (request) => {
         if (new URL(request.url()).pathname.endsWith(`/blobs/${blobId}`)) {
@@ -826,6 +896,7 @@ test(
       await expectBodyCount(second, 3);
       expect(blobReads).toEqual(['GET']);
       await expect(second.getByText(/could not be fetched/)).toHaveCount(0);
+      expect((await secondWrites()).plaintext).toEqual([]);
     } finally {
       await fresh.close();
     }
