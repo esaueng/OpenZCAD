@@ -907,6 +907,37 @@ describe('plainRefusalSentence', () => {
     );
   });
 
+  // Review of #2405: a quoted feature name took the unit, and a formatted
+  // sentence took a second one.
+  it('puts the unit after the refused size, not in a quoted feature name', () => {
+    expect(
+      plainRefusalSentence(
+        raw.replace('Chamfer 1', 'Chamfer with distance 2 "Nominal"'),
+        undefined,
+        'in'
+      )
+    ).toBe(
+      'Chamfer could not be created on 1 selected edge with distance 0.5 in. Try a smaller distance: distance 0.095 in builds here.'
+    );
+  });
+
+  it.each(['mm', 'in'])('never writes %s twice', (unit) => {
+    const once = plainRefusalSentence(raw, undefined, unit);
+    expect(plainRefusalSentence(once, undefined, unit)).toBe(once);
+  });
+
+  it('keeps a name with digits and units out of it, in mm', () => {
+    expect(
+      plainRefusalSentence(
+        raw.replace('Chamfer 1', 'Edge 4 mm with distance 3 mm'),
+        undefined,
+        'mm'
+      )
+    ).toBe(
+      'Chamfer could not be created on 1 selected edge with distance 0.5 mm. Try a smaller distance: distance 0.095 mm builds here.'
+    );
+  });
+
   it('leaves sizes bare without a unit, and words a typed code as plainRefusal does', () => {
     expect(plainRefusalSentence(raw, undefined, null)).toBe(
       'Chamfer could not be created on 1 selected edge with distance 0.5. Try a smaller distance: distance 0.095 builds here.'

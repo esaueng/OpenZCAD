@@ -435,6 +435,48 @@ describe("puts the document's unit after a refused chamfer's sizes", () => {
   });
 });
 
+// Review of #2405: a chamfer named with quotes and a size of its own kept
+// its name in front of the sentence, and the name's number took the unit.
+it('puts the unit after the refused size, not in a quoted feature name', () => {
+  const { document, fillet } = plateAndFillet();
+  const name = 'Chamfer with distance 2 "Nominal"';
+  const named = withFeature(document, fillet.id, (feature) => ({
+    ...feature,
+    name
+  }));
+  const message = `Feature "${name}": Chamfer could not be created on 1 selected edge with distance 1.5. Try a smaller distance: distance 0.985 builds here.`;
+  render(
+    <FeatureHistoryPanel
+      document={{
+        ...named,
+        units: 'inch',
+        derived: { ...named.derived, warnings: [message] }
+      }}
+      featureWarnings={[
+        {
+          featureId: fillet.featureId,
+          featureName: name,
+          kind: 'build-failed',
+          message,
+          kernelRefusal: {
+            family: 'blend',
+            category: 'invalid_input',
+            code: 'invalid-input'
+          }
+        }
+      ]}
+      selectedId={fillet.id}
+      failure={null}
+      onSelect={vi.fn()}
+      onDismissFailure={vi.fn()}
+    />
+  );
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'Chamfer could not be created on 1 selected edge with distance 1.5 in. Try a smaller distance: distance 0.985 in builds here.'
+  );
+  expect(screen.getByRole('alert')).not.toHaveTextContent('Nominal');
+});
+
 // K10: every feature but Mirror refused a missing target body untyped. The
 // card words the typed code, as the bar does.
 it("words a missing target body from its code, not the adapter's sentence", () => {

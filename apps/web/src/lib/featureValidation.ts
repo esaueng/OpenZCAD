@@ -103,6 +103,22 @@ export function refusingWarning(
 }
 
 /**
+ * The adapter's sentence without its `Feature "<name>": ` lead. The name is
+ * the user's and may hold quotes (`Chamfer with distance 2 "Nominal"`), so
+ * it is stripped as the known name, not up to the first quote: a name left
+ * in front would put user text where the refusal's sizes are read.
+ */
+export function withoutFeatureName(
+  message: string,
+  featureName: string
+): string {
+  const lead = `Feature "${featureName}": `;
+  return message.startsWith(lead)
+    ? message.slice(lead.length)
+    : message.replace(/^Feature "(?:[^"]|"(?!:\s))*":\s*/, '');
+}
+
+/**
  * The refusing warning with the kernel's classification beside it.
  *
  * The record already holds the category the adapter read off the kernel's
@@ -136,7 +152,7 @@ export function refusingWarningDetail(
   if (failure) {
     return {
       reason:
-        failure.message.replace(/^Feature "[^"]+":\s*/, '').trim() ||
+        withoutFeatureName(failure.message, failure.featureName).trim() ||
         'This operation does not produce valid geometry.',
       ...(failure.kernelRefusal
         ? {

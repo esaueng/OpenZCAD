@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { toFeatureId } from '@openzcad/shared';
 import {
   PreviewRefusalError,
+  refusingWarningDetail,
   splitRefusal,
   validatedFeatureRejection,
   warningForFeature
@@ -367,5 +368,33 @@ describe('a verdict with warning attribution', () => {
       })
     ).toBeNull();
     expect(warnings).toEqual([warning]);
+  });
+});
+
+// Review of #2405: a feature name holding quotes was not stripped, so the
+// name's own "with distance 2" took the refused size's unit.
+describe('the refusing warning without its feature name', () => {
+  it.each([
+    'Chamfer with distance 2 "Nominal"',
+    'Edge 4 mm with radius 3 mm',
+    '"Quoted": name'
+  ])('strips %j as the known name', (name) => {
+    const sentence =
+      'Chamfer could not be created on 1 selected edge with distance 1.5. Try a smaller distance: distance 0.985 builds here.';
+    expect(
+      refusingWarningDetail(
+        name,
+        [],
+        [
+          {
+            featureId: toFeatureId('feat_named'),
+            featureName: name,
+            kind: 'build-failed',
+            message: `Feature "${name}": ${sentence}`
+          }
+        ],
+        toFeatureId('feat_named')
+      )?.reason
+    ).toBe(sentence);
   });
 });

@@ -51,3 +51,45 @@ describe('a blend refusal as its command bar reads it', () => {
     );
   });
 });
+
+// Review of #2405: units go only into the adapter's own sentence. A feature
+// name with a number in it must not take the unit, and a size that has one
+// already must not take a second.
+describe('a unit only where the adapter quoted a size', () => {
+  const SENTENCE =
+    'Chamfer could not be created on 1 selected edge with distance 1.5. Try a smaller distance: distance 0.985 builds here.';
+  const formatted = (unit: string) =>
+    `Chamfer could not be created on 1 selected edge with distance 1.5 ${unit}. Try a smaller distance: distance 0.985 ${unit} builds here.`;
+
+  it('strips a quoted name and writes the unit after the refused size', () => {
+    expect(
+      blendRefusalText(
+        `Feature "Chamfer with distance 2 "Nominal"": ${SENTENCE}`,
+        'in'
+      )
+    ).toBe(formatted('in'));
+  });
+
+  it.each(['mm', 'in'])('never writes %s twice', (unit) => {
+    expect(blendRefusalText(formatted(unit), unit)).toBe(formatted(unit));
+  });
+
+  it('keeps a name with digits and units out of it, in mm', () => {
+    expect(
+      blendRefusalText(
+        `Feature "Edge 4 mm with distance 3 mm": ${SENTENCE}`,
+        'mm'
+      )
+    ).toBe(formatted('mm'));
+  });
+
+  it('writes no unit into text that does not open with the adapter sentence', () => {
+    // A name holding `": ` cannot be told from the lead; the text is left
+    // as it is rather than given a unit in the wrong place.
+    const unstripped = `Feature "Size": with distance 2": ${SENTENCE}`;
+    expect(blendRefusalText(unstripped, 'in')).not.toMatch(/\d in\b/);
+    expect(blendRefusalText('Bevel with distance 2 failed.', 'mm')).toBe(
+      'Bevel with distance 2 failed.'
+    );
+  });
+});
