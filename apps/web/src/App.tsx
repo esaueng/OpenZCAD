@@ -5283,6 +5283,14 @@ export function App() {
   keypadRef.current = keypad;
   /** Latest pointer/entry value stays transient until an exact frame lands. */
   const offsetPreviewValueRef = useRef<number | null>(null);
+  /**
+   * The offset the viewer's own mesh proxy draws the face at while no exact
+   * frame is up (a drag value reported with `exactGeometry` false); null
+   * once an exact frame is requested, at zero, or when the gesture ends.
+   */
+  const [projectedFaceOffset, setProjectedFaceOffset] = useState<number | null>(
+    null
+  );
   const submittedOffsetExpression = useRef<{
     document: ProjectDocument;
     key: string;
@@ -7479,6 +7487,7 @@ export function App() {
       regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
+      setProjectedFaceOffset(null);
       if (!directEditOwnsSelection(pending)) {
         // Picked elsewhere while this was checked: the refusal is the earlier
         // edit's. Marking the new selection failed showed it beside a value
@@ -7521,6 +7530,7 @@ export function App() {
       regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
+      setProjectedFaceOffset(null);
       setLastValidPreview(null);
       // Picked elsewhere while this was checked: the edit lands, and the new
       // selection stays. Finishing on the edited face took the pick away.
@@ -25613,6 +25623,7 @@ export function App() {
     offsetLeadPreview.clear();
     setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
+    setProjectedFaceOffset(null);
     setLastValidPreview(null);
   }, [offsetInteractionKey, offsetPreview, offsetLeadPreview]);
 
@@ -32987,7 +32998,16 @@ export function App() {
     return sectionHidesFaceOffset(
       {
         faces: offsetFaceExtents(body, target),
-        ...shownFaceOffset(currentFaceGeometryPreview)
+        ...shownFaceOffset(
+          currentFaceGeometryPreview,
+          // The viewer's mesh proxy moves the handle's face alone.
+          projectedFaceOffset === null
+            ? null
+            : {
+                offset: projectedFaceOffset,
+                movedTopologyIds: [target.topologyId]
+              }
+        )
       },
       offsetSectionView
     );
@@ -32996,7 +33016,8 @@ export function App() {
     interaction,
     representations,
     hiddenBodyIds,
-    currentFaceGeometryPreview
+    currentFaceGeometryPreview,
+    projectedFaceOffset
   ]);
 
   // M07: the armed face set's faces, for their direction ticks.
@@ -34665,6 +34686,9 @@ export function App() {
       current.handValue !== offset
     )
       dispatchInteraction({ type: 'drag-hand', value: offset });
+    setProjectedFaceOffset(
+      !exactGeometry && Math.abs(offset) > 1e-9 ? offset : null
+    );
     if (!exactGeometry) {
       offsetPreview.clear();
       offsetLeadPreview.clear();
@@ -34747,6 +34771,7 @@ export function App() {
     // canceled gesture left it latched until the next one of those.
     setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
+    setProjectedFaceOffset(null);
     const current = interactionRef.current;
     if (current.mode === 'face' && current.op === 'offset-face') {
       // Re-selecting the same semantic target resets the existing lifecycle
@@ -34790,6 +34815,7 @@ export function App() {
     edgePreview.clear();
     setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
+    setProjectedFaceOffset(null);
     reusableOffsetPreviewRef.current = null;
     reusableRadiusPreview.current = null;
     setFaceGeometryPreview(null);
@@ -35407,6 +35433,7 @@ export function App() {
     // it; it never authors the commit, which replays the whole set.
     offsetLeadPreview.stop();
     offsetPreviewValueRef.current = null;
+    setProjectedFaceOffset(null);
     // Let go where the set-aside release was, it commits from the rebuild
     // already running for it; anywhere else, the new value replaces it.
     if (resumeRelease && retaken) {

@@ -217,6 +217,47 @@ describe('shownFaceOffset', () => {
   });
 });
 
+describe('shownFaceOffset with the viewer mesh proxy', () => {
+  it('follows the proxy while no exact frame is up', () => {
+    // A primitive face held at +2: the proxy draws it, no exact frame comes.
+    expect(
+      shownFaceOffset(null, { offset: 2, movedTopologyIds: ['side'] })
+    ).toEqual({ previewOffset: 2, movedTopologyIds: ['side'] });
+  });
+
+  it('lets an exact frame stand over the proxy, and nothing over neither', () => {
+    expect(
+      shownFaceOffset({ offset: 3 }, { offset: 2, movedTopologyIds: ['side'] })
+    ).toEqual({ previewOffset: 3 });
+    expect(shownFaceOffset(null, null)).toEqual({ previewOffset: null });
+  });
+
+  it('reports a held face the proxy moves past the cut', () => {
+    // The +X side at x = 20, a YZ cut 1 mm beyond it, the face held at +2.
+    const side: BoundingBox = {
+      min: { x: 20, y: 0, z: 0 },
+      max: { x: 20, y: 10, z: 10 }
+    };
+    const faces = [{ topologyId: 'side', bounds: side, normal: plusX }];
+    const section = { plane: 'YZ', offset: 21 } as const;
+    expect(
+      sectionHidesFaceOffset({ faces, ...shownFaceOffset(null) }, section)
+    ).toBe(false);
+    expect(
+      sectionHidesFaceOffset(
+        {
+          faces,
+          ...shownFaceOffset(null, {
+            offset: 2,
+            movedTopologyIds: ['side']
+          })
+        },
+        section
+      )
+    ).toBe(true);
+  });
+});
+
 describe('a face set drag frame by frame', () => {
   // A 20 × 10 × 10 block's +Z top and +X side (x = 20), offset together;
   // a YZ cut at x = 21 keeps x ≤ 21.

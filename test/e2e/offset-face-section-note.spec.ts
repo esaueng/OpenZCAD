@@ -66,6 +66,33 @@ async function cutSideAt(page: Page, position: number) {
   await expect(toggle).toHaveAttribute('aria-pressed', 'true');
 }
 
+async function openBlock(page: Page) {
+  const document = addPrimitiveFeature(
+    createProjectDocument('Section note block', toUserId('user_e2e')),
+    {
+      name: 'Block',
+      bodyName: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 20, depth: 10 }
+    }
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Import project' }).click();
+  await page.getByLabel('Import project backup').setInputFiles({
+    name: 'block.openzcad',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        format: 'openzcad-project',
+        version: 1,
+        document,
+        files: []
+      })
+    )
+  });
+  await expectBodyCount(page, 1);
+}
+
 test(
   'an offset face says when the section view hides part of it, and only then',
   { tag: '@ci-smoke' },
@@ -73,30 +100,7 @@ test(
     test.setTimeout(120_000);
     await stubApi(page, { panelLayout: MODEL_ONLY });
     await page.setViewportSize({ width: 1440, height: 1000 });
-    const document = addPrimitiveFeature(
-      createProjectDocument('Section note block', toUserId('user_e2e')),
-      {
-        name: 'Block',
-        bodyName: 'Block',
-        primitiveKind: 'box',
-        dimensions: { width: 40, height: 20, depth: 10 }
-      }
-    );
-    await page.goto('/');
-    await page.getByRole('button', { name: 'Import project' }).click();
-    await page.getByLabel('Import project backup').setInputFiles({
-      name: 'block.openzcad',
-      mimeType: 'application/json',
-      buffer: Buffer.from(
-        JSON.stringify({
-          format: 'openzcad-project',
-          version: 1,
-          document,
-          files: []
-        })
-      )
-    });
-    await expectBodyCount(page, 1);
+    await openBlock(page);
     const canvas = page.locator('.viewer-host canvas');
     const span = await boxSpanX(canvas);
     const note = page.locator('.section-hidden-notice');
@@ -154,5 +158,51 @@ test(
     // Its way out turns the cut off, and the note goes with it.
     await turnOff.click();
     await expect(note).toHaveCount(0);
+  }
+);
+
+test(
+  'a face held past the cut mid-drag brings the note before release',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await openBlock(page);
+    const canvas = page.locator('.viewer-host canvas');
+    const span = await boxSpanX(canvas);
+    const note = page.locator('.section-hidden-notice');
+
+    // A cut 1 mm beyond the +X face: the face at rest is whole.
+    await cutSideAt(page, span.max + 1);
+    await armSideFace(canvas);
+    await expect(page.getByTestId('direct-manipulation-value')).toBeVisible();
+    await expect(note).toHaveCount(0);
+
+    // Drag the face 3 mm outward and hold it there, never releasing: the
+    // viewer's own mesh preview draws it past the cut, and the bar says so.
+    const handle = await canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY),
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy),
+      perUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+    }));
+    const rect = (await canvas.boundingBox())!;
+    const start = { x: rect.x + handle.x, y: rect.y + handle.y };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(
+      start.x + handle.dx * handle.perUnit * 3,
+      start.y + handle.dy * handle.perUnit * 3,
+      { steps: 12 }
+    );
+    // The drawn body reaches past the cut while the hand holds it.
+    await expect
+      .poll(async () => (await boxSpanX(canvas)).max, ready)
+      .toBeGreaterThan(span.max + 1.5);
+    await expect(note).toBeVisible(ready);
+    await expect(note).toContainText('Section view hides part of this face');
+    await page.mouse.up();
   }
 );

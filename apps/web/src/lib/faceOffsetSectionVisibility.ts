@@ -198,29 +198,37 @@ export function offsetFaceExtents(
   return extents;
 }
 
+/** A face displacement as drawn: its offset, and the faces it moved. */
+export interface ShownFaceFrame {
+  offset?: number | undefined;
+  /** The faces it moved, when only some; absent: every face of the edit. */
+  movedTopologyIds?: readonly string[] | undefined;
+}
+
 /**
- * What the face frame on screen shows, read from the frame the viewer
- * draws: its offset, and when it is a face set's leading-plane frame, the
- * faces it moved (the rest of the set stays on the source body). With no
- * frame up (none yet, or one taken down after a refusal) the source body is
- * on screen and nothing has moved, as the offset handle reads it too.
+ * What the viewer draws the edit at, read from the same state it draws
+ * from: the exact frame when one is up, its leading-plane frame moving only
+ * the faces it names; otherwise the viewer's own mesh proxy, which follows
+ * the hand while no exact frame comes (a primitive face held still never
+ * gets one); otherwise nothing has moved (none yet, or a frame taken down
+ * after a refusal), as the offset handle reads it too.
  */
 export function shownFaceOffset(
-  frame: {
-    offset?: number | undefined;
-    movedTopologyIds?: readonly string[] | undefined;
-  } | null
+  frame: ShownFaceFrame | null,
+  projected: ShownFaceFrame | null = null
 ): {
   previewOffset: number | null;
   movedTopologyIds?: readonly string[];
 } {
-  if (!frame || frame.offset === undefined || !Number.isFinite(frame.offset)) {
-    return { previewOffset: null };
-  }
+  const drawn = [frame, projected].find(
+    (candidate) =>
+      candidate?.offset !== undefined && Number.isFinite(candidate.offset)
+  );
+  if (!drawn) return { previewOffset: null };
   return {
-    previewOffset: frame.offset,
-    ...(frame.movedTopologyIds
-      ? { movedTopologyIds: frame.movedTopologyIds }
+    previewOffset: drawn.offset!,
+    ...(drawn.movedTopologyIds
+      ? { movedTopologyIds: drawn.movedTopologyIds }
       : {})
   };
 }
