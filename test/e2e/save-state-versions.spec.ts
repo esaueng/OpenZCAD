@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
+  SAVE_PREVIEW_EXPORT_REASON,
+  SAVE_PREVIEW_MEASURE_REASON
+} from '../../apps/web/src/lib/saveStatePreview';
+import {
   createPrimitiveInPlace,
   expectBodyCount,
   stubApi
@@ -124,6 +128,79 @@ test(
     await expect(page.getByRole('contentinfo')).toContainText(
       'Restored “Manual save”'
     );
+  }
+);
+
+test(
+  'a previewed version refuses the exports and Measure that read the project',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    // #2366, #2364: the project has two bodies and the save one, so a file
+    // or a reading taken from the project cannot pass for the version's.
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Preview Reads');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('ControlOrMeta+s');
+    const saved = revisionRow(page, 'Manual save');
+    await expect(saved).toBeVisible();
+    await expectSaveSettled(page);
+    await createPrimitiveInPlace(page, 'cylinder');
+    await expectBodyCount(page, 2);
+
+    const fileMenu = page.locator('details.file-menu');
+    const exportStep = fileMenu.getByRole('button', { name: /^Export STEP/ });
+    const exportMesh = fileMenu.getByRole('button', { name: /^Export mesh/ });
+    await fileMenu.locator('summary').click();
+    await expect(exportStep).toBeEnabled();
+    await fileMenu.locator('summary').click();
+
+    await saved.hover();
+    await saved.getByRole('button', { name: 'Preview Manual save' }).click();
+    const notice = page.getByRole('region', { name: 'Save preview' });
+    await expect(notice).toContainText('Previewing “Manual save”');
+    const canvas = page.locator('canvas[data-e2e-rendered-bodies]');
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
+
+    // The exports read the project: none is offered over the version, and
+    // each says why and what does export.
+    await fileMenu.locator('summary').click();
+    await expect(exportStep).toBeDisabled();
+    await expect(exportStep).toHaveAttribute(
+      'title',
+      SAVE_PREVIEW_EXPORT_REASON
+    );
+    await expect(exportMesh).toBeDisabled();
+    await fileMenu.locator('summary').click();
+
+    // Measure does not open on the project behind the preview, and the
+    // preview stays, saying how to measure.
+    await page
+      .getByRole('toolbar', { name: 'Viewer bar' })
+      .getByRole('button', { name: 'Measure', exact: true })
+      .click();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      SAVE_PREVIEW_MEASURE_REASON
+    );
+    await expect(page.getByLabel('Measurement workbench')).toHaveCount(0);
+    await expect(notice).toContainText('Previewing “Manual save”');
+    await expect(saved).toHaveClass(/is-previewing/);
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
+
+    // Closed, the project exports and measures again.
+    await notice.getByRole('button', { name: 'Close preview' }).click();
+    await expect(notice).toHaveCount(0);
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2');
+    await fileMenu.locator('summary').click();
+    await expect(exportStep).toBeEnabled();
+    await fileMenu.locator('summary').click();
+    await page
+      .getByRole('toolbar', { name: 'Viewer bar' })
+      .getByRole('button', { name: 'Measure', exact: true })
+      .click();
+    await expect(page.getByLabel('Measurement workbench')).toBeVisible();
   }
 );
 

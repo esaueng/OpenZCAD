@@ -131,6 +131,12 @@ import {
   type ExportScope
 } from './lib/exportScope';
 import {
+  SAVE_PREVIEW_EXPORT_REASON,
+  SAVE_PREVIEW_MEASURE_REASON,
+  viewportMeasurementAnnotations,
+  viewportStoredUnits
+} from './lib/saveStatePreview';
+import {
   DESKTOP_IMAGE_MAX_PIXELS,
   initialImageSketchId,
   viewImageScope
@@ -8401,6 +8407,12 @@ export function App() {
     savePreview !== null &&
     previewDoc === savePreview.document &&
     savePreview.projectId === doc?.projectId;
+  // #2365: the viewport draws the previewed version's coordinates, so its
+  // scale, grid and section readouts take that version's stored unit: one
+  // saved before a unit conversion is still in the old unit.
+  const viewportUnits = doc
+    ? viewportStoredUnits(doc.units, savePreviewActive ? savePreview : null)
+    : undefined;
   const projectEditDisabledReason =
     navigationPause.reasonFor(managerRef.current) ??
     (!projectOpenElsewhere && !shareSession && migrationEditReason
@@ -11708,6 +11720,9 @@ export function App() {
   }>(() => {
     if (
       !doc ||
+      // #2366: the exports read the project, not the saved version on
+      // screen, so none is offered while one is previewed.
+      savePreviewActive ||
       currentGeometrySnapshot !== null ||
       currentFaceGeometryPreview !== null ||
       (tweakMode && parameterModelError)
@@ -11747,6 +11762,7 @@ export function App() {
     hiddenBodyIds,
     tweakMode,
     parameterModelError,
+    savePreviewActive,
     currentGeometrySnapshot,
     currentFaceGeometryPreview
   ]);
@@ -11758,7 +11774,10 @@ export function App() {
       : exportScopeInfo && exportScopeInfo.hiddenExcluded > 0
         ? exportScopeLabel(exportScopeInfo)
         : null;
-  const emptyExportReason = emptyExportMessage(exportScopeInfo);
+  // Every control that names why nothing exports names the preview first.
+  const emptyExportReason = savePreviewActive
+    ? SAVE_PREVIEW_EXPORT_REASON
+    : emptyExportMessage(exportScopeInfo);
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -15503,6 +15522,13 @@ export function App() {
    * any other command starts — the two never stack.
    */
   function toggleMeasure(next: boolean) {
+    // #2364: Measure reads the project. Over a saved version it would
+    // measure the model the preview hides, and opening it closed the
+    // preview without a word: the preview stays, and says how to measure.
+    if (next && savePreviewActive) {
+      setStatus(SAVE_PREVIEW_MEASURE_REASON);
+      return;
+    }
     if (next && !modelingLocked) {
       if (interactionRef.current.mode === 'sketch') {
         setStatus('Finish the sketch before measuring.');
@@ -15518,6 +15544,10 @@ export function App() {
 
   /** Settled activation shares the rail/palette cleanup without asking again. */
   function completeMeasureToggle(next: boolean) {
+    if (next && savePreviewActive) {
+      setStatus(SAVE_PREVIEW_MEASURE_REASON);
+      return;
+    }
     if (next && !modelingLocked) cancelPanel();
     setMeasuring(next);
     clearMeasurementPicks();
@@ -19787,6 +19817,9 @@ export function App() {
       setSelectedSketchProfileId(null);
       setSelectedProfiles([]);
       setTool(null);
+      // #2364: Measure is the project's; it does not run over the version.
+      setMeasuring(false);
+      clearMeasurementPicks();
       setPreviewDoc(shown);
       setSavePreview({
         projectId: current.projectId,
@@ -22416,7 +22449,7 @@ export function App() {
     bodyId: string;
     topologyId: string;
   }) {
-    if (exportBlockedByUpdate() || !doc) {
+    if (exportBlockedByPreview() || exportBlockedByUpdate() || !doc) {
       return;
     }
     // F06: the face is picked on the row View shows, so it is that row's.
@@ -22473,7 +22506,7 @@ export function App() {
    */
   function openFlatPattern(featureId?: FeatureId) {
     const current = managerRef.current?.document;
-    if (!current) return;
+    if (!current || exportBlockedByPreview()) return;
     const target = flatPatternTarget(current, featureId);
     if ('error' in target) {
       setStatus(target.error);
@@ -22533,7 +22566,7 @@ export function App() {
     // No rebuild guard: the sketch is read from the saved document, and the
     // worker queues the export behind any rebuild in flight. The dialog
     // offers SVG while the model updates, so it must be able to deliver it.
-    if (!doc) {
+    if (!doc || exportBlockedByPreview()) {
       return;
     }
     // F06: the sketch as the row View shows it, at that row's sizes.
@@ -22932,6 +22965,7 @@ export function App() {
 
   /** F06: opens the mesh dialog on the row View shows. */
   function openMeshExport() {
+    if (exportBlockedByPreview()) return;
     setExportRowId(shownExportRowId);
     setMeshExportOpen(true);
   }
@@ -23019,6 +23053,17 @@ export function App() {
     );
   }
 
+  /**
+   * #2366: whether an export is refused because a saved version is on
+   * screen, said in the status. The exports read the project, so writing
+   * one now would hand over a model other than the one being looked at.
+   */
+  function exportBlockedByPreview() {
+    if (!savePreviewActive) return false;
+    setStatus(SAVE_PREVIEW_EXPORT_REASON);
+    return true;
+  }
+
   /** Whether an export must wait for the model to finish updating, said in the status. */
   function exportBlockedByUpdate() {
     if (currentGeometrySnapshot === null) return false;
@@ -23042,7 +23087,7 @@ export function App() {
    * configuration cannot be exported, or there is nothing to export.
    */
   function readyExportTarget(rowId: string | null) {
-    if (exportBlockedByUpdate()) {
+    if (exportBlockedByPreview() || exportBlockedByUpdate()) {
       return null;
     }
     let target: ReturnType<typeof exportTarget>;
@@ -23251,6 +23296,9 @@ export function App() {
       onProgress?(progress: ExportProgress): void;
     }
   ) {
+    if (savePreviewActive) {
+      return Promise.reject(new Error(SAVE_PREVIEW_EXPORT_REASON));
+    }
     let target: ReturnType<typeof exportTarget>;
     try {
       target = exportTarget(exportRowId);
@@ -41661,7 +41709,7 @@ export function App() {
               current: viewerSettings.sectionView ?? null,
               rangeFor: sectionAxisRange,
               outline: sectionOutline,
-              units: doc.units,
+              units: viewportUnits ?? doc.units,
               onToggle: toggleSectionView,
               onPlane: setSectionPlane,
               onOffset: setSectionOffset,
@@ -42247,7 +42295,12 @@ export function App() {
                 : undefined
             }
             view={viewportGeometry}
-            measurementAnnotations={measurementAnnotations}
+            // #2365: the kept results were taken on the project's geometry;
+            // none is drawn over a previewed version's.
+            measurementAnnotations={viewportMeasurementAnnotations(
+              measurementAnnotations,
+              savePreviewActive
+            )}
             measurementCloudSync={[
               doc.projectId,
               deploymentHealth?.projectMeasurementSyncEnabled,
@@ -42315,7 +42368,7 @@ export function App() {
             clearStageRequest={clearStageRequest}
             viewRequest={projectViewRequest}
             normalToFaceRequest={normalToFaceRequest}
-            units={doc.units}
+            units={viewportUnits ?? doc.units}
             // Every drag handle below is disarmed by passing nothing to arm:
             // the viewer only builds a manipulator when it is given a target,
             // so view mode keeps orbit, pan and picking while no gesture can
