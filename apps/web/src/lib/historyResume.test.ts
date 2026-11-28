@@ -290,6 +290,30 @@ describe('resume preflight decision', () => {
     ).toEqual([]);
   });
 
+  // The committed rebuild keeps only warning strings while the candidate
+  // carries typed records, so the baseline must not drop a failure whose
+  // lead two features share, or the resume is refused for it.
+  it('does not refuse a resume for a shared-name failure the model already had', () => {
+    const { features, derived } = rolledBackChain();
+    const resumed = rollbackMarkerMove(features, null).resumed;
+    const roster = [...features.map((feature) => feature.name), 'Copy'];
+    const committed = {
+      ...derived,
+      featureWarnings: undefined,
+      warnings: ['Feature "Copy": Target is unavailable.']
+    };
+    const before = new Set(failingFeatureIds(resumed, committed));
+    expect(before.has(features[1]!.featureId)).toBe(true);
+    const candidate = {
+      ...derived,
+      featureWarnings: [failed(features[1]!, 'Target is unavailable.')]
+    };
+    expect(resumeFailures(resumed, candidate, before, roster)).toEqual([]);
+    expect(() =>
+      validateHistoryResume(resumed, candidate, before, roster)
+    ).not.toThrow();
+  });
+
   it('refuses with a plain sentence, not a feature build error', () => {
     const { features, derived } = rolledBackChain();
     const resumed = rollbackMarkerMove(features, null).resumed;
@@ -466,6 +490,29 @@ describe('row resume preflight decision', () => {
     expect(resumeFailures(resume.checked, derived, alreadyFailing)).toEqual([]);
     // Before the rebuild of the current version is in, none is known.
     expect([...rowResumeAlreadyFailing(resume, null)]).toEqual([]);
+  });
+
+  // The committed rebuild keeps only warning strings while the candidate
+  // carries typed records: a later feature failing under a name it shares
+  // stays in the baseline, so the resume is not refused for it.
+  it('keeps a shared-name failure in the baseline the candidate is checked against', () => {
+    const { features, derived } = suppressedRow(1);
+    const resume = rowResume(features, features[1]!.featureId)!;
+    const roster = [...features.map((feature) => feature.name), 'Move copy'];
+    const committed = {
+      ...derived,
+      featureWarnings: undefined,
+      warnings: ['Feature "Move copy": Target is unavailable.']
+    };
+    const alreadyFailing = rowResumeAlreadyFailing(resume, committed);
+    expect([...alreadyFailing]).toEqual([features[2]!.featureId]);
+    const candidate = {
+      ...derived,
+      featureWarnings: [failed(features[2]!, 'Target is unavailable.')]
+    };
+    expect(() =>
+      validateHistoryResume(resume.checked, candidate, alreadyFailing, roster)
+    ).not.toThrow();
   });
 
   it('takes the row as already failing only when a rollback paused it so', () => {

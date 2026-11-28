@@ -36704,13 +36704,17 @@ export function App() {
     // Every feature's name: a warning without a typed record is blamed on
     // a feature only when its name is that feature's alone.
     const roster = listFeaturesInOrder(document).map((entry) => entry.name);
+    // No roster for the baseline: the committed rebuild keeps only warning
+    // strings, so a failure counts as already there for every feature its
+    // lead could name. A stricter baseline would refuse the resume for a
+    // failure the model already had once the candidate names it by its
+    // typed record.
     const alreadyFailing = rowResumeAlreadyFailing(
       resume,
       ready ? document.derived : null,
       rollbackFailingRef.current?.projectId === document.projectId
         ? rollbackFailingRef.current.featureIds
-        : undefined,
-      roster
+        : undefined
     );
     let refusal: HistoryResumeRefusal | null = null;
     let candidate: ProjectDocument['derived'] | null = null;
@@ -36887,9 +36891,11 @@ export function App() {
     const roster = listFeaturesInOrder(document).map((entry) => entry.name);
     if (move.paused.length > 0) {
       // Remember what the model already could not build before the pause,
-      // judged on the rebuild of this very version only.
+      // judged on the rebuild of this very version only. No roster: a
+      // shared name counts as failing for each feature it could name, so
+      // the resume is not refused for a failure that was already there.
       const failing = geometry.isReadyFor(document)
-        ? new Set(failingFeatureIds(move.paused, document.derived, roster))
+        ? new Set(failingFeatureIds(move.paused, document.derived))
         : new Set<FeatureId>();
       const known =
         rollbackFailingRef.current?.projectId === document.projectId

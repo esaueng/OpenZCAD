@@ -137,11 +137,12 @@ export function rowResume(
 export function rowResumeAlreadyFailing(
   resume: RowResume,
   derived: ProjectDocument['derived'] | null,
-  rollbackFailing: ReadonlySet<FeatureId> = new Set(),
-  roster?: readonly string[]
+  rollbackFailing: ReadonlySet<FeatureId> = new Set()
 ): Set<FeatureId> {
+  // No roster: this is the baseline, so an untyped warning counts for every
+  // feature its lead could name rather than for none of them.
   const failing = new Set(
-    derived ? failingFeatureIds(resume.checked.slice(1), derived, roster) : []
+    derived ? failingFeatureIds(resume.checked.slice(1), derived) : []
   );
   if (
     isFeatureRollbackSuppressed(resume.feature) &&
