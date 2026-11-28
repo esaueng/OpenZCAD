@@ -435,6 +435,10 @@ import {
 import { resolveBoundaryRegionReference } from './lib/profileProvenance';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
 import {
+  projectionPickProjects,
+  projectionRepickAccepts
+} from './lib/sketch/projectionPickEdges';
+import {
   SKETCH_RELATION_GLYPHS,
   sketchRelationGlyphs,
   sketchRelationKeepOuts,
@@ -27346,6 +27350,56 @@ export function App() {
   );
   // The viewport's copy of the session also knows whether a solve or rebuild
   // owns the sketch, so a click cannot place text the card has disabled.
+  /**
+   * I01: what the Project tool would accept, so its hover lights only that:
+   * a pick that projects onto the sketch plane, and under a re-pick one
+   * edge projecting to the repaired object's kind of curve — the rules its
+   * commit applies (`lib/sketch/projectionPickEdges`).
+   */
+  const referenceSession =
+    interaction.mode === 'sketch' && interaction.session.tool === 'project'
+      ? interaction.session
+      : null;
+  const referenceSketchId = referenceSession?.sketchId ?? null;
+  const referenceMode = referenceSession
+    ? (referenceSession.projectMode ?? 'linked')
+    : null;
+  const sketchReferenceAccepts = useMemo(() => {
+    if (!referenceMode || !doc || !sketchBasis) {
+      return undefined;
+    }
+    const sketch = referenceSketchId
+      ? (findSketch(doc, referenceSketchId as SketchId) ?? null)
+      : null;
+    const basis = sketchBasis;
+    if (projectionRepair) {
+      const repaired = ownEntry(doc.nodes, projectionRepair.objectId);
+      const objectKind =
+        repaired?.kind === 'sketch-object' ? repaired.data.objectKind : null;
+      return (selection: TopologySelection) =>
+        objectKind !== null &&
+        projectionRepickAccepts({
+          document: doc,
+          sketch,
+          selection,
+          basis,
+          repairing: projectionRepair.objectId,
+          objectKind,
+          lineagePending: true
+        });
+    }
+    const mode = referenceMode;
+    return (selection: TopologySelection) =>
+      projectionPickProjects({
+        document: doc,
+        sketch,
+        selection,
+        basis,
+        mode,
+        lineagePending: true
+      });
+  }, [referenceMode, referenceSketchId, doc, sketchBasis, projectionRepair]);
+
   const sketchModeForViewer = useMemo(
     () =>
       sketchModeState && {
@@ -27353,7 +27407,10 @@ export function App() {
         relations: sketchRelationChips,
         relationStrokes: sketchRelationStrokeSegments,
         relationKeepOuts: sketchRelationKeepOutPoints,
-        textDraftBusy: sketchSolving || geometryBusy
+        textDraftBusy: sketchSolving || geometryBusy,
+        ...(sketchReferenceAccepts
+          ? { referenceAccepts: sketchReferenceAccepts }
+          : {})
       },
     [
       sketchModeState,
@@ -27361,7 +27418,8 @@ export function App() {
       sketchRelationStrokeSegments,
       sketchRelationKeepOutPoints,
       sketchSolving,
-      geometryBusy
+      geometryBusy,
+      sketchReferenceAccepts
     ]
   );
 

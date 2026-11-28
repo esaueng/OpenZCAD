@@ -775,6 +775,14 @@ export class BodyEdgeOverlay extends THREE.Group {
     return true;
   }
 
+  /** The topology ids the hover overlay is lighting now, owner first. */
+  get hoveredTopologyIds(): string[] {
+    const prefix = `${this.bodyId}:`;
+    return [...this.hoveredKeys].map((key) =>
+      key.startsWith(prefix) ? key.slice(prefix.length) : key
+    );
+  }
+
   /** Drops hover immediately when its source geometry is restored/replaced. */
   resetHover() {
     this.hoveredKeys.clear();
