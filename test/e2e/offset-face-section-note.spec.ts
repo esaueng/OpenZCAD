@@ -15,9 +15,9 @@ import {
 const ready = { timeout: 30_000 };
 
 /** The +X face's world bounds along X, read from the rendered body. */
-async function boxSpanX(canvas: Locator) {
+async function boxSpanX(canvas: Locator, axis = 0) {
   return canvas.evaluate(
-    (element) =>
+    (element, axis) =>
       new Promise<{ min: number; max: number }>((resolve) => {
         element.dispatchEvent(
           new CustomEvent('openzcad:e2e-render-policy', {
@@ -26,25 +26,28 @@ async function boxSpanX(canvas: Locator) {
                 bodyFaces: { worldBounds: { min: number[]; max: number[] } }[];
               }) => {
                 const bounds = state.bodyFaces[0]!.worldBounds;
-                resolve({ min: bounds.min[0]!, max: bounds.max[0]! });
+                resolve({ min: bounds.min[axis]!, max: bounds.max[axis]! });
               }
             }
           })
         );
-      })
+      }),
+    axis
   );
 }
 
 /** Arms the offset handle on the box's +X face, as a click on it would. */
-async function armSideFace(canvas: Locator) {
+async function armSideFace(canvas: Locator, normal = { x: 1, y: 0, z: 0 }) {
   await expect
     .poll(async () => {
-      await canvas.evaluate((element) =>
-        element.dispatchEvent(
-          new CustomEvent('openzcad:e2e-select-planar-face', {
-            detail: { normal: { x: 1, y: 0, z: 0 } }
-          })
-        )
+      await canvas.evaluate(
+        (element, normal) =>
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-select-planar-face', {
+              detail: { normal }
+            })
+          ),
+        normal
       );
       return canvas.getAttribute('data-e2e-handle-x');
     }, ready)
@@ -52,12 +55,17 @@ async function armSideFace(canvas: Locator) {
 }
 
 /** Puts a Side (YZ) cut at `position`, then puts the controls away. */
-async function cutSideAt(page: Page, position: number, flipped = false) {
+async function cutSideAt(
+  page: Page,
+  position: number,
+  flipped = false,
+  plane = 'Side (YZ plane)'
+) {
   const toggle = page.getByRole('button', { name: /^Section view — now:/ });
   const panel = page.getByRole('group', { name: 'Section view', exact: true });
   await toggle.click();
   await expect(panel).toBeVisible();
-  await panel.getByRole('button', { name: 'Side (YZ plane)' }).click();
+  await panel.getByRole('button', { name: plane }).click();
   const offset = panel.getByRole('spinbutton', { name: 'Cut position' });
   await offset.fill(String(position));
   await offset.press('Enter');
@@ -92,14 +100,17 @@ async function handleGrab(canvas: Locator) {
   };
 }
 
-async function openBlock(page: Page) {
+async function openBlock(
+  page: Page,
+  dimensions = { width: 40, height: 20, depth: 10 }
+) {
   const document = addPrimitiveFeature(
     createProjectDocument('Section note block', toUserId('user_e2e')),
     {
       name: 'Block',
       bodyName: 'Block',
       primitiveKind: 'box',
-      dimensions: { width: 40, height: 20, depth: 10 }
+      dimensions
     }
   );
   await page.goto('/');
@@ -289,5 +300,73 @@ test(
     await expect(note).toHaveCount(0);
     await page.waitForTimeout(500);
     await expect(note).toHaveCount(0);
+  }
+);
+
+test(
+  'a refused release keeps the note beside the refusal while its last preview is cut away',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    // The default box, 30 × 18 × 24 mm, with the flipped top cut at 20 mm
+    // of its height: the cut keeps everything above it.
+    await openBlock(page, { width: 30, height: 18, depth: 24 });
+    const canvas = page.locator('.viewer-host canvas');
+    const span = await boxSpanX(canvas, 2);
+    const cut = span.min + 20;
+    const note = page.locator('.section-hidden-notice');
+    await cutSideAt(page, cut, true, 'Top (XY plane)');
+    await armSideFace(canvas, { x: 0, y: 0, z: 1 });
+    // Offset the face itself, not the box's Resize.
+    const offsetVerb = page
+      .locator('.selection-rail')
+      .getByRole('button', { name: 'Selection: Offset', exact: true });
+    await offsetVerb.click();
+    await expect(offsetVerb).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('direct-manipulation-value')).toBeVisible();
+    await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+    await expect(note).toHaveCount(0);
+
+    // Pull the top down through the cut and hold: the note shows.
+    const grab = await handleGrab(canvas);
+    await page.mouse.move(grab.start.x, grab.start.y);
+    await page.mouse.down();
+    const low = grab.at(-22);
+    await page.mouse.move(low.x, low.y, { steps: 12 });
+    await expect(note).toBeVisible(ready);
+    // The exact frame for that value lands in place of the viewer's proxy.
+    await expect(canvas).not.toHaveAttribute(
+      'data-e2e-height-proxy-offset',
+      /.+/,
+      ready
+    );
+    await expect
+      .poll(async () => (await boxSpanX(canvas, 2)).max, ready)
+      .toBeLessThan(cut);
+    await expect(note).toBeVisible();
+
+    // On past zero height and let go: the edit is refused, and its last
+    // valid preview stays drawn below the cut, so the note stays beside
+    // the refusal rather than giving way to it.
+    const past = grab.at(-30);
+    await page.mouse.move(past.x, past.y);
+    await page.mouse.up();
+    const refusal = page.locator('.workspace-hint .edit-refusal');
+    await expect(refusal).toBeVisible(ready);
+    await expect(refusal).toContainText('Not built');
+    await expect
+      .poll(async () => (await boxSpanX(canvas, 2)).max, ready)
+      .toBeLessThan(cut);
+    await expect(note).toBeVisible();
+    await expect(note).toContainText('Section view hides part of this face');
+    await page.waitForTimeout(300);
+    await expect(note).toBeVisible();
+
+    // Turning the cut off from the note shows that preview, and the note goes.
+    await note.getByRole('button', { name: 'Turn off section' }).click();
+    await expect(note).toHaveCount(0);
+    await expect(refusal).toBeVisible();
   }
 );

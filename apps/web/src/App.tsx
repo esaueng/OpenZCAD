@@ -40916,15 +40916,15 @@ export function App() {
   // "Tick the bodies that are parts", and "Drag the arrow to set the fillet
   // on edge" once a part was clicked, with no arrow to drag. It rests.
   const panelModeHint = assembleMode ? idleHint : tweakModeHint;
-  // The section note takes the guidance row's notice slot only when nothing
-  // with more to say (a save preview, the live session, a refusal) has it.
+  // The section note takes the guidance row's notice slot when nothing with
+  // more to say (a save preview, the live session) has it. A refusal shares
+  // the slot: its last valid preview stays drawn, and the cut can hide it.
   // The compact workspace reads it in its sheet, as it does a refusal.
   const offsetSectionNoteShown =
     offsetHiddenBySection &&
     !modelingLocked &&
     !savePreviewActive &&
-    !liveSessionConnecting &&
-    !(!keypad && calloutWithOperation?.operation?.error);
+    !liveSessionConnecting;
   const workspacePrompt =
     !displayedGeometryComplete && !drawingMode
       ? 'Preparing model · viewing is available; editing waits until it is ready'
@@ -44652,25 +44652,30 @@ export function App() {
                   onRetry={collaboration.reconnect}
                 />
               ) : !keypad && calloutWithOperation?.operation?.error ? (
-                <EditRefusal
-                  operation={calloutWithOperation.operation}
-                  // The compact sheet has the width for the whole line, and
-                  // its explanation opens in the sheet's flow (U12).
-                  variant={compactShell ? 'control' : 'bar'}
-                  revealRequest={
-                    refusalReveal?.interaction === interaction
-                      ? refusalReveal.count
-                      : 0
-                  }
-                  unitLabel={displayLengthName(doc.units)}
-                  onTrySize={tryRefusalSize}
-                  onPickAnother={pickAnotherAfterRefusal}
-                  pickAnotherLabel={
-                    interaction.mode === 'edges'
-                      ? 'Pick another edge'
-                      : 'Pick another face'
-                  }
-                />
+                <>
+                  <EditRefusal
+                    operation={calloutWithOperation.operation}
+                    // The compact sheet has the width for the whole line, and
+                    // its explanation opens in the sheet's flow (U12).
+                    variant={compactShell ? 'control' : 'bar'}
+                    revealRequest={
+                      refusalReveal?.interaction === interaction
+                        ? refusalReveal.count
+                        : 0
+                    }
+                    unitLabel={displayLengthName(doc.units)}
+                    onTrySize={tryRefusalSize}
+                    onPickAnother={pickAnotherAfterRefusal}
+                    pickAnotherLabel={
+                      interaction.mode === 'edges'
+                        ? 'Pick another edge'
+                        : 'Pick another face'
+                    }
+                  />
+                  {offsetSectionNoteShown ? (
+                    <SectionHidesEditNotice onTurnOff={turnSectionViewOff} />
+                  ) : null}
+                </>
               ) : offsetSectionNoteShown ? (
                 <SectionHidesEditNotice onTurnOff={turnSectionViewOff} />
               ) : null
