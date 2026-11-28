@@ -266,6 +266,30 @@ describe('resume preflight decision', () => {
     expect(resumeFailures(resumed, derived, before)).toEqual([]);
   });
 
+  // A committed document's rebuild keeps only the warning strings, which
+  // name a feature by its `Feature "<name>":` lead and nothing else.
+  it('blames an untyped warning only on the one feature its lead names', () => {
+    const { features, derived } = rolledBackChain();
+    const resumed = rollbackMarkerMove(features, null).resumed;
+    const untyped = { ...derived, featureWarnings: undefined };
+    const roster = features.map((feature) => feature.name);
+    // "Copy" is not blamed for a "Copy 10" warning.
+    untyped.warnings = ['Feature "Copy 10": Target is unavailable.'];
+    expect(failingFeatureIds(resumed, untyped, roster)).toEqual([]);
+    // Its own lead still names it.
+    untyped.warnings = ['Feature "Copy": Target is unavailable.'];
+    expect(failingFeatureIds(resumed, untyped, roster)).toEqual([
+      features[1]!.featureId
+    ]);
+    // A rename that gives two features that name leaves the lead to neither.
+    expect(failingFeatureIds(resumed, untyped, [...roster, 'Copy'])).toEqual(
+      []
+    );
+    expect(
+      resumeFailures(resumed, untyped, new Set(), [...roster, 'Copy'])
+    ).toEqual([]);
+  });
+
   it('refuses with a plain sentence, not a feature build error', () => {
     const { features, derived } = rolledBackChain();
     const resumed = rollbackMarkerMove(features, null).resumed;

@@ -137,10 +137,11 @@ export function rowResume(
 export function rowResumeAlreadyFailing(
   resume: RowResume,
   derived: ProjectDocument['derived'] | null,
-  rollbackFailing: ReadonlySet<FeatureId> = new Set()
+  rollbackFailing: ReadonlySet<FeatureId> = new Set(),
+  roster?: readonly string[]
 ): Set<FeatureId> {
   const failing = new Set(
-    derived ? failingFeatureIds(resume.checked.slice(1), derived) : []
+    derived ? failingFeatureIds(resume.checked.slice(1), derived, roster) : []
   );
   if (
     isFeatureRollbackSuppressed(resume.feature) &&
@@ -153,14 +154,19 @@ export function rowResumeAlreadyFailing(
 /**
  * The features that do not build in `derived`, among `features`. Recorded
  * when a rollback pauses them, so a later resume does not blame itself for
- * a failure the model already had.
+ * a failure the model already had. `roster` is every feature's name in the
+ * document, so an untyped warning is not pinned to a feature by a name it
+ * shares (`featureFailure`).
  */
 export function failingFeatureIds(
   features: readonly FeatureNode[],
-  derived: ProjectDocument['derived']
+  derived: ProjectDocument['derived'],
+  roster?: readonly string[]
 ): FeatureId[] {
   return features
-    .filter((feature) => featureFailureReason(feature, derived) !== null)
+    .filter(
+      (feature) => featureFailureReason(feature, derived, roster) !== null
+    )
     .map((feature) => feature.featureId);
 }
 
@@ -172,11 +178,12 @@ export function failingFeatureIds(
 export function resumeFailures(
   resumed: readonly FeatureNode[],
   derived: ProjectDocument['derived'],
-  alreadyFailing: ReadonlySet<FeatureId> = new Set()
+  alreadyFailing: ReadonlySet<FeatureId> = new Set(),
+  roster?: readonly string[]
 ): RefusedDependent[] {
   return resumed.flatMap((feature): RefusedDependent[] => {
     if (alreadyFailing.has(feature.featureId)) return [];
-    const failure = featureFailure(feature, derived);
+    const failure = featureFailure(feature, derived, roster);
     return failure
       ? [{ featureId: feature.featureId, name: feature.name, ...failure }]
       : [];
@@ -207,9 +214,10 @@ export class HistoryResumeRefusal extends Error {
 export function validateHistoryResume(
   resumed: readonly FeatureNode[],
   derived: ProjectDocument['derived'],
-  alreadyFailing?: ReadonlySet<FeatureId>
+  alreadyFailing?: ReadonlySet<FeatureId>,
+  roster?: readonly string[]
 ): void {
-  const failures = resumeFailures(resumed, derived, alreadyFailing);
+  const failures = resumeFailures(resumed, derived, alreadyFailing, roster);
   if (failures.length) throw new HistoryResumeRefusal(failures);
 }
 

@@ -36701,12 +36701,16 @@ export function App() {
       ready,
       attributedFeatureWarnings()
     );
+    // Every feature's name: a warning without a typed record is blamed on
+    // a feature only when its name is that feature's alone.
+    const roster = listFeaturesInOrder(document).map((entry) => entry.name);
     const alreadyFailing = rowResumeAlreadyFailing(
       resume,
       ready ? document.derived : null,
       rollbackFailingRef.current?.projectId === document.projectId
         ? rollbackFailingRef.current.featureIds
-        : undefined
+        : undefined,
+      roster
     );
     let refusal: HistoryResumeRefusal | null = null;
     let candidate: ProjectDocument['derived'] | null = null;
@@ -36717,7 +36721,12 @@ export function App() {
         validateDerived: (derived) => {
           candidate = derived;
           try {
-            validateHistoryResume(resume.checked, derived, alreadyFailing);
+            validateHistoryResume(
+              resume.checked,
+              derived,
+              alreadyFailing,
+              roster
+            );
           } catch (error) {
             if (error instanceof HistoryResumeRefusal) refusal = error;
             throw error;
@@ -36873,11 +36882,14 @@ export function App() {
     if (!owner || move.commands.length === 0) return;
     const document = owner.document;
     setPendingResume(null);
+    // Every feature's name: a warning without a typed record is blamed on
+    // a feature only when its name is that feature's alone.
+    const roster = listFeaturesInOrder(document).map((entry) => entry.name);
     if (move.paused.length > 0) {
       // Remember what the model already could not build before the pause,
       // judged on the rebuild of this very version only.
       const failing = geometry.isReadyFor(document)
-        ? new Set(failingFeatureIds(move.paused, document.derived))
+        ? new Set(failingFeatureIds(move.paused, document.derived, roster))
         : new Set<FeatureId>();
       const known =
         rollbackFailingRef.current?.projectId === document.projectId
@@ -36913,7 +36925,12 @@ export function App() {
         targets: [],
         validateDerived: (derived) => {
           try {
-            validateHistoryResume(move.resumed, derived, alreadyFailing);
+            validateHistoryResume(
+              move.resumed,
+              derived,
+              alreadyFailing,
+              roster
+            );
           } catch (error) {
             if (error instanceof HistoryResumeRefusal) {
               refusal = error;
