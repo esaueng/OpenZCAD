@@ -683,12 +683,38 @@ function NumericKeypadControl({
     // Losing the anchor (orbited off screen) docks it once, and it stays.
     let positioned = false;
     let docked = false;
+    // Drawn as the phone's sheet; left again when the window widens. Whether
+    // it is a sheet is the window's width alone: a place handed on by Tab
+    // from a value that was in the sheet is no place in the stage, so it is
+    // never replayed (the width would then keep the sheet's look while the
+    // command bar went back to the foot).
+    let sheet = false;
+    const held =
+      request.heldAt && request.heldAt.side !== 'sheet' ? request.heldAt : null;
     let lastAnchor: { x: number; y: number } | null = null;
     const phone = () =>
       asSheetRef.current ||
       (typeof window.matchMedia === 'function' &&
         window.matchMedia(PHONE_QUERY).matches);
+    // On the regular stage the phone sheet covers the stage's foot, where a
+    // running command's bar says why a value was refused; the bar stands
+    // above it by the height published here (quiet-stage.css). The compact
+    // workspace draws the control in its own sheet and needs none.
+    let sheetArea: HTMLElement | null = null;
+    const publishSheetHeight = () => {
+      if (asSheetRef.current) return;
+      const area = root.closest<HTMLElement>('.viewer-area');
+      if (!area) return;
+      sheetArea = area;
+      const covered =
+        area.getBoundingClientRect().bottom - root.getBoundingClientRect().top;
+      area.style.setProperty(
+        '--keypad-sheet-h',
+        `${Math.max(0, Math.ceil(covered))}px`
+      );
+    };
     const place = (placement: KeypadPlacement) => {
+      sheetArea?.style.removeProperty('--keypad-sheet-h');
       root.style.visibility = 'visible';
       root.style.left = `${placement.x}px`;
       root.style.top = `${placement.y}px`;
@@ -706,6 +732,21 @@ function NumericKeypadControl({
         row: rowRef.current?.offsetHeight || root.offsetHeight || 40
       };
     };
+    // Where a control placed in the stage stands when nothing has pushed
+    // the pick's point: its fixed point, its chip, or the stage's middle.
+    const stageAnchor = (host: HTMLElement) => {
+      if (request.fixedClientAnchor) {
+        const rect = host.getBoundingClientRect();
+        return {
+          x: request.fixedClientAnchor.x - rect.left,
+          y: request.fixedClientAnchor.y - rect.top
+        };
+      }
+      const chip = valueChipBox(host, request.commandValueId);
+      return chip
+        ? { x: chip.left, y: chip.top }
+        : { x: host.clientWidth / 2, y: host.clientHeight / 2 };
+    };
     const positionAt = (point: { x: number; y: number } | null) => {
       const host = root.parentElement;
       if (!host) return;
@@ -717,29 +758,35 @@ function NumericKeypadControl({
         root.style.removeProperty('max-height');
         root.dataset.placement = 'sheet';
         setPlacement('sheet');
+        publishSheetHeight();
+        sheet = true;
         positioned = true;
         return;
       }
-      if (request.heldAt) {
+      if (sheet) {
+        // Wider than a phone now (a widened window, a turned tablet): the
+        // control leaves the sheet and is placed in the stage afresh, by
+        // the pick when it is known, and the bar goes back to the foot.
+        sheet = false;
+        sheetArea?.style.removeProperty('--keypad-sheet-h');
+        positioned = false;
+        docked = false;
+        point ??= lastAnchor ?? stageAnchor(host);
+      }
+      if (held) {
         // Stepped here by Tab: it stands where the last value's did.
         if (positioned) return;
         const { size, viewport } = measure(host);
         const rect = host.getBoundingClientRect();
         const within = (value: number, room: number) =>
           Math.min(Math.max(value, 0), Math.max(0, room));
-        const left = within(
-          request.heldAt.x - rect.left,
-          viewport.width - size.width
-        );
-        const top = within(
-          request.heldAt.y - rect.top,
-          viewport.height - size.height
-        );
+        const left = within(held.x - rect.left, viewport.width - size.width);
+        const top = within(held.y - rect.top, viewport.height - size.height);
         root.style.visibility = 'visible';
         root.style.left = `${left}px`;
         root.style.top = `${top}px`;
-        root.dataset.placement = request.heldAt.side;
-        setPlacement(request.heldAt.side);
+        root.dataset.placement = held.side;
+        setPlacement(held.side);
         lastAnchor = { x: 0, y: 0 };
         positioned = true;
         return;
@@ -774,7 +821,7 @@ function NumericKeypadControl({
     };
     anchorRef.current = positionAt;
     const host = root.parentElement;
-    if (host && request.heldAt) {
+    if (host && held) {
       positionAt(null);
     } else if (host && request.fixedClientAnchor) {
       const rect = host.getBoundingClientRect();
@@ -796,7 +843,7 @@ function NumericKeypadControl({
     // Preserve a stable position during typing, but re-clamp when the host
     // or the control changes size (rotation, a dock opening, a refusal line).
     const reposition = () => {
-      if (!lastAnchor && !phone()) return;
+      if (!lastAnchor && !phone() && !sheet) return;
       const wasPositioned = positioned;
       positioned = false;
       positionAt(lastAnchor);
@@ -818,6 +865,7 @@ function NumericKeypadControl({
       observer?.disconnect();
       window.removeEventListener('resize', reposition);
       stopKeyboardInset();
+      sheetArea?.style.removeProperty('--keypad-sheet-h');
       anchorRef.current = null;
     };
   }, [

@@ -1955,3 +1955,131 @@ describe('the keypad in the compact sheet', () => {
     }
   });
 });
+
+describe('the phone sheet across a change of width', () => {
+  let phone = true;
+  beforeEach(() => {
+    phone = true;
+    window.matchMedia = (query: string) => ({
+      matches: query === '(max-width: 560px)' ? phone : false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false
+    });
+  });
+
+  /** The keypad on the regular stage, in a viewer area as App draws it. */
+  function mount(request: KeypadRequest) {
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const host = document.createElement('div');
+    Object.defineProperties(host, {
+      clientWidth: { value: 1000, configurable: true },
+      clientHeight: { value: 800 }
+    });
+    area.append(host);
+    document.body.append(area);
+    const anchor = {
+      current: null as ((point: { x: number; y: number } | null) => void) | null
+    };
+    const view = render(
+      <NumericKeypad
+        request={request}
+        units="mm"
+        scope={{}}
+        anchorRef={anchor}
+        onPreview={() => undefined}
+        onCommit={() => undefined}
+        onCancel={() => undefined}
+      />,
+      { container: host }
+    );
+    return {
+      anchor,
+      keypad: () => screen.getByRole('dialog'),
+      sheetHeight: () => area.style.getPropertyValue('--keypad-sheet-h'),
+      done: () => {
+        view.unmount();
+        area.remove();
+      }
+    };
+  }
+
+  const widen = () =>
+    act(() => {
+      phone = false;
+      window.dispatchEvent(new Event('resize'));
+    });
+  const narrow = () =>
+    act(() => {
+      phone = true;
+      window.dispatchEvent(new Event('resize'));
+    });
+
+  it.each([
+    [
+      'its chip still on screen',
+      {
+        kind: 'command',
+        commandValueId: 'distance',
+        label: 'Offset',
+        initial: '-1',
+        unitKind: 'length'
+      } satisfies KeypadRequest,
+      true
+    ],
+    [
+      'opened at a fixed point',
+      {
+        kind: 'sketch-dimension',
+        label: 'Length',
+        initial: '12',
+        unitKind: 'length',
+        fixedClientAnchor: { x: 400, y: 300 }
+      } satisfies KeypadRequest,
+      false
+    ],
+    [
+      'stepped to by Tab from a value in the sheet',
+      {
+        kind: 'command',
+        commandValueId: 'depth',
+        label: 'Depth',
+        initial: '10',
+        unitKind: 'length',
+        // Tab hands the last value's place on: the sheet, on a phone.
+        heldAt: { x: 0, y: 700, side: 'sheet' }
+      } satisfies KeypadRequest,
+      false
+    ]
+  ])(
+    'leaves the sheet when widened past a phone, %s, and takes it back',
+    (_name, request, pushes) => {
+      const view = mount(request);
+      try {
+        const keypad = view.keypad();
+        if (pushes) act(() => view.anchor.current?.({ x: 500, y: 300 }));
+        expect(keypad).toHaveAttribute('data-placement', 'sheet');
+        expect(view.sheetHeight()).toMatch(/^\d+px$/);
+
+        widen();
+        // The viewport pushes the pick's point each frame while it shows.
+        if (pushes) act(() => view.anchor.current?.({ x: 500, y: 300 }));
+        expect(keypad).not.toHaveAttribute('data-placement', 'sheet');
+        expect(keypad.style.left).not.toBe('');
+        expect(view.sheetHeight()).toBe('');
+
+        narrow();
+        expect(keypad).toHaveAttribute('data-placement', 'sheet');
+        expect(keypad.style.left).toBe('');
+        expect(view.sheetHeight()).toMatch(/^\d+px$/);
+      } finally {
+        view.done();
+      }
+    }
+  );
+});

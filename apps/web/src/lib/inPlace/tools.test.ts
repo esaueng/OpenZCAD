@@ -29,6 +29,7 @@ import {
   inPlaceBodyMode,
   inPlaceFaceMode,
   inPlaceFacePickSurfaces,
+  inPlaceFacesOverEdges,
   takesFeatureFaces,
   toggledPatternSkip,
   patternCopyChip,
@@ -1752,6 +1753,27 @@ describe('M02 feature patterns and skipped copies', () => {
     expect(surfaces('shell')).toBeNull();
     expect(surfaces('linear-pattern')).toBeNull();
     expect(inPlaceFacePickSurfaces(null, {})).toBeNull();
+  });
+
+  it('takes the face under an edge only for a command with no use for edges', () => {
+    const overEdges = (id: keyof typeof IN_PLACE_TOOL_SPECS) =>
+      inPlaceFacesOverEdges(IN_PLACE_TOOL_SPECS[id], {});
+    // Faces and nothing an edge could be: a tap on a small face, inside a
+    // finger's edge band all over, still takes the face.
+    expect(overEdges('hole')).toBe(true);
+    expect(overEdges('shell')).toBe(true);
+    // Edges are what Fillet takes; a datum may stand on an edge; a pattern
+    // takes bodies (and an edge as its direction).
+    expect(overEdges('fillet')).toBe(false);
+    expect(overEdges('datum-axis')).toBe(false);
+    expect(overEdges('linear-pattern')).toBe(false);
+    // A pattern of features takes faces, and still an edge as its direction.
+    expect(
+      inPlaceFacesOverEdges(IN_PLACE_TOOL_SPECS['linear-pattern'], {
+        repeat: 'features'
+      })
+    ).toBe(false);
+    expect(inPlaceFacesOverEdges(null, {})).toBe(false);
   });
 
   it('repeats the picked feature on its body, once however many faces name it', () => {

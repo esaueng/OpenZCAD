@@ -451,6 +451,8 @@ interface ViewerShellProps {
   facePickSurfaces?: readonly string[] | null;
   /** Shift adds faces of this body to a held face set (see `ModelViewer`). */
   faceSetPickBodyId?: string | null;
+  /** A running command takes faces and no edges (ModelViewer). */
+  facePickOverEdges?: boolean;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onMovePreviewChange(
@@ -683,6 +685,7 @@ export function ViewerShell({
   facePickOnly,
   facePickSurfaces,
   faceSetPickBodyId = null,
+  facePickOverEdges = false,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onMovePreviewChange,
@@ -1244,6 +1247,7 @@ export function ViewerShell({
         {...(facePickOnly ? { facePickOnly } : {})}
         {...(facePickSurfaces ? { facePickSurfaces } : {})}
         faceSetPickBodyId={faceSetPickBodyId}
+        facePickOverEdges={facePickOverEdges}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
         onMovePreviewChange={onMovePreviewChange}
