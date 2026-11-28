@@ -17,11 +17,16 @@ import {
   type DrawingView,
   type DrawingViewId,
   DRAWING_EXPLODED_VIEW_ANNOTATIONS,
-  type ProjectDocument
+  drawingAnnotationToleranceFloorError,
+  pinDrawingToleranceUnits,
+  type ProjectDocument,
+  type UnitSystem
 } from '@openzcad/shared';
 import {
   assertDrawingExplodedViewSchema,
-  assertDrawingViewConfigurationSchema
+  assertDrawingToleranceUnitsSchema,
+  assertDrawingViewConfigurationSchema,
+  hasDrawingToleranceUnits
 } from './document-content-schema';
 
 /**
@@ -54,6 +59,23 @@ export interface DrawingSheetUpdateInput {
    * or an empty record clears them back to every default.
    */
   format?: DrawingSheetFormat | null;
+  /**
+   * v156: the units the sheet printed in before this update, stated on each
+   * of its length tolerances and frame amounts that state none (see
+   * `pinDrawingToleranceUnits`), so a `format` that changes the printed
+   * units converts them rather than reinterpreting them. Absent (every
+   * update before v156) states nothing.
+   */
+  pinToleranceUnits?: UnitSystem;
+  /**
+   * v156: with no `pinToleranceUnits`, work the pin out from the sheet: a
+   * `format` that changes the units the sheet prints in pins the old ones
+   * (and one that keeps them pins nothing). `commandFactories` sets it on
+   * every format change it builds, so no fresh command can reinterpret a
+   * tolerance; an update logged before v156 lacks it and replays exactly
+   * as it was recorded.
+   */
+  derivePinToleranceUnits?: true;
 }
 
 export interface DrawingSheetDeleteInput {
@@ -220,9 +242,14 @@ export function updateDrawingSheet(
   document: ProjectDocument,
   input: DrawingSheetUpdateInput
 ): ProjectDocument {
+  // v156: stating tolerance units is refused below v156, before any edit.
+  if (input.pinToleranceUnits !== undefined)
+    assertDrawingToleranceUnitsSchema(document.schemaVersion);
   return withDrawings(document, (sheets) => {
     const index = sheetIndex(sheets, input.sheetId);
     const sheet = sheets[index]!;
+    // Read before the format below replaces the sheet's own.
+    const pin = sheetTolerancePin(document, sheet, input);
     if (input.name !== undefined) sheet.name = input.name.trim();
     if (input.paper) sheet.paper = { ...input.paper };
     if (input.scale) sheet.scale = { ...input.scale };
@@ -275,6 +302,15 @@ export function updateDrawingSheet(
       if (input.titleBlockLayout === null) delete sheet.titleBlockLayout;
       else sheet.titleBlockLayout = input.titleBlockLayout;
     }
+    if (pin !== undefined && sheet.annotations) {
+      const annotations = sheet.annotations;
+      const pinned = pinDrawingToleranceUnits(annotations, pin);
+      // A derived pin that states nothing leaves a v155 document open.
+      if (pinned.some((annotation, at) => annotation !== annotations[at])) {
+        assertDrawingToleranceUnitsSchema(document.schemaVersion);
+        sheet.annotations = pinned;
+      }
+    }
     if (input.format !== undefined) {
       if (input.format === null || Object.keys(input.format).length === 0)
         delete sheet.format;
@@ -282,6 +318,24 @@ export function updateDrawingSheet(
     }
     return sheets;
   });
+}
+
+/**
+ * v156: the units an update pins on the sheet's unstated tolerances: the
+ * stated pin, or (`derivePinToleranceUnits`) the units the sheet printed in
+ * when its new format prints in others.
+ */
+function sheetTolerancePin(
+  document: ProjectDocument,
+  sheet: DrawingSheet,
+  input: DrawingSheetUpdateInput
+): UnitSystem | undefined {
+  if (input.pinToleranceUnits !== undefined) return input.pinToleranceUnits;
+  if (!input.derivePinToleranceUnits || input.format === undefined)
+    return undefined;
+  const before = sheet.format?.units ?? document.units;
+  const after = input.format?.units ?? document.units;
+  return before === after ? undefined : before;
 }
 
 /**
@@ -666,6 +720,35 @@ function assertAnnotationEdgesInView(
   }
 }
 
+/**
+ * v156: refuses a new edit's tolerance finer than
+ * `MIN_DRAWING_TOLERANCE_MM` (see `drawingAnnotationToleranceFloorError`).
+ * `commandFactories` checks every fresh annotation add and update; a
+ * logged one replays as it was recorded, and loading never checks it, so a
+ * document stored before the floor still opens unchanged.
+ */
+export function assertDrawingAnnotationToleranceFloor(
+  document: ProjectDocument,
+  input: DrawingAnnotationAddInput | DrawingAnnotationUpdateInput
+): void {
+  const sheet = document.drawings?.sheets.find(
+    (entry) => entry.sheetId === input.sheetId
+  );
+  if (!sheet) return;
+  const previous = sheet.annotations?.find(
+    (entry) => entry.annotationId === input.annotation.annotationId
+  );
+  const error = drawingAnnotationToleranceFloorError(
+    input.annotation,
+    sheet.format?.units ?? document.units,
+    previous
+  );
+  if (error)
+    throw new Error(
+      `Drawing annotation ${input.annotation.annotationId}: ${error}`
+    );
+}
+
 export function addDrawingAnnotation(
   document: ProjectDocument,
   input: DrawingAnnotationAddInput
@@ -681,6 +764,8 @@ export function addDrawingAnnotation(
       throw new Error(
         `Drawing annotation ${input.annotation.annotationId} already exists.`
       );
+    if (hasDrawingToleranceUnits(input.annotation))
+      assertDrawingToleranceUnitsSchema(document.schemaVersion);
     assertAnnotationEdgesInView(sheet, input.annotation);
     sheet.annotations = [...annotations, deepClone(input.annotation)];
     return sheets;
@@ -704,6 +789,8 @@ export function updateDrawingAnnotation(
     const previous = annotations[index]!;
     if (previous.viewId !== input.annotation.viewId)
       throw new Error('An annotation cannot move to another view.');
+    if (hasDrawingToleranceUnits(input.annotation))
+      assertDrawingToleranceUnitsSchema(document.schemaVersion);
     assertAnnotationEdgesInView(sheet, input.annotation, previous);
     annotations[index] = deepClone(input.annotation);
     sheet.annotations = annotations;

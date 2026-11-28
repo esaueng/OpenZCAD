@@ -1395,9 +1395,13 @@ export function draftAnnotation(
   componentId?: string,
   /**
    * v98: a new datum symbol's letter and a new frame's tolerance amount
-   * (in the sheet's printed units); the Properties panel edits the rest.
+   * (in `units`, v156, else the sheet's printed units); the Properties
+   * panel edits the rest.
    */
-  tolerancing: { letter: string; amount: number } = { letter: 'A', amount: 0.1 }
+  tolerancing: { letter: string; amount: number; units?: UnitSystem } = {
+    letter: 'A',
+    amount: 0.1
+  }
 ): DrawingAnnotation | null {
   if (!pickedEnough(tool)) return null;
   const base = { annotationId, placementMm };
@@ -1558,7 +1562,8 @@ export function draftAnnotation(
             viewId: tool.viewId!,
             ...target,
             characteristic: 'flatness',
-            amount: tolerancing.amount
+            amount: tolerancing.amount,
+            ...(tolerancing.units ? { units: tolerancing.units } : {})
           };
     }
   }

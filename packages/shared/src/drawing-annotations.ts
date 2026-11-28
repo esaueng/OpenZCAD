@@ -2,7 +2,8 @@ import type {
   BodyId,
   Brand,
   EdgeTopologyReferenceV5,
-  FaceTopologyReferenceV5
+  FaceTopologyReferenceV5,
+  UnitSystem
 } from './index';
 import type { DrawingViewId } from './drawings';
 import { storedTopologyReferenceError } from './topology-reference';
@@ -213,10 +214,17 @@ interface DrawingAnnotationBase {
 
 /**
  * v68: a dimension's tolerance. Deviations are signed amounts from the
- * measured value, in the units the dimension is printed in (the sheet's
- * units from v70, else the document's; degrees on an angle), so
- * a toleranced dimension stays associative: `limits` prints the measured
- * value plus each deviation, read from the model each time it is drawn.
+ * measured value, so a toleranced dimension stays associative: `limits`
+ * prints the measured value plus each deviation, read from the model each
+ * time it is drawn.
+ *
+ * v156: a length's amounts are in `units`, and the sheet converts them to
+ * the units it prints in, so changing the sheet's units never changes what
+ * a tolerance means. Absent (every tolerance before v156) they are in the
+ * units the dimension is printed in (the sheet's units from v70, else the
+ * document's); a change of those units first states the old ones on each
+ * such tolerance (see {@link pinDrawingToleranceUnits}). An angle's are in
+ * degrees and never state units.
  *
  * - `symmetric`: `10 ±0.05`; `value` is positive.
  * - `deviation`: `10` with `+0.1` over `-0.05` stacked after it.
@@ -227,9 +235,9 @@ interface DrawingAnnotationBase {
  * tolerance, and a chamfer's `size × angle` callout takes none.
  */
 export type DrawingTolerance =
-  | { kind: 'symmetric'; value: number }
-  | { kind: 'deviation'; upper: number; lower: number }
-  | { kind: 'limits'; upper: number; lower: number }
+  | { kind: 'symmetric'; value: number; units?: UnitSystem }
+  | { kind: 'deviation'; upper: number; lower: number; units?: UnitSystem }
+  | { kind: 'limits'; upper: number; lower: number; units?: UnitSystem }
   | { kind: 'basic' };
 
 export type DrawingToleranceKind = DrawingTolerance['kind'];
@@ -705,13 +713,15 @@ export interface DrawingDatumFeature extends DrawingToleranceAnnotationBase {
  * v98: a feature control frame: the characteristic's symbol, the tolerance
  * (a cylindrical zone's Ø, then the amount and any material modifier),
  * then up to three datum references in order of precedence. `amount`, the
- * tolerance zone's size, is in the units the sheet prints in, like a
- * dimension's tolerance.
+ * tolerance zone's size, is in `units` (v156), or absent in the units the
+ * sheet prints in, like a dimension's tolerance.
  */
 export interface DrawingFeatureControlFrame extends DrawingToleranceAnnotationBase {
   kind: 'feature-control-frame';
   characteristic: DrawingGeometricCharacteristic;
   amount: number;
+  /** v156: the units `amount` is in; absent, the sheet's printed units. */
+  units?: UnitSystem;
   diameterZone?: true;
   material?: DrawingMaterialCondition;
   datums?: DrawingDatumReference[];
@@ -1007,19 +1017,199 @@ function isDeviation(value: unknown): value is number {
   );
 }
 
+/** v156: the units a length tolerance may state its amounts in. */
+const DRAWING_TOLERANCE_UNITS: readonly UnitSystem[] = [
+  'mm',
+  'cm',
+  'm',
+  'inch'
+];
+
+function isToleranceUnits(value: unknown): value is UnitSystem {
+  return (
+    typeof value === 'string' &&
+    (DRAWING_TOLERANCE_UNITS as readonly string[]).includes(value)
+  );
+}
+
+/** v156: the dimensions that measure an angle, whose tolerance is in degrees. */
+export const DRAWING_ANGLE_DIMENSION_KINDS = [
+  'angle',
+  'arc-angle',
+  'three-point-angle'
+] as const;
+
+/**
+ * v156: the units a stored length tolerance or frame amount is in: its own,
+ * or (stated before v156) the units its sheet prints in.
+ */
+export function drawingToleranceUnits(
+  stated: { units?: UnitSystem },
+  printed: UnitSystem
+): UnitSystem {
+  return stated.units ?? printed;
+}
+
+/**
+ * v156: `annotations` with `units` stated on every length tolerance and
+ * feature control frame amount that states none. Such an amount is in the
+ * units its sheet prints in, so a change of those units states the old ones
+ * first, and the amount keeps its meaning. Angles (degrees) and every
+ * amount that already states its units are kept; the result shares
+ * unchanged annotations.
+ */
+export function pinDrawingToleranceUnits(
+  annotations: readonly DrawingAnnotation[],
+  units: UnitSystem
+): DrawingAnnotation[] {
+  return annotations.map((annotation) => {
+    if (annotation.kind === 'feature-control-frame')
+      return annotation.units === undefined
+        ? { ...annotation, units }
+        : annotation;
+    if (
+      !('tolerance' in annotation) ||
+      annotation.tolerance === undefined ||
+      annotation.tolerance.kind === 'basic' ||
+      annotation.tolerance.units !== undefined ||
+      (DRAWING_ANGLE_DIMENSION_KINDS as readonly string[]).includes(
+        annotation.kind
+      )
+    )
+      return annotation;
+    return {
+      ...annotation,
+      tolerance: { ...annotation.tolerance, units }
+    };
+  });
+}
+
+/**
+ * v156: the smallest physical tolerance a new edit may state, in
+ * millimetres: each nonzero amount, and the gap between two limits, is at
+ * least this in whatever units it is stored in. With it, a tolerance never
+ * needs more than 12 decimals to print distinct limits in any units.
+ */
+export const MIN_DRAWING_TOLERANCE_MM = 0.0001;
+
+/** Millimetres per tolerance unit (kept local: `index` imports this file). */
+const TOLERANCE_UNIT_MM: Readonly<Record<UnitSystem, number>> = {
+  mm: 1,
+  cm: 10,
+  m: 1000,
+  inch: 25.4
+};
+
+/**
+ * v156: `value` as a tolerance stores it (at most
+ * {@link MAX_DRAWING_DIMENSION_DECIMALS} decimals, bounded), or null when
+ * storing it would round it. Float noise (0.005 in is 0.12699999… mm) is
+ * not rounding.
+ */
+export function storedDrawingToleranceAmount(value: number): number | null {
+  if (!Number.isFinite(value) || Math.abs(value) > MAX_DRAWING_TOLERANCE)
+    return null;
+  const stored = Number(value.toFixed(MAX_DRAWING_DIMENSION_DECIMALS));
+  return Math.abs(stored - value) <= 1e-9 * Math.abs(value)
+    ? stored || 0
+    : null;
+}
+
+/**
+ * v156: why a new edit's length tolerance (or a frame's amount, as
+ * `{ kind: 'symmetric', value: amount, units }`) is finer than
+ * {@link MIN_DRAWING_TOLERANCE_MM}, or null. `printed` is the sheet's
+ * printed units (an unstated tolerance's). An amount `previous`, the
+ * tolerance the edit replaces, already states keeps its meaning, so a
+ * document stored before the floor still opens and can be edited.
+ */
+export function drawingToleranceFloorError(
+  next: DrawingTolerance,
+  printed: UnitSystem,
+  previous?: DrawingTolerance
+): string | null {
+  if (next.kind === 'basic') return null;
+  const mm = (tolerance: { units?: UnitSystem }, amount: number) =>
+    amount * TOLERANCE_UNIT_MM[drawingToleranceUnits(tolerance, printed)];
+  const before =
+    previous === undefined || previous.kind === 'basic'
+      ? []
+      : (previous.kind === 'symmetric'
+          ? [previous.value, -previous.value]
+          : [previous.upper, previous.lower]
+        ).map((amount) => mm(previous, amount));
+  const kept = (amount: number) =>
+    before.some(
+      (stated) =>
+        Math.abs(stated - amount) <= 1e-9 * Math.max(Math.abs(amount), 1e-9)
+    );
+  const fine = (amount: number) =>
+    Math.abs(amount) < MIN_DRAWING_TOLERANCE_MM * (1 - 1e-9);
+  const amounts =
+    next.kind === 'symmetric' ? [next.value] : [next.upper, next.lower];
+  for (const amount of amounts.map((stated) => mm(next, stated)))
+    if (amount !== 0 && fine(amount) && !kept(amount))
+      return `A tolerance is at least ${MIN_DRAWING_TOLERANCE_MM} mm.`;
+  if (next.kind !== 'symmetric') {
+    const [upper, lower] = [mm(next, next.upper), mm(next, next.lower)];
+    if (fine(upper - lower) && !(kept(upper) && kept(lower)))
+      return `Limits are at least ${MIN_DRAWING_TOLERANCE_MM} mm apart.`;
+  }
+  return null;
+}
+
+/**
+ * v156: {@link drawingToleranceFloorError} for an annotation a new edit
+ * states, replacing `previous` (absent when it is added): a length
+ * dimension's tolerance, or a frame's amount. Angles are in degrees.
+ */
+export function drawingAnnotationToleranceFloorError(
+  next: DrawingAnnotation,
+  printed: UnitSystem,
+  previous?: DrawingAnnotation
+): string | null {
+  const stated = (
+    annotation: DrawingAnnotation | undefined
+  ): DrawingTolerance | undefined => {
+    if (annotation === undefined) return undefined;
+    if (annotation.kind === 'feature-control-frame')
+      return {
+        kind: 'symmetric',
+        value: annotation.amount,
+        ...(annotation.units === undefined ? {} : { units: annotation.units })
+      };
+    if (
+      !('tolerance' in annotation) ||
+      (DRAWING_ANGLE_DIMENSION_KINDS as readonly string[]).includes(
+        annotation.kind
+      )
+    )
+      return undefined;
+    return annotation.tolerance;
+  };
+  const tolerance = stated(next);
+  return tolerance === undefined
+    ? null
+    : drawingToleranceFloorError(tolerance, printed, stated(previous));
+}
+
 /** Why `value` is not a stored {@link DrawingTolerance}, or null. */
 export function drawingToleranceError(value: unknown): string | null {
   if (!isRecord(value)) return 'has a tolerance that is not a record';
+  // v156: a length's amounts may state their units.
+  const stated = value.units === undefined ? 0 : 1;
+  if (stated && value.kind !== 'basic' && !isToleranceUnits(value.units))
+    return 'has a tolerance in unknown units';
   switch (value.kind) {
     case 'symmetric':
-      if (Object.keys(value).length !== 2)
+      if (Object.keys(value).length !== 2 + stated)
         return 'has a symmetric tolerance with unknown fields';
       return isDeviation(value.value) && value.value > 0
         ? null
         : 'has a symmetric tolerance that is not a positive amount of at most six decimals';
     case 'deviation':
     case 'limits':
-      if (Object.keys(value).length !== 3)
+      if (Object.keys(value).length !== 3 + stated)
         return `has a ${value.kind} tolerance with unknown fields`;
       if (!isDeviation(value.upper) || !isDeviation(value.lower))
         return `has a ${value.kind} tolerance with an invalid deviation (finite, at most six decimals)`;
@@ -1067,6 +1257,7 @@ const FEATURE_CONTROL_FRAME_KEYS = new Set([
   'attachedTo',
   'characteristic',
   'amount',
+  'units',
   'diameterZone',
   'material',
   'datums'
@@ -1200,6 +1391,8 @@ function toleranceAnnotationError(
       value.attachedTo === value.annotationId)
   )
     return `${where} is a ${name} attached to an invalid annotation id.`;
+  if (value.units !== undefined && !isToleranceUnits(value.units))
+    return `${where} is a feature control frame whose tolerance is in unknown units.`;
   return toleranceFieldsError(value, where);
 }
 
@@ -1525,6 +1718,12 @@ export function drawingAnnotationError(
       return `${where} is a callout, which takes no tolerance.`;
     const error = drawingToleranceError(value.tolerance);
     if (error) return fail(error);
+    if (
+      isRecord(value.tolerance) &&
+      value.tolerance.units !== undefined &&
+      (DRAWING_ANGLE_DIMENSION_KINDS as readonly unknown[]).includes(value.kind)
+    )
+      return `${where} measures an angle, whose tolerance is in degrees and states no units.`;
   }
   switch (value.kind) {
     case 'distance': {
