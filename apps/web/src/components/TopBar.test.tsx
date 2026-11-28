@@ -707,6 +707,30 @@ describe('TopBar File menu', () => {
     expect(screen.getAllByRole('button', { name: /STEP/ })).toHaveLength(1);
   });
 
+  // #2381: the picker took .igs and .iges while the line and tooltip
+  // named neither.
+  it('lists every format the import picker accepts, IGES included', () => {
+    renderTopBar({ canExport: true });
+    fileMenu().open = true;
+    const item = screen.getByRole('button', { name: 'Import CAD files…' });
+    const line = item.querySelector('small')?.textContent ?? '';
+    expect(line).toBe('STEP · IGES · STL · 3MF · OBJ · GLB · PLY · DXF');
+    expect(item.getAttribute('title')).toContain('IGES (exact B-rep solids)');
+    const accepted = screen
+      .getByLabelText<HTMLInputElement>('Import STEP or a mesh file…')
+      .accept.split(',');
+    expect(accepted).toEqual(expect.arrayContaining(['.igs', '.iges']));
+    for (const extension of accepted.filter((ext) => ext !== '.shapr')) {
+      expect(line.toLowerCase()).toContain(
+        extension === '.stp'
+          ? 'step'
+          : extension === '.igs'
+            ? 'iges'
+            : extension.slice(1)
+      );
+    }
+  });
+
   it('offers IGES beside STEP on one row, so the File menu gains no height', () => {
     const { onExportIges, onExportStep } = renderTopBar({ canExport: true });
     fileMenu().open = true;

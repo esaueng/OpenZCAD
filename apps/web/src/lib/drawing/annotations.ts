@@ -39,6 +39,7 @@ import {
   isDrawingToleranceAnnotation,
   drawingAnnotationHost,
   drawingToleranceHostAllowed,
+  drawingToleranceUnits,
   type DrawingToleranceAnnotation,
   type DrawingTolerance,
   type DrawingSheetFormat,
@@ -640,6 +641,78 @@ function significantDecimals(value: number): number {
   return MAX_DRAWING_DIMENSION_DECIMALS;
 }
 
+/**
+ * v156: what a stored length tolerance amount is multiplied by to print it:
+ * the ratio of the units it is in to the sheet's printed units (1 when the
+ * same, or when it states none and so is in the printed units).
+ */
+export function toleranceUnitFactor(
+  stated: { units?: UnitSystem },
+  printed: UnitSystem
+): number {
+  const units = drawingToleranceUnits(stated, printed);
+  return units === printed
+    ? 1
+    : millimetresPerUnit(units) / millimetresPerUnit(printed);
+}
+
+/**
+ * The most decimals a tolerance prints with: the smallest stored amount
+ * (0.000001) in the largest ratio (mm to m) is 1e-9, which takes nine, and
+ * one significant digit more takes ten. Limits at least the v156 floor
+ * (0.0001 mm) apart print distinct well within it.
+ */
+export const MAX_CONVERTED_TOLERANCE_DECIMALS = 12;
+
+/**
+ * The decimals a tolerance amount prints with once multiplied by `factor`:
+ * as many as state it exactly when it is not converted, or when its
+ * converted value is exact (0.001 in is 0.0254 mm), else one significant
+ * digit more than it was stated with (0.02 mm is 0.00079 in, 0.1 mm is
+ * 0.0039 in, and 0.00001 mm is 0.00000039 in), so a converted amount neither
+ * rounds to a different tolerance, nor to zero, nor prints a long tail of
+ * noise. A converted amount may take more decimals than a stored one.
+ */
+export function toleranceDecimals(amount: number, factor: number): number {
+  if (factor === 1 || amount === 0) return significantDecimals(amount);
+  const converted = Math.abs(amount * factor);
+  const digits =
+    significantDecimals(amount) + Math.floor(Math.log10(Math.abs(amount))) + 1;
+  const rounded = Math.min(
+    MAX_CONVERTED_TOLERANCE_DECIMALS,
+    Math.max(0, digits - Math.floor(Math.log10(converted)))
+  );
+  // Exact within a relative bound, so a tiny amount is never "exactly" 0.
+  for (
+    let decimals = 0;
+    decimals <= Math.max(MAX_DRAWING_DIMENSION_DECIMALS, rounded);
+    decimals++
+  )
+    if (
+      Math.abs(Number(converted.toFixed(decimals)) - converted) <=
+      1e-9 * converted
+    )
+      return decimals;
+  return rounded;
+}
+
+/**
+ * v156: a stored tolerance amount in the sheet's printed units, as a field
+ * shows it: converted by `factor`, to at least the decimals a tolerance
+ * stores and as many more as it prints with, so it is never shown as 0.
+ */
+export function printedToleranceAmount(amount: number, factor: number): number {
+  if (factor === 1) return amount;
+  return Number(
+    (amount * factor).toFixed(
+      Math.max(
+        MAX_DRAWING_DIMENSION_DECIMALS,
+        toleranceDecimals(amount, factor)
+      )
+    )
+  );
+}
+
 /** Fixed decimals, kept so a stacked pair lines up; never "-0". */
 function fixedNumber(value: number, decimals: number): string {
   const fixed = value.toFixed(decimals);
@@ -723,6 +796,13 @@ export function formatDimension(
     const write = (n: number, d: number, trim: boolean) =>
       writeNumber(n, d, kind, format, trim);
     const nominal = `${symbol}${write(value, decimals, true)}${measured.designation ? ` ${measured.designation}` : ''}`;
+    // v156: a length tolerance states the units its amounts are in, which
+    // the sheet converts to its own; an angle's are degrees.
+    const factor =
+      kind === 'length' && tolerance && tolerance.kind !== 'basic'
+        ? toleranceUnitFactor(tolerance, format.units)
+        : 1;
+    const amount = (n: number) => n * factor;
     // A tolerance keeps the decimals it needs, so a stored one never prints
     // as zero: a length's or decimal degree's own, a D°M'S" amount's in
     // seconds (0.000001° is 0.0036").
@@ -732,34 +812,63 @@ export function formatDimension(
             decimals,
             ...amounts.map((amount) => significantDecimals(amount * 3600))
           )
-        : Math.max(decimals, ...amounts.map(significantDecimals));
+        : Math.max(
+            decimals,
+            ...amounts.map((stated) => toleranceDecimals(stated, factor))
+          );
+    /**
+     * From `start`, the fewest decimals (at most
+     * {@link MAX_CONVERTED_TOLERANCE_DECIMALS}) at which `legible` holds:
+     * no nonzero amount prints as zero, and two limits print distinct. The
+     * v156 floor (0.0001 mm, and limits as far apart) keeps every new
+     * tolerance inside the cap.
+     */
+    const legible = (start: number, holds: (d: number) => boolean) => {
+      let d = start;
+      while (d < MAX_CONVERTED_TOLERANCE_DECIMALS && !holds(d)) d++;
+      return d;
+    };
+    /** Whether an amount's text states a nonzero digit. */
+    const shown = (text: string) => /[1-9]/.test(text);
     switch (tolerance?.kind) {
       case undefined:
       case 'basic':
         lead = nominal;
         break;
       case 'symmetric': {
-        const d = tolerant(tolerance.value);
-        lead = `${nominal} ±${write(tolerance.value, d, false)}`;
+        const text = (d: number) => write(amount(tolerance.value), d, false);
+        const d = legible(tolerant(tolerance.value), (at) => shown(text(at)));
+        lead = `${nominal} ±${text(d)}`;
         break;
       }
       case 'deviation':
       case 'limits': {
-        const d = tolerant(tolerance.upper, tolerance.lower);
+        const { upper, lower } = tolerance;
+        const pair = (d: number): [string, string] =>
+          tolerance.kind === 'deviation'
+            ? [
+                signedDeviation(amount(upper), d, kind, format),
+                signedDeviation(amount(lower), d, kind, format)
+              ]
+            : [
+                write(value + amount(upper), d, false),
+                write(value + amount(lower), d, false)
+              ];
+        // From each offset, then from the gap between them, so distinct
+        // limits print distinct (500.000001 and 500 mm on an inch sheet).
+        const d = legible(tolerant(upper, lower), (at) => {
+          const [over, under] = pair(at);
+          return (
+            over !== under &&
+            (tolerance.kind === 'limits' ||
+              ((upper === 0 || shown(over)) && (lower === 0 || shown(under))))
+          );
+        });
         if (tolerance.kind === 'deviation') {
           lead = nominal;
           gap = ' ';
-          stack = [
-            signedDeviation(tolerance.upper, d, kind, format),
-            signedDeviation(tolerance.lower, d, kind, format)
-          ];
-        } else {
-          lead = symbol;
-          stack = [
-            write(value + tolerance.upper, d, false),
-            write(value + tolerance.lower, d, false)
-          ];
-        }
+        } else lead = symbol;
+        stack = pair(d);
         break;
       }
     }
@@ -1372,12 +1481,27 @@ export function generalToleranceTable(
   };
 }
 
-/** D07 v98: a frame's tolerance amount in the sheet's number format. */
+/**
+ * D07 v98: a frame's tolerance amount in the sheet's number format, from
+ * the units it is in (v156: `units`, else the sheet's printed units). A
+ * converted amount prints to at least the sheet's decimals, trailing zeros
+ * trimmed; one in the printed units as it is stated.
+ */
 export function formatFrameTolerance(
   value: number,
-  format: DrawingNumberFormat
+  format: DrawingNumberFormat,
+  units?: UnitSystem
 ): string {
-  return writeNumber(value, significantDecimals(value), 'length', format, true);
+  const factor = toleranceUnitFactor({ units }, format.units);
+  return writeNumber(
+    value * factor,
+    factor === 1
+      ? toleranceDecimals(value, factor)
+      : Math.max(format.lengthDecimals, toleranceDecimals(value, factor)),
+    'length',
+    format,
+    true
+  );
 }
 
 /**
@@ -1433,7 +1557,11 @@ function resolveToleranceAnnotation(
     return failure('datum-undefined');
   const cells: FrameCells = {
     characteristic: annotation.characteristic,
-    tolerance: formatFrameTolerance(annotation.amount, format),
+    tolerance: formatFrameTolerance(
+      annotation.amount,
+      format,
+      annotation.units
+    ),
     diameterZone: annotation.diameterZone === true,
     ...(annotation.material ? { material: annotation.material } : {}),
     datums: (annotation.datums ?? []).map((reference) => ({ ...reference }))

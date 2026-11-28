@@ -1,6 +1,7 @@
 import {
   documentNodesWithHistory,
   importedSourceReferenceOf,
+  importedStepSourceFormat,
   IMPORTED_MESH_PAYLOAD_CONTENT_TYPE,
   isImportedMeshSourceData,
   isImportedStepSourceData,
@@ -141,6 +142,30 @@ export function meshPayloadArchive(sourceName: string): {
   };
 }
 
+/**
+ * How an exact import's STEP source is archived. A STEP import keeps its own
+ * name. An IGES import's bytes are the STEP it was restated as (I06), so the
+ * archive says so: `plate.igs.step`, the way a mesh payload is
+ * `plate.stl.ozmesh`. Archived as `plate.igs`, a download of it was STEP text
+ * under an IGES name, which no CAD tool reading the extension would open
+ * (#2380). The feature's `sourceName` keeps the file the user chose.
+ */
+export function stepSourceArchive(sourceName: string): {
+  fileName: string;
+  contentType: 'model/step';
+  kind: 'step-import';
+} {
+  const suffix = '.step';
+  return {
+    fileName:
+      importedStepSourceFormat(sourceName) === 'iges'
+        ? `${sourceName.slice(0, 255 - suffix.length)}${suffix}`
+        : sourceName,
+    contentType: 'model/step',
+    kind: 'step-import'
+  };
+}
+
 /** How an import's referenced bytes are archived, by what they are. */
 export function importSourceArchive(
   source: Pick<LocalOnlyImportSource, 'kind' | 'sourceName' | 'contentType'>
@@ -160,11 +185,7 @@ export function importSourceArchive(
   }
   return source.kind === 'mesh-payload'
     ? meshPayloadArchive(source.sourceName)
-    : {
-        fileName: source.sourceName,
-        contentType: 'model/step',
-        kind: 'step-import'
-      };
+    : stepSourceArchive(source.sourceName);
 }
 
 /** Answers whether any import is still working with a checksum's bytes. */

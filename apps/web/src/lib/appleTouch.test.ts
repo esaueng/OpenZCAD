@@ -3,6 +3,9 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   CAD_IMPORT_ACCEPT,
+  CAD_IMPORT_FORMAT_LINE,
+  CAD_IMPORT_FORMATS,
+  cadImportTitle,
   fileAccept,
   isAppleTouchDevice,
   isStandaloneApp,
@@ -40,6 +43,27 @@ describe('Apple touch devices', () => {
     expect(
       fileAccept('.openzcad', { userAgent: WINDOWS, maxTouchPoints: 10 })
     ).toBe('.openzcad');
+  });
+});
+
+describe('CAD import formats (#2381)', () => {
+  it('derives the picker and the hints from one list, IGES included', () => {
+    expect(CAD_IMPORT_ACCEPT.split(',')).toEqual([
+      '.shapr',
+      ...CAD_IMPORT_FORMATS.flatMap((format) => format.extensions)
+    ]);
+    expect(CAD_IMPORT_ACCEPT.split(',')).toEqual(
+      expect.arrayContaining(['.igs', '.iges'])
+    );
+    for (const { label } of CAD_IMPORT_FORMATS) {
+      expect(CAD_IMPORT_FORMAT_LINE.split(' · ')).toContain(label);
+    }
+    expect(cadImportTitle({ shaprPair: false })).toBe(
+      'Import STEP, IGES (exact B-rep solids), a mesh file (STL, 3MF, OBJ, GLB, PLY), or a DXF drawing'
+    );
+    expect(cadImportTitle({ shaprPair: true })).toContain(
+      'a paired Shapr3D project and STEP'
+    );
   });
 });
 

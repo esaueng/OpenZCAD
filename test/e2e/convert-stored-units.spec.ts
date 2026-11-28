@@ -3,6 +3,7 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument, findSketch } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
+  bodyCardFromHistory,
   createPrimitiveInPlace,
   expect,
   keepMeasurement,
@@ -498,3 +499,178 @@ test('the review lists each fact beside its marker at phone width', async ({
   const box = await dialog.boundingBox();
   expect(box!.width).toBeLessThanOrEqual(390);
 });
+
+/** Model length per CSS pixel the scale rule reads, in its shown unit. */
+async function scalePerPixel(page: Page, unit: 'mm' | 'in') {
+  const indicator = page.getByTestId('viewport-scale-indicator');
+  const pattern = new RegExp(`: (\\d+(?:\\.\\d+)?) ${unit}$`);
+  await expect(indicator).toHaveAttribute('aria-label', pattern, READY);
+  const value = Number(
+    pattern.exec((await indicator.getAttribute('aria-label')) ?? '')![1]
+  );
+  const length = await page
+    .getByTestId('viewport-scale-rule')
+    .evaluate((element) =>
+      parseFloat(
+        (element as HTMLElement).style.getPropertyValue(
+          '--viewport-scale-length'
+        )
+      )
+    );
+  expect(length).toBeGreaterThan(0);
+  return value / length;
+}
+
+async function fitView(page: Page) {
+  await page.getByRole('button', { name: 'Fit view (F)' }).click();
+  await expect.poll(() => cameraDistance(page), READY).toBeGreaterThan(0);
+  // Let the framing settle before the rule is read.
+  let previous = -1;
+  await expect
+    .poll(async () => {
+      const now = await cameraDistance(page);
+      const settled = Math.abs(now - previous) < 1e-9;
+      previous = now;
+      return settled;
+    }, READY)
+    .toBe(true);
+}
+
+test(
+  'a version saved before the conversion previews, reads and cuts in its own unit, without the project’s pins',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    // #2365: the checkpoint stores millimetres while the project stores
+    // inches, so a viewport sized by the project's unit reads 25.4 times
+    // too large, and pins taken on the project float off the version.
+    test.setTimeout(240_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await stubApi(page);
+    await page.route('**/api/session', (route) =>
+      route.fulfill({ status: 401, json: { error: 'Not signed in' } })
+    );
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Preview units');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled(
+      READY
+    );
+
+    // One kept edge length, pinned on the model once Measure is off.
+    await switchWorkspace(page, 'View');
+    const measure = page
+      .getByRole('toolbar', { name: 'View tools' })
+      .getByRole('button', { name: 'Measure' });
+    await measure.click();
+    await setSelectionFilter(page, 'Edge');
+    const edge = await locateEdge(page);
+    await page.mouse.click(edge.x, edge.y);
+    await keepMeasurement(page);
+    await measure.click();
+    await expect(page.getByLabel('Measurement workbench')).toHaveCount(0);
+    const pins = page.locator('.measurement-callout');
+    await expect(pins).toHaveCount(1, READY);
+    await page.waitForTimeout(700);
+
+    await switchWorkspace(page, 'Build');
+    const dialog = await openConversion(page);
+    await dialog.getByRole('button', { name: 'Convert', exact: true }).click();
+    await expect(dialog.getByRole('status')).toContainText(
+      `“${CHECKPOINT}” was saved first`,
+      READY
+    );
+    await dialog.getByRole('button', { name: 'Done' }).click();
+    await expectShownIn(page, 'Lengths are shown and typed in in.');
+
+    await fitView(page);
+    const live = await scalePerPixel(page, 'in');
+    const liveDistance = await cameraDistance(page);
+    await expect(pins).toHaveCount(1);
+
+    await revealModelPanel(page, 'Revisions');
+    const row = page.locator('.revision-row', {
+      has: page.locator('.revision-reason', { hasText: CHECKPOINT })
+    });
+    await expect(row).toBeVisible(READY);
+    await row.hover();
+    await row.getByRole('button', { name: `Preview ${CHECKPOINT}` }).click();
+    const notice = page.getByRole('region', { name: 'Save preview' });
+    await expect(notice).toContainText(`Previewing “${CHECKPOINT}”`, READY);
+
+    // The pin was taken on the project's geometry: not drawn over the
+    // version's.
+    await expect(pins).toHaveCount(0);
+    // The same box, fitted the same way, reads the same scale: its
+    // millimetre coordinates are not read as inches.
+    await fitView(page);
+    const previewed = await scalePerPixel(page, 'in');
+    expect(previewed / live).toBeGreaterThan(0.5);
+    expect(previewed / live).toBeLessThan(2);
+    await expect(notice).toBeVisible();
+    // Fitted to the version, the camera stands in its millimetres: 25.4
+    // times further out than the project's inches put it.
+    expect((await cameraDistance(page)) / liveDistance).toBeGreaterThan(10);
+
+    // #2422: an edge picked on the version reads its millimetres in the
+    // project's inches: about 1 in for a box edge, not its mm number.
+    await setSelectionFilter(page, 'Edge');
+    const picked = await locateEdge(page);
+    await page.mouse.click(picked.x, picked.y);
+    const readout = page.locator('.selection-readout');
+    await expect(readout).toContainText(/\d in/, READY);
+    const length = Number(
+      /(\d+(?:\.\d+)?) in/.exec(await readout.innerText())![1]
+    );
+    expect(length).toBeGreaterThan(0.1);
+    expect(length).toBeLessThan(5);
+
+    // #2422: a cut moved over the version is in its millimetres on screen.
+    const section = page.getByRole('button', { name: /^Section view — now:/ });
+    const uncut = await section.getAttribute('aria-label');
+    await section.click();
+    const cut = page.getByLabel('Cut position');
+    await expect(cut).toBeEnabled();
+    await cut.fill('5');
+    await cut.press('Enter');
+    await expect(cut).toHaveValue('5');
+
+    // #2422: with a History feature of the project selected, the version's
+    // body is still measured in the version's millimetres: about an inch a
+    // side, not its millimetre number read as inches.
+    const inspector = await bodyCardFromHistory(page);
+    await expect(inspector).toContainText(/size\s*[\d.]+ × [\d.]+ × [\d.]+ in/);
+    const side = Number(
+      /size\s*([\d.]+) ×/.exec(await inspector.innerText())![1]
+    );
+    expect(side).toBeGreaterThan(0.1);
+    expect(side).toBeLessThan(5);
+    await expect(notice).toBeVisible();
+
+    await notice.getByRole('button', { name: 'Close preview' }).click();
+    await expect(notice).toHaveCount(0);
+    await expect(pins).toHaveCount(1, READY);
+    // #2422: the fit and the cut were made over the version. The project's
+    // own view is as it was left: framed in its inches, with no cut.
+    await expect(section).toHaveAttribute('aria-label', uncut!);
+    await expect(cut).toHaveCount(0);
+    await expect
+      .poll(async () => (await cameraDistance(page)) / liveDistance, READY)
+      .toBeCloseTo(1, 3);
+    expect((await scalePerPixel(page, 'in')) / live).toBeCloseTo(1, 3);
+
+    // And nothing of the version's view was remembered for the project: a
+    // reload opens on the model, not 25.4 times too far out.
+    await page.waitForTimeout(700);
+    await expect(page.locator('.save-state')).toHaveClass(SAVED, READY);
+    await page.reload();
+    await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
+    await expectShownIn(page, 'Lengths are shown and typed in in.');
+    await expect
+      .poll(async () => (await cameraDistance(page)) / liveDistance, READY)
+      .toBeCloseTo(1, 3);
+    expect(errors).toEqual([]);
+  }
+);
