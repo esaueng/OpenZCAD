@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { describe, expect, it, vi } from 'vitest';
-import { BottomSheet, useSheet } from './BottomSheet';
+import { BottomSheet, revealInside, useSheet } from './BottomSheet';
 import {
   CLOSED_SHEET,
   SHEET_PEEK_PX,
@@ -731,5 +731,91 @@ describe('BottomSheet', () => {
     expect(document.activeElement).toBe(
       screen.getByRole('textbox', { name: 'Width' })
     );
+  });
+
+  it('keeps a focused field in view when the page shortens under it', () => {
+    // The phone review: the iOS shell ends the page at the keyboard, which
+    // shortens the sheet, and the Pivot's Angle field went under the tabs.
+    vi.useFakeTimers({ toFake: ['requestAnimationFrame'] });
+    try {
+      render(
+        <Harness hasRoot initial={[{ type: 'set-detent', detent: 'half' }]}>
+          <label>
+            Angle
+            <input defaultValue="20" />
+          </label>
+        </Harness>
+      );
+      const field = screen.getByLabelText('Angle');
+      const body = field.closest<HTMLElement>('.compact-sheet-body')!;
+      field.focus();
+      const rect = (top: number, bottom: number) =>
+        ({
+          top,
+          bottom,
+          left: 0,
+          right: 0,
+          width: 0,
+          height: bottom - top
+        }) as DOMRect;
+      vi.spyOn(body, 'getBoundingClientRect').mockReturnValue(rect(400, 560));
+      vi.spyOn(field, 'getBoundingClientRect').mockReturnValue(rect(600, 640));
+      act(() => {
+        window.dispatchEvent(new Event('resize'));
+        vi.advanceTimersToNextFrame();
+      });
+      // 640 - 560 + 12: the field's foot clears the sheet's with room.
+      expect(body.scrollTop).toBe(92);
+
+      // And again once the sheet's height has finished moving.
+      body.scrollTop = 0;
+      const transitionEnd = new Event('transitionend', { bubbles: true });
+      Object.assign(transitionEnd, { propertyName: 'height' });
+      act(() => {
+        sheet().dispatchEvent(transitionEnd);
+      });
+      expect(body.scrollTop).toBe(92);
+
+      // A field elsewhere is not the sheet's to move.
+      body.scrollTop = 0;
+      screen.getByRole('button', { name: 'Outside' }).focus();
+      act(() => {
+        window.dispatchEvent(new Event('resize'));
+        vi.advanceTimersToNextFrame();
+      });
+      expect(body.scrollTop).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('revealInside', () => {
+  const box = (top: number, bottom: number) =>
+    ({
+      top,
+      bottom,
+      left: 0,
+      right: 0,
+      width: 0,
+      height: bottom - top
+    }) as DOMRect;
+  function scroller(view: DOMRect, item: DOMRect, scrollTop = 100) {
+    const outer = document.createElement('div');
+    const inner = document.createElement('input');
+    outer.append(inner);
+    outer.scrollTop = scrollTop;
+    vi.spyOn(outer, 'getBoundingClientRect').mockReturnValue(view);
+    vi.spyOn(inner, 'getBoundingClientRect').mockReturnValue(item);
+    revealInside(outer, inner);
+    return outer.scrollTop;
+  }
+
+  it('scrolls only as far as the element needs', () => {
+    expect(scroller(box(0, 200), box(50, 80))).toBe(100);
+    expect(scroller(box(0, 200), box(190, 230))).toBe(142);
+    expect(scroller(box(0, 200), box(-30, 0))).toBe(58);
+    // Taller than the view: its top stays in view.
+    expect(scroller(box(0, 100), box(150, 400))).toBe(238);
   });
 });

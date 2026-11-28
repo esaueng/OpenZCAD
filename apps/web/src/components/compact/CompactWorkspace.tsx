@@ -103,8 +103,9 @@ export interface CompactWorkspaceProps extends CompactChromeProps {
    */
   commandRowPresent?: boolean;
   /**
-   * That bar is all the sheet holds: it comes up at peek, the model in view
-   * to pick on, and its Options raise it.
+   * That bar is all the sheet holds, or the card with it asks for a handle
+   * on the model to be dragged (a region's Extrude): it comes up at peek,
+   * the model in view to pick on, and its Options raise it.
    */
   rowOnly?: boolean;
   /**

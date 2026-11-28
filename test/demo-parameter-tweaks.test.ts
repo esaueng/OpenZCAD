@@ -703,3 +703,70 @@ describe('demo parameter tweaks', () => {
     60_000
   );
 });
+
+/**
+ * The phone review's one-step + on Pipe Flange's Rim r (45 → 46) was refused
+ * with "Feature 'Rim chamfer': A selected edge no longer exists": the
+ * chamfer was seeded by edge hash alone, as the bracket's fillet was before
+ * ZCAD-001, and a hash encodes the rim's radius.
+ */
+describe('flange parameter tweaks', () => {
+  let adapter: ExactKernelAdapter;
+  let flange: ProjectDocument;
+
+  beforeAll(async () => {
+    adapter = await createExactKernelAdapter();
+    const definition = DEMO_DEFINITIONS.find(
+      (candidate) => candidate.key === 'flange'
+    )!;
+    flange = await buildDemoDocument(
+      definition,
+      toUserId('user_flange_tweaks'),
+      (candidate) => adapter.syncDocument(candidate)
+    );
+  }, 120_000);
+
+  afterAll(() => adapter.dispose());
+
+  it('seeds the rim chamfer with lineage references', () => {
+    const chamfer = Object.values(flange.nodes).find(
+      (node) => node.kind === 'feature' && node.data.featureKind === 'chamfer'
+    );
+    if (chamfer?.kind !== 'feature' || chamfer.data.featureKind !== 'chamfer') {
+      throw new Error('Missing flange chamfer');
+    }
+    expect(chamfer.data.edgeReferences).toHaveLength(
+      chamfer.data.edgeHashes.length
+    );
+  });
+
+  it.each([
+    ['rim_r', '46'],
+    ['rim_r', '44'],
+    ['rim_r', '55'],
+    ['hub_r', '25'],
+    ['hub_r', '20'],
+    ['bore_r', '13'],
+    ['rim_t', '11'],
+    ['rim_t', '8'],
+    ['hub_h', '27'],
+    ['hub_h', '34'],
+    ['bolt_circle', '36'],
+    ['chamfer_d', '2']
+  ])(
+    'rebuilds the flange with %s = %s',
+    async (name, expression) => {
+      const tweaked = new CommandManager(flange).runTransaction('Tweak', [
+        commandFactories.setParameter({
+          name,
+          expression,
+          ids: createParameterIds()
+        })
+      ]);
+      const derived = await adapter.syncDocument(tweaked);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.exportableBodyIds).toHaveLength(1);
+    },
+    60_000
+  );
+});

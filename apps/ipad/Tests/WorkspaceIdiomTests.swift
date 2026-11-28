@@ -18,6 +18,51 @@ final class WorkspaceIdiomTests: XCTestCase {
         XCTAssertEqual(WorkspaceIdiom.tablet.documentStartScripts, [])
     }
 
+    func testPageZoomFollowsTheTextSize() {
+        // The default size is the page as built; smaller sizes keep it.
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .large, shortSide: 420), 1)
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .extraSmall, shortSide: 420), 1)
+        // Larger sizes zoom by their body size over 17 pt.
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(bodyPointSize: 19, shortSide: 420), 1.12)
+        XCTAssertGreaterThan(WorkspaceIdiom.pageZoom(for: .extraExtraLarge, shortSide: 420), 1)
+        // The largest sizes stop where the page would be under 320 CSS px wide,
+        // and at 1.5 however wide the device is.
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .accessibilityExtraExtraExtraLarge, shortSide: 420), 1.31)
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .accessibilityExtraExtraExtraLarge, shortSide: 375), 1.17)
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .accessibilityExtraExtraExtraLarge, shortSide: 1024), 1.5)
+        // 402 / 320 is 1.25625: rounded down, never up past the floor.
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(for: .accessibilityExtraExtraExtraLarge, shortSide: 402), 1.25)
+        XCTAssertGreaterThanOrEqual(402 / WorkspaceIdiom.pageZoom(bodyPointSize: 53, shortSide: 402), 320)
+        // A device narrower than the floor is never zoomed out.
+        XCTAssertEqual(WorkspaceIdiom.pageZoom(bodyPointSize: 40, shortSide: 300), 1)
+    }
+
+    @MainActor
+    func testViewportScriptScalesThePageAndPutsItBack() async throws {
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 420, height: 900))
+        let navigation = LoadProbe()
+        web.navigationDelegate = navigation
+        navigation.loaded = expectation(description: "page loaded")
+        web.loadHTMLString(
+            #"<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes"></head><body></body></html>"#,
+            baseURL: nil)
+        await fulfillment(of: [navigation.loaded!], timeout: 10)
+        func viewport(after zoom: CGFloat) async throws -> String? {
+            _ = try await web.callAsyncJavaScript(
+                WorkspaceIdiom.viewportScript(zoom: zoom), arguments: [:], in: nil, contentWorld: .page)
+            return try await web.callAsyncJavaScript(
+                "return document.querySelector('meta[name=viewport]').content;",
+                arguments: [:], in: nil, contentWorld: .page) as? String
+        }
+        // Zoomed: a scale and no width, so the page reflows narrower.
+        let zoomed = try await viewport(after: 1.31)
+        XCTAssertEqual(zoomed, "initial-scale=1.31, user-scalable=yes, viewport-fit=cover")
+        let again = try await viewport(after: 1.31)
+        XCTAssertEqual(again, zoomed)
+        let restored = try await viewport(after: 1)
+        XCTAssertEqual(restored, "width=device-width, initial-scale=1, user-scalable=yes, viewport-fit=cover")
+    }
+
     func testWorkspaceFollowsTheHostDevice() {
         let phone = UIDevice.current.userInterfaceIdiom == .phone
         let controller = WorkspaceViewController()

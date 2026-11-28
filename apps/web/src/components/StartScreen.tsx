@@ -3360,9 +3360,17 @@ export function StartScreen({
   // The empty Projects shelf of a library with nothing in it: the shelf
   // itself offers "Create your first project", the page's primary action
   // for as long as it is showing.
+  // The compact library's Shared segment, always on screen there: its empty
+  // shelf is about sharing, not a second copy of Projects' first-run prompt
+  // (the phone review). The regular library hides its filter tabs on an
+  // empty shelf, so a Shared filter left from the compact layout is not
+  // shown there and changes nothing.
+  const sharedSegment =
+    compact && shelf === 'active' && activeFilter === 'shared';
   const firstProjectPrompt =
     !loading &&
     shelf === 'active' &&
+    !sharedSegment &&
     shelfProjects.length === 0 &&
     partsElsewhere === null;
 
@@ -4326,7 +4334,17 @@ export function StartScreen({
                 <span className="start-empty-mark" aria-hidden="true">
                   <BrandMark />
                 </span>
-                {shelf === 'active' && partsElsewhere ? (
+                {sharedSegment ? (
+                  // Shared before "all your projects are in Archive": this
+                  // tab is about sharing, whatever else is on the shelves.
+                  <>
+                    <strong>Nothing shared yet</strong>
+                    <span>
+                      Projects shared with you, and the ones you share, show up
+                      here.
+                    </span>
+                  </>
+                ) : shelf === 'active' && partsElsewhere ? (
                   <>
                     <strong>No projects on this shelf</strong>
                     <span>{`All your projects are in ${partsElsewhere}.`}</span>

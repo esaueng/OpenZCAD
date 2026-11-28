@@ -880,6 +880,21 @@ describe('StartScreen library discovery', () => {
     expect(screen.getByRole('button', { name: 'New project' })).toBeEnabled();
   });
 
+  it('keeps the first-run prompt under a Shared filter left from the phone layout', () => {
+    // The preview check: Shared chosen in the compact library, then Full
+    // layout, where an empty shelf shows no filter tabs to leave it by.
+    sessionStorage.setItem(
+      'openzcad.start.view',
+      JSON.stringify({ shelf: 'active', filter: 'shared' })
+    );
+    renderStartScreen({ projects: [], signedIn: false });
+    expect(screen.getByText('No projects yet')).toBeVisible();
+    expect(screen.queryByText('Nothing shared yet')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Create your first project' })
+    ).toBeVisible();
+  });
+
   it('keeps one primary action while the empty shelf offers the first project', () => {
     // UI review, 12 Nov 2026: New project and Create your first project
     // were both the page's blue button.

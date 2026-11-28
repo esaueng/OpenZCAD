@@ -22,6 +22,59 @@ enum WorkspaceIdiom: Equatable {
         self == .phone ? .allButUpsideDown : .all
     }
 
+    /// The web workspace's zoom for the person's iOS text size. The web app
+    /// sets its type in CSS pixels, so the text size reaches it only through
+    /// the page's scale (`viewportScript`): the default size (Large, a 17 pt
+    /// body) is 1, and each
+    /// larger size zooms by its body size over 17. Smaller sizes stay at 1,
+    /// which keeps every control at its full touch size. Zoom narrows the
+    /// page as well, so it stops where the page would be narrower than the
+    /// 320 CSS px the compact layout is built down to, and at 1.5 on any
+    /// device: the largest accessibility sizes (a 53 pt body) get as much as
+    /// a CAD workspace can hold, not their full size.
+    static func pageZoom(bodyPointSize: CGFloat, shortSide: CGFloat) -> CGFloat {
+        // Hundredths: the size rounds to the nearest, the ceiling down, so a
+        // rounded zoom never narrows the page past the floor.
+        let wanted = (bodyPointSize / defaultBodyPointSize * 100).rounded() / 100
+        let ceiling = (min(maximumPageZoom, shortSide / minimumPageWidth) * 100).rounded(.down) / 100
+        return min(max(wanted, 1), max(ceiling, 1))
+    }
+
+    /// The zoom for a text size, read from the system's own body font.
+    static func pageZoom(for category: UIContentSizeCategory, shortSide: CGFloat) -> CGFloat {
+        let traits = UITraitCollection(preferredContentSizeCategory: category)
+        let body = UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize
+        return pageZoom(bodyPointSize: body, shortSide: shortSide)
+    }
+
+    /// Sets the workspace page's viewport for a zoom, and `viewport-fit=cover`
+    /// so the page reaches under the status bar and home indicator and keeps
+    /// clear of them with its own safe-area insets. Zoomed, the viewport names
+    /// an initial scale and no width, which WebKit lays out at the view's
+    /// width over that scale: the page reflows narrower and is drawn larger.
+    /// (`WKWebView.pageZoom` drew it larger at its full width instead, off
+    /// the screen's edge.) Run again, it replaces what it set.
+    static func viewportScript(zoom: CGFloat) -> String {
+        #"""
+        (() => {
+            const viewport = document.querySelector('meta[name="viewport"]');
+            if (!viewport) return;
+            const zoom = \#(Double(zoom));
+            const kept = viewport.content.split(',').map((part) => part.trim())
+                .filter((part) => part && !/^(width|initial-scale|viewport-fit)\s*=/i.test(part));
+            viewport.content = [
+                zoom === 1 ? 'width=device-width, initial-scale=1' : `initial-scale=${zoom}`,
+                ...kept,
+                'viewport-fit=cover'
+            ].join(', ');
+        })();
+        """#
+    }
+
+    static let defaultBodyPointSize: CGFloat = 17
+    static let minimumPageWidth: CGFloat = 320
+    static let maximumPageZoom: CGFloat = 1.5
+
     /// Scripts injected at document start for this idiom.
     var documentStartScripts: [String] {
         self == .phone ? [Self.seedCompactLayout] : []

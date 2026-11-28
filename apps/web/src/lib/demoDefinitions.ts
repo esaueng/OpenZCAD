@@ -46,8 +46,8 @@ export const DEMO_DEFINITIONS: DemoDefinition[] = [
     projectId: toProjectId('proj_demo_pipe_flange'),
     name: 'Demo · Pipe Flange',
     tagline: 'Revolved flange with a patterned bolt circle',
-    summary: 'Revolve, bolt circle, chamfer',
-    revisions: ['A — Revolved blank', 'B — Bolt circle', 'C — Rim chamfer']
+    summary: 'Revolve, chamfer, bolt circle',
+    revisions: ['A — Revolved blank', 'B — Rim chamfer', 'C — Bolt circle']
   },
   {
     key: 'heatsink',

@@ -1499,6 +1499,39 @@ describe('the keypad on a touch screen', () => {
     }
   });
 
+  it('replaces the selected value with the first key, as typing does', () => {
+    // The phone review: a tap on 5 over a visibly selected 45 read 455.
+    matchPointer(true);
+    try {
+      const { input, onPreview } = setup('45');
+      expect(input.selectionStart).toBe(0);
+      expect(input.selectionEnd).toBe(2);
+      fireEvent.click(screen.getByRole('button', { name: '5' }));
+      expect(input).toHaveValue('5');
+      expect(onPreview).toHaveBeenLastCalledWith(5);
+      // The selection is gone: the next key appends.
+      fireEvent.click(screen.getByRole('button', { name: '0' }));
+      expect(input).toHaveValue('50');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('appends after a first key that leaves the selected value as it was', () => {
+    // 5 over a selected 5 changes nothing React would write, so the field
+    // kept its selection and the 0 after it replaced the 5.
+    matchPointer(true);
+    try {
+      const { input } = setup('5');
+      expect(input.selectionEnd).toBe(1);
+      fireEvent.click(screen.getByRole('button', { name: '5' }));
+      fireEvent.click(screen.getByRole('button', { name: '0' }));
+      expect(input).toHaveValue('50');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(['touch', 'pen'])(
     'raises the system keyboard for a %s on the field itself',
     (pointerType) => {

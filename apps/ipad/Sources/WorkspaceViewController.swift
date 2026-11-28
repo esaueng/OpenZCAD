@@ -14,6 +14,7 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
     private var failureLabel: UILabel?
     private var bootstrapGeneration = 0
     private var processRecoveries = 0
+    private var textZoom: CGFloat = 1
 
     private let idiom = WorkspaceIdiom.current
 
@@ -38,26 +39,7 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
         let server = BundleServer(root: root)
         self.server = server
         configuration.setURLSchemeHandler(server, forURLScheme: BundleServer.scheme)
-        // A bounded local-only prototype. Reuse the app's existing cloud gate
-        // before any module reads it; no credentials or E2EE contracts change.
-        configuration.userContentController.addUserScript(WKUserScript(
-            source: "localStorage.setItem('openzcad-cloud-functions-enabled:v1', 'false');",
-            injectionTime: .atDocumentStart, forMainFrameOnly: true
-        ))
-        for source in idiom.documentStartScripts {
-            configuration.userContentController.addUserScript(WKUserScript(
-                source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true
-            ))
-        }
-        configuration.userContentController.addUserScript(WKUserScript(
-            source: """
-            const viewport = document.querySelector('meta[name="viewport"]');
-            if (viewport && !viewport.content.includes('viewport-fit=')) {
-                viewport.content += ', viewport-fit=cover';
-            }
-            """,
-            injectionTime: .atDocumentEnd, forMainFrameOnly: true
-        ))
+        installUserScripts(in: configuration.userContentController)
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
         webView.scrollView.bounces = false
@@ -67,12 +49,25 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
         webView.isInspectable = true
         #endif
         view.addSubview(webView)
+        // The workspace ends at the keyboard's top. Left full height, the
+        // keyboard covered its lower half and WebKit scrolled the whole page
+        // up to show a focused field: the header went offscreen and Undo and
+        // Redo slid under the status bar. Resized instead, the page lays out
+        // above the keyboard and nothing scrolls. Without a keyboard the
+        // guide sits at the view's bottom edge, under the home indicator,
+        // which the page clears with its own safe-area insets.
+        view.keyboardLayoutGuide.usesBottomSafeArea = false
         NSLayoutConstraint.activate([
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             webView.topAnchor.constraint(equalTo: view.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            webView.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
         ])
+        // The person's text size, now and whenever it changes in Settings.
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) {
+            (controller: WorkspaceViewController, _: UITraitCollection) in
+            controller.applyTextSize()
+        }
         if UserDefaults.standard.bool(forKey: migrationDefaultsKey) {
             webView.load(URLRequest(url: BundleServer.origin))
         } else {
@@ -82,6 +77,48 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
             // request or accepting any content from a loopback process.
             webView.loadHTMLString("<!doctype html><html><body></body></html>", baseURL: PrototypeStorage.legacyOrigin)
         }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        applyTextSize()
+    }
+
+    /// The scripts every workspace document starts with. The viewport one
+    /// carries the text size's zoom, so they are installed again when it
+    /// changes, for the documents loaded after.
+    private func installUserScripts(in controller: WKUserContentController) {
+        controller.removeAllUserScripts()
+        // A bounded local-only prototype. Reuse the app's existing cloud gate
+        // before any module reads it; no credentials or E2EE contracts change.
+        controller.addUserScript(WKUserScript(
+            source: "localStorage.setItem('openzcad-cloud-functions-enabled:v1', 'false');",
+            injectionTime: .atDocumentStart, forMainFrameOnly: true
+        ))
+        for source in idiom.documentStartScripts {
+            controller.addUserScript(WKUserScript(
+                source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true
+            ))
+        }
+        controller.addUserScript(WKUserScript(
+            source: WorkspaceIdiom.viewportScript(zoom: textZoom),
+            injectionTime: .atDocumentEnd, forMainFrameOnly: true
+        ))
+    }
+
+    /// Zooms the workspace for the iOS text size (`WorkspaceIdiom.pageZoom`),
+    /// in the document on screen and in every one loaded after. The shorter
+    /// side keeps the zoom the same in both orientations.
+    private func applyTextSize() {
+        guard let webView, view.bounds.width > 0 else { return }
+        let zoom = WorkspaceIdiom.pageZoom(
+            for: traitCollection.preferredContentSizeCategory,
+            shortSide: min(view.bounds.width, view.bounds.height)
+        )
+        guard zoom != textZoom else { return }
+        textZoom = zoom
+        installUserScripts(in: webView.configuration.userContentController)
+        webView.evaluateJavaScript(WorkspaceIdiom.viewportScript(zoom: zoom))
     }
 
     private func showFailure(_ message: String) {
@@ -125,6 +162,8 @@ final class WorkspaceViewController: UIViewController, WKNavigationDelegate, WKD
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         failureLabel?.removeFromSuperview()
         failureLabel = nil
+        // A zoom that changed while this document was loading.
+        if textZoom != 1 { webView.evaluateJavaScript(WorkspaceIdiom.viewportScript(zoom: textZoom)) }
         guard bootstrap != .workspace else { return }
         let generation = bootstrapGeneration
         Task { @MainActor in
