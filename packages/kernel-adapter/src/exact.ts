@@ -91,7 +91,11 @@ export type {
 } from './sketch-2d-ops';
 import {
   assemblyComponentBodies,
-  assemblyConfigurationOverrides,
+  assemblyExportRowIds,
+  assemblyExportRowParts,
+  assemblyRowDraw,
+  assemblyRowDrawnParts,
+  documentForConfiguration,
   findSketch,
   isLiveAssemblyBody,
   getParameterScope,
@@ -1468,12 +1472,23 @@ function exportLiveBody(
 ): (bodyId: BodyId) => boolean {
   if (!build) return (bodyId) => isLiveAssemblyBody(document, bodyId);
   const hidden = getParameterHiddenBodyIds(document);
-  const built = (bodyId: BodyId) => {
+  const built = exportBuiltBody(build);
+  return (bodyId) => built(bodyId) && !hidden.has(bodyId);
+}
+
+/**
+ * Whether an exact build holds a body: built, with solids or a mesh
+ * reference's facets, and not consumed. Hidden bodies count; they are built.
+ */
+function exportBuiltBody(build: ExactBuildResult): (bodyId: BodyId) => boolean {
+  return (bodyId) => {
     const shape = build.shapes.get(bodyId);
-    return !!shape && (shape.solids.length > 0 || !!shape.referenceMesh);
+    return (
+      !!shape &&
+      (shape.solids.length > 0 || !!shape.referenceMesh) &&
+      !build.consumed.has(bodyId)
+    );
   };
-  return (bodyId) =>
-    built(bodyId) && !build.consumed.has(bodyId) && !hidden.has(bodyId);
 }
 
 /** Whether a column-major 4×4 is exactly the identity. */
@@ -1526,44 +1541,79 @@ function transformedPoints(
 }
 
 /**
- * F06: refuses an export while an assembly part shows a configuration other
- * than the active one. Assemble draws that part from its own row, but an
- * export builds the document once, in its active row, so the file would
- * hold a different part (or none, where the active row suppresses it)
- * without saying so.
+ * F06: the configuration rows an export's parts name, each built on its own
+ * (`assemblyExportRows`): the row's document, and the bodies its exact
+ * build holds.
  */
-function refuseConfiguredAssemblyExport(
+type AssemblyExportRows = ReadonlyMap<
+  string,
+  { document: ProjectDocument; built: ReadonlySet<BodyId> }
+>;
+
+/**
+ * F06: the bodies an export of `bodyIds` writes, as Assemble shows the
+ * model, or a refusal. `assemblyRowDrawnParts` is what Assemble draws from,
+ * read here over exact builds of the model and of each row a part names:
+ *
+ * - A written body Assemble draws from another row than the active one is
+ *   refused, naming the part and both rows: an export builds the document
+ *   once, in its active row, so the file would hold a different part (or
+ *   none, where the active row suppresses or hides it) without saying so.
+ * - A body Assemble draws nothing for, because its part shows a row that
+ *   suppresses or hides it, is left out, as it is on screen.
+ *
+ * Without `rows` no part in the export names another row, and `bodyIds`
+ * are returned as they are.
+ */
+function assemblyExportBodyIds(
   document: ProjectDocument,
-  /**
-   * The bodies the export writes; a part outside them puts nothing in the
-   * file and is not refused. Omitted for a whole-model export.
-   */
-  bodyIds?: readonly BodyId[]
-): void {
-  const overrides = assemblyConfigurationOverrides(document, bodyIds, (id) =>
-    isLiveAssemblyBody(document, id)
+  build: ExactBuildResult,
+  rows: AssemblyExportRows | null,
+  bodyIds: readonly BodyId[],
+  /** A whole-model export: every part Assemble draws is in it. */
+  wholeModel = false
+): BodyId[] {
+  if (!rows) return [...bodyIds];
+  const live = exportBuiltBody(build);
+  const builtIn = new Map(
+    [...rows.values()].map((row) => [row.document, row.built])
   );
-  if (overrides.length === 0) return;
-  const table = document.configurations!;
-  const active =
-    table.rows.find((row) => row.id === table.activeRowId)?.name ??
-    'the active one';
-  const shown = overrides.map(
-    (entry) => `${entry.componentName} in ${entry.rowName}`
+  const draw = assemblyRowDraw(
+    assemblyRowDrawnParts(
+      document,
+      (rowId) => rows.get(rowId)?.document,
+      (built, bodyId) =>
+        built === document
+          ? live(bodyId)
+          : (builtIn.get(built)?.has(bodyId) ?? false)
+      // A row that could not be built draws nothing of its own: Assemble
+      // shows such a part as the model has it.
+    ).filter((part) => !part.pending)
   );
-  const list =
-    shown.length === 1
-      ? shown[0]!
-      : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)!}`;
-  const rows = [...new Set(overrides.map((entry) => entry.rowName))];
-  const own = shown.length === 1 ? 'its' : 'their';
-  const fix =
-    rows.length === 1
-      ? `Set ${own} Configuration to follow the model, or make ${rows[0]!} the active configuration, then export again.`
-      : `Set ${own} Configuration to follow the model, then export again.`;
-  throw new Error(
-    `Export refused: Assemble shows ${list}, but an export writes every part in the active configuration, ${active}. ${fix}`
-  );
+  const parts = assemblyExportRowParts(draw, wholeModel ? undefined : bodyIds);
+  if (parts.length > 0) {
+    const table = document.configurations!;
+    const active =
+      table.rows.find((row) => row.id === table.activeRowId)?.name ??
+      'the active one';
+    const shown = parts.map(
+      (entry) => `${entry.componentName} in ${entry.rowName}`
+    );
+    const list =
+      shown.length === 1
+        ? shown[0]!
+        : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)!}`;
+    const names = [...new Set(parts.map((entry) => entry.rowName))];
+    const own = shown.length === 1 ? 'its' : 'their';
+    const fix =
+      names.length === 1
+        ? `Set ${own} Configuration to follow the model, or make ${names[0]!} the active configuration, then export again.`
+        : `Set ${own} Configuration to follow the model, then export again.`;
+    throw new Error(
+      `Export refused: Assemble shows ${list}, but an export writes every part in the active configuration, ${active}. ${fix}`
+    );
+  }
+  return bodyIds.filter((bodyId) => !draw.removed.has(bodyId));
 }
 
 /**
@@ -5743,6 +5793,44 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     }
   }
 
+  /**
+   * F06: each configuration row a part in an export of `bodyIds` names
+   * (every part's, without `bodyIds`), built exactly on its own, for
+   * `assemblyExportBodyIds`; null when no part in it names another row, so
+   * such an export builds nothing more. A row that cannot be applied or
+   * built is left out: Assemble cannot draw from it either, and shows the
+   * part as the model has it.
+   */
+  private async assemblyExportRows(
+    document: ProjectDocument,
+    bodyIds?: readonly BodyId[]
+  ): Promise<AssemblyExportRows | null> {
+    const rowIds = assemblyExportRowIds(document, bodyIds);
+    if (rowIds.length === 0) return null;
+    const rows = new Map<
+      string,
+      { document: ProjectDocument; built: ReadonlySet<BodyId> }
+    >();
+    for (const rowId of rowIds) {
+      let row: ProjectDocument;
+      try {
+        row = documentForConfiguration(document, rowId);
+      } catch {
+        continue;
+      }
+      try {
+        const built = await this.withExportBuild(row, (_kernel, build) => {
+          const holds = exportBuiltBody(build);
+          return new Set([...build.shapes.keys()].filter(holds));
+        });
+        rows.set(rowId, { document: row, built });
+      } catch (error) {
+        if (isBuildCancelled(error)) throw error;
+      }
+    }
+    return rows;
+  }
+
   private exportSolidsFor(
     kernel: RemusKernel,
     build: ExactBuildResult,
@@ -5859,7 +5947,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     options: ExportUnitOptions & { fileName?: string } = {}
   ): Promise<string> {
-    refuseConfiguredAssemblyExport(document, bodyIds);
+    const rows = await this.assemblyExportRows(document, bodyIds);
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
@@ -5868,7 +5956,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         kernel,
         build,
         document,
-        bodyIds,
+        assemblyExportBodyIds(document, build, rows, bodyIds),
         units,
         true
       );
@@ -5908,7 +5996,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[],
     options: StepExportOptions = {}
   ): Promise<string> {
-    refuseConfiguredAssemblyExport(document, bodyIds);
+    const rows = await this.assemblyExportRows(document, bodyIds);
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) =>
@@ -5916,7 +6004,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         kernel,
         io,
         document,
-        this.exportBodySolidsFor(kernel, build, document, bodyIds, units),
+        this.exportBodySolidsFor(
+          kernel,
+          build,
+          document,
+          assemblyExportBodyIds(document, build, rows, bodyIds),
+          units
+        ),
         options,
         build
       )
@@ -5966,12 +6060,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     options: StepExportOptions = {}
   ): Promise<StepBodiesExport> {
-    // A whole-model export: every part is in it.
-    refuseConfiguredAssemblyExport(document);
+    // A whole-model export: every part Assemble draws is in it.
+    const rows = await this.assemblyExportRows(document);
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
-      const { written, skipped } = shownExportBodies(document, build);
+      const shown = shownExportBodies(document, build);
+      const { skipped } = shown;
+      const written = assemblyExportBodyIds(
+        document,
+        build,
+        rows,
+        shown.written,
+        true
+      );
       if (written.length === 0) {
         throw new Error('The project has no solid body to write.');
       }
@@ -6500,17 +6602,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   async exportStl(
     document: ProjectDocument,
-    bodyIds: BodyId[],
+    requested: BodyId[],
     deflection: number = STL_EXPORT_DEFLECTION,
     options: MeshExportTolerances = {}
   ): Promise<string> {
-    refuseConfiguredAssemblyExport(document, bodyIds);
+    const rows = await this.assemblyExportRows(document, requested);
     const units = options.units ?? 'mm';
     const angular = explicitAngularTolerance(options.angularTolerance);
     // The deflection is physical millimetres; the solids are in `units`.
     const unitDeflection = deflection / millimetresPerUnit(units);
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
+      const bodyIds = assemblyExportBodyIds(document, build, rows, requested);
       const referenceMeshes = this.referenceExportMeshes(
         kernel,
         build,
@@ -6571,7 +6674,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   async exportMesh(
     document: ProjectDocument,
-    bodyIds: BodyId[],
+    requested: BodyId[],
     options: {
       format: MeshExportFormat;
       deflection: number;
@@ -6586,22 +6689,23 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     if (!Number.isFinite(deflection) || deflection <= 0) {
       throw new Error('Mesh export deflection must be a positive number.');
     }
-    refuseConfiguredAssemblyExport(document, bodyIds);
     // glTF defines metres, which the root node states over a millimetre
     // tessellation (glb-scene.ts); no other unit can be written into it.
     const units = format === 'glb' ? 'mm' : (options.units ?? 'mm');
     const angular = explicitAngularTolerance(options.angularTolerance);
     if (format === 'stl-ascii') {
       return new TextEncoder().encode(
-        await this.exportStl(document, bodyIds, deflection, {
+        await this.exportStl(document, requested, deflection, {
           units,
           ...(angular === null ? {} : { angularTolerance: angular })
         })
       );
     }
+    const rows = await this.assemblyExportRows(document, requested);
     const unitDeflection = deflection / millimetresPerUnit(units);
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
+      const bodyIds = assemblyExportBodyIds(document, build, rows, requested);
       const meshes =
         format === 'stl-binary'
           ? this.referenceExportMeshes(

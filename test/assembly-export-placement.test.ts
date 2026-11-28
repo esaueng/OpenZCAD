@@ -6,12 +6,12 @@ import {
   addConfigurationColumn,
   addConfigurationRow,
   addPrimitiveFeature,
-  assemblyConfigurationOnlyBodies,
-  assemblyConfigurationOverrides,
+  assemblyExportRowIds,
   createConfigurations,
   createProjectDocument,
   documentForConfiguration,
   documentForConfigurationExport,
+  getParameterHiddenBodyIds,
   importMeshBody,
   listParameters,
   setAssemblyExplode,
@@ -39,6 +39,14 @@ import { parseStl } from '@openzcad/io-stl';
 import { exportedModel } from './support/three-mf-export';
 import { coincidentBoxSoup } from './support/mesh-import-fixtures';
 import { stepOccurrenceFrames } from './e2e/step-occurrence-frames';
+import { exportScope } from '../apps/web/src/lib/exportScope';
+import {
+  exportRowDraw,
+  exportScopeBodies,
+  exportTargetEmpty,
+  exportTargetFor,
+  rowDrawnHiddenBodyIds
+} from '../apps/web/src/lib/modelExportScope';
 
 /**
  * AS04 (#2391): IGES and the mesh formats have no product structure, so an
@@ -49,7 +57,10 @@ import { stepOccurrenceFrames } from './e2e/step-occurrence-frames';
  * F06 (#2389): an export builds the document once, in its active
  * configuration, so while an assembly part shows another configuration the
  * export is refused, naming the part and its row, rather than writing a
- * different part without saying so.
+ * different part without saying so. What Assemble draws (the part's own
+ * row, that row's suppression and its Visible cell) is decided in one place,
+ * `assemblyRowDrawnParts`, which the app's export scope and the adapter's
+ * refusal both read.
  */
 
 type Box = [number, number, number, number, number, number];
@@ -448,7 +459,80 @@ function configuredPlate() {
       }
     ]
   });
-  return { document, ids: [plate, lugBody] };
+  return {
+    document,
+    ids: [plate, lugBody],
+    lugFeature: lug.featureId,
+    plateFeature: Object.values(document.nodes).find(
+      (node): node is FeatureNode =>
+        node.kind === 'feature' && node.name === 'Plate'
+    )!.featureId
+  };
+}
+
+/**
+ * The export scope File › Export reads, as App computes it: the model
+ * synced, each row a part names built on its own as Assemble builds it
+ * (`rows`; none before those builds land, or outside Assemble), and every
+ * body Assemble draws, no selection.
+ */
+async function appScope(document: ProjectDocument, rows = true) {
+  const synced: ProjectDocument = {
+    ...document,
+    derived: await adapter.syncDocument(document)
+  };
+  const built = new Map<string, ProjectDocument>();
+  if (rows)
+    for (const rowId of assemblyExportRowIds(synced)) {
+      const row = documentForConfiguration(synced, rowId);
+      built.set(rowId, { ...row, derived: await adapter.syncDocument(row) });
+    }
+  const draw = exportRowDraw(synced, (rowId) => built.get(rowId));
+  const hidden = rowDrawnHiddenBodyIds(
+    getParameterHiddenBodyIds(synced),
+    new Set(),
+    draw
+  );
+  const scope = exportScope(
+    exportScopeBodies(
+      synced,
+      draw,
+      (bodyId) => hidden.has(bodyId),
+      () => false
+    ),
+    null
+  );
+  return { synced, ids: scope.bodyIds as BodyId[] };
+}
+
+/** A Visible column for the body: whether each row shows it. */
+function shownIn(
+  document: ProjectDocument,
+  bodyId: BodyId,
+  rows: Record<string, boolean>
+) {
+  let next = addConfigurationColumn(document, {
+    column: { kind: 'body', bodyId }
+  });
+  for (const [rowId, value] of Object.entries(rows))
+    next = setConfigurationCell(next, {
+      rowId,
+      column: { kind: 'body', bodyId },
+      value
+    });
+  return next;
+}
+
+/** STEP, IGES and binary STL: the three routes of the #2412 re-check. */
+function scopedExports(document: ProjectDocument, ids: BodyId[]) {
+  return Promise.allSettled([
+    adapter.exportStep(document, ids),
+    adapter.exportIges(document, ids),
+    adapter.exportMesh(document, ids, {
+      format: 'stl-binary',
+      deflection: 0.1
+    })
+  ]);
 }
 
 async function everyExport(document: ProjectDocument, ids: BodyId[]) {
@@ -494,15 +578,12 @@ describe('assembly parts in another configuration (F06, #2389)', () => {
     // Wide active: the lug is suppressed in the model, kept by its part.
     document = activateConfiguration(document, { rowId: 'wide' });
     expect(await adapter.documentExportBodyIds(document)).toEqual([ids[0]]);
-    // The app's export scope adds the body only the part's row builds.
-    const synced: ProjectDocument = {
-      ...document,
-      derived: await adapter.syncDocument(document)
-    };
-    expect(assemblyConfigurationOnlyBodies(synced)).toEqual([
-      { bodyId: ids[1], name: 'Indicator lug' }
-    ]);
-    for (const result of await everyExport(synced, ids))
+    // The app's export scope adds the body only the part's row builds,
+    // with that row built or not.
+    const { synced, ids: scoped } = await appScope(document);
+    expect(scoped).toEqual(ids);
+    expect((await appScope(document, false)).ids).toEqual(ids);
+    for (const result of await everyExport(synced, scoped))
       expect(String((result as PromiseRejectedResult).reason)).toMatch(
         /Assemble shows Plate in Narrow and Indicator lug in Narrow, but an export writes every part in the active configuration, Wide\. Set their Configuration to follow the model, or make Narrow the active configuration/
       );
@@ -531,7 +612,9 @@ describe('assembly parts in another configuration (F06, #2389)', () => {
       adapter.exportStl(document, [lug])
     ]))
       expect(result.status).toBe('fulfilled');
-    expect(assemblyConfigurationOverrides(document, [lug])).toEqual([]);
+    // No row is built for a part outside the scope.
+    expect(assemblyExportRowIds(document, [lug])).toEqual([]);
+    expect(assemblyExportRowIds(document, [plate])).toEqual(['wide']);
     await expect(adapter.exportStep(document, [plate])).rejects.toThrow(
       /Assemble shows Plate in Wide/
     );
@@ -555,14 +638,14 @@ describe('assembly parts in another configuration (F06, #2389)', () => {
     // Built as it stands, the Wide row keeps Plate pinned to Narrow, which
     // its export would refuse.
     expect(
-      assemblyConfigurationOverrides(documentForConfiguration(document, 'wide'))
-    ).toHaveLength(1);
+      assemblyExportRowIds(documentForConfiguration(document, 'wide'))
+    ).toEqual(['narrow']);
     const wide = documentForConfigurationExport(document, 'wide');
     expect(wide.configurations?.activeRowId).toBe('wide');
     expect(
       wide.assembly?.components.map((c) => c.configurationId ?? null)
     ).toEqual([null, null]);
-    expect(assemblyConfigurationOverrides(wide)).toEqual([]);
+    expect(assemblyExportRowIds(wide)).toEqual([]);
     const shown = await adapter.documentExportBodyIds(wide);
     expect(shown).toEqual([ids[0]]);
     for (const result of await everyExport(wide, shown))
@@ -574,6 +657,149 @@ describe('assembly parts in another configuration (F06, #2389)', () => {
     // The open document is untouched, and its active row keeps the pins.
     expect(document.configurations?.activeRowId).toBe('narrow');
     expect(documentForConfigurationExport(document, 'narrow')).toBe(document);
+  }, 240_000);
+
+  it('refuses a part the active row hides while its own row shows it', async () => {
+    // Narrow active hides the lug through its Visible cell; the lug's part
+    // is set to Wide, which builds and shows it, so Assemble draws it.
+    const { document: start, ids, lugFeature } = configuredPlate();
+    const [plate, lug] = ids as [BodyId, BodyId];
+    let document = setConfigurationCell(start, {
+      rowId: 'wide',
+      column: { kind: 'suppression', featureId: lugFeature },
+      value: false
+    });
+    document = shownIn(document, lug, { narrow: false, wide: true });
+    document = updateAssemblyComponent(document, {
+      componentId: 'c_lug',
+      configurationId: 'wide'
+    });
+    // The scope holds the lug, with Wide built or not: read from the active
+    // row's hidden set it held the plate alone, which then exported.
+    for (const rows of [true, false]) {
+      const { synced, ids: scoped } = await appScope(document, rows);
+      expect(scoped).toEqual([plate, lug]);
+      for (const result of await scopedExports(synced, scoped)) {
+        expect(result.status).toBe('rejected');
+        expect(String((result as PromiseRejectedResult).reason)).toMatch(
+          /Export refused: Assemble shows Indicator lug in Wide, but an export writes every part in the active configuration, Narrow\./
+        );
+      }
+    }
+    // A whole-model export holds it too; the plate alone is not refused.
+    await expect(adapter.exportStepBodies(document)).rejects.toThrow(
+      /Assemble shows Indicator lug in Wide/
+    );
+    for (const result of await scopedExports(document, [plate]))
+      expect(result.status).toBe('fulfilled');
+    // Following the model, the lug is hidden and the plate exports alone.
+    const following = updateAssemblyComponent(document, {
+      componentId: 'c_lug',
+      configurationId: null
+    });
+    const { synced, ids: scoped } = await appScope(following);
+    expect(scoped).toEqual([plate]);
+    for (const result of await scopedExports(synced, scoped))
+      expect(result.status).toBe('fulfilled');
+  }, 240_000);
+
+  it("exports the rest when a part's own row builds nothing for it", async () => {
+    // The lug is suppressed in Narrow and in Wide, and its part is set to
+    // Wide: Assemble shows the plate alone, so the plate alone exports.
+    const { document: start, ids, lugFeature } = configuredPlate();
+    const [plate, lug] = ids as [BodyId, BodyId];
+    let document = setConfigurationCell(start, {
+      rowId: 'narrow',
+      column: { kind: 'suppression', featureId: lugFeature },
+      value: true
+    });
+    document = updateAssemblyComponent(document, {
+      componentId: 'c_lug',
+      configurationId: 'wide'
+    });
+    const { synced, ids: scoped } = await appScope(document);
+    expect(scoped).toEqual([plate]);
+    // Before Wide is built the app scopes the part by its body; the
+    // adapter builds Wide, finds nothing drawn for it and leaves it out.
+    expect((await appScope(document, false)).ids).toEqual([plate, lug]);
+    for (const bodyIds of [scoped, [plate, lug]]) {
+      for (const result of await scopedExports(synced, bodyIds))
+        expect(result.status).toBe('fulfilled');
+      const boxes = await igesSolidBoxes(
+        await adapter.exportIges(synced, bodyIds)
+      );
+      expect(boxes).toHaveLength(1);
+      expect(boxes[0]![3] - boxes[0]![0]).toBeCloseTo(20, 4);
+    }
+    const whole = await adapter.exportStepBodies(synced);
+    expect(whole.bodies.map((body) => body.bodyId)).toEqual([plate]);
+    // The lug alone has nothing to write, and says so without a refusal.
+    await expect(adapter.exportStep(synced, [lug])).rejects.toThrow(
+      /Select at least one body to export/
+    );
+  }, 240_000);
+
+  it('leaves out a part whose own row hides it, as Assemble does', async () => {
+    // Narrow builds and shows the lug; Wide hides it, and its part is set
+    // to Wide: Assemble draws nothing in the lug's place.
+    const { document: start, ids, lugFeature } = configuredPlate();
+    const [plate, lug] = ids as [BodyId, BodyId];
+    let document = setConfigurationCell(start, {
+      rowId: 'wide',
+      column: { kind: 'suppression', featureId: lugFeature },
+      value: false
+    });
+    document = shownIn(document, lug, { narrow: true, wide: false });
+    document = updateAssemblyComponent(document, {
+      componentId: 'c_lug',
+      configurationId: 'wide'
+    });
+    const { synced, ids: scoped } = await appScope(document);
+    expect(scoped).toEqual([plate]);
+    for (const bodyIds of [scoped, [plate, lug]]) {
+      const boxes = await igesSolidBoxes(
+        await adapter.exportIges(synced, bodyIds)
+      );
+      expect(boxes).toHaveLength(1);
+      expect(boxes[0]![3] - boxes[0]![0]).toBeCloseTo(20, 4);
+    }
+    const whole = await adapter.exportStepBodies(synced);
+    expect(whole.bodies.map((body) => body.bodyId)).toEqual([plate]);
+  }, 240_000);
+
+  it('exports another row although the active row builds nothing', async () => {
+    // Narrow suppresses every body; Wide builds the plate. "Export Wide"
+    // is not stopped by Narrow's empty scope.
+    const {
+      document: start,
+      ids,
+      lugFeature,
+      plateFeature
+    } = configuredPlate();
+    let document = addConfigurationColumn(start, {
+      column: { kind: 'suppression', featureId: plateFeature }
+    });
+    for (const featureId of [plateFeature, lugFeature])
+      document = setConfigurationCell(document, {
+        rowId: 'narrow',
+        column: { kind: 'suppression', featureId },
+        value: true
+      });
+    const { synced, ids: scoped } = await appScope(document);
+    expect(scoped).toEqual([]);
+    expect(exportTargetEmpty(exportTargetFor(synced, null, scoped))).toBe(true);
+    const target = exportTargetFor(synced, 'wide', scoped);
+    expect(exportTargetEmpty(target)).toBe(false);
+    // As the worker resolves `allShownBodies`.
+    const shown = await adapter.documentExportBodyIds(target.document);
+    expect(shown).toEqual([ids[0]]);
+    for (const result of await scopedExports(target.document, shown))
+      expect(result.status).toBe('fulfilled');
+    const boxes = await igesSolidBoxes(
+      await adapter.exportIges(target.document, shown)
+    );
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0]![3] - boxes[0]![0]).toBeCloseTo(45, 4);
   }, 240_000);
 
   it('exports a part that names the active row, or follows the model', async () => {

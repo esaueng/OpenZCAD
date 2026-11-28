@@ -131,9 +131,13 @@ import {
   type ExportScope
 } from './lib/exportScope';
 import {
+  NO_ROW_DRAW,
+  exportRowDraw,
   exportScopeBodies,
   exportScopeBodyName,
+  exportTargetEmpty,
   exportTargetFor,
+  rowDrawnHiddenBodyIds,
   type ExportTarget
 } from './lib/modelExportScope';
 import {
@@ -272,7 +276,8 @@ import {
   findBodyNode,
   listObjectFolders,
   getParameterHiddenBodyIds,
-  assemblyComponentBodies,
+  assemblyRowDraw,
+  assemblyRowDrawnParts,
   findFeature,
   standardPartHoleSource,
   findSketch,
@@ -11030,37 +11035,28 @@ export function App() {
   const componentRows = useMemo(() => {
     const swaps = new Map<string, BodyRepresentation | null>();
     const added: BodyRepresentation[] = [];
-    const set = doc?.assembly;
-    if (!assembleMode || !doc || !set || configurationRows.builds.size === 0)
-      return { swaps, added };
-    const liveIn =
-      (bodies: ProjectDocument['derived']['bodyRepresentations']) =>
-      (bodyId: BodyId) =>
-        !!bodies[bodyId] && !bodies[bodyId].consumed;
-    const live = assemblyComponentBodies(
+    if (!assembleMode || !doc || configurationRows.builds.size === 0)
+      return { swaps, added, draw: NO_ROW_DRAW };
+    // `assemblyRowDrawnParts` decides what each part draws; an export reads
+    // the same answer (`exportDraw`), so a file cannot differ from this.
+    const parts = assemblyRowDrawnParts(
       doc,
-      liveIn(doc.derived.bodyRepresentations)
-    );
-    for (const component of set.components) {
-      const row = component.configurationId
-        ? configurationRows.builds.get(component.configurationId)?.document
-        : undefined;
-      if (!row) continue;
-      const bodies = row.derived.bodyRepresentations;
-      const rowBody = assemblyComponentBodies(
-        { ...row, assembly: set },
-        liveIn(bodies)
-      ).get(component.id);
+      (rowId) => configurationRows.builds.get(rowId)?.document
+    ).filter((part) => !part.pending);
+    for (const part of parts) {
       const shown =
-        rowBody && !getParameterHiddenBodyIds(row).has(rowBody)
-          ? bodies[rowBody]
+        part.rowBodyId !== null
+          ? configurationRows.builds.get(part.rowId)?.document.derived
+              .bodyRepresentations[part.rowBodyId]
           : undefined;
-      const liveBody = live.get(component.id);
-      if (liveBody)
-        swaps.set(liveBody, shown ? { ...shown, bodyId: liveBody } : null);
+      if (part.liveBodyId !== null)
+        swaps.set(
+          part.liveBodyId,
+          shown ? { ...shown, bodyId: part.liveBodyId } : null
+        );
       else if (shown) added.push(shown);
     }
-    return { swaps, added };
+    return { swaps, added, draw: assemblyRowDraw(parts) };
   }, [assembleMode, configurationRows.builds, doc]);
   /**
    * The document the viewport draws in Assemble while parts show other
@@ -11103,17 +11099,8 @@ export function App() {
           ...getParameterHiddenBodyIds(viewerRowDocument)
         ])
       : hiddenBodyIds;
-    if (componentRows.swaps.size === 0 && componentRows.added.length === 0)
-      return base;
-    const hidden = new Set(base);
-    for (const [bodyId, swap] of componentRows.swaps) {
-      if (swap === null) hidden.add(bodyId);
-      // The part's row decides; only a hide in this browser still holds.
-      else if (!localHiddenBodyIds.has(bodyId)) hidden.delete(bodyId);
-    }
-    for (const body of componentRows.added)
-      if (!localHiddenBodyIds.has(body.bodyId)) hidden.delete(body.bodyId);
-    return hidden;
+    // The part's row decides; only a hide in this browser still holds.
+    return rowDrawnHiddenBodyIds(base, localHiddenBodyIds, componentRows.draw);
   }, [viewerRowDocument, localHiddenBodyIds, hiddenBodyIds, componentRows]);
   /**
    * Bodies the viewer reported it drew away from their document pose, from
@@ -11705,6 +11692,22 @@ export function App() {
         : new Set<FeatureId>(),
     [doc, featureAttribution]
   );
+  /**
+   * F06: what Assemble draws from other configuration rows, as an export of
+   * the model reads it: the answer the viewport draws from
+   * (`assemblyRowDrawnParts`), over each row built from the document as it
+   * now stands. A part whose row is not built here counts as drawn from it,
+   * and the exact export, which builds the row, decides.
+   */
+  const exportDraw = useMemo(
+    () =>
+      doc
+        ? exportRowDraw(doc, (rowId) =>
+            currentConfigurationRow(configurationRows, rowId)
+          )
+        : NO_ROW_DRAW,
+    [doc, configurationRows]
+  );
   const { exportBodyIds, exportWithheldMessage, exportScopeInfo } = useMemo<{
     exportBodyIds: BodyId[];
     exportWithheldMessage: string | null;
@@ -11722,11 +11725,19 @@ export function App() {
         exportScopeInfo: null
       };
     }
-    const bodyName = (bodyId: BodyId) => exportScopeBodyName(doc, bodyId);
+    const bodyName = (bodyId: BodyId) =>
+      exportScopeBodyName(doc, exportDraw, bodyId);
+    // What Assemble leaves out is not in a file, and what it draws is.
+    const hidden = rowDrawnHiddenBodyIds(
+      hiddenBodyIds,
+      localHiddenBodyIds,
+      exportDraw
+    );
     const scope = exportScope(
       exportScopeBodies(
         doc,
-        (bodyId) => hiddenBodyIds.has(bodyId),
+        exportDraw,
+        (bodyId) => hidden.has(bodyId),
         (bodyId) => failedHistoryBodies.has(bodyId)
       ),
       selectedBody?.bodyId ?? null
@@ -11745,6 +11756,8 @@ export function App() {
     doc,
     selectedBody,
     hiddenBodyIds,
+    localHiddenBodyIds,
+    exportDraw,
     tweakMode,
     parameterModelError,
     currentGeometrySnapshot,
@@ -22821,8 +22834,13 @@ export function App() {
     }): Promise<{ save(): Promise<boolean>; warnings: number }>;
     /** The status once the file is saved, when not the export's own. */
     completed?(bodies: string): string;
+    /**
+     * What the job writes. Another configuration row's bodies are the
+     * kernel's to list, so the active row's own scope never stops its job.
+     */
+    target: Pick<ExportTarget, 'bodyIds' | 'allShownBodies'>;
   }) {
-    if (!doc || exportBodyIds.length === 0) {
+    if (!doc || exportTargetEmpty(input.target)) {
       setStatus(emptyExportReason);
       return;
     }
@@ -23025,11 +23043,7 @@ export function App() {
       setStatus(errorMessage(error, 'That configuration cannot be exported.'));
       return null;
     }
-    if (
-      !doc ||
-      !target ||
-      (!target.allShownBodies && target.bodyIds.length === 0)
-    ) {
+    if (!doc || !target || exportTargetEmpty(target)) {
       setStatus(emptyExportReason);
       return null;
     }
@@ -23098,6 +23112,7 @@ export function App() {
     const fileName = `${exportStemFor(rowName)}.step`;
     await runExportJob({
       fileName,
+      target,
       label: rowName ? `STEP of ${rowName}` : 'STEP',
       ...(rowName
         ? {
@@ -23185,6 +23200,7 @@ export function App() {
     const fileName = `${exportStemFor(rowName)}.${info.extension}`;
     void runExportJob({
       fileName,
+      target: written,
       label: slicer ? `3MF for ${slicer.label}` : '3MF for your slicer',
       completed: (bodies) =>
         slicer
@@ -23232,7 +23248,7 @@ export function App() {
         error instanceof Error ? error : new Error(String(error))
       );
     }
-    if (!target || (!target.allShownBodies && target.bodyIds.length === 0)) {
+    if (!target || exportTargetEmpty(target)) {
       return Promise.reject(
         new Error(emptyExportMessage(exportScopeInfo, 'checking printability'))
       );
@@ -45227,7 +45243,7 @@ export function App() {
                       : []
                     : exportBodyIds.map((bodyId) => ({
                         bodyId,
-                        name: exportScopeBodyName(doc, bodyId),
+                        name: exportScopeBodyName(doc, exportDraw, bodyId),
                         meshReference: ownEntry(
                           doc.derived.bodyRepresentations,
                           bodyId

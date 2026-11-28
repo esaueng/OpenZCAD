@@ -12,6 +12,7 @@ import {
   isAssemblySetEmpty,
   jointAddError,
   normalizeQuaternion,
+  ownEntry,
   solveAssembly,
   transformToPlacement,
   IDENTITY_PLACEMENT,
@@ -36,6 +37,7 @@ import {
   assertAssemblySchema,
   assertComponentConfigurationSchema
 } from './document-content-schema';
+import { getParameterHiddenBodyIds } from './index';
 import { bodySourceMap } from './object-folders';
 
 /**
@@ -735,80 +737,213 @@ export function assemblyComponentBodies(
   return result;
 }
 
-/** F06: a part that shows a configuration other than the document's active one. */
-export interface AssemblyConfigurationOverride {
+/**
+ * F06: a part whose own Configuration names a row other than the document's
+ * active one, as Assemble draws it. A part naming the active row, or a row
+ * no longer in the table (which Assemble draws as the active row), is not
+ * one of these: it follows the model.
+ */
+export interface AssemblyRowDrawnPart {
   componentId: string;
   componentName: string;
   rowId: string;
   rowName: string;
+  /** The body the part was made from. */
+  componentBodyId: BodyId;
+  /**
+   * The model's live body the part stands for (`assemblyComponentBodies`),
+   * which its row's body is drawn in place of; null when the active row
+   * builds none.
+   */
+  liveBodyId: BodyId | null;
+  /**
+   * The body of the row's own build that Assemble draws for the part, or
+   * null when that row shows none (suppressed, consumed or hidden there).
+   */
+  rowBodyId: BodyId | null;
+  /**
+   * The row is not built yet, so what it shows is unknown. Assemble draws
+   * the part as the model has it until the row lands.
+   */
+  pending: boolean;
 }
 
 /**
- * F06: the parts, in display order, whose own configuration differs from
- * the document's active row: Assemble draws each from that row, while
- * anything built from the document alone (an export, for one) has only the
- * active row's geometry for it. A part naming the active row, or a row no
- * longer in the table (which Assemble draws as the active row), is left out.
+ * F06: what Assemble draws for each part that shows another configuration,
+ * in display order. This is the one place that decides it: the viewport
+ * draws from it, and an export takes its scope and its refusal from it
+ * (`assemblyRowDraw`), so a file cannot differ from the view unsaid.
  *
- * With `bodyIds`, only the parts an export of those bodies writes count: a
- * part whose own body, or the live body it shows now (`isLive`, as
- * `assemblyComponentBodies` resolves it), is one of them. A part outside
- * that scope, a hidden one say, puts nothing in the file. Without
- * `bodyIds` every part counts, as for a whole-model export.
+ * `rowDocument` gives a named row built on its own (the document with that
+ * row active and the bodies it builds), or nothing while it is not built.
+ * `isLive` says whether a document's build shows a body (built and not
+ * consumed); a row's own hidden bodies are read from the row.
  */
-export function assemblyConfigurationOverrides(
+export function assemblyRowDrawnParts(
   document: ProjectDocument,
-  bodyIds?: readonly BodyId[],
-  isLive?: (bodyId: BodyId) => boolean
-): AssemblyConfigurationOverride[] {
+  rowDocument: (rowId: string) => ProjectDocument | null | undefined,
+  isLive: (document: ProjectDocument, bodyId: BodyId) => boolean = (
+    built,
+    bodyId
+  ) => {
+    const body = ownEntry(built.derived.bodyRepresentations, bodyId);
+    return Boolean(body && !body.consumed);
+  }
+): AssemblyRowDrawnPart[] {
   const set = document.assembly;
   const table = document.configurations;
   if (!set || !table) return [];
   const rows = new Map(table.rows.map((row) => [row.id, row]));
-  const scope = bodyIds ? new Set(bodyIds) : null;
-  const shown = scope ? assemblyComponentBodies(document, isLive) : null;
-  const overrides: AssemblyConfigurationOverride[] = [];
-  for (const c of set.components) {
+  const pinned = set.components.filter((c) => {
     const row = c.configurationId ? rows.get(c.configurationId) : undefined;
-    if (!row || row.id === table.activeRowId) continue;
-    if (scope) {
-      const body = shown!.get(c.id);
-      if (!scope.has(c.bodyId) && !(body && scope.has(body))) continue;
+    return row !== undefined && row.id !== table.activeRowId;
+  });
+  if (pinned.length === 0) return [];
+  const live = assemblyComponentBodies(document, (bodyId) =>
+    isLive(document, bodyId)
+  );
+  const shownIn = new Map<string, Map<string, BodyId | null> | null>();
+  const shown = (rowId: string) => {
+    if (!shownIn.has(rowId)) {
+      const built = rowDocument(rowId);
+      if (!built) shownIn.set(rowId, null);
+      else {
+        // Membership is the current assembly's; the row lends its geometry.
+        const bodies = assemblyComponentBodies(
+          { ...built, assembly: set },
+          (bodyId) => isLive(built, bodyId)
+        );
+        const hidden = getParameterHiddenBodyIds(built);
+        for (const [componentId, bodyId] of bodies)
+          if (bodyId && hidden.has(bodyId)) bodies.set(componentId, null);
+        shownIn.set(rowId, bodies);
+      }
     }
-    overrides.push({
+    return shownIn.get(rowId) ?? null;
+  };
+  return pinned.map((c) => {
+    const row = rows.get(c.configurationId!)!;
+    const bodies = shown(row.id);
+    return {
       componentId: c.id,
       componentName: c.name,
       rowId: row.id,
-      rowName: row.name
-    });
-  }
-  return overrides;
+      rowName: row.name,
+      componentBodyId: c.bodyId,
+      liveBodyId: live.get(c.id) ?? null,
+      rowBodyId: bodies?.get(c.id) ?? null,
+      pending: bodies === null
+    };
+  });
 }
 
 /**
- * F06: each part Assemble draws from its own row although the active row
- * builds no body for it (the active row suppresses its feature, say), as
- * the body it would show. An export scope read from the model's own bodies
- * would leave such a part out, and with it the refusal naming it, so the
- * scope adds these.
+ * F06: the rows `assemblyRowDrawnParts` needs built to say what an export
+ * of `bodyIds` holds: each row a part names (not the active one) while the
+ * part's body, or a body made from it, is among them. Every such row
+ * without `bodyIds`, as for a whole-model export.
  */
-export function assemblyConfigurationOnlyBodies(
-  document: ProjectDocument
-): { bodyId: BodyId; name: string }[] {
-  const built = document.derived.bodyRepresentations;
-  const present = (bodyId: BodyId) =>
-    Object.hasOwn(built, bodyId) && !built[bodyId]!.consumed;
-  const shown = assemblyComponentBodies(document, present);
-  const components = new Map(
-    (document.assembly?.components ?? []).map((c) => [c.id, c])
-  );
-  const seen = new Set<BodyId>();
-  const result: { bodyId: BodyId; name: string }[] = [];
-  for (const entry of assemblyConfigurationOverrides(document)) {
-    const component = components.get(entry.componentId)!;
-    if (shown.get(component.id) || seen.has(component.bodyId)) continue;
-    seen.add(component.bodyId);
-    result.push({ bodyId: component.bodyId, name: component.name });
+export function assemblyExportRowIds(
+  document: ProjectDocument,
+  bodyIds?: readonly BodyId[]
+): string[] {
+  const set = document.assembly;
+  const table = document.configurations;
+  if (!set || !table) return [];
+  const scope = bodyIds ? new Set(bodyIds) : null;
+  const inScope = scope
+    ? assemblyComponentBodies(document, (bodyId) => scope.has(bodyId))
+    : null;
+  const rowIds = new Set<string>();
+  for (const c of set.components) {
+    const rowId = c.configurationId;
+    if (
+      rowId === undefined ||
+      rowId === table.activeRowId ||
+      !table.rows.some((row) => row.id === rowId)
+    )
+      continue;
+    if (!inScope || inScope.get(c.id)) rowIds.add(rowId);
   }
-  return result;
+  return [...rowIds];
+}
+
+/** F06: what the row-drawn parts make of the model's bodies (`assemblyRowDraw`). */
+export interface AssemblyRowDraw {
+  /**
+   * The bodies Assemble draws from another row than the document's, by the
+   * id it draws them under: the model's live body the part stands for, else
+   * the row's own body. An export of the document cannot write these.
+   */
+  fromRow: Map<BodyId, AssemblyRowDrawnPart>;
+  /**
+   * Bodies of the model Assemble draws nothing for, because the part that
+   * stands for them shows a row without them. An export leaves them out.
+   */
+  removed: Set<BodyId>;
+}
+
+/**
+ * F06: `assemblyRowDrawnParts` by body, for the viewport's hidden set and
+ * an export's scope alike. Where parts stand for one model body the later
+ * one decides. A part whose row is not built counts as drawn from it: the
+ * cautious reading for an export, whose exact build of every row it needs
+ * then decides. The viewport passes only the parts whose rows are built.
+ */
+export function assemblyRowDraw(
+  parts: readonly AssemblyRowDrawnPart[]
+): AssemblyRowDraw {
+  const fromRow = new Map<BodyId, AssemblyRowDrawnPart>();
+  const removed = new Set<BodyId>();
+  // Re-inserted, so the map stays in the deciding parts' display order.
+  const draw = (bodyId: BodyId, part: AssemblyRowDrawnPart) => {
+    fromRow.delete(bodyId);
+    fromRow.set(bodyId, part);
+    removed.delete(bodyId);
+  };
+  for (const part of parts) {
+    if (part.pending) draw(part.liveBodyId ?? part.componentBodyId, part);
+    else if (part.liveBodyId !== null) {
+      if (part.rowBodyId !== null) draw(part.liveBodyId, part);
+      else {
+        fromRow.delete(part.liveBodyId);
+        removed.add(part.liveBodyId);
+      }
+    } else if (part.rowBodyId !== null) draw(part.rowBodyId, part);
+  }
+  // A part that draws nothing at all: the body it was made from is not the
+  // model's to write either, should a caller have scoped it unbuilt.
+  for (const part of parts)
+    if (
+      !part.pending &&
+      part.liveBodyId === null &&
+      part.rowBodyId === null &&
+      !fromRow.has(part.componentBodyId)
+    )
+      removed.add(part.componentBodyId);
+  return { fromRow, removed };
+}
+
+/**
+ * F06: the parts an export of `bodyIds` would have to write from another
+ * row than the document's, in display order: those `assemblyRowDraw`
+ * draws from their own row under one of the written ids. A caller that
+ * scoped a part before its row was built may name it by the body it was
+ * made from, or the model's live one, so those count too. Every such part
+ * without `bodyIds`, as for a whole-model export.
+ */
+export function assemblyExportRowParts(
+  draw: AssemblyRowDraw,
+  bodyIds?: readonly BodyId[]
+): AssemblyRowDrawnPart[] {
+  const scope = bodyIds ? new Set(bodyIds) : null;
+  return [...draw.fromRow]
+    .filter(
+      ([bodyId, part]) =>
+        !scope ||
+        scope.has(bodyId) ||
+        scope.has(part.componentBodyId) ||
+        (part.liveBodyId !== null && scope.has(part.liveBodyId))
+    )
+    .map(([, part]) => part);
 }

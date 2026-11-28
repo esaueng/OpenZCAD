@@ -548,7 +548,8 @@ export function documentForConfiguration(
 /**
  * F06: the document an export of configuration `rowId` writes. The active
  * row is the model as Assemble shows it, each part's own Configuration
- * included (an export refuses while one names another row). Another row is
+ * included (an export refuses while a part it writes is drawn from another
+ * row, `assemblyRowDrawnParts`). Another row is
  * a request for that configuration: the model with `rowId` active and every
  * assembly part following it, as View draws a row. A part's own
  * Configuration pins it in Assemble's presentation of the active model, so

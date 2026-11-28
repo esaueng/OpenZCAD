@@ -91,6 +91,7 @@ export function exportIges(input: {
   const { target, fileName } = input;
   return input.runExportJob({
     fileName,
+    target,
     label: 'IGES',
     produce: async (options) => {
       const result = await input.exportModel(
