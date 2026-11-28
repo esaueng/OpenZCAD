@@ -20,6 +20,7 @@ import type {
   SketchId
 } from '@openzcad/shared';
 import type { InPlaceEditSeed } from '../lib/inPlace/edit';
+import { editTargetMissingSentence } from '../lib/refusalLanguage';
 import {
   mergeSweptFaces,
   useInPlaceCommand,
@@ -1211,6 +1212,71 @@ describe('useInPlaceCommand: thread', () => {
     });
     expect(hook.result.current.refusal).toBeNull();
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  // A chamfer whose body is not built (its typed `target_body_unavailable`):
+  // the edit opened in edge-pick mode over a viewport without that body.
+  it('opens a chamfer edit with no body as a typed refusal, picking nothing', async () => {
+    const missing = {
+      family: 'reference' as const,
+      category: 'invalid_input',
+      code: 'target_body_unavailable'
+    };
+    const seed: InPlaceEditSeed = {
+      featureId: 'feat_c' as FeatureId,
+      nodeId: 'node_c',
+      name: 'Chamfer 1',
+      data: {
+        featureKind: 'chamfer',
+        targetBodyId: 'body_gone' as BodyId,
+        edgeHashes: [4],
+        distance: 1
+      },
+      resultBodyId: 'body_gone' as BodyId,
+      ownBodyIds: [],
+      slots: {
+        profiles: [],
+        axisId: null,
+        path: [],
+        guide: [],
+        faces: [],
+        bodies: [],
+        plane: null,
+        edges: []
+      },
+      values: { distance: 1, angle: 45, distance2: 1 },
+      raws: {},
+      touched: ['distance'],
+      options: { shape: 'equal' },
+      axes: [],
+      choices: {},
+      lockedOptions: [],
+      notice: null,
+      targetMissing: missing
+    };
+    const { hook, built } = setup();
+    act(() => hook.result.current.edit('chamfer', seed));
+    expect(hook.result.current.refusal).toBe(
+      editTargetMissingSentence(missing, 'chamfer')
+    );
+    expect(hook.result.current.refusal).not.toMatch(/click the edges/i);
+    expect(hook.result.current.request).toBeNull();
+    expect(hook.result.current.canFinish).toBe(false);
+    // No pick mode for the viewer, and a click on another body's edge is
+    // refused rather than retargeting the chamfer.
+    expect(hook.result.current.spec?.edgeMode).toBeUndefined();
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.pickEdge({
+        bodyId: BODY,
+        hash: 7,
+        topologyId: 'e7'
+      });
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.slots.edges).toEqual([]);
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(built).toEqual([]);
   });
 
   /** A stored partial thread, 10 long from 2 up, reopened from History. */

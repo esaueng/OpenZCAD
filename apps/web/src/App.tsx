@@ -2268,6 +2268,7 @@ import {
   inPlaceEditObjects,
   inPlaceEditOperandRefusal,
   inPlaceEditRestDocument,
+  inPlaceEditOwnRefusal,
   inPlaceEditSeed,
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
@@ -14445,7 +14446,14 @@ export function App() {
           (datum) => datum.featureId === featureId
         ),
       datumAxis: (featureId) => current.derived.datumAxes?.[featureId] ?? null,
-      bodyVertices: (bodyId) => representations[bodyId]?.mesh.vertices ?? null
+      bodyVertices: (bodyId) => representations[bodyId]?.mesh.vertices ?? null,
+      // The feature's own typed refusal in the rebuild `current` carries:
+      // a missing target body leaves its edit nothing to pick.
+      ownRefusal: inPlaceEditOwnRefusal(
+        feature.featureId,
+        current.derived,
+        featureAttribution
+      )
     });
   }
 

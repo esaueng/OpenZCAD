@@ -10,6 +10,7 @@ import {
   SPLIT_PLANE_ON_FACE,
   SPLIT_PLANE_TOUCHES,
   TARGET_BODY_UNAVAILABLE,
+  editTargetMissingSentence,
   plainRefusal,
   plainRefusalSentence,
   stepImportRefusal,
@@ -828,6 +829,30 @@ describe('withFaceSweepReading', () => {
     const other = { message: 'Unsupported adjacent surface.' };
     expect(withFaceSweepReading(other, read)).toBe(other);
     expect(read).not.toHaveBeenCalled();
+  });
+});
+
+// An edit opened on a chamfer (or a fillet, a hole, …) whose body is not
+// built: the bar says so from the code, and how to recover, instead of
+// asking for picks on a body the viewport does not have.
+describe('an edit whose target body is not built', () => {
+  it('words the edit from the typed code, with the way back', () => {
+    const sentence = editTargetMissingSentence(
+      { code: 'target_body_unavailable' },
+      'chamfer'
+    );
+    expect(sentence).toBe(
+      "This chamfer's body isn't built at this point in the history, so there is nothing to pick. Its feature may be suppressed or may have failed: fix or restore that feature in History, or delete this chamfer."
+    );
+    // The bar reads it through `plainRefusal`, which keeps it as written.
+    expect(plainRefusal(sentence!).message).toBe(sentence);
+  });
+
+  it('says nothing for another code, or none', () => {
+    expect(
+      editTargetMissingSentence({ code: 'mirror_source_unavailable' }, 'fillet')
+    ).toBeNull();
+    expect(editTargetMissingSentence({}, 'fillet')).toBeNull();
   });
 });
 
