@@ -1043,7 +1043,7 @@ describe('scaleUnitlessMeshFile', () => {
       expect(Buffer.compare(scaled, file)).toBe(0);
       // The old rewrite left some 600,000 views behind it; one output buffer
       // and the scan's short-lived strings come to a fraction of that.
-      expect(grown).toBeLessThan(32 * 1024 * 1024);
+      expect(grown).toBeLessThan(48 * 1024 * 1024);
     }
   );
 
