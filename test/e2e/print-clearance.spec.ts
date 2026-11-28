@@ -78,6 +78,12 @@ test(
     await page.getByRole('button', { name: 'Redo', exact: true }).click();
     await expect(input).toHaveValue('0.15 mm');
 
+    // Reload once this device has stored the Redo. A reload while the write
+    // is still queued meets the unsaved-edits guard, which Playwright
+    // accepts, so the tab leaves with the edit unsaved on purpose.
+    const saveChip = page.locator('.save-state');
+    await expect(saveChip).toBeVisible();
+    await expect(saveChip).not.toHaveClass(/\bis-saving\b/);
     await page.reload();
     await expect(
       page.getByLabel('Print clearance', { exact: true })

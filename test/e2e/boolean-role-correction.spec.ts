@@ -110,6 +110,9 @@ declare global {
         source: 'frame' | 'mutation';
         doneFound: boolean;
         done: boolean;
+        /** The unconsumed bodies drawn, in draw order. */
+        bodyIds: string[];
+        /** Their volumes, NaN where the drawn body carries none. */
         volumes: number[];
       }[];
     };
@@ -201,9 +204,16 @@ const settleFrames = (page: Page) =>
   );
 
 /**
- * Records the Done state and the drawn volumes on every animation frame and
- * on every `disabled` change in the command bar, until stopped, so a flash
- * that lasts one frame is still seen.
+ * Records the Done state and the drawn bodies and volumes on every animation
+ * frame and on every `disabled` change in the command bar, until stopped, so
+ * a flash that lasts one frame is still seen.
+ *
+ * The viewer's bodies are display geometry (`GeometryBodyRepresentation`):
+ * a volume rides along only when the array it was handed had one. A preview
+ * reply always does; the live model, opened while its analysis arrived a
+ * moment after its meshes, keeps the measured-less meshes it already drew
+ * (same geometry, nothing to redraw). So which bodies are drawn is read from
+ * their ids, and a volume, where present, must agree.
  */
 async function startFrameSampler(page: Page, title: string) {
   await page.evaluate((title) => {
@@ -218,19 +228,26 @@ async function startFrameSampler(page: Page, title: string) {
       const done = document.querySelector<HTMLButtonElement>(
         `[aria-label="${title} command"] .in-place-command-done`
       );
+      let bodyIds: string[] = [];
       let volumes: number[] = [];
       canvas.dispatchEvent(
         new CustomEvent('openzcad:e2e-render-policy', {
           detail: {
             includeBodies: true,
             resolve: (state: {
-              bodies?: { volume?: number; consumed?: boolean }[];
+              bodies?: {
+                bodyId: string;
+                volume?: number;
+                consumed?: boolean;
+              }[];
             }) => {
-              volumes = (state.bodies ?? [])
-                .filter((body) => !body.consumed)
-                .map(
-                  (body) => Math.round((body.volume ?? Number.NaN) * 100) / 100
-                );
+              const drawn = (state.bodies ?? []).filter(
+                (body) => !body.consumed
+              );
+              bodyIds = drawn.map((body) => body.bodyId);
+              volumes = drawn.map(
+                (body) => Math.round((body.volume ?? Number.NaN) * 100) / 100
+              );
             }
           }
         })
@@ -240,6 +257,7 @@ async function startFrameSampler(page: Page, title: string) {
         source,
         doneFound: done !== null,
         done: done !== null && !done.disabled,
+        bodyIds,
         volumes
       });
     };
@@ -432,15 +450,22 @@ test('Cell 1: Subtract roles reverse in two Objects clicks, and only the B − A
   ).toBeGreaterThan(10);
   expect(stale.every((sample) => sample.doneFound)).toBe(true);
   // While only the stale reply had landed: Done never enabled, and the two
-  // whole bodies drawn on every frame.
+  // whole bodies drawn on every frame: Block and Post by their own ids (a
+  // Subtract result is a new body), measuring 2000 and 3000 wherever the
+  // drawn body carries its volume.
   expect(stale.filter((sample) => sample.done)).toEqual([]);
   expect(
     stale.filter(
       (sample) =>
-        JSON.stringify(sample.volumes) !== JSON.stringify([2000, 3000])
+        JSON.stringify(sample.bodyIds) !== JSON.stringify([block, post]) ||
+        sample.volumes.some(
+          (volume, index) =>
+            !Number.isNaN(volume) && volume !== [2000, 3000][index]
+        )
     )
   ).toEqual([]);
-  // At no sample, before or after the current reply, was A − B drawn.
+  // At no sample, before or after the current reply, was A − B drawn. Only
+  // a preview reply could draw it, and a reply's bodies carry their volumes.
   expect(
     samples.filter((sample) => sample.volumes.includes(BLOCK_MINUS_POST))
   ).toEqual([]);

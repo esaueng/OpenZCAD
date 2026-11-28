@@ -38,6 +38,34 @@ interface FacePoint {
 }
 
 /**
+ * The canvas cursor once the hover under the pointer has settled. A change
+ * of hover target is committed only after it has been seen for the hover
+ * dwell (`HOVER_DWELL_MS`, 60 ms) and on the frame after that, so a cursor
+ * read straight after a move still names the previous target. This waits
+ * frames until well past the dwell, then one frame more for the commit.
+ * Hover-only frames stopped drawing in #1939, so they no longer take long
+ * enough under software GL to hide the dwell.
+ */
+async function settledCursor(canvas: Locator): Promise<string> {
+  return canvas.evaluate(
+    (element) =>
+      new Promise<string>((resolve) => {
+        const start = performance.now();
+        const tick = () => {
+          if (performance.now() - start < 150) {
+            requestAnimationFrame(tick);
+            return;
+          }
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => resolve(element.style.cursor))
+          );
+        };
+        requestAnimationFrame(tick);
+      })
+  );
+}
+
+/**
  * Points on two different faces of the box. A point is on a face when the
  * pointer turns to a grab there; clicking it says which face, and Escape
  * leaves nothing selected again.
@@ -53,9 +81,7 @@ async function twoFacePoints(canvas: Locator): Promise<[FacePoint, FacePoint]> {
         y: bounds.y + bounds.height * yRatio
       };
       await page.mouse.move(point.x, point.y);
-      if (
-        (await canvas.evaluate((element) => element.style.cursor)) !== 'grab'
-      ) {
+      if ((await settledCursor(canvas)) !== 'grab') {
         continue;
       }
       await page.mouse.click(point.x, point.y);

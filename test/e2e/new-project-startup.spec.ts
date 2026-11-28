@@ -30,6 +30,12 @@ for (const width of [1440, 390]) {
     await expect(page).toHaveTitle('OpenZCAD');
     expect(new URL(page.url()).pathname).toBe('/');
     await page.getByLabel('Project name').fill('New blank project');
+    // The library offers New project once its first account read is in.
+    // Holding the session before then would hold that read as well, and
+    // New project would stay disabled behind its own held response.
+    await expect(
+      page.getByRole('button', { name: 'New project', exact: true })
+    ).toBeEnabled();
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     page.on('console', (message) => {
