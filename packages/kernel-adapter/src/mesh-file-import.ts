@@ -12,6 +12,7 @@ import { RemusKernel, loadRemusTranslators } from './remus-runtime';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { importMeshSolid } from './exact-shape-utils';
 import { glbPlacement, glbWithIdentityNodes } from './glb-scene';
+import { scaleUnitlessMeshFile } from './unitless-mesh-units';
 import {
   applyThreeMfTransform,
   readThreeMfPackage,
@@ -83,11 +84,23 @@ interface MeshPlacement {
  * its own geometric tolerance, so the check must use the stored scale. The
  * returned vertices are still millimetres; only the check is scaled, as the
  * commit will scale them.
+ *
+ * `readAs` is the unit an OBJ or PLY file's numbers are in — the user's
+ * answer to the unit prompt; millimetres when omitted, and ignored for the
+ * formats that declare their own. Its vertex positions are rewritten into
+ * millimetres *before* the translator reads the file (#2096), so the
+ * translator, the tessellation and the rebuild check all see the numbers a
+ * millimetre copy of the same part would hold, and the same physical mesh
+ * imports to the same triangles whichever unit its file was written in. The
+ * translator offers no unit scale or weld distance to pass instead, so the
+ * file is what changes; a file whose positions cannot all be rewritten is
+ * refused rather than read at the wrong size.
  */
 export async function importMeshFile(
   format: MeshImportFormat,
   data: Uint8Array,
-  documentUnits: UnitSystem
+  documentUnits: UnitSystem,
+  readAs: UnitSystem = 'mm'
 ): Promise<ImportedMeshTriangles> {
   const policy = MESH_IMPORT_POLICIES[format];
   if (data.byteLength > policy.maxInputBytes) {
@@ -95,6 +108,19 @@ export async function importMeshFile(
   }
   if (format === 'obj') {
     assertObjTriangleBudget(data, policy);
+  }
+  // Budgets are charged on the file as the user picked it. The rewrite may
+  // spell the same numbers in more digits, so it carries its own: the
+  // translator's vertex ceiling and twice the byte ceiling, both enforced
+  // while it scans, before anything is allocated for what it finds.
+  let maxInputBytes = policy.maxInputBytes;
+  if ((format === 'obj' || format === 'ply') && readAs !== 'mm') {
+    data = scaleUnitlessMeshFile(format, data, millimetresPerUnit(readAs), {
+      label: policy.label,
+      maxVertices: policy.maxEntities,
+      maxOutputBytes: 2 * policy.maxInputBytes
+    });
+    maxInputBytes = Math.max(maxInputBytes, data.byteLength);
   }
   // Read before parsing: a package that cannot be read, or that asks for
   // something this import will not do, refuses without spending the parse.
@@ -106,7 +132,7 @@ export async function importMeshFile(
       format === '3mf'
         ? io.import3mf(data, policy.maxInputBytes, policy.maxEntities)
         : format === 'obj'
-          ? io.importObj(data, policy.maxInputBytes, policy.maxEntities)
+          ? io.importObj(data, maxInputBytes, policy.maxEntities)
           : format === 'glb'
             ? io.importGlb(
                 // The reader welds what it places; hand it the meshes as
@@ -115,7 +141,7 @@ export async function importMeshFile(
                 policy.maxInputBytes,
                 policy.maxEntities
               )
-            : io.importPly(data, policy.maxInputBytes, policy.maxEntities);
+            : io.importPly(data, maxInputBytes, policy.maxEntities);
   } catch (error) {
     // The translator's own refusals name the budget that stopped it ("import
     // limit exceeded for input bytes: ...") and the parse position that failed,
