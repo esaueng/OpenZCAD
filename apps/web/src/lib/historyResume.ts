@@ -135,6 +135,11 @@ export function rowResume(
  * another rebuild. A Resume baseline reads it, so a failure is known by its
  * feature id as the candidate's is, and a name two features share neither
  * hides a new failure nor reports an old one again.
+ *
+ * The rebuild is recognised by its warning list, not the container: a
+ * revision that keeps the geometry (a display-unit change rebinding sketch
+ * geometry, say) copies `derived` but carries the same list over, and its
+ * records with it.
  */
 export function withFeatureAttribution(
   derived: ProjectDocument['derived'],
@@ -145,7 +150,9 @@ export function withFeatureAttribution(
     >[number][];
   } | null
 ): ProjectDocument['derived'] {
-  return attribution?.derived === derived
+  return attribution &&
+    (attribution.derived === derived ||
+      attribution.derived.warnings === derived.warnings)
     ? { ...derived, featureWarnings: [...attribution.featureWarnings] }
     : derived;
 }
