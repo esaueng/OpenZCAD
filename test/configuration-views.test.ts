@@ -11,6 +11,8 @@ import {
   createProjectDocument,
   deleteConfigurationRow,
   deleteConfigurations,
+  holeBody,
+  listFeaturesInOrder,
   listParameters,
   setConfigurationCell,
   setParameter,
@@ -34,8 +36,16 @@ import {
   projectionViewRow,
   rowBodyKey,
   rowContentKey,
+  rowDocument,
   viewConfigurationRows
 } from '../apps/web/src/lib/drawing/viewConfigurations';
+import {
+  holeCalloutLookup,
+  holeCalloutSnapshot,
+  rowViewBodyKey,
+  viewHoleCallouts
+} from '../apps/web/src/lib/drawing/annotations';
+import { auditDrawingDimensions } from '../apps/web/src/lib/drawing/dimensionAudit';
 
 /**
  * F06 slice 4b: one configuration per drawing view (schema v89). A base
@@ -309,5 +319,160 @@ describe('which row each view draws', () => {
     expect(
       projectionViewCacheKey(projectionSheet(sheet, new Map(), 'x').views[0]!)
     ).toBeNull();
+  });
+
+  it('keys a row view by everything a rebuild reads, the feature order included (review)', () => {
+    const named = addPrimitiveFeature(model(), {
+      name: 'Boss',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 5 }
+    });
+    const key = rowContentKey(named);
+    // Two steps swapped: the same features, another result.
+    expect(named.featureOrder.length).toBeGreaterThan(1);
+    expect(
+      rowContentKey({
+        ...named,
+        featureOrder: [...named.featureOrder].reverse()
+      })
+    ).not.toBe(key);
+    // The other orders, the units and the imports a rebuild reads.
+    expect(rowContentKey({ ...named, parameterOrder: [] })).not.toBe(key);
+    expect(
+      rowContentKey({ ...named, bodyOrder: [...named.bodyOrder].reverse() })
+    ).not.toBe(key);
+    expect(rowContentKey({ ...named, units: 'inch' })).not.toBe(key);
+    expect(rowContentKey({ ...named, printClearance: 0.2 })).not.toBe(key);
+    expect(
+      rowContentKey({
+        ...named,
+        assets: { asset_x: { assetId: 'asset_x' } } as never
+      })
+    ).not.toBe(key);
+    // What a rebuild never reads keeps the key: the bookkeeping of a
+    // command, and the folders bodies are filed in.
+    expect(
+      rowContentKey({
+        ...named,
+        version: named.version + 1,
+        commandLog: [],
+        objectFolders: { folders: [] } as never
+      })
+    ).toBe(key);
+  });
+
+  it('answers a row the model cannot take, rather than throwing (review)', () => {
+    const named = model();
+    const good = rowDocument(named, 'large');
+    expect(good.ok && good.document.configurations!.activeRowId).toBe('large');
+    // Large's width names a parameter the model no longer has.
+    const set = named.configurations!;
+    const width = listParameters(named)[0]!.parameterId;
+    const broken: ProjectDocument = {
+      ...named,
+      configurations: {
+        ...set,
+        rows: set.rows.map((row) =>
+          row.id === 'large'
+            ? { ...row, parameters: { ...row.parameters, [width]: 'gone * 2' } }
+            : row
+        )
+      }
+    };
+    const refused = rowDocument(broken, 'large');
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.message).toMatch(/^Configuration "Large": /);
+  });
+
+  it('reads a view’s hole callouts from the row it draws (review)', () => {
+    let document = setParameter(
+      createProjectDocument('Drilled', toUserId('user_cfg')),
+      { name: 'bore', expression: '10' }
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 60, height: 40, depth: 10 }
+    });
+    document = holeBody(document, {
+      name: 'Hole',
+      targetBodyId: document.bodyOrder.at(-1)!,
+      faceHash: 1,
+      style: 'simple',
+      diameter: 'bore',
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    }).document;
+    const holeId = listFeaturesInOrder(document).at(-1)!.featureId;
+    const column = {
+      kind: 'parameter' as const,
+      parameterId: listParameters(document)[0]!.parameterId
+    };
+    document = createConfigurations(document, { rowId: 'wide', name: 'Wide' });
+    document = addConfigurationColumn(document, { column });
+    document = addConfigurationRow(document, {
+      rowId: 'narrow',
+      name: 'Narrow'
+    });
+    document = setConfigurationCell(document, {
+      rowId: 'narrow',
+      column,
+      value: '6'
+    });
+    const narrow = rowDocument(document, 'narrow');
+    expect(narrow.ok).toBe(true);
+    const callouts = viewHoleCallouts(
+      holeCalloutLookup(document),
+      new Map([
+        [frontId, narrow.ok ? holeCalloutSnapshot(narrow.document) : null],
+        [sectionId, null]
+      ])
+    );
+    // The active row's views, and a read that names no view.
+    expect(callouts(holeId)?.diameter).toBe(10);
+    expect(callouts(holeId, sideId)?.diameter).toBe(10);
+    // A view on Narrow reads Narrow's size.
+    expect(callouts(holeId, frontId)?.diameter).toBe(6);
+    // A row that could not be read calls nothing out, never the active
+    // row's size in its place.
+    expect(callouts(holeId, sectionId)).toBeNull();
+    // With no view on another row the active lookup is used as it is.
+    const active = holeCalloutLookup(document);
+    expect(viewHoleCallouts(active, new Map())).toBe(active);
+  });
+
+  it('reports a view whose row is not in as unchecked, not complete (review)', () => {
+    const named = updateDrawingView(model(), {
+      sheetId,
+      viewId: frontId,
+      configurationId: 'large'
+    });
+    const sheet: DrawingSheet = {
+      ...named.drawings!.sheets[0]!,
+      views: [named.drawings!.sheets[0]!.views[0]!]
+    };
+    const bodyId = sheet.views[0]!.bodyIds[0]!;
+    // Large is still building: its view has no body to read.
+    const bodies = { [rowViewBodyKey(frontId, bodyId)]: undefined };
+    expect(auditDrawingDimensions(sheet, bodies, 'mm')).toMatchObject({
+      missing: [],
+      required: 0
+    });
+    const audit = auditDrawingDimensions(
+      sheet,
+      bodies,
+      'mm',
+      new Map([[frontId, 'Front: its configuration is still being built.']])
+    );
+    expect(audit.uncheckedViews).toEqual([
+      {
+        viewId: frontId,
+        message: 'Front: its configuration is still being built.'
+      }
+    ]);
+    // A view the map does not name is read as ever.
+    expect(
+      auditDrawingDimensions(sheet, bodies, 'mm', new Map()).uncheckedViews
+    ).toBeUndefined();
   });
 });

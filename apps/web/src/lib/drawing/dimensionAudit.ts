@@ -110,7 +110,20 @@ export interface DrawingAudit {
   stated: number;
   /** How many requirements the part has that this check reads. */
   required: number;
+  /**
+   * F06: views the check has not read, each with why: one that draws a
+   * configuration row whose geometry is not in (still building, or it could
+   * not be built). Nothing such a view draws is in `required`, so the sheet
+   * is not complete while any is listed. Absent when every view was read.
+   */
+  uncheckedViews?: { viewId: DrawingViewId; message: string }[];
 }
+
+/**
+ * F06: the views of a sheet whose configuration row's geometry is not in,
+ * each with why, which the check reports instead of reading.
+ */
+export type UncheckedViews = ReadonlyMap<DrawingViewId, string>;
 
 const AXES: readonly AuditAxis[] = ['x', 'y', 'z'];
 const UNIT: Readonly<Record<AuditAxis, Vector3>> = {
@@ -1272,9 +1285,16 @@ function keyedReading(
 export function auditDrawingDimensions(
   sheet: DrawingSheet,
   bodies: AnnotationBodies,
-  units: UnitSystem
+  units: UnitSystem,
+  /** F06: views whose configuration row's geometry is not in. */
+  uncheckedViews?: UncheckedViews
 ): DrawingAudit {
-  const { audit, geometry } = readDimensionState(sheet, bodies, units);
+  const { audit, geometry } = readDimensionState(
+    sheet,
+    bodies,
+    units,
+    uncheckedViews
+  );
   if (!geometry.keyed) return audit;
   // Findings name the model body, whichever row's geometry they read.
   return {
@@ -1293,7 +1313,9 @@ export function auditDrawingDimensions(
 export function readDimensionState(
   source: DrawingSheet,
   sourceBodies: AnnotationBodies,
-  units: UnitSystem
+  units: UnitSystem,
+  /** F06: views whose configuration row's geometry is not in. */
+  uncheckedViews?: UncheckedViews
 ): DimensionState {
   const geometry = auditGeometry(source, sourceBodies);
   const { sheet, bodies } = geometry;
@@ -1305,6 +1327,14 @@ export function readDimensionState(
     stated: 0,
     required: 0
   };
+  // F06: a view whose row's geometry is not in has no body to read here
+  // (never the active row's in its place), so what it draws would be left
+  // out of every count and the sheet reported complete: said instead.
+  const unread = source.views.flatMap((view) => {
+    const message = uncheckedViews?.get(view.viewId);
+    return message === undefined ? [] : [{ viewId: view.viewId, message }];
+  });
+  if (unread.length > 0) audit.uncheckedViews = unread;
   const bodyIds = [...new Set(sheet.views.flatMap((view) => view.bodyIds))];
   const requirements = new Map<string, BodyRequirements>();
   for (const bodyId of bodyIds) {

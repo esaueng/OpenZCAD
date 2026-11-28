@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -8,9 +9,17 @@ import {
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  addConfigurationColumn,
   addConfigurationRow,
+  addPrimitiveFeature,
   createConfigurations,
-  createProjectDocument
+  createProjectDocument,
+  getParameterScope,
+  holeBody,
+  listFeaturesInOrder,
+  listParameters,
+  setConfigurationCell,
+  setParameter
 } from '@openzcad/document-core';
 import {
   toUserId,
@@ -20,11 +29,17 @@ import {
   type DrawingAnnotationId,
   type DrawingLinearDimension,
   type DrawingSheet,
+  type DrawingSheetId,
   type DrawingView,
   type DrawingViewId,
+  type FeatureId,
   type ProjectDocument
 } from '@openzcad/shared';
-import { DrawingWorkspace, resetRetainedProjections } from './DrawingWorkspace';
+import {
+  DrawingWorkspace,
+  resetRetainedProjections,
+  retainedRowBodyIds
+} from './DrawingWorkspace';
 import {
   createStarterSheet,
   drawingSourceFingerprint,
@@ -156,20 +171,24 @@ function rowBodies(
   return width ? { [bodyId]: plate(width) } : {};
 }
 
-function tessellate(
-  document: ProjectDocument,
-  bodyIds: BodyId[]
-): Promise<Record<string, ProjectionBodyInput>> {
-  const bodies = rowBodies(document);
-  return Promise.resolve(
-    Object.fromEntries(
-      bodyIds.flatMap((id) => {
-        const input = bodies[id] ? projectionBodyInput(bodies[id]) : null;
-        return input ? [[id, input]] : [];
-      })
-    )
-  );
-}
+type Build = (document: ProjectDocument) => Record<string, BodyRepresentation>;
+
+const tessellateWith =
+  (build: Build) =>
+  (
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): Promise<Record<string, ProjectionBodyInput>> => {
+    const bodies = build(document);
+    return Promise.resolve(
+      Object.fromEntries(
+        bodyIds.flatMap((id) => {
+          const input = bodies[id] ? projectionBodyInput(bodies[id]) : null;
+          return input ? [[id, input]] : [];
+        })
+      )
+    );
+  };
 
 /** Wide and Narrow rows; the same project whichever row is active. */
 const project = (() => {
@@ -246,25 +265,31 @@ function workspace(
   {
     requestBodies = true,
     requestSection,
-    onCommand = vi.fn(() => true)
+    onCommand = vi.fn(() => true),
+    build = rowBodies
   }: {
-    requestBodies?: boolean;
+    /** False for none; a function to answer a row's bodies another way. */
+    requestBodies?: boolean | NonNullable<Props['requestBodies']>;
     requestSection?: Props['requestSection'];
     onCommand?: Props['onCommand'];
+    /** What a row's document builds. */
+    build?: Build;
   } = {}
 ) {
   return (
     <DrawingWorkspace
       document={document}
-      bodies={rowBodies(document)}
+      bodies={build(document)}
       geometryPending={false}
       defaultBodyIds={[bodyId]}
-      requestTessellation={tessellate}
+      requestTessellation={tessellateWith(build)}
       {...(requestSection ? { requestSection } : {})}
       {...(requestBodies
         ? {
-            requestBodies: (row: ProjectDocument) =>
-              Promise.resolve(rowBodies(row))
+            requestBodies:
+              typeof requestBodies === 'function'
+                ? requestBodies
+                : (row: ProjectDocument) => Promise.resolve(build(row))
           }
         : {})}
       editDisabledReason={null}
@@ -300,8 +325,10 @@ async function exported(format: 'SVG' | 'DXF'): Promise<string> {
   return saved[saved.length - 1]!.text;
 }
 
-async function drawn(views = 2): Promise<HTMLElement> {
-  const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+async function drawn(views = 2, sheet = 'Sheet 1'): Promise<HTMLElement> {
+  const canvas = await screen.findByRole('application', {
+    name: `Sheet ${sheet}`
+  });
   await waitFor(() =>
     expect(canvas.querySelectorAll('.drawing-view')).toHaveLength(views)
   );
@@ -546,5 +573,400 @@ describe('DrawingWorkspace: views pinned to a configuration row', () => {
     });
     const texts = svgTexts(await exported('SVG'));
     expect(texts).toEqual(expect.arrayContaining(['70', '28']));
+  });
+});
+
+/**
+ * Review of #2426: what else a pinned view reads from its row (hole sizes),
+ * what its cache key must cover (the feature order), a row the model cannot
+ * take, a check run before a row's geometry is in, and how much of a row's
+ * build is kept.
+ */
+describe('DrawingWorkspace: pinned rows read, key, fail and keep their own row', () => {
+  beforeEach(() => {
+    resetRetainedProjections();
+    saved.length = 0;
+  });
+  afterEach(cleanup);
+
+  /**
+   * A plate drilled with one through hole of diameter `bore`: 10 in Wide,
+   * 6 in Narrow. The plate is `60 + bore` wide, so a row's body is its own.
+   */
+  const holed = (() => {
+    let document = setParameter(
+      createProjectDocument('Drilled', toUserId('test')),
+      { name: 'bore', expression: '10' }
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 70, height: 28, depth: 7 }
+    });
+    const drilled = holeBody(document, {
+      name: 'Hole',
+      targetBodyId: document.bodyOrder.at(-1)!,
+      faceHash: 101,
+      style: 'simple',
+      diameter: 'bore',
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    });
+    document = drilled.document;
+    const column = {
+      kind: 'parameter' as const,
+      parameterId: listParameters(document)[0]!.parameterId
+    };
+    document = createConfigurations(document, { rowId: WIDE, name: 'Wide' });
+    document = addConfigurationColumn(document, { column });
+    document = addConfigurationRow(document, { rowId: NARROW, name: 'Narrow' });
+    document = setConfigurationCell(document, {
+      rowId: NARROW,
+      column,
+      value: '6'
+    });
+    return {
+      document,
+      column,
+      bodyId: drilled.bodyId,
+      holeId: listFeaturesInOrder(document).at(-1)!.featureId
+    };
+  })();
+
+  /** What a row of `holed` builds: the plate with its bore, at its size. */
+  const holedBodies: Build = (document) => {
+    const bore = getParameterScope(document).scope.bore!;
+    const base = plate(60 + bore);
+    return {
+      [holed.bodyId]: {
+        ...base,
+        bodyId: holed.bodyId,
+        topology: {
+          ...base.topology!,
+          faces: [
+            ...base.topology!.faces,
+            {
+              topologyId: 'f_bore',
+              hash: 150,
+              triangleStart: 0,
+              triangleCount: 0,
+              reference: {
+                kind: 'face',
+                producingFeatureId: holed.holeId,
+                lineageName: 'hole.face.bore'
+              } as never,
+              geometry: {
+                surfaceType: 'cylinder',
+                area: Math.PI * bore * 7,
+                center: { x: 20, y: 14, z: 3.5 },
+                axisStart: { x: 20, y: 14, z: 0 },
+                axisEnd: { x: 20, y: 14, z: 7 },
+                radius: bore / 2
+              }
+            }
+          ]
+        }
+      }
+    };
+  };
+
+  const top = (id: string, row?: string): DrawingView => ({
+    viewId: id as DrawingViewId,
+    orientation: 'top',
+    bodyIds: [holed.bodyId],
+    centerMm: { x: row ? 280 : 120, y: 150 },
+    hiddenLines: false,
+    ...(row ? { configurationId: row } : {})
+  });
+
+  const holeTable = (viewId: DrawingViewId, id: string): DrawingAnnotation => ({
+    annotationId: id as DrawingAnnotationId,
+    kind: 'hole-table',
+    viewId,
+    placementMm: { x: -40, y: -60 }
+  });
+
+  /** A sheet of `views` of the drilled plate, each with its hole table. */
+  const holeSheet = (
+    document: ProjectDocument,
+    views: DrawingView[]
+  ): DrawingSheet => ({
+    ...twoFronts(),
+    source: {
+      fingerprint: drawingSourceFingerprint(holedBodies(document), [
+        holed.bodyId
+      ])!
+    },
+    views,
+    annotations: views.map((view, index) =>
+      holeTable(view.viewId, `dann_holes_${index}`)
+    )
+  });
+
+  it('sizes a pinned view’s hole table from its own row, not the active one', async () => {
+    // Wide (Ø10) is active; the sheet's only view draws Narrow's Ø6 bore.
+    const sheet = holeSheet(holed.document, [top('dview_narrow', NARROW)]);
+    render(
+      workspace(
+        { ...holed.document, drawings: { sheets: [sheet] } },
+        { build: holedBodies }
+      )
+    );
+    await drawn(1);
+    const svg = svgTexts(await exported('SVG'));
+    expect(svg).toContain('Ø6 THRU');
+    expect(svg).not.toContain('Ø10 THRU');
+    const dxf = dxfTexts(await exported('DXF')).join('\n');
+    expect(dxf).toMatch(/6 THRU/);
+    expect(dxf).not.toMatch(/10 THRU/);
+  });
+
+  it('keeps a stale sheet’s hole sizes as each row drew them', async () => {
+    const sheet = holeSheet(holed.document, [
+      top('dview_wide'),
+      top('dview_narrow', NARROW)
+    ]);
+    const first = render(
+      workspace(
+        { ...holed.document, drawings: { sheets: [sheet] } },
+        { build: holedBodies }
+      )
+    );
+    await drawn();
+    expect(svgTexts(await exported('SVG'))).toEqual(
+      expect.arrayContaining(['Ø10 THRU', 'Ø6 THRU'])
+    );
+    first.unmount();
+    // Both rows are resized; the sheet is not updated.
+    let edited = setConfigurationCell(holed.document, {
+      rowId: WIDE,
+      column: holed.column,
+      value: '12'
+    });
+    edited = setConfigurationCell(edited, {
+      rowId: NARROW,
+      column: holed.column,
+      value: '4'
+    });
+    render(
+      workspace(
+        { ...edited, drawings: { sheets: [sheet] } },
+        { build: holedBodies }
+      )
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Model changed');
+    await drawn();
+    const texts = svgTexts(await exported('SVG'));
+    expect(texts).toEqual(expect.arrayContaining(['Ø10 THRU', 'Ø6 THRU']));
+    expect(texts).not.toContain('Ø12 THRU');
+    expect(texts).not.toContain('Ø4 THRU');
+  });
+
+  it('redraws a pinned-only sheet when the feature order changes', async () => {
+    // Narrow builds 40 mm wide with feat_a first, 55 mm with feat_b first:
+    // two steps whose order decides the result.
+    const build: Build = (document) =>
+      document.configurations!.activeRowId === NARROW
+        ? { [bodyId]: plate(document.featureOrder[0] === 'feat_a' ? 40 : 55) }
+        : rowBodies(document);
+    const pinned = twoFronts().views[1]!;
+    const sheet: DrawingSheet = {
+      ...twoFronts(),
+      source: { fingerprint: 'v1:any' },
+      views: [pinned],
+      annotations: [across(pinned.viewId, 'dann_b')]
+    };
+    const ordered = (...featureOrder: string[]): ProjectDocument => ({
+      ...configured(WIDE),
+      featureOrder: featureOrder as FeatureId[],
+      drawings: { sheets: [sheet] }
+    });
+    const view = render(workspace(ordered('feat_a', 'feat_b'), { build }));
+    const canvas = await drawn(1);
+    await within(canvas).findByRole('button', {
+      name: 'Horizontal dimension 40'
+    });
+    view.rerender(workspace(ordered('feat_b', 'feat_a'), { build }));
+    await within(canvas).findByRole('button', {
+      name: 'Horizontal dimension 55'
+    });
+    await drawn(1);
+    const texts = svgTexts(await exported('SVG'));
+    expect(texts).toContain('55');
+    expect(texts).not.toContain('40');
+  });
+
+  it('reports a row the model cannot take on its own views, and draws the rest', async () => {
+    // Narrow's width names a parameter the model no longer has.
+    let document = setParameter(
+      createProjectDocument('Bracket', toUserId('test')),
+      { name: 'width', expression: '70' }
+    );
+    const column = {
+      kind: 'parameter' as const,
+      parameterId: listParameters(document)[0]!.parameterId
+    };
+    document = createConfigurations(document, { rowId: WIDE, name: 'Wide' });
+    document = addConfigurationColumn(document, { column });
+    document = addConfigurationRow(document, { rowId: NARROW, name: 'Narrow' });
+    const set = document.configurations!;
+    const broken: ProjectDocument = {
+      ...document,
+      bodyOrder: [bodyId],
+      configurations: {
+        ...set,
+        rows: set.rows.map((row) =>
+          row.id === NARROW
+            ? {
+                ...row,
+                parameters: {
+                  ...row.parameters,
+                  [column.parameterId]: 'deleted_name * 2'
+                }
+              }
+            : row
+        )
+      },
+      drawings: { sheets: [twoFronts()] }
+    };
+    render(workspace(broken));
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    // The active row's view is drawn and dimensioned as ever.
+    await within(canvas).findByRole('button', {
+      name: 'Horizontal dimension 70'
+    });
+    // The Narrow view says why it is not, by its row.
+    await within(canvas).findByText(/Front — Configuration "Narrow"/);
+    expect(
+      within(canvas).queryByRole('button', { name: 'Horizontal dimension 40' })
+    ).toBeNull();
+  });
+
+  it('leaves a pinned view unchecked until its row’s geometry is in', async () => {
+    const pinned = twoFronts().views[1]!;
+    const sheet: DrawingSheet = {
+      ...twoFronts(),
+      source: { fingerprint: 'v1:any' },
+      views: [pinned],
+      annotations: []
+    };
+    let release!: () => void;
+    const built = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    render(
+      workspace(
+        { ...configured(WIDE), drawings: { sheets: [sheet] } },
+        { requestBodies: (row) => built.then(() => rowBodies(row)) }
+      )
+    );
+    // Narrow is still building: nothing of it has been read, so the sheet
+    // is not called complete.
+    const unread = await screen.findByRole('list', {
+      name: 'Views not checked'
+    });
+    expect(unread).toHaveTextContent('Front: its configuration is still');
+    expect(screen.queryByText(/Every size and position/)).toBeNull();
+    await act(async () => {
+      release();
+      await built;
+    });
+    const missing = await screen.findByRole('list', {
+      name: 'Missing dimensions'
+    });
+    expect(missing).toHaveTextContent('x = 40');
+    expect(
+      screen.queryByRole('list', { name: 'Views not checked' })
+    ).toBeNull();
+  });
+
+  it('keeps only the bodies a row’s views draw', async () => {
+    // The row's build answers with the whole model: a large part no view
+    // of the sheet draws comes with it.
+    const other = { ...plate(500), bodyId: 'body_other' as BodyId };
+    render(
+      workspace(
+        { ...configured(WIDE), drawings: { sheets: [twoFronts()] } },
+        {
+          requestBodies: (row) =>
+            Promise.resolve({ ...rowBodies(row), body_other: other })
+        }
+      )
+    );
+    const canvas = await drawn();
+    await within(canvas).findByRole('button', {
+      name: 'Horizontal dimension 40'
+    });
+    const held = retainedRowBodyIds(project.projectId);
+    expect(Object.values(held.cached)).toEqual([[bodyId]]);
+    expect(held.kept.flatMap((drawing) => Object.values(drawing))).toEqual([
+      [bodyId]
+    ]);
+  });
+
+  it('lets a sheet off screen go past the budget, and builds its row again when shown', async () => {
+    resetRetainedProjections({ inactiveRowBodiesBytes: 0 });
+    // Bare is active; one sheet draws Narrow, the other Wide.
+    const front = twoFronts().views[0]!;
+    const sheetOf = (
+      name: string,
+      row: string,
+      dimension: string
+    ): DrawingSheet => {
+      const view: DrawingView = {
+        ...front,
+        viewId: `dview_${row}` as DrawingViewId,
+        configurationId: row
+      };
+      return {
+        ...twoFronts(),
+        sheetId: `dsht_${row}` as DrawingSheetId,
+        name,
+        source: { fingerprint: 'v1:any' },
+        views: [view],
+        annotations: [across(view.viewId, dimension)]
+      };
+    };
+    const requestBodies = vi.fn((row: ProjectDocument) =>
+      Promise.resolve(rowBodies(row))
+    );
+    const builds = (row: string) =>
+      requestBodies.mock.calls.filter(
+        ([document]) => document.configurations!.activeRowId === row
+      ).length;
+    render(
+      workspace(
+        {
+          ...configured(BARE),
+          drawings: {
+            sheets: [
+              sheetOf('Sheet 1', NARROW, 'dann_n'),
+              sheetOf('Sheet 2', WIDE, 'dann_w')
+            ]
+          }
+        },
+        { requestBodies }
+      )
+    );
+    await within(await drawn(1)).findByRole('button', {
+      name: 'Horizontal dimension 40'
+    });
+    expect(builds(NARROW)).toBe(1);
+    await userEvent.click(screen.getByRole('tab', { name: 'Sheet 2' }));
+    await within(await drawn(1, 'Sheet 2')).findByRole('button', {
+      name: 'Horizontal dimension 70'
+    });
+    // Sheet 1 is off screen and over budget: neither the row cache nor a
+    // kept drawing holds Narrow's bodies any more.
+    await waitFor(() => {
+      const held = retainedRowBodyIds(project.projectId);
+      expect(Object.keys(held.cached)).toHaveLength(1);
+      expect(held.kept).toHaveLength(1);
+    });
+    await userEvent.click(screen.getByRole('tab', { name: 'Sheet 1' }));
+    await within(await drawn(1)).findByRole('button', {
+      name: 'Horizontal dimension 40'
+    });
+    expect(builds(NARROW)).toBe(2);
   });
 });

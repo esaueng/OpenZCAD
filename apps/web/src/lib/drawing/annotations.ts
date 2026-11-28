@@ -166,8 +166,16 @@ export function viewModelBody(
   return bodies[bodyId];
 }
 
-/** M01: a hole's callout data by the hole's feature id, else null. */
-export type HoleCalloutLookup = (featureId: FeatureId) => HoleCallout | null;
+/**
+ * M01: a hole's callout data by the hole's feature id, else null. `viewId`
+ * names the view the bore is read in: a view that draws another
+ * configuration row reads that row's callout (F06, `viewHoleCallouts`), as it
+ * draws that row's bore.
+ */
+export type HoleCalloutLookup = (
+  featureId: FeatureId,
+  viewId?: DrawingViewId
+) => HoleCallout | null;
 
 /**
  * M01: the hole callouts of `document`, read once per hole and bound to it:
@@ -187,6 +195,40 @@ export function holeCalloutLookup(
   };
 }
 
+/**
+ * F06: every hole callout of `document`, read now and bound to nothing: a
+ * configuration row's document is a copy of the whole model, which a
+ * drawing kept with the row's callouts must not keep alive.
+ */
+export function holeCalloutSnapshot(
+  document: ProjectDocument
+): HoleCalloutLookup {
+  const scope = getParameterScope(document).scope;
+  const read = new Map<FeatureId, HoleCallout | null>();
+  for (const node of Object.values(document.nodes))
+    if (node.kind === 'feature' && node.data.featureKind === 'hole')
+      read.set(node.featureId, holeCallout(document, node.featureId, scope));
+  return (featureId) => read.get(featureId) ?? null;
+}
+
+/**
+ * F06: the callouts each view reads. A view in `rows` draws another
+ * configuration row and reads that row's callouts: its bore is that row's,
+ * so the active row's size, depth or thread length beside it would be
+ * another part's. Null there (the row could not be read) calls nothing
+ * out, never the active row's in its place. Every other view reads `active`.
+ */
+export function viewHoleCallouts(
+  active: HoleCalloutLookup,
+  rows: ReadonlyMap<DrawingViewId, HoleCalloutLookup | null>
+): HoleCalloutLookup {
+  if (rows.size === 0) return active;
+  return (featureId, viewId) => {
+    if (viewId === undefined || !rows.has(viewId)) return active(featureId);
+    return rows.get(viewId)?.(featureId) ?? null;
+  };
+}
+
 /** Below this a rim's radius is its bore's. */
 const BORE_RIM_TOLERANCE = 1e-6;
 
@@ -200,14 +242,16 @@ function boreCallout(
   body: SourceBody | undefined,
   edge: { adjacentFaceHashes?: readonly number[] },
   radius: number,
-  holes: HoleCalloutLookup
+  holes: HoleCalloutLookup,
+  /** The view the bore is read in, whose row's callout it takes (F06). */
+  viewId: DrawingViewId | undefined
 ): HoleCallout | null {
   const faces = body?.topology?.faces ?? [];
   for (const hash of edge.adjacentFaceHashes ?? []) {
     const face = faces.find((candidate) => candidate.hash === hash);
     const holeId = face?.reference ? holeOfBoreFace(face.reference) : null;
     if (!holeId) continue;
-    const callout = holes(holeId);
+    const callout = holes(holeId, viewId);
     if (
       callout &&
       (callout.standard || callout.thread) &&
@@ -2344,7 +2388,8 @@ export function resolveDrawingAnnotation(
               annotationBody(bodies, view, annotation.edge.bodyId),
               found.edge,
               circle.radius,
-              holes
+              holes,
+              view.viewId
             )
           : null;
       // v105: a thread class follows the tapped hole's designation, in its
@@ -3891,7 +3936,7 @@ function holeTable(
       )
         continue;
       const holeId = tableHoleOf(face.reference);
-      const callout = holeId ? holes(holeId) : null;
+      const callout = holeId ? holes(holeId, view.viewId) : null;
       const axis = {
         x: geometry.axisEnd.x - geometry.axisStart.x,
         y: geometry.axisEnd.y - geometry.axisStart.y,
