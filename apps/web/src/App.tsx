@@ -22063,9 +22063,17 @@ export function App() {
       // `imported-mesh` feature — so a body from one of these files autosaves,
       // reopens, rebuilds and exports exactly like an imported STL.
       let mesh;
+      // OBJ and PLY state no unit (3MF and glTF do, and arrive converted).
+      // The unit is settled before the import runs, from the file's raw
+      // extent, because the import's translator, tessellation and rebuild
+      // check all depend on the numbers they read: reading an inch file as
+      // millimetres and enlarging the result could change its triangles
+      // (#2096).
+      let reading: UnitSystem | null = null;
       try {
         const {
           importMeshFileInDisposableWorker,
+          inspectUnitlessMeshInDisposableWorker,
           meshImportFormatForFileName
         } = await import('./lib/meshImportWorkerClient');
         const format = meshImportFormatForFileName(file.name);
@@ -22073,38 +22081,42 @@ export function App() {
           refuseImportOnCard(file.name, unsupportedImportMessage(file.name));
           return;
         }
+        if (format === 'obj' || format === 'ply') {
+          reading = await readUnitlessImportAs({
+            fileName: file.name,
+            kind: 'mesh',
+            extent: await inspectUnitlessMeshInDisposableWorker(file, format),
+            documentUnits: doc.units
+          });
+          if (!reading) {
+            setStatus(`${file.name} was not imported: you cancelled it.`);
+            return;
+          }
+        }
         // The open document's units, not millimetres: the import runs the
         // rebuild this document will run, and it has to run it on the numbers
         // this document will store.
-        mesh = await importMeshFileInDisposableWorker(file, format, doc.units);
+        mesh = await importMeshFileInDisposableWorker(
+          file,
+          format,
+          doc.units,
+          undefined,
+          reading ?? undefined
+        );
       } catch (error) {
         trackDetail('error_import');
         setStatus(errorMessage(error, `${file.name} import failed.`));
         return;
       }
-      // OBJ and PLY state no unit (3MF and glTF do, and arrive converted).
-      const importUnits = await import('./lib/importUnits');
-      if (!mesh.sourceUnit && importUnits.isUnitlessMeshFileName(file.name)) {
-        const reading = await readUnitlessImportAs({
-          fileName: file.name,
-          kind: 'mesh',
-          extent: importUnits.meshExtent(mesh.vertices),
-          documentUnits: doc.units
-        });
-        if (!reading) {
-          setStatus(`${file.name} was not imported: you cancelled it.`);
-          return;
-        }
-        mesh = { ...mesh, assumedUnits: reading };
-        if (reading !== 'mm') {
-          // A uniform enlargement: the worker's rebuild check, run on the
-          // millimetre reading, still holds for every larger unit.
-          mesh = {
-            ...mesh,
-            vertices: importUnits.verticesReadAs(mesh.vertices, reading),
-            sourceUnit: importUnits.IMPORT_UNIT_LABELS[reading].toLowerCase()
-          };
-        }
+      if (reading) {
+        const { IMPORT_UNIT_LABELS } = await import('./lib/importUnits');
+        mesh = {
+          ...mesh,
+          assumedUnits: reading,
+          ...(reading === 'mm'
+            ? {}
+            : { sourceUnit: IMPORT_UNIT_LABELS[reading].toLowerCase() })
+        };
       }
       await commitImportedMesh({
         file,

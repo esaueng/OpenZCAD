@@ -1,4 +1,7 @@
-import type { MeshImportFormat } from '@openzcad/kernel-adapter/mesh-import-formats';
+import type {
+  MeshImportFormat,
+  UnitlessMeshFormat
+} from '@openzcad/kernel-adapter/mesh-import-formats';
 import type { UnitSystem } from '@openzcad/shared';
 import { meshExtent } from '../lib/importUnits';
 
@@ -16,8 +19,18 @@ export type MeshImportWorkerInput =
        * to nothing.
        */
       units: UnitSystem;
+      /**
+       * OBJ and PLY: the unit the file's numbers are in, applied before the
+       * translator reads them (#2096). Millimetres when omitted.
+       */
+      readAs?: UnitSystem;
     }
-  | { type: 'import-stl'; file: File };
+  | { type: 'import-stl'; file: File }
+  /**
+   * The raw extent of an OBJ or PLY, for the unit prompt, without the kernel:
+   * the import itself runs once the unit is known.
+   */
+  | { type: 'inspect-unitless'; format: UnitlessMeshFormat; file: File };
 
 export type MeshImportWorkerRequest = MeshImportWorkerInput & {
   requestId: string;
@@ -74,11 +87,31 @@ self.onmessage = async (event: MessageEvent<MeshImportWorkerRequest>) => {
       self.postMessage(result, { transfer: [vertices.buffer, indices.buffer] });
       return;
     }
+    if (request.type === 'inspect-unitless') {
+      const { unitlessMeshExtent } =
+        await import('@openzcad/kernel-adapter/mesh-import-formats');
+      const extent = unitlessMeshExtent(
+        request.format,
+        new Uint8Array(await request.file.arrayBuffer())
+      );
+      const result: MeshImportWorkerResult = {
+        type: 'result',
+        requestId: request.requestId,
+        ok: true,
+        vertices: new Float64Array(0),
+        indices: new Uint32Array(0),
+        triangleCount: 0,
+        ...(extent ? { extent } : {})
+      };
+      self.postMessage(result);
+      return;
+    }
     const { importMeshFile } = await import('@openzcad/kernel-adapter/exact');
     const mesh = await importMeshFile(
       request.format,
       new Uint8Array(await request.file.arrayBuffer()),
-      request.units
+      request.units,
+      request.readAs
     );
     const vertices = Float64Array.from(mesh.vertices);
     const indices = Uint32Array.from(mesh.indices);

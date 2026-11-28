@@ -16,6 +16,15 @@
  */
 export type MeshImportFormat = '3mf' | 'obj' | 'glb' | 'ply';
 
+// Kernel-free, so the import worker can size the unit prompt (#2096) through
+// this entry point before it loads the translators.
+export {
+  scaleUnitlessMeshFile,
+  unitlessMeshExtent,
+  type UnitlessMeshBudget,
+  type UnitlessMeshFormat
+} from './unitless-mesh-units';
+
 export interface MeshImportPolicy {
   readonly format: MeshImportFormat;
   /** Lower-case and dot-prefixed, as a file input's `accept` list spells it. */
