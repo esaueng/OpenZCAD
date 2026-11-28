@@ -372,6 +372,11 @@ import {
   type SketchModeRig
 } from './viewer/sketchModeController';
 import {
+  sketchReferenceHoverApplies,
+  sketchReferencePick,
+  sketchToolTakesReference
+} from './viewer/sketchReferencePick';
+import {
   REGION_COMMAND_OPACITY,
   REGION_IDLE_OPACITY,
   REGION_SELECTED_OPACITY,
@@ -3617,6 +3622,8 @@ export function ModelViewer({
     null
   );
   const resetBodyPickingRef = useRef<(() => void) | null>(null);
+  /** Drops the pointer's hover highlight and the dwell waiting on one. */
+  const clearPointerHoverRef = useRef<(() => void) | null>(null);
   const offsetGhostClearRef = useRef<(() => void) | null>(null);
   /** Drops the fillet/chamfer drag's ghost; see `beginEdgeGhost`. */
   const edgeGhostClearRef = useRef<(() => void) | null>(null);
@@ -5195,6 +5202,10 @@ export function ModelViewer({
       renderer.domElement.style.cursor = 'default';
       requestRender();
       return cancelled;
+    };
+    clearPointerHoverRef.current = () => {
+      pendingHoverEvent = null;
+      applyHover(null);
     };
     resetBodyPickingRef.current = () => {
       // Candidates and dwell can hold hits from a mesh that a proxy deformed
@@ -8680,6 +8691,14 @@ export function ModelViewer({
     function applyHover(result: PickCandidate | null) {
       hoverDwellRef.current.reset(result);
       selection.applyHover(result);
+      if (e2eCanvasHooksEnabled) {
+        const hovered = result?.selection;
+        if (hovered) {
+          renderer.domElement.dataset.e2eHoverTarget = `${hovered.kind}:${hovered.topologyId ?? ''}`;
+        } else {
+          delete renderer.domElement.dataset.e2eHoverTarget;
+        }
+      }
       const nextProfileId = result?.region?.profileId ?? null;
       if (nextProfileId !== hoveredProfileId) {
         hoveredProfileId = nextProfileId;
@@ -8870,6 +8889,28 @@ export function ModelViewer({
     }
 
     function applyHoverAt(event: PointerEvent) {
+      // I01: a sketch step that takes a model reference lights only what its
+      // click would take — the same stack, read the same way — so geometry
+      // it would refuse gets no highlight. Touch has no hover to show.
+      if (sketchToolTakesReference(sketchModeRef.current?.tool)) {
+        const reference = sketchReferenceHoverApplies(
+          sketchModeRef.current?.tool,
+          event.pointerType
+        )
+          ? sketchReferencePick(picker.pickAll(event))
+          : null;
+        const verdict = hoverDwellRef.current.propose(
+          reference,
+          performance.now()
+        );
+        if (verdict.commit) {
+          applyHover(verdict.candidate);
+        } else if (verdict.pending) {
+          pendingHoverEvent = event;
+          requestHoverFrame();
+        }
+        return;
+      }
       const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
       if (movePreviewRef.current && moveFocus) {
         updateMoveGizmoFocus(moveFocus);
@@ -11911,7 +11952,16 @@ export function ModelViewer({
           updateSketchInProgress(event);
         }
         if (event.buttons !== 2 && event.buttons !== 4) {
-          if (event.buttons !== 0 || sketchModeRef.current.tool !== 'select') {
+          // Select hovers as it always has; a step that takes a model
+          // reference hovers what its click would take (I01).
+          if (
+            event.buttons !== 0 ||
+            (sketchModeRef.current.tool !== 'select' &&
+              !sketchReferenceHoverApplies(
+                sketchModeRef.current.tool,
+                event.pointerType
+              ))
+          ) {
             return;
           }
         }
@@ -13410,15 +13460,9 @@ export function ModelViewer({
         gestures.release(event, null);
         // I01: the Project tool picks model edges and faces through the
         // sketch plane; the host projects them into the sketch.
-        if (mode.tool === 'project') {
+        if (sketchToolTakesReference(mode.tool)) {
           if (!moved) {
-            const candidate = picker
-              .pickAll(event)
-              .find(
-                (entry) =>
-                  entry.selection?.kind === 'edge' ||
-                  entry.selection?.kind === 'face'
-              );
+            const candidate = sketchReferencePick(picker.pickAll(event));
             onSelectTopologyRef.current(candidate?.selection ?? null, false);
           }
           requestRender();
@@ -15276,6 +15320,7 @@ export function ModelViewer({
       // materials belong to SelectionManager. Detach them before the body
       // tree is disposed so ownership is not crossed or disposed twice.
       moveCopyPreview.clear();
+      clearPointerHoverRef.current = null;
       selection.dispose();
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
@@ -17339,6 +17384,15 @@ export function ModelViewer({
     },
     []
   );
+
+  // I01: a reference step's hover belongs to that step. Leaving it — another
+  // sketch tool, or the sketch closing — drops whatever it lit, since the
+  // tools after it do not hover the model and would leave it standing.
+  const sketchReferenceStep = sketchToolTakesReference(sketchMode?.tool);
+  useEffect(() => {
+    if (!sketchReferenceStep) return;
+    return () => clearPointerHoverRef.current?.();
+  }, [sketchReferenceStep]);
 
   // Region-detected sketch rendering: curves stay readable while bounded
   // cells get cached fill, boundary, marker, and plane-local pick targets.
