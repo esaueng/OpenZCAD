@@ -48,35 +48,25 @@ const EXPORT_DIR = process.env.OPENZCAD_SUBTRACT_EXPORT_DIR;
 type Outcome =
   { kind: 'cut' } | { kind: 'refused'; family: string; code: string };
 
-/** Each cut and refused operand set must survive a STEP round-trip. */
-const EXPECTED: Record<string, { outcome: Outcome }> = {
-  'revolve-sweep': {
-    outcome: { kind: 'cut' }
-  },
-  'revolve-trimmed-nurbs': {
-    outcome: {
-      kind: 'refused',
-      family: 'boolean',
-      code: 'exact_only_unattainable'
-    }
-  },
-  // Remus 2026.1.160 produced an open body that the result-acceptance
-  // gate refused with cut_kept_tool_material. Remus #1974 preserves the
-  // section lens during shell assembly. The 2026.1.163 cut matches the
-  // OCCT volume and excludes the overlap witness after reload and STEP
-  // round-trip.
-  'sweep-sweep': {
-    outcome: { kind: 'cut' }
-  },
-  'sweep-loft': {
-    outcome: {
-      kind: 'refused',
-      family: 'boolean',
-      code: 'exact_only_unattainable'
-    }
-    // Re-exported since Remus 2026.1.159, like sweep-sweep.
-  }
-};
+/**
+ * Each recipe's outcome on the installed Remus build, in `outcomes.json`
+ * beside the fixtures so `check_exports.py` checks the exports against the
+ * same pin rather than inferring it from the file it checks.
+ *
+ * - sweep-sweep: Remus 2026.1.160 produced an open body that the
+ *   result-acceptance gate refused with cut_kept_tool_material. Remus #1974
+ *   preserves the section lens during shell assembly. The 2026.1.163 cut
+ *   matches the OCCT volume and excludes the overlap witness after reload
+ *   and STEP round-trip.
+ * - sweep-loft: re-exported since Remus 2026.1.159, like sweep-sweep.
+ *
+ * Each cut and refused operand set must survive a STEP round-trip.
+ */
+const EXPECTED = Object.fromEntries(
+  Object.entries(
+    JSON.parse(subtractFixture('outcomes.json')) as Record<string, Outcome>
+  ).map(([name, outcome]) => [name, { outcome }])
+);
 
 describe('Subtract of overlapping curved STEP bodies (#1242)', () => {
   let adapter: ExactKernelAdapter;

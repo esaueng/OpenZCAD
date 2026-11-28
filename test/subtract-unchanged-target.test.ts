@@ -1,3 +1,5 @@
+// @vitest-environment happy-dom
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createExactKernelAdapter,
@@ -11,8 +13,10 @@ import {
   expectVolume,
   importSubtractRecipe,
   meshEncloses,
-  reimportedStepSolids
+  reimportedStepSolids,
+  subtractCommand
 } from './support/subtract-curved';
+import { validatedCreate } from './support/validated-commit';
 
 /**
  * Issue #1242, the defect itself rather than the kernel that showed it: the
@@ -23,25 +27,102 @@ import {
  * guard does not depend on the pin staying right.
  *
  * Whatever the kernel returns, a Subtract must not publish the unchanged
- * target as its result and consume the tool. It refuses with the reason,
- * the tool stays visible, both sources export as they were, and Undo
- * restores them, on commit and again on reload.
+ * target as its result and consume the tool:
+ * - the workspace's Create refuses it with the reason and commits nothing:
+ *   no Subtract in history and no Undo entry for it;
+ * - a document that already holds the Subtract (saved while the kernel cut
+ *   correctly) refuses it on rebuild and again on reload, keeps the tool
+ *   visible, exports both sources as they were, and Undo restores them.
  *
- * Two gates stand behind that, and each recipe is driven through both:
- * - the kernel's own intersect measures the overlap, and the removed
- *   volume falls short of it;
- * - the intersect cannot measure it, and a point inside the target, the
- *   tool and the result proves the overlap was kept.
- * `subtract-classifier-blind.test.ts` repeats the second with the kernel's
- * point classifier blinded as well.
+ * Two gates stand behind that, and each recipe is driven through each one:
+ * - `measured`: the intersect measures the overlap, and the removed volume
+ *   falls short of it. The installed kernel cannot intersect every recipe
+ *   (trimmed NURBS and loft refuse), and where it cannot, this case would
+ *   fall through to the second gate unseen. So the intersect answers with a
+ *   stand-in of OCCT's shared volume: the gate reads only that volume.
+ * - `unmeasured`: the intersect cannot measure it, and the kernel's point
+ *   classifier finds a point inside the target, the tool and the result.
+ * `subtract-classifier-blind.test.ts` blinds that classifier as well, which
+ * leaves the tessellated witness.
  */
 
 /** The message of the gate that compares removed volume to the overlap. */
 const REMOVED_TOO_LITTLE =
-  /^Feature "Subtract": Subtract refused: the tool overlaps the target by [\d.]+ mm³, but the kernel removed 0 mm³; .* The target and tools were left unchanged\.$/;
-/** The headline of the gate that finds a kept point. */
-const KEPT_OVERLAP =
-  /^Feature "Subtract": Subtract refused: the exact kernel returned the target without removing the material the tool overlaps\. The target and tools were left unchanged\.\n/;
+  /^Feature "Subtract": Subtract refused: the tool overlaps the target by ([\d.]+) mm³, but the kernel removed 0 mm³; .* The target and tools were left unchanged\.$/;
+/**
+ * The gate that finds a kept point, when the kernel's own point classifier
+ * found it: the headline, then the classifier's detail. The tessellated
+ * witness writes "the tessellated target, tool and result all enclose
+ * point …" instead.
+ */
+const KEPT_OVERLAP_BY_CLASSIFIER =
+  /^Feature "Subtract": Subtract refused: the exact kernel returned the target without removing the material the tool overlaps\. The target and tools were left unchanged\.\nAcceptance check cut_kept_tool_material: the kernel reported the cut as built, but point \([^)\n]+\) lies inside the target, the tool and the result\.$/;
+
+type Overlap = 'measured' | 'unmeasured';
+
+/**
+ * The regressed kernel: every cut reports success with the target
+ * unchanged, and the intersect either measures OCCT's overlap or cannot.
+ */
+function regressKernel(name: string, overlap: Overlap) {
+  const cut = vi.spyOn(RemusKernel.prototype, 'booleanWithCancellation');
+  cut.mockImplementation(function (this: RemusKernel, _op, target) {
+    return {
+      status: 'completed',
+      result: { solid: this.copySolid(target), quality: 'exact' }
+    };
+  });
+  const intersect = vi.spyOn(RemusKernel.prototype, 'intersectDetailed');
+  if (overlap === 'measured') {
+    // A cube of OCCT's shared volume (`reference.json`).
+    const side = Math.cbrt(SUBTRACT_RECIPES[name]!.sharedVolume);
+    intersect.mockImplementation(function (this: RemusKernel) {
+      return {
+        status: 'ok',
+        code: null,
+        category: null,
+        details: {},
+        value: this.makeBox(side, side, side)
+      };
+    });
+  } else {
+    intersect.mockReturnValue({
+      status: 'error',
+      category: 'nonconvergence',
+      code: 'overlap_not_measured',
+      details: {},
+      value: null
+    });
+  }
+  return { cut, intersect };
+}
+
+/** The adapter's refusal, by the gate `overlap` selects. */
+function expectGate(
+  failure: {
+    message: string;
+    kernelRefusal?: unknown;
+  },
+  overlap: Overlap,
+  sharedVolume: number
+): void {
+  if (overlap === 'measured') {
+    // The removed-volume gate answers, untyped, and the kept-point gates
+    // are not consulted.
+    expect(failure.kernelRefusal).toBeUndefined();
+    const measured = REMOVED_TOO_LITTLE.exec(failure.message);
+    expect(measured, failure.message).not.toBeNull();
+    // The overlap it names is OCCT's shared volume.
+    expectVolume(Number(measured![1]), sharedVolume);
+  } else {
+    expect(failure.kernelRefusal).toEqual({
+      family: 'validation',
+      category: 'internal',
+      code: 'cut_kept_tool_material'
+    });
+    expect(failure.message).toMatch(KEPT_OVERLAP_BY_CLASSIFIER);
+  }
+}
 
 describe('Subtract when the kernel returns the target unchanged (#1242)', () => {
   afterEach(() => {
@@ -50,24 +131,63 @@ describe('Subtract when the kernel returns the target unchanged (#1242)', () => 
 
   for (const overlap of ['measured', 'unmeasured'] as const) {
     for (const [name, recipe] of Object.entries(SUBTRACT_RECIPES)) {
-      it(`${name}, overlap ${overlap}: refuses and keeps both sources`, async () => {
-        const cut = vi.spyOn(RemusKernel.prototype, 'booleanWithCancellation');
-        cut.mockImplementation(function (this: RemusKernel, _op, target) {
-          return {
-            status: 'completed',
-            result: { solid: this.copySolid(target), quality: 'exact' }
-          };
-        });
-        if (overlap === 'unmeasured') {
-          vi.spyOn(RemusKernel.prototype, 'intersectDetailed').mockReturnValue({
-            status: 'error',
-            category: 'nonconvergence',
-            code: 'overlap_not_measured',
-            details: {},
-            value: null
-          });
-        }
+      it(`${name}, overlap ${overlap}: the Create refuses and commits nothing`, async () => {
+        const { cut, intersect } = regressKernel(name, overlap);
+        const { manager, target, tool } = importSubtractRecipe(name);
+        const before = manager.document;
+        const undoLabel = manager.undoLabel;
+        expect(undoLabel).not.toBeNull();
+        const adapter = await createExactKernelAdapter();
+        try {
+          const command = subtractCommand(target, tool);
+          const resultBodyId = command.payload.ids!.bodyId;
+          let derived: ProjectDocument['derived'] | null = null;
+          const create = await validatedCreate(
+            manager,
+            command,
+            { featureName: 'Subtract', resultBodyId },
+            async (candidate) =>
+              (derived = await adapter.syncDocument(candidate))
+          );
 
+          // The candidate was rebuilt and the kernel answered the cut with
+          // the unchanged target: the refusal is the adapter's verdict.
+          expect(cut.mock.calls.map((call) => call[0])).toEqual(['cut']);
+          expect(intersect).toHaveBeenCalledTimes(1);
+          const failures = (derived!.featureWarnings ?? []).filter(
+            (warning) => warning.featureName === 'Subtract'
+          );
+          expect(failures).toHaveLength(1);
+          expectGate(failures[0]!, overlap, recipe.sharedVolume);
+
+          // Refused: nothing reached history, and the card and History
+          // both carry the adapter's reason.
+          expect(create.outcome).toBe('rejected');
+          expect(create.committed).toEqual([]);
+          expect(manager.document).toBe(before);
+          expect(manager.undoLabel).toBe(undoLabel);
+          expect(manager.canRedo).toBe(false);
+          expect(create.rejections).toHaveLength(1);
+          const rejection = create.rejections[0]!;
+          expect(rejection.featureName).toBe('Subtract');
+          expect(rejection.message).toMatch(
+            overlap === 'measured'
+              ? /^Subtract refused: the tool overlaps the target by [\d.]+ mm³, but the kernel removed 0 mm³/
+              : /^Subtract refused: the exact kernel returned the target without removing the material the tool overlaps\./
+          );
+          expect(create.failures).toEqual([rejection.message]);
+
+          // The Undo the refusal left in place is the one before it: the
+          // tool's import, not a Subtract.
+          manager.undo();
+          expect(manager.document.bodyOrder).toEqual([target]);
+        } finally {
+          adapter.dispose();
+        }
+      }, 120_000);
+
+      it(`${name}, overlap ${overlap}: a saved Subtract refuses on rebuild and keeps both sources`, async () => {
+        const { cut } = regressKernel(name, overlap);
         const { manager, target, tool } = importSubtractRecipe(name);
         const result = commitSubtract(manager, target, tool);
 
@@ -88,18 +208,7 @@ describe('Subtract when the kernel returns the target unchanged (#1242)', () => 
           expect(failures).toHaveLength(1);
           const failure = failures[0]!;
           expect(failure.kind).toBe('build-failed');
-          if (failure.kernelRefusal) {
-            expect(failure.kernelRefusal).toEqual({
-              family: 'validation',
-              category: 'internal',
-              code: 'cut_kept_tool_material'
-            });
-            expect(failure.message).toMatch(KEPT_OVERLAP);
-          } else {
-            // Only a measured overlap reaches the removed-volume gate.
-            expect(overlap).toBe('measured');
-            expect(failure.message).toMatch(REMOVED_TOO_LITTLE);
-          }
+          expectGate(failure, overlap, recipe.sharedVolume);
           // Nothing consumed: the tool is still a visible, exportable body
           // and the failed step passes the target through where its result
           // would stand (ADR-017), reported as failed rather than as a cut.
@@ -126,7 +235,7 @@ describe('Subtract when the kernel returns the target unchanged (#1242)', () => 
             JSON.stringify(manager.document)
           ) as ProjectDocument;
           const reloaded = await check(fresh, reloadedDocument);
-          expect(reloaded.kernelRefusal).toEqual(committed.kernelRefusal);
+          expect(reloaded.message).toBe(committed.message);
           const solids = await reimportedStepSolids(
             await fresh.exportStep(
               reloadedDocument,

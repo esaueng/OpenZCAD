@@ -7,13 +7,17 @@ sweep/sweep cut to OCCT's volumes and exclude the witness; revolve/trimmed
 NURBS and sweep/loft refuse `exact_only_unattainable` before consuming
 either input. `test/subtract-unchanged-target.test.ts` pins the defect
 itself independently of the pin: with the kernel's cut made to return the
-target unchanged, all four recipes refuse on commit and reload, with the
-overlap measured (removed-volume gate) and unmeasured
-(`cut_kept_tool_material`), keep the tool visible, export both sources and
-Undo cleanly; `test/subtract-classifier-blind.test.ts` now blinds the point
-classifier for all four. `test/subtract-curved-operands.test.ts` also pins
+target unchanged, all four recipes are refused by the workspace's
+validated Create (`useValidatedFeatureCommit`: nothing committed, no Undo
+entry) and, in a document that already holds the Subtract, on rebuild and
+reload, with the overlap measured (removed-volume gate, for every recipe)
+and unmeasured (the classifier's `cut_kept_tool_material`), keeping the
+tool visible, exporting both sources and Undoing cleanly;
+`test/subtract-classifier-blind.test.ts` now blinds the point classifier for
+all four, leaving the tessellated witness. `test/subtract-curved-operands.test.ts` also pins
 `classifyPoint` and `classifyPointRobust` on the OCCT witness. The STEP
 exports were checked by OCCT 8.0.1 (`check_exports.py` beside the fixtures,
-run by hand, not in CI): both cuts are valid solids matching OCCT's own cut
+run by hand, not in CI, against each recipe's pinned outcome in
+`outcomes.json`): both cuts are valid solids matching OCCT's own cut
 in volume, centre of mass, inertia and point classification, and both
 refusals export the two sources unchanged.

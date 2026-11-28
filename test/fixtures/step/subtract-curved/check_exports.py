@@ -9,10 +9,14 @@ exports, then measure them (`pip install cadquery-ocp`):
     python3 -I check_exports.py <dir>
 
 Each `<recipe>.step` holds what the reloaded document exports after the
-Subtract: one body where it cut, both sources where it refused. A cut must be
+Subtract: one body where it cut, both sources where it refused. Which of the
+two each recipe must hold is `outcomes.json`, the pin the Vitest suite
+asserts, not whatever the export happens to contain: a recipe pinned to cut
+that exports both sources fails here, and so does the reverse. A cut must be
 a valid solid that excludes the witness and is the same body as OCCT's own
 cut of the committed operands. Refused sources must be the committed
-operands, unchanged. Exits non-zero otherwise.
+operands, unchanged. A recipe without an export, or without a pinned
+outcome, fails too. Exits non-zero otherwise.
 
 "The same body" is measured without a boolean between the two: their
 boundaries coincide, which is the case OCCT's boolean answers least reliably
@@ -125,18 +129,26 @@ def same_body(actual, expected):
 
 def main(exports):
     reference = json.load(open(os.path.join(HERE, 'reference.json')))
-    report, ok = {}, True
+    outcomes = json.load(open(os.path.join(HERE, 'outcomes.json')))
+    report, ok = {}, sorted(outcomes) == sorted(reference)
     for recipe, expected in reference.items():
+        pinned = outcomes.get(recipe, {}).get('kind')
+        path = os.path.join(exports, f'{recipe}.step')
+        if pinned not in ('cut', 'refused') or not os.path.exists(path):
+            report[recipe] = {'expected': pinned, 'exported': os.path.exists(path),
+                              'ok': False}
+            ok = False
+            continue
         target = read(os.path.join(HERE, expected['target']))
         tool = read(os.path.join(HERE, expected['tool']))
         witness = expected['witness']
-        bodies = solids(read(os.path.join(exports, f'{recipe}.step')))
-        if len(bodies) == 1:
+        bodies = solids(read(path))
+        if pinned == 'cut' and len(bodies) == 1:
             entry = {'outcome': 'cut',
                      **same_body(bodies[0], BRepAlgoAPI_Cut(target, tool).Shape()),
                      'witnessInside': inside(bodies[0], witness)}
             entry['ok'] = entry['ok'] and not entry['witnessInside']
-        elif len(bodies) == 2:
+        elif pinned == 'refused' and len(bodies) == 2:
             # Both sources, in either order: the smaller volume pairs with
             # the smaller operand.
             bodies.sort(key=volume)
@@ -149,6 +161,7 @@ def main(exports):
             entry['ok'] = entry['ok'] and all(entry['witnessInside'])
         else:
             entry = {'outcome': f'{len(bodies)} solids', 'ok': False}
+        entry = {'expected': pinned, **entry}
         report[recipe] = entry
         ok = ok and entry['ok']
     print(json.dumps(report, indent=2))

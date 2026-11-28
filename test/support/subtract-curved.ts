@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
@@ -27,11 +29,15 @@ export interface SubtractRecipe {
   witnessClearance: number;
 }
 
+// By path rather than `new URL(…, import.meta.url)`: a happy-dom suite
+// replaces the global `URL`, which `readFileSync` does not accept.
+const FIXTURES = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../fixtures/step/subtract-curved'
+);
+
 export const subtractFixture = (name: string) =>
-  readFileSync(
-    new URL(`../fixtures/step/subtract-curved/${name}`, import.meta.url),
-    'utf8'
-  );
+  readFileSync(join(FIXTURES, name), 'utf8');
 
 export const SUBTRACT_RECIPES = JSON.parse(
   subtractFixture('reference.json')
@@ -93,19 +99,28 @@ export function importSubtractRecipe(name: string): {
   return { manager, recipe, target, tool };
 }
 
-/** Commits target − tool and returns the body the Subtract publishes. */
+/** The Subtract of target − tool, as the Boolean card's Create builds it. */
+export function subtractCommand(target: BodyId, tool: BodyId) {
+  return commandFactories.booleanBodies({
+    name: 'Subtract',
+    operation: 'subtract',
+    targetBodyIds: [target, tool]
+  });
+}
+
+/**
+ * Executes target − tool straight into history and returns the body the
+ * Subtract publishes: a document that holds the Subtract however the
+ * kernel answers it now, as one saved while the kernel cut correctly does.
+ * The workspace's own Create validates before committing; see
+ * `validatedCreate` in `validated-commit.ts`.
+ */
 export function commitSubtract(
   manager: CommandManager,
   target: BodyId,
   tool: BodyId
 ): BodyId {
-  manager.execute(
-    commandFactories.booleanBodies({
-      name: 'Subtract',
-      operation: 'subtract',
-      targetBodyIds: [target, tool]
-    })
-  );
+  manager.execute(subtractCommand(target, tool));
   return manager.document.bodyOrder.at(-1)!;
 }
 
