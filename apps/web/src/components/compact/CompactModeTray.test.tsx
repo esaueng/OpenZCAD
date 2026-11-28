@@ -195,6 +195,22 @@ describe('the compact tray', () => {
     expect(screen.queryByRole('heading', { name: 'Views' })).toBeNull();
   });
 
+  it('takes a raised tray back to peek when its page goes', async () => {
+    // A page opened over a raised sheet used to leave the tray standing at
+    // that height over blank space when it went (the space review).
+    render(shell('view', <CompactModeTray mode="view" {...viewProps()} />));
+    const views = await trayButton('View tools', 'Standard views');
+    await waitFor(() => expect(detent()).toBe('peek'));
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Sheet height' }), {
+      key: 'End'
+    });
+    await waitFor(() => expect(detent()).toBe('full'));
+    fireEvent.click(views);
+    expect(screen.getByRole('heading', { name: 'Views' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    await waitFor(() => expect(detent()).toBe('peek'));
+  });
+
   it('takes an open page away with its tray when the mode changes', async () => {
     const { rerender } = render(
       shell('view', <CompactModeTray mode="view" {...viewProps()} />)
