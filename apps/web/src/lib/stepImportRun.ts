@@ -280,6 +280,8 @@ export interface StepImportRunDeps {
     archived: boolean;
     bodies: number;
   }): string;
+  /** The tone of {@link successMessage}'s status; `ready` unless given. */
+  successTone?(): 'ready' | 'warning';
   /** Overridable so a test need not build a 128 MB file. */
   limits?: { maxSourceBytes?: number; maxEmbeddedBytes?: number };
 }
@@ -869,6 +871,12 @@ export async function runStepImport(
           (structureRefusal !== undefined
             ? ` Its assembly structure could not be read (${structureRefusal}), so parts keep their own placements, without the file's names and colours.`
             : ''),
+      // Imported, but without the structure the file declared: news to read.
+      successTone: () =>
+        deps.successTone?.() ??
+        (deps.successMessage === undefined && structureRefusal !== undefined
+          ? 'warning'
+          : 'ready'),
       onFailure: (message) => {
         // The kernel's verdict is already in the status bar. The host sink
         // renders inline in whichever feature form is open, and an import has

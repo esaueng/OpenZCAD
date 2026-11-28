@@ -1349,6 +1349,18 @@
     .workspace-toast.is-refusal:not(.hidden) {
     transition-delay: var(--dur-base);
   }
+
+  /* A taller refusal taking the place of a status already drawn had no
+     fade to delay: it stood at once, under the toast's foot. It is drawn
+     hidden for a frame (.is-entering, WorkspaceReadout), then fades in as
+     above. */
+  html:not([data-reduced-motion='true'])
+    .app-shell:not([data-shell='compact'])
+    .viewer-area:has(.toast:not(.closing))
+    .workspace-toast.is-refusal.is-entering:not(.hidden) {
+    opacity: 0;
+    transition: none;
+  }
 }
 
 /* Tracks --activity-pill-h in activity-pill.css, plus the 12px row gap; an

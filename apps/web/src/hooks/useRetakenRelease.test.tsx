@@ -235,7 +235,9 @@ describe('a release taken again while it validates', () => {
     });
     expect(box.derive).toHaveBeenCalledTimes(1);
     expect(box.committedWidth()).toBe(23);
-    expect(box.host.onStatus).toHaveBeenLastCalledWith('Width set to 23.');
+    expect(box.host.onStatus).toHaveBeenLastCalledWith('Width set to 23.', {
+      tone: 'ready'
+    });
   });
 
   it('lands the release of a drag that ends without telling', async () => {

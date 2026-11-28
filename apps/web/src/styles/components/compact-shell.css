@@ -1236,13 +1236,18 @@
    the notice is up: the notice stands over it rather than on it. The
    action is read from the line's class (.has-action, WorkspaceReadout): a
    :has() inside :has() is not a valid selector, and dropped these rules
-   whole (#2434). */
+   whole (#2434). The row is the taller of the line and its action, its
+   height published on the host (WorkspaceReadout): at 320px a long line
+   wraps beside "Turn off section", and lifted by the 44px action alone the
+   notice came down over the button. */
 .app-shell[data-shell='compact']
   .compact-notice-host:has(
     .workspace-toast.has-action:not(.hidden, .ready, [data-section-line])
   )
   .toast {
-  margin-bottom: calc(var(--compact-target) + var(--sp-1));
+  margin-bottom: calc(
+    max(var(--compact-target), var(--workspace-toast-live-h, 0px)) + var(--sp-1)
+  );
 }
 
 /* A refusal or a warning wraps and can stand taller than the 44px row its

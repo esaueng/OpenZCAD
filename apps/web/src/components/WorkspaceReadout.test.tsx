@@ -404,6 +404,156 @@ describe('WorkspaceReadout', () => {
     );
   });
 
+  it('lifts the notice by the taller of a wrapped line and its action over a full sheet', () => {
+    // Review of #2438: at 320px a delete's line wraps beside "Turn off
+    // section", taller than the 44px action the notice lifted by, and the
+    // notice came down over the button. On the host the line publishes the
+    // taller of itself and its action.
+    let bodyHeight = 90.2;
+    const rect = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const height = this.classList.contains('workspace-toast-body')
+          ? bodyHeight
+          : this.classList.contains('workspace-toast-undo')
+            ? 44
+            : 0;
+        return new DOMRect(0, 0, 0, height);
+      });
+    const host = document.createElement('div');
+    host.className = 'compact-notice-host';
+    document.body.append(host);
+    try {
+      const view = (geometry: boolean, status = 'Deleted Long name.') => (
+        <CompactNoticeHostContext.Provider value={host}>
+          <CompactStatusHostContext.Provider value={host}>
+            <div className="viewer-area">
+              <WorkspaceReadout
+                {...SUMMARY}
+                status={status}
+                statusImmediate
+                tone="running"
+                geometryStatus={
+                  geometry
+                    ? {
+                        phase: 'Rebuilding geometry…',
+                        projection: 'showing the previous result'
+                      }
+                    : null
+                }
+                section={{
+                  label: 'Section · XY',
+                  note: null,
+                  onTurnOff: vi.fn()
+                }}
+                onOpenLog={vi.fn()}
+              />
+            </div>
+          </CompactStatusHostContext.Provider>
+        </CompactNoticeHostContext.Provider>
+      );
+      const { rerender } = render(view(true));
+      const toast = screen.getByRole('contentinfo');
+      expect(host).toContainElement(toast);
+      expect(
+        screen.getByRole('button', { name: 'Turn off section view' })
+      ).toBeInTheDocument();
+      expect(toast).toHaveClass('has-action');
+      expect(toast).not.toHaveClass('is-standing');
+      expect(host.style.getPropertyValue('--workspace-toast-live-h')).toBe(
+        '91px'
+      );
+      // A line shorter than its action: the action's row.
+      bodyHeight = 20;
+      rerender(view(true, 'Deleted box.'));
+      expect(host.style.getPropertyValue('--workspace-toast-live-h')).toBe(
+        '44px'
+      );
+      // The model ready, the cut's own line, not drawn over the sheet:
+      // nothing for the notice to clear.
+      rerender(view(false, ''));
+      expect(toast).toHaveAttribute('data-section-line');
+      expect(host.style.getPropertyValue('--workspace-toast-live-h')).toBe('');
+    } finally {
+      rect.mockRestore();
+      host.remove();
+    }
+    const css = readFileSync(
+      resolve(__dirname, '../styles/components/compact-shell.css'),
+      'utf8'
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\s+/g, ' ');
+    expect(css).toContain(
+      '.compact-notice-host:has( .workspace-toast.has-action:not(.hidden, .ready, [data-section-line]) ) .toast { margin-bottom: calc( max(var(--compact-target), var(--workspace-toast-live-h, 0px)) + var(--sp-1) ); }'
+    );
+  });
+
+  it('draws a taller refusal replacing a drawn status hidden until the notice has glided', () => {
+    // Review of #2438: on the stage a refusal fades in after the Undo
+    // notice's glide, but one taking the place of a status already drawn
+    // had no fade to delay and stood under the notice's foot at once.
+    vi.useFakeTimers();
+    const rect = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        return new DOMRect(
+          0,
+          0,
+          0,
+          this.classList.contains('workspace-toast-body')
+            ? (this.textContent?.length ?? 0) > 60
+              ? 56
+              : 28
+            : 0
+        );
+      });
+    try {
+      const view = (status: string, statusAt: number) => (
+        <div className="viewer-area">
+          <WorkspaceReadout
+            {...SUMMARY}
+            status={status}
+            statusAt={statusAt}
+            statusImmediate
+            tone="warning"
+            onOpenLog={vi.fn()}
+          />
+        </div>
+      );
+      const { rerender } = render(
+        view('Cannot reorder: "Lug" would run first.', Date.now())
+      );
+      const toast = screen.getByRole('contentinfo');
+      expect(toast).toHaveClass('is-refusal');
+      expect(toast).not.toHaveClass('is-entering');
+      const longer =
+        'Cannot reorder: "Lug" would run after "Cut" already replaced "Plate", which branches the history.';
+      rerender(view(longer, Date.now() + 1));
+      expect(toast).toHaveTextContent(longer);
+      expect(toast).toHaveClass('is-entering');
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
+      expect(toast).not.toHaveClass('is-entering');
+      // No taller: nothing moves, so nothing waits.
+      rerender(view(`${longer} Keep it.`, Date.now() + 2));
+      expect(toast).not.toHaveClass('is-entering');
+    } finally {
+      rect.mockRestore();
+      vi.useRealTimers();
+    }
+    const css = readFileSync(
+      resolve(__dirname, '../styles/components/quiet-stage.css'),
+      'utf8'
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\s+/g, ' ');
+    expect(css).toContain(
+      '.workspace-toast.is-refusal.is-entering:not(.hidden) { opacity: 0; transition: none; }'
+    );
+  });
+
   it('marks a status line that draws an action', () => {
     // The notice over a full compact sheet lifts by the action's row; the
     // line says it has one by class, since :has() cannot nest (#2434).

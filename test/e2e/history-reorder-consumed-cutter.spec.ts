@@ -473,3 +473,215 @@ for (const size of [
     }
   );
 }
+
+/**
+ * Review of #2438: on the regular stage the refusal's fade-in waits for the
+ * Undo notice's glide up to its row, but a longer refusal taking the place
+ * of one already drawn had no fade to wait: the taller text stood at once
+ * and the notice's foot covered its first line for the glide. It is drawn
+ * hidden again until the notice has made room.
+ */
+test(
+  'keeps a visible Undo clear of a longer refusal replacing a drawn one at 1440×900',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await stubApi(page, { panelLayout: { right: [['history']] } });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+    await page
+      .getByRole('button', { name: 'Import project', exact: true })
+      .click();
+    await page.getByLabel('Import project backup').setInputFiles({
+      name: 'vented-block.openzcad',
+      mimeType: 'application/json',
+      buffer: projectBackup(ventedBlock().manager.document)
+    });
+    const status = page.getByRole('contentinfo');
+    await page
+      .getByRole('button', { name: 'History panel', exact: true })
+      .waitFor({ state: 'visible', timeout: 60_000 });
+    await revealModelPanel(page);
+    const rows = page.locator('.feature-row');
+    await expect(rows).toHaveCount(HISTORY.length, { timeout: 30_000 });
+    await expectBodyCount(page, 1);
+    await expect(status).toContainText('warnings0', { timeout: 120_000 });
+
+    await rows
+      .filter({ hasText: 'Place pocket tool' })
+      .first()
+      .click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Duplicate' }).click();
+    const notice = page.locator('.toast', { hasText: 'Duplicated' });
+    await expect(notice).toBeVisible({ timeout: 30_000 });
+    await notice.hover();
+
+    // The placement above the body it places: a one-line refusal, drawn.
+    const line = status.locator('.workspace-toast-body > [role="status"]');
+    await grip(page, PLACEMENT).press('ArrowUp');
+    await expect(line).toHaveText(/^Cannot reorder: .*before the body/);
+    const body = status.locator('.workspace-toast-body');
+    await expect
+      .poll(() =>
+        body.evaluate((element) =>
+          Number(getComputedStyle(element.parentElement!).opacity)
+        )
+      )
+      .toBe(1);
+    const shortHeight = (await body.boundingBox())!.height;
+
+    // Then below the Subtract: the longer refusal takes its place.
+    await watchNoticeFrames(page);
+    await grip(page, PLACEMENT).press('ArrowDown');
+    await expect(line).toHaveText(REFUSAL);
+    await expect(notice).toBeVisible();
+    // Settled: the notice's glide and the fade have run.
+    await expect
+      .poll(async () => {
+        const boxes = await noticeBoxes(page);
+        return boxes.notice!.bottom <= boxes.refusal!.top + 0.5;
+      })
+      .toBe(true);
+    await page.waitForTimeout(400);
+    const frames = (await stopNoticeFrames(page)).filter(
+      (frame) => frame.text.includes(REFUSAL) && frame.opacity > 0.01
+    );
+    expect(frames.length).toBeGreaterThan(0);
+    const longHeight =
+      frames.at(-1)!.refusal.bottom - frames.at(-1)!.refusal.top;
+    // The case under test: the row grows, so the notice glides up.
+    expect(longHeight).toBeGreaterThan(shortHeight);
+    const covered = frames.filter(
+      (frame) => frame.notice.bottom > frame.refusal.top + 0.5
+    );
+    expect(covered, JSON.stringify(covered.slice(0, 3))).toEqual([]);
+    expect(errors).toEqual([]);
+  }
+);
+
+/**
+ * Review of #2438: over a full compact sheet the Undo notice lifted by the
+ * 44px row a status's action takes. At 320px, with the cut on, a delete's
+ * line ("Deleted … · Rebuilding geometry…") wraps beside "Turn off
+ * section" and stands taller than that, and the notice came down over the
+ * button: a tap at its centre reached the notice. The notice lifts by the
+ * taller of the line and its action.
+ */
+test(
+  'keeps the Undo notice off Turn off section beside a wrapped line at 320×700 over a full sheet',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await stubApi(page, { panelLayout: { right: [['history']] } });
+    await holdRebuilds(page);
+    await page.addInitScript(() => {
+      if (!sessionStorage.getItem('compact-seeded')) {
+        sessionStorage.setItem('compact-seeded', '1');
+        localStorage.setItem('openzcad.layout:v1', 'compact');
+      }
+    });
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto('/');
+    await page.evaluate(() => window.__holdRebuild!.release());
+    await page
+      .getByRole('button', { name: 'Import project', exact: true })
+      .click();
+    await page.getByLabel('Import project backup').setInputFiles({
+      name: 'vented-block.openzcad',
+      mimeType: 'application/json',
+      buffer: projectBackup(ventedBlock().manager.document)
+    });
+    await expect(page.locator('.app-shell[data-shell="compact"]')).toBeVisible({
+      timeout: 60_000
+    });
+    await expectBodyCount(page, 1);
+    const status = page.getByRole('contentinfo');
+    await expect(status).toContainText('warnings0', { timeout: 120_000 });
+
+    // Deleted from History while the model is held mid-rebuild: the notice
+    // offers Undo, and the line carries the rebuild's phase.
+    const mode = (name: string) =>
+      page
+        .getByRole('group', { name: 'Workspace mode' })
+        .getByRole('button', { name, exact: true });
+    const sheet = page.locator('.compact-sheet');
+    await page.getByRole('button', { name: 'More', exact: true }).click();
+    await sheet.getByRole('button', { name: 'Panels', exact: true }).click();
+    const rows = sheet.locator('.compact-row');
+    await expect(rows).toHaveCount(HISTORY.length, { timeout: 30_000 });
+    await page.evaluate(() => {
+      window.__holdRebuild!.hold = true;
+    });
+    await rows.filter({ hasText: SUBTRACT }).first().click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Delete' }).click();
+    const notice = page.locator('.toast', { hasText: 'Deleted' });
+    await expect(notice).toBeVisible({ timeout: 30_000 });
+    await expect(status).toContainText('Rebuilding');
+
+    // The cut on from View's tray, where its controls are put away and the
+    // line has Turn off beside it, and View's sheet at full height.
+    await mode('View').click();
+    await page
+      .getByRole('toolbar', { name: 'View tools' })
+      .getByRole('button', { name: 'Section view', exact: true })
+      .click();
+    const cut = sheet.getByRole('switch', { name: 'Section cut' });
+    await cut.click();
+    await expect(cut).toHaveAttribute('aria-checked', 'true');
+    await sheet.getByRole('slider', { name: 'Sheet height' }).press('End');
+    await expect(sheet).toHaveAttribute('data-detent', 'full');
+    const host = page.locator('.compact-notice-host');
+    const line = host.locator('.workspace-toast');
+    const turnOff = line.getByRole('button', { name: 'Turn off section view' });
+    await expect(turnOff).toBeVisible();
+    await expect(line).toContainText('Rebuilding');
+    await expect(notice).toBeVisible();
+
+    // Settled: the notice has come to rest.
+    const boxes = () =>
+      page.evaluate(() => {
+        const box = (selector: string) => {
+          const r = document.querySelector(selector)!.getBoundingClientRect();
+          return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+        };
+        return {
+          notice: box('.compact-notice-host .toast'),
+          body: box('.compact-notice-host .workspace-toast-body'),
+          action: box('.compact-notice-host .workspace-toast-undo')
+        };
+      });
+    let last = '';
+    await expect
+      .poll(async () => {
+        const next = JSON.stringify(await boxes());
+        const still = next === last;
+        last = next;
+        return still;
+      })
+      .toBe(true);
+    const settled = await boxes();
+    // The case under test: the line wraps taller than its 44px action.
+    expect(settled.body.bottom - settled.body.top).toBeGreaterThan(
+      settled.action.bottom - settled.action.top
+    );
+    expect(settled.notice.bottom, JSON.stringify(settled)).toBeLessThanOrEqual(
+      Math.min(settled.body.top, settled.action.top) + 0.5
+    );
+    // A tap at the button's centre reaches the button.
+    const reached = await turnOff.evaluate((button) => {
+      const r = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        r.left + r.width / 2,
+        r.top + r.height / 2
+      );
+      return hit === button || button.contains(hit);
+    });
+    expect(reached).toBe(true);
+    await page.evaluate(() => window.__holdRebuild!.release());
+    expect(errors).toEqual([]);
+  }
+);

@@ -140,7 +140,9 @@ export async function runProjectInsert(
       successMessage: ({ bodies, archived }) =>
         `Inserted ${countLabel(bodies, 'body', 'bodies')} from ${prepared.projectName}` +
         (archived ? '.' : ' (source saved on this device only).') +
-        projectInsertLeftOut(prepared, dropped)
+        projectInsertLeftOut(prepared, dropped),
+      successTone: () =>
+        projectInsertLeftOut(prepared, dropped) === '' ? 'ready' : 'warning'
     });
     // Its reason is already in the status line.
     if (!finished) {
