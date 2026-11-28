@@ -28,6 +28,13 @@ export interface SavedViewsSectionProps {
   capture(): SavedViewInput | null;
   onApply(view: SavedView): void;
   onStatus(message: string): void;
+  /**
+   * Why the list is not changed right now, when it is not: said in place
+   * of saving, renaming or deleting a view. Going to a view still works.
+   * The view on screen is not the project's while a saved version is
+   * previewed in its place.
+   */
+  writeRefusal?: string | null;
 }
 
 /**
@@ -41,7 +48,8 @@ export function SavedViewsSection({
   units,
   capture,
   onApply,
-  onStatus
+  onStatus,
+  writeRefusal = null
 }: SavedViewsSectionProps) {
   const [views, setViews] = useState<SavedView[]>(() =>
     loadSavedViews(projectId)
@@ -90,6 +98,10 @@ export function SavedViewsSection({
   function finishNaming(view: SavedView, name: string, keyboard = false) {
     if (!settle(view, keyboard)) return;
     if (name.trim() === '' || name.trim() === view.name) return;
+    if (writeRefusal) {
+      onStatus(writeRefusal);
+      return;
+    }
     const renamed = renameSavedView(projectId, view.id, name);
     if (!renamed) {
       onStatus(
@@ -113,6 +125,10 @@ export function SavedViewsSection({
   }
 
   function save() {
+    if (writeRefusal) {
+      onStatus(writeRefusal);
+      return;
+    }
     const view = capture();
     if (!view) {
       onStatus('Move the view once, then save it.');
@@ -175,6 +191,10 @@ export function SavedViewsSection({
             className="saved-views-delete"
             aria-label={`Delete ${view.name}`}
             onClick={() => {
+              if (writeRefusal) {
+                onStatus(writeRefusal);
+                return;
+              }
               const remaining = deleteSavedView(projectId, view.id);
               if (!remaining) {
                 onStatus(

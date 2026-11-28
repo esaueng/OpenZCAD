@@ -115,7 +115,32 @@ export interface ProjectView {
     sectionView: SectionViewSettings | undefined;
   } | null;
   apply(view: ProjectViewSnapshot): void;
+  /**
+   * The project's view as it would be remembered, or null before the
+   * viewport reports a pose and while the view is suspended: what is on
+   * screen then is not the project's view.
+   */
   snapshot(): ProjectViewSnapshot | null;
+  /**
+   * Something else is on screen in the project's place (a saved version
+   * previewed): the project's view is held as it stands, and nothing the
+   * view does from here is remembered. The camera, fit, cut, display and
+   * visibility choices made meanwhile are of what is on screen, in its
+   * stored unit, and writing them under the project would move its own view
+   * (a millimetre pose stamped as inches leaves the model out of frame).
+   */
+  suspend(): void;
+  /**
+   * Ends a suspension: the held view is put back, and its pose answered so
+   * the mounted viewer can land on it (it reads `initialView` only when it
+   * mounts). Null when nothing was held, or the project it was held for is
+   * no longer the one open.
+   */
+  resume(): {
+    pose: ViewportCameraState | null;
+    projection: ProjectionMode;
+    sectionView: SectionViewSettings | undefined;
+  } | null;
   /** Closing a project: drop the remembered pose so the next one refits. */
   forget(): void;
 }
@@ -152,8 +177,30 @@ export function useProjectView(
 ): ProjectView {
   const keepsViewRef = useRef(keepsView);
   keepsViewRef.current = keepsView;
+  // Read by `resume`, which runs from the render that suspended.
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
+  /**
+   * The project's own view while it is suspended; see `suspend`. Its camera
+   * and cut are in `unitsRef`'s unit, like the ones on screen otherwise.
+   */
+  const heldRef = useRef<{
+    projectId: string;
+    camera: ViewportCameraState | null;
+    projection: ProjectionMode;
+    showGrid: boolean;
+    displayMode: DisplayMode;
+    xray: boolean | undefined;
+    sectionView: SectionViewSettings | undefined;
+    hiddenBodyIds: ReadonlySet<string>;
+    sketchVisibility: Readonly<Record<string, boolean>>;
+    hiddenDatumIds: ReadonlySet<string>;
+    hiddenReferenceImageIds: ReadonlySet<string>;
+  } | null>(null);
   /** Every remembered-view write goes through here. */
   function remember(id: string, view: ProjectViewState) {
+    // Suspended: the view on screen is not the project's to remember.
+    if (heldRef.current) return;
     if (keepsViewRef.current?.(id) === false) return;
     saveProjectView(id, view);
   }
@@ -240,6 +287,7 @@ export function useProjectView(
       hiddenBodyIds: ReadonlySet<string>;
     }>
   ) {
+    if (heldRef.current) return;
     const references = hiddenReferences();
     savedHiddenReferencesProject.current = references ? id : null;
     remember(id, {
@@ -304,6 +352,8 @@ export function useProjectView(
     hiddenReferenceImageIds,
     setHiddenReferenceImageIds,
     restore(id, defaults, units, legacyUnits, initialHidden) {
+      // The view restored is the project's from here; nothing is held.
+      heldRef.current = null;
       const shownUnits =
         restoredProjectRef.current === id ? unitsRef.current : null;
       const shownCamera = cameraRef.current;
@@ -405,6 +455,19 @@ export function useProjectView(
       const factor = storedUnitFactor(unitsRef.current ?? from, to);
       unitsRef.current = to;
       if (factor === 1) return null;
+      const held = heldRef.current;
+      if (held) {
+        // The project's own view follows its unit while it is held; what is
+        // on screen in its place is in another document's unit already.
+        heldRef.current = {
+          ...held,
+          camera: held.camera ? scaledCameraPose(held.camera, factor) : null,
+          sectionView: held.sectionView
+            ? scaledSectionView(held.sectionView, factor)
+            : undefined
+        };
+        return null;
+      }
       const camera = cameraRef.current
         ? scaledCameraPose(cameraRef.current, factor)
         : null;
@@ -428,7 +491,7 @@ export function useProjectView(
       return { factor, camera, sectionView };
     },
     snapshot() {
-      return cameraRef.current
+      return cameraRef.current && !heldRef.current
         ? {
             camera: cameraRef.current,
             projection,
@@ -462,9 +525,54 @@ export function useProjectView(
       }
     },
     forget() {
+      heldRef.current = null;
       restoredProjectRef.current = null;
       cameraRef.current = null;
       setInitialView(null);
+    },
+    suspend() {
+      if (!projectId || heldRef.current) return;
+      heldRef.current = {
+        projectId,
+        camera: cameraRef.current,
+        projection,
+        showGrid: settings.showGrid,
+        displayMode: settings.displayMode,
+        xray: settings.xray,
+        sectionView: settings.sectionView,
+        hiddenBodyIds,
+        sketchVisibility,
+        hiddenDatumIds,
+        hiddenReferenceImageIds
+      };
+    },
+    resume() {
+      const held = heldRef.current;
+      heldRef.current = null;
+      if (!held || held.projectId !== projectIdRef.current) return null;
+      cameraRef.current = held.camera;
+      setProjection(held.projection);
+      // Only what a project's view holds: the device's navigation settings
+      // changed meanwhile stay as they are.
+      setSettings((current) => {
+        const { xray: _xray, sectionView: _section, ...rest } = current;
+        return {
+          ...rest,
+          showGrid: held.showGrid,
+          displayMode: held.displayMode,
+          ...(held.xray !== undefined ? { xray: held.xray } : {}),
+          ...(held.sectionView ? { sectionView: held.sectionView } : {})
+        };
+      });
+      setHiddenBodyIds(held.hiddenBodyIds);
+      setSketchVisibility(held.sketchVisibility);
+      setHiddenDatumIds(held.hiddenDatumIds);
+      setHiddenReferenceImageIds(held.hiddenReferenceImageIds);
+      return {
+        pose: held.camera,
+        projection: held.projection,
+        sectionView: held.sectionView
+      };
     }
   };
 }
