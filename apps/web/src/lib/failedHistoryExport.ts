@@ -25,7 +25,7 @@ export interface WithheldExportBody {
  * A failed shell, cut or blend leaves its target in place unchanged; that
  * body is the feature's unfinished input, not part of the design.
  */
-function inputBodyIds(feature: FeatureNode): BodyId[] {
+export function inputBodyIds(feature: FeatureNode): BodyId[] {
   const data = feature.data;
   switch (data.featureKind) {
     case 'extrude':

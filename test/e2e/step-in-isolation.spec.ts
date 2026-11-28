@@ -529,7 +529,7 @@ test('exports an isolated cut part and then the full scope as STEP that reimport
   // The full scope: every visible body that built. Spare (the user's eye)
   // and Disabled (its parameter) are left out and counted; Broken stands in
   // for a failed step, so it is withheld with its reason and not counted as
-  // hidden.
+  // hidden, and the count says the file holds 3 of the 4 shown (#2254).
   await objects
     .getByRole('button', { name: 'Exit isolation of Bored plate' })
     .click();
@@ -540,7 +540,7 @@ test('exports an isolated cut part and then the full scope as STEP that reimport
   );
   await file.open();
   await expect(stepButton).toContainText(
-    'visible bodies (3, 2 hidden left out)'
+    'visible bodies (3 of 4, 2 hidden left out)'
   );
   await expect(file.menu.getByRole('note')).toContainText(
     'Broken not exported: “Thick shell” failed to rebuild, so it does not match the design. Fix or suppress the failed feature in History to export it.'
@@ -573,6 +573,19 @@ test('exports an isolated cut part and then the full scope as STEP that reimport
     'Broken not exported: “Thick shell” failed to rebuild'
   );
   await file.close();
+  // #2205: the command palette gives the same reason, not the empty
+  // document's "Create a body".
+  await page.keyboard.press('ControlOrMeta+k');
+  await page
+    .getByRole('combobox', { name: 'Search commands', exact: true })
+    .fill('Export STEP');
+  const paletteStep = page.getByRole('option', { name: /^Export STEP/ });
+  await expect(paletteStep).toHaveAttribute('aria-disabled', 'true');
+  await expect(paletteStep).toHaveAttribute(
+    'title',
+    'Broken not exported: “Thick shell” failed to rebuild, so it does not match the design. Fix or suppress the failed feature in History to export it.'
+  );
+  await page.keyboard.press('Escape');
   await objects
     .getByRole('button', { name: 'Exit isolation of Broken' })
     .click();

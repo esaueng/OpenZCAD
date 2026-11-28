@@ -127,9 +127,18 @@ import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
 import {
   emptyExportMessage,
   exportScope,
+  exportScopeHeldOut,
   exportScopeLabel,
+  unavailableExportMessage,
   type ExportScope
 } from './lib/exportScope';
+import {
+  omittedExportMessage,
+  omittedFailedHistoryBodies,
+  staleProjectionExportBodies,
+  staleProjectionExportMessage,
+  type OmittedExportBody
+} from './lib/exportOmissions';
 import {
   SAVE_PREVIEW_MEASURE_REASON,
   previewLiveOutputRefusal,
@@ -11735,6 +11744,21 @@ export function App() {
         : new Map<BodyId, WithheldExportBody>(),
     [doc, featureAttribution]
   );
+  // #2254: saved bodies a failed feature built nothing for. Nothing of them
+  // is on screen, so the export names them instead of leaving them out unsaid.
+  const omittedHistoryBodies = useMemo(
+    () =>
+      doc && featureAttribution?.derived === doc.derived
+        ? omittedFailedHistoryBodies(doc, featureAttribution.featureWarnings)
+        : ([] as OmittedExportBody[]),
+    [doc, featureAttribution]
+  );
+  // #2255: bodies built from a sketch whose linked projection is broken, and
+  // so from its last valid geometry. They export, and the export says so.
+  const staleProjectionBodies = useMemo(
+    () => (doc ? staleProjectionExportBodies(doc) : []),
+    [doc]
+  );
   // Rows named "needs repair" for failures that leave every body standing,
   // such as a transform whose target survives its own failure.
   const failedHistoryFeatureIds = useMemo(
@@ -11760,9 +11784,20 @@ export function App() {
         : NO_ROW_DRAW,
     [doc, configurationRows]
   );
-  const { exportBodyIds, exportWithheldMessage, exportScopeInfo } = useMemo<{
+  const {
+    exportBodyIds,
+    exportWithheldMessage,
+    exportHeldOutMessage,
+    exportStaleCount,
+    exportScopeInfo
+  } = useMemo<{
     exportBodyIds: BodyId[];
+    /** Every note an export of this scope owes: held out, then stale. */
     exportWithheldMessage: string | null;
+    /** The bodies a failed feature keeps out of the file, and why. */
+    exportHeldOutMessage: string | null;
+    /** Exported bodies built from last-valid sketch geometry (#2255). */
+    exportStaleCount: number;
     exportScopeInfo: ExportScope | null;
   }>(() => {
     if (
@@ -11777,6 +11812,8 @@ export function App() {
       return {
         exportBodyIds: [],
         exportWithheldMessage: null,
+        exportHeldOutMessage: null,
+        exportStaleCount: 0,
         exportScopeInfo: null
       };
     }
@@ -11801,13 +11838,41 @@ export function App() {
       const entry = failedHistoryBodies.get(bodyId as BodyId);
       return entry ? [entry] : [];
     });
+    // A selection writes only itself, and a hidden body or one Assemble
+    // draws from another row was never in the file: neither is owed a note.
+    const omitted = scope.selection
+      ? []
+      : omittedHistoryBodies.filter(
+          (entry) =>
+            !hidden.has(entry.bodyId) && !exportDraw.fromRow.has(entry.bodyId)
+        );
+    const exported = new Set(scope.bodyIds);
+    const stale = staleProjectionBodies.filter((entry) =>
+      exported.has(entry.bodyId)
+    );
+    const notes = (parts: (string | null)[]) =>
+      parts.filter((part) => part !== null).join(' ') || null;
+    const heldOut = notes([
+      withheldExportMessage(withheld, bodyName),
+      omittedExportMessage(omitted)
+    ]);
     return {
       exportBodyIds: scope.bodyIds as BodyId[],
-      exportWithheldMessage: withheldExportMessage(withheld, bodyName),
-      exportScopeInfo: scope
+      exportWithheldMessage: notes([
+        heldOut,
+        staleProjectionExportMessage(stale, bodyName)
+      ]),
+      exportHeldOutMessage: heldOut,
+      exportStaleCount: stale.length,
+      exportScopeInfo:
+        omitted.length > 0
+          ? { ...scope, omittedIds: omitted.map((entry) => entry.bodyId) }
+          : scope
     };
   }, [
     failedHistoryBodies,
+    omittedHistoryBodies,
+    staleProjectionBodies,
     doc,
     selectedBody,
     hiddenBodyIds,
@@ -11820,17 +11885,21 @@ export function App() {
     currentFaceGeometryPreview
   ]);
   // What the one-click STEP controls name: the selected body, or the
-  // visible-body scope whenever hidden bodies are left out of it.
+  // visible-body scope whenever hidden bodies are left out of it, or the
+  // counted scope whenever a failed feature keeps a body out (#2254).
   const exportControlScope =
     exportScopeInfo?.selection && selectedBody
       ? selectedBody.name
-      : exportScopeInfo && exportScopeInfo.hiddenExcluded > 0
+      : exportScopeInfo &&
+          (exportScopeInfo.hiddenExcluded > 0 ||
+            exportScopeHeldOut(exportScopeInfo) > 0)
         ? exportScopeLabel(exportScopeInfo)
         : null;
-  // Every control that names why nothing exports names the preview first.
+  // Every control that names why nothing exports names the preview first,
+  // then the failed feature that holds every body back (#2205).
   const emptyExportReason =
     previewLiveOutputRefusal(savePreviewActive, 'export-step') ??
-    emptyExportMessage(exportScopeInfo);
+    unavailableExportMessage(exportScopeInfo, exportHeldOutMessage);
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -23096,16 +23165,35 @@ export function App() {
         ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
         : '';
       const bodies = `${countLabel(exportBodyIds.length, 'body', 'bodies')}${hiddenNote}`;
+      // #2254, #2255: the activity card says the file is partial or built
+      // from retained geometry, not a plain success; the status names which.
+      // Another configuration row's file is the kernel's to list, so the
+      // active scope's notes are not its own.
+      const scoped = !input.target.allShownBodies;
+      const heldOut =
+        scoped && exportScopeInfo ? exportScopeHeldOut(exportScopeInfo) : 0;
+      const stale = scoped ? exportStaleCount : 0;
+      const caveats = [
+        ...(heldOut > 0 ? [`${heldOut} not exported`] : []),
+        ...(stale > 0 ? [`${stale} from last valid sketch geometry`] : [])
+      ];
+      const note = scoped ? exportWithheldMessage : null;
       const outcome =
         produced.warnings > 0
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
           : input.completed
             ? input.completed(bodies)
             : `Exported ${bodies} to ${input.fileName}.`;
-      setStatus(
-        exportWithheldMessage ? `${outcome} ${exportWithheldMessage}` : outcome
+      setStatus(note ? `${outcome} ${note}` : outcome);
+      sink.finish(
+        caveats.length > 0
+          ? {
+              tone: 'warning',
+              message: `${bodies}; ${caveats.join(', ')}`,
+              landed: true
+            }
+          : { tone: 'ok', message: bodies, landed: true }
       );
-      sink.finish({ tone: 'ok', message: bodies, landed: true });
     } catch (error) {
       if (signal.aborted) {
         cancelled();
