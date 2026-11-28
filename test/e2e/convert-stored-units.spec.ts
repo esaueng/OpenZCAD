@@ -536,7 +536,7 @@ async function fitView(page: Page) {
 }
 
 test(
-  'a version saved before the conversion previews in its own unit, without the project’s pins',
+  'a version saved before the conversion previews, reads and cuts in its own unit, without the project’s pins',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     // #2365: the checkpoint stores millimetres while the project stores
@@ -609,9 +609,33 @@ test(
     expect(previewed / live).toBeLessThan(2);
     await expect(notice).toBeVisible();
 
+    // #2422: an edge picked on the version reads its millimetres in the
+    // project's inches: about 1 in for a box edge, not its mm number.
+    await setSelectionFilter(page, 'Edge');
+    const picked = await locateEdge(page);
+    await page.mouse.click(picked.x, picked.y);
+    const readout = page.locator('.selection-readout');
+    await expect(readout).toContainText(/\d in/, READY);
+    const length = Number(
+      /(\d+(?:\.\d+)?) in/.exec(await readout.innerText())![1]
+    );
+    expect(length).toBeGreaterThan(0.1);
+    expect(length).toBeLessThan(5);
+
+    // #2422: a cut moved over the version is in its millimetres on screen,
+    // and stays where it was put once the preview closes: 5 mm is 0.197 in,
+    // not 5 in.
+    await page.getByRole('button', { name: /^Section view — now:/ }).click();
+    const cut = page.getByLabel('Cut position');
+    await expect(cut).toBeEnabled();
+    await cut.fill('5');
+    await cut.press('Enter');
+    await expect(cut).toHaveValue('5');
+
     await notice.getByRole('button', { name: 'Close preview' }).click();
     await expect(notice).toHaveCount(0);
     await expect(pins).toHaveCount(1, READY);
+    await expect(cut).toHaveValue(/^0\.19685/);
     expect(errors).toEqual([]);
   }
 );

@@ -314,6 +314,13 @@ export interface ProjectSharingDialogProps {
    * (`tweakableShareDocument`).
    */
   onFreezeModel?(options?: { parameters?: boolean }): Promise<ProjectDocument>;
+  /**
+   * Why no model is frozen into a link right now, when one is not: shown in
+   * place of creating or updating a link without history, before anything
+   * is frozen. A saved version previewed in place of the project is not the
+   * model `onFreezeModel` freezes.
+   */
+  frozenShareRefusal?: string | null;
   role: ProjectAccessRole | null;
   collaborationStatus: CollaborationStatus;
   collaborationFailure?: string | null;
@@ -647,6 +654,7 @@ export function ProjectSharingDialog({
   onSaveToAccount,
   onBeforeCreateShareLink,
   onFreezeModel,
+  frozenShareRefusal = null,
   role,
   collaborationStatus,
   collaborationFailure,
@@ -1886,6 +1894,8 @@ export function ProjectSharingDialog({
                       `share-link:update:${shareLink.shareLinkId}`,
                       async () => {
                         if (!onFreezeModel) return;
+                        if (frozenShareRefusal)
+                          throw new Error(frozenShareRefusal);
                         await shareLinkClient.updateProjectShareLinkSnapshot(
                           projectId,
                           shareLink.shareLinkId,
@@ -1901,6 +1911,8 @@ export function ProjectSharingDialog({
                     void mutate('share-link:create', async () => {
                       // Refused before anything is frozen or saved.
                       const label = normalizeShareLinkLabel(name);
+                      if (!history && onFreezeModel && frozenShareRefusal)
+                        throw new Error(frozenShareRefusal);
                       // L08: a link without history is the model frozen in this
                       // browser, so it waits on no save and needs no source file
                       // in the account.

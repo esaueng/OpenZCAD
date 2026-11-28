@@ -1,4 +1,6 @@
 import type { UnitSystem } from '@openzcad/shared';
+import type { SectionViewSettings } from '@openzcad/viewport';
+import { scaledSectionView, storedUnitFactor } from './storedUnitView';
 
 /**
  * L03 save-state preview: while a saved version is on screen in place of the
@@ -28,6 +30,13 @@ export const SAVE_PREVIEW_MEASURE_REASON =
   'A saved version is open for preview. Close it to measure the project, or branch it to measure that version.';
 
 /**
+ * Why a link without history is not made or updated while a saved version
+ * is previewed. It freezes the project's model, not the version on screen.
+ */
+export const SAVE_PREVIEW_SHARE_REASON =
+  'A saved version is open for preview. Close it to share the project, or branch it to share that version.';
+
+/**
  * The stored unit the viewport draws in: the previewed version's, whose
  * coordinates are what is on screen, else the project's. A version saved
  * before a unit conversion holds its lengths in the old unit.
@@ -53,3 +62,34 @@ export function viewportMeasurementAnnotations<T>(
 
 // One empty list, so the viewer's memo of the pins holds across renders.
 const NO_ANNOTATIONS: never[] = [];
+
+/**
+ * A section cut as the viewport draws it: the project keeps its cut in its
+ * own stored unit, and a previewed version saved in another unit is cut at
+ * the same physical place (#2365).
+ */
+export function viewportSectionView(
+  section: SectionViewSettings,
+  projectUnits: UnitSystem,
+  viewportUnits: UnitSystem
+): SectionViewSettings {
+  return projectUnits === viewportUnits
+    ? section
+    : scaledSectionView(section, storedUnitFactor(projectUnits, viewportUnits));
+}
+
+/**
+ * A section cut set over the viewport, as the project keeps it: moved over
+ * a previewed version, the cut stays at that physical place once the
+ * preview closes rather than keeping the version's number in the project's
+ * unit.
+ */
+export function projectSectionView(
+  section: SectionViewSettings,
+  projectUnits: UnitSystem,
+  viewportUnits: UnitSystem
+): SectionViewSettings {
+  return projectUnits === viewportUnits
+    ? section
+    : scaledSectionView(section, storedUnitFactor(viewportUnits, projectUnits));
+}

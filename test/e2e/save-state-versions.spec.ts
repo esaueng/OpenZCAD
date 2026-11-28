@@ -205,6 +205,118 @@ test(
 );
 
 test(
+  'a preview still building does not open over the workspace switched to',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    // #2422: Draw is opened while the version builds. The preview it would
+    // have been is over, so it never installs: Draw stays on the project,
+    // which it edits and exports.
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Preview Race');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('ControlOrMeta+s');
+    const saved = revisionRow(page, 'Manual save');
+    await expect(saved).toBeVisible();
+    await expectSaveSettled(page);
+    await createPrimitiveInPlace(page, 'cylinder');
+    await expectBodyCount(page, 2);
+
+    await saved.hover();
+    const preview = saved.getByRole('button', { name: 'Preview Manual save' });
+    const modes = page.getByRole('group', { name: 'Workspace mode' });
+    const draw = modes.getByRole('button', { name: 'Draw' });
+    await expect(preview).toBeVisible();
+    // One task: the preview is asked for, then Draw is opened before the
+    // version can have built.
+    await page.evaluate(
+      ([previewButton, drawButton]) => {
+        (previewButton as HTMLElement).click();
+        (drawButton as HTMLElement).click();
+      },
+      [await preview.elementHandle(), await draw.elementHandle()]
+    );
+    await expect(draw).toHaveAttribute('aria-pressed', 'true');
+    const newSheet = page
+      .getByRole('region', { name: 'Drawings' })
+      .getByRole('button', { name: 'New drawing sheet' });
+    await expect(newSheet).toBeEnabled();
+    // Long enough for a two-body version to build and install, were it
+    // still wanted.
+    await page.waitForTimeout(2_500);
+    await expect(
+      page.getByRole('region', { name: 'Save preview' })
+    ).toHaveCount(0);
+    await expect(newSheet).toBeEnabled();
+
+    await modes.getByRole('button', { name: 'View' }).click();
+    await expect(
+      page.locator('canvas[data-e2e-rendered-bodies]')
+    ).toHaveAttribute('data-e2e-rendered-bodies', '2');
+    await expect(
+      page.getByRole('region', { name: 'Save preview' })
+    ).toHaveCount(0);
+  }
+);
+
+test(
+  'a previewed version is outlined with its own sketches',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    // #2422: a sketch drawn after the save is the project's. Over the
+    // version it is not outlined, so neither the viewport nor a PNG of it
+    // shows a sketch the version does not have.
+    await stubApi(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Preview Sketches');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+    await page.getByRole('button', { name: 'Top (XY)' }).click();
+    await expect(
+      page.getByRole('toolbar', { name: 'Sketch tools' })
+    ).toBeVisible();
+    await page.waitForTimeout(800);
+    const canvas = page.locator('.viewer-host canvas');
+    const bounds = (await canvas.boundingBox())!;
+    await page.keyboard.press('r');
+    await page.mouse.click(
+      bounds.x + bounds.width * 0.55,
+      bounds.y + bounds.height * 0.4
+    );
+    await page.mouse.click(
+      bounds.x + bounds.width * 0.68,
+      bounds.y + bounds.height * 0.55
+    );
+    await expect(page.getByRole('contentinfo')).toContainText(/Sketch 01/);
+    await page.getByRole('button', { name: /^Finish sketch/i }).click();
+    const outlined = () =>
+      page.evaluate(
+        () =>
+          JSON.parse(
+            document.documentElement.dataset.e2eOutlinedSketches ?? '[]'
+          ) as string[]
+      );
+    await expect.poll(outlined).not.toEqual([]);
+
+    const initial = revisionRow(page, 'Initial document');
+    await initial.hover();
+    await initial
+      .getByRole('button', { name: 'Preview Initial document' })
+      .click();
+    const notice = page.getByRole('region', { name: 'Save preview' });
+    await expect(notice).toContainText('Previewing “Initial document”');
+    await expect.poll(outlined).toEqual([]);
+
+    await notice.getByRole('button', { name: 'Close preview' }).click();
+    await expect(notice).toHaveCount(0);
+    await expect.poll(outlined).not.toEqual([]);
+  }
+);
+
+test(
   'compares a save point with the project now',
   { tag: '@ci-smoke' },
   async ({ page }) => {

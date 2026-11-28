@@ -133,7 +133,10 @@ import {
 import {
   SAVE_PREVIEW_EXPORT_REASON,
   SAVE_PREVIEW_MEASURE_REASON,
+  SAVE_PREVIEW_SHARE_REASON,
+  projectSectionView,
   viewportMeasurementAnnotations,
+  viewportSectionView,
   viewportStoredUnits
 } from './lib/saveStatePreview';
 import {
@@ -3924,6 +3927,13 @@ export function App() {
      */
     recovered?: boolean;
   } | null>(null);
+  /**
+   * L03: counts preview requests. A preview builds before it shows, and
+   * whatever ends a shown preview (a workspace switch, another tool,
+   * Close) moves this on, so a build still in flight is dropped instead of
+   * installing over what the user went to.
+   */
+  const savePreviewRequestRef = useRef(0);
   /** L03: the save point the compare dialog starts from. */
   const [comparingSave, setComparingSave] = useState<ProjectCheckpoint | null>(
     null
@@ -8413,6 +8423,8 @@ export function App() {
   const viewportUnits = doc
     ? viewportStoredUnits(doc.units, savePreviewActive ? savePreview : null)
     : undefined;
+  const savePreviewActiveRef = useRef(savePreviewActive);
+  savePreviewActiveRef.current = savePreviewActive;
   const projectEditDisabledReason =
     navigationPause.reasonFor(managerRef.current) ??
     (!projectOpenElsewhere && !shareSession && migrationEditReason
@@ -10646,6 +10658,11 @@ export function App() {
     () => requiredValueResolver(parameterScope.scope, doc?.units),
     [parameterScope.scope, doc?.units]
   );
+  // #2422: a previewed version outlines its own sketches, on screen and in
+  // a PNG of the view; the project's later ones are not drawn over it.
+  const sketchShownInstead = savePreviewActive
+    ? savePreview.document
+    : viewerRowDocument;
   /**
    * F06: the sketches the viewport outlines, read from the document whose
    * solids it draws. View showing another row draws that row's solved
@@ -10654,11 +10671,11 @@ export function App() {
    */
   const sketchDisplay = useMemo(
     () =>
-      viewerRowDocument
+      sketchShownInstead
         ? {
-            document: viewerRowDocument,
-            read: resolvedSketchDocument(viewerRowDocument),
-            scope: getParameterScope(viewerRowDocument).scope
+            document: sketchShownInstead,
+            read: resolvedSketchDocument(sketchShownInstead),
+            scope: getParameterScope(sketchShownInstead).scope
           }
         : doc
           ? {
@@ -10667,7 +10684,7 @@ export function App() {
               scope: parameterScope.scope
             }
           : null,
-    [viewerRowDocument, doc, sketchReadDocument, parameterScope.scope]
+    [sketchShownInstead, doc, sketchReadDocument, parameterScope.scope]
   );
   // F06: the variant table as it reads, the active row as the model holds it.
   const configurationView = useMemo((): ConfigurationSet | undefined => {
@@ -11819,7 +11836,9 @@ export function App() {
     // the Inspector print it.
     const shownUnits = documentDisplayUnits(doc);
     const units = displayLengthName(shownUnits);
-    const scale = convertLength(1, doc.units, shownUnits);
+    // #2422: the picks are on the geometry on screen, whose stored unit is
+    // a previewed version's own.
+    const scale = convertLength(1, viewportUnits ?? doc.units, shownUnits);
     const round = (value: number) =>
       scale === 1
         ? Math.round(value * 100) / 100
@@ -12004,6 +12023,7 @@ export function App() {
     return null;
   }, [
     doc,
+    viewportUnits,
     tool,
     selectedEdges,
     renderedSelectedTopology,
@@ -15467,6 +15487,8 @@ export function App() {
     setFeatureFormError(null);
     setModelingEditFeature(null);
     setPreviewDoc(null);
+    // A save preview still building is ended with the one on screen.
+    savePreviewRequestRef.current += 1;
     // A cancelled extrude releases its profiles rather than restoring the
     // selection it started from: Escape lands on nothing selected, not on a
     // "profile selected · Extrude" prompt one press short of it.
@@ -15486,6 +15508,9 @@ export function App() {
   function handleWorkspaceMode(mode: WorkspaceMode) {
     if (mode !== workspaceModeRef.current)
       trackUsage(mode === 'build' ? 'workflow_model' : 'workflow_setup');
+    // #2422: a save preview still building belongs to the workspace it was
+    // asked from; it does not open over the one switched to.
+    savePreviewRequestRef.current += 1;
     if (
       mode === 'view' ||
       mode === 'tweak' ||
@@ -16125,11 +16150,13 @@ export function App() {
    * the slider at pointer rate, and an exact section belongs to exactly one
    * plane position anyway.
    */
-  async function requestExactSection(section: SectionViewSettings | undefined) {
+  async function requestExactSection(kept: SectionViewSettings | undefined) {
     const view = viewportGeometry;
-    if (!section || !view.document) {
+    if (!kept || !view.document) {
       return;
     }
+    // The cut as the project keeps it, on the geometry on screen (#2422).
+    const section = sectionToViewport(kept);
     // Taken before the await: whatever this call decides, an answer already
     // in flight is about a cut that has moved on.
     const token = ++sectionTokenRef.current;
@@ -16248,6 +16275,37 @@ export function App() {
     viewerSettings.sectionView,
     doc?.projectId
   );
+  // #2422: the project keeps its cut in its own stored unit, and that is
+  // what is persisted. Over a previewed version saved in another unit, the
+  // viewport, the section panel and the exact section read the cut in the
+  // version's unit, and a cut moved there is kept back in the project's,
+  // so it stays where it was put once the preview closes.
+  const sectionToViewport = (section: SectionViewSettings) =>
+    doc && viewportUnits
+      ? viewportSectionView(section, doc.units, viewportUnits)
+      : section;
+  const sectionToProject = (section: SectionViewSettings) =>
+    doc && viewportUnits
+      ? projectSectionView(section, doc.units, viewportUnits)
+      : section;
+  const projectUnits = doc?.units;
+  const viewportViewerSettings = useMemo(
+    () =>
+      viewerSettings.sectionView &&
+      projectUnits &&
+      viewportUnits &&
+      projectUnits !== viewportUnits
+        ? {
+            ...viewerSettings,
+            sectionView: viewportSectionView(
+              viewerSettings.sectionView,
+              projectUnits,
+              viewportUnits
+            )
+          }
+        : viewerSettings,
+    [viewerSettings, projectUnits, viewportUnits]
+  );
 
   function turnSectionViewOff() {
     if (!viewerSettingsRef.current.sectionView) return;
@@ -16305,7 +16363,9 @@ export function App() {
     pendingSectionRestoreRef.current = null;
     const range = sectionAxisRange(plane);
     const offset = range ? (range.min + range.max) / 2 : 0;
-    const section = { plane, offset };
+    // The range is the geometry on screen's; the project keeps the cut in
+    // its own unit.
+    const section = sectionToProject({ plane, offset });
     // The previous plane's exact section describes a cut that is gone.
     clearSectionOutline();
     setViewerSettings((current) => ({
@@ -16328,7 +16388,13 @@ export function App() {
     clearSectionOutline();
     setViewerSettings((current) =>
       current.sectionView
-        ? { ...current, sectionView: { ...current.sectionView, offset } }
+        ? {
+            ...current,
+            sectionView: sectionToProject({
+              ...sectionToViewport(current.sectionView),
+              offset
+            })
+          }
         : current
     );
   }
@@ -16347,11 +16413,12 @@ export function App() {
 
   /** Write the exact section — never the display caps — as a DXF drawing. */
   async function handleExportSectionDxf() {
-    const section = viewerSettings.sectionView;
+    const kept = viewerSettings.sectionView;
     const view = viewportGeometry;
-    if (!section || !view.document) {
+    if (!kept || !view.document) {
       return;
     }
+    const section = sectionToViewport(kept);
     // Two gates, both the exporter's own: it writes every body the plane
     // cuts or nothing, which is the state the DXF button is enabled for,
     // and it takes the viewport's geometry, so a drawing of a model the
@@ -19789,9 +19856,14 @@ export function App() {
     const manager = managerRef.current;
     const current = manager?.document;
     if (!manager || !current || shareSessionRef.current) return;
+    const request = ++savePreviewRequestRef.current;
+    const superseded = () =>
+      managerRef.current !== manager ||
+      savePreviewRequestRef.current !== request;
     setBusy(true);
     try {
       const loaded = await loadPreviewSaveState(current.projectId, checkpoint);
+      if (superseded()) return;
       if (!loaded) {
         setStatus(
           'That save state is no longer stored on this device or in your account.'
@@ -19802,7 +19874,9 @@ export function App() {
       const label = checkpointLabel(checkpoint);
       setStatus(`Building “${label}” for preview…`);
       const derived = await geometry.syncOnce(snapshot);
-      if (managerRef.current !== manager) return;
+      // #2422: the user went elsewhere (another workspace, a tool, Close)
+      // while it built; that ends the preview it would have been.
+      if (superseded()) return;
       const shown: ProjectDocument = { ...snapshot, derived };
       // A save point this device never drew gets its card now.
       void captureCheckpointThumbnail(
@@ -19820,6 +19894,9 @@ export function App() {
       // #2364: Measure is the project's; it does not run over the version.
       setMeasuring(false);
       clearMeasurementPicks();
+      // Its pins are hidden over the version, so none stays selected for
+      // Delete to remove unseen (#2422).
+      setActiveMeasurementId(null);
       setPreviewDoc(shown);
       setSavePreview({
         projectId: current.projectId,
@@ -19872,6 +19949,7 @@ export function App() {
 
   /** Ends a save-state preview; the project's own model shows again. */
   function closeSavePreview(announce = true) {
+    savePreviewRequestRef.current += 1;
     if (!savePreview) return;
     if (previewDoc === savePreview.document) setPreviewDoc(null);
     setSavePreview(null);
@@ -31636,6 +31714,16 @@ export function App() {
       ),
     [availableSketchViews, hiddenSketchIds, movingSketch, inPlaceEditSketchIds]
   );
+  // E2E builds only: the sketches the viewport outlines, so a spec can tell
+  // whose sketches a previewed version is drawn with (#2422).
+  useEffect(() => {
+    if (!E2E_BUILD) return;
+    window.document.documentElement.dataset.e2eOutlinedSketches =
+      JSON.stringify([
+        ...sketchViews.map((view) => view.sketchId),
+        ...viewerSketches.map((overlay) => overlay.sketchId)
+      ]);
+  }, [sketchViews, viewerSketches]);
   // An edit whose feature an undo, a remote change or a delete removed has
   // nothing left to edit.
   const inPlaceEditGone =
@@ -38816,7 +38904,9 @@ export function App() {
         case 'Delete':
         case 'Backspace':
           if (modelingLocked) {
-            if (activeMeasurementId) {
+            // #2422: over a previewed version the project's pins are not
+            // drawn, so none is a Delete target.
+            if (activeMeasurementId && !savePreviewActive) {
               event.preventDefault();
               setMeasurements((current) =>
                 current.filter(
@@ -41650,8 +41740,11 @@ export function App() {
   // The slider was released, or a key repeat ended: cut it exactly.
   const commitSectionCut = (offset?: number) => {
     const section = viewerSettingsRef.current.sectionView;
+    // The panel's offset is on the geometry on screen (#2422).
     const next =
-      section && offset !== undefined ? { ...section, offset } : section;
+      section && offset !== undefined
+        ? sectionToProject({ ...sectionToViewport(section), offset })
+        : section;
     persistSectionView(next);
     void requestExactSection(next);
   };
@@ -41706,7 +41799,7 @@ export function App() {
               dock: measurementDock
             }}
             section={{
-              current: viewerSettings.sectionView ?? null,
+              current: viewportViewerSettings.sectionView ?? null,
               rangeFor: sectionAxisRange,
               outline: sectionOutline,
               units: viewportUnits ?? doc.units,
@@ -42360,7 +42453,8 @@ export function App() {
                 }
               })
             }
-            settings={viewerSettings}
+            // #2422: the cut on the geometry on screen, in its stored unit.
+            settings={viewportViewerSettings}
             fitSignal={fitSignal}
             finishSketchCurveSignal={finishSketchCurveSignal}
             autoFrame={autoFrame}
@@ -43734,7 +43828,14 @@ export function App() {
                 bodyRepresentations={representations}
                 scope={parameterScope.scope}
                 bodies={bodyOptions}
-                units={doc.units}
+                // #2422: a feature's values are the project's; a picked body
+                // or face is measured on the geometry on screen, a previewed
+                // version's in its own stored unit.
+                units={
+                  selectedFeature || selectedSketch
+                    ? doc.units
+                    : (viewportUnits ?? doc.units)
+                }
                 commandSession={commandSession}
                 featureSelectionSource={featureSelectionSource}
                 directPickDetails={editFaceOpen}
@@ -45031,7 +45132,14 @@ export function App() {
                   setSharingOpen(false);
                   void handleGoHome();
                 }}
+                // #2422: a previewed version is on screen, and freezing would
+                // publish the project behind it.
+                frozenShareRefusal={
+                  savePreviewActive ? SAVE_PREVIEW_SHARE_REASON : null
+                }
                 onFreezeModel={async (options) => {
+                  if (savePreviewActiveRef.current)
+                    throw new Error(SAVE_PREVIEW_SHARE_REASON);
                   // L08: a link without history shares the model as this
                   // tab shows it now, saved or not.
                   const current = managerRef.current?.document;

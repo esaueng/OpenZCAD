@@ -2285,6 +2285,62 @@ describe('ProjectSharingDialog links without history (L08)', () => {
     expect(links.createProjectShareLink).not.toHaveBeenCalled();
   });
 
+  it('freezes nothing while the model on screen is not the project’s (#2422)', async () => {
+    // A saved version previewed in place of the project: freezing would
+    // publish the project's model, not the one being looked at.
+    const links = shareLinkClient();
+    const user = userEvent.setup();
+    const base = createProjectDocument('Bracket', owner);
+    const onFreezeModel = vi.fn(async () => frozenOf(base));
+    const refusal =
+      'A saved version is open for preview. Close it to share the project, or branch it to share that version.';
+    await open(links, { onFreezeModel, frozenShareRefusal: refusal });
+    await openLinkOptions(user);
+    await user.click(
+      await screen.findByRole('checkbox', { name: 'Include history' })
+    );
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    expect(await screen.findByText(refusal)).toBeVisible();
+    expect(links.createProjectShareLink).not.toHaveBeenCalled();
+    expect(onFreezeModel).not.toHaveBeenCalled();
+  });
+
+  it('updates no link without history while the model on screen is not the project’s (#2422)', async () => {
+    const links = shareLinkClient();
+    const user = userEvent.setup();
+    const base = createProjectDocument('Bracket', owner);
+    const onFreezeModel = vi.fn(async () => frozenOf(base));
+    const refusal =
+      'A saved version is open for preview. Close it to share the project, or branch it to share that version.';
+    const props = {
+      projectId: base.projectId,
+      role: 'owner' as const,
+      collaborationStatus: 'live' as const,
+      lease: null,
+      client: client(),
+      shareLinkClient: links,
+      onClose: vi.fn(),
+      onFreezeModel
+    };
+    const { rerender } = render(<ProjectSharingDialog {...props} />);
+    await openLinks();
+    await openLinkOptions(user);
+    await user.click(
+      await screen.findByRole('checkbox', { name: 'Include history' })
+    );
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await openCard(/^View link · /, user);
+    rerender(<ProjectSharingDialog {...props} frozenShareRefusal={refusal} />);
+    await user.click(
+      await screen.findByRole('button', {
+        name: /^Update .* to the current model$/
+      })
+    );
+    expect(await screen.findByText(refusal)).toBeVisible();
+    expect(links.updateProjectShareLinkSnapshot).not.toHaveBeenCalled();
+    expect(onFreezeModel).toHaveBeenCalledTimes(1);
+  });
+
   it('Update freezes the current model into the same link', async () => {
     const links = shareLinkClient();
     const user = userEvent.setup();
