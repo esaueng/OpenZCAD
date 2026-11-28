@@ -451,24 +451,26 @@ export function WorkspaceReadout({
     OVERLAY_EXIT_MS
   );
   const shownStatus = quiet ? (fading.rendered ?? '') : paced.status;
-  const refusal = isRefusalStatus(shownStatus);
+  // Held through the fade once a refusal expires: the text stays drawn for
+  // that 100ms, wrapped, and the rows above keep clear of it until it goes.
+  const refusal = isRefusalStatus(shownStatus) && (shown || quiet);
   // A wrapped refusal is taller than the 28px row the notice lane allows a
   // status, so the rows stacked above it (the Undo toast) lift by its real
-  // height, published on the viewer as the activity pill publishes its own.
-  const toastRef = useRef<HTMLElement>(null);
+  // height, published as the activity pill publishes its own: on the viewer
+  // for the stage's lane, or, over a full compact sheet, on the notice host
+  // that draws the line beside the action notice. The body is taken by a
+  // callback ref: the sheet coming up to full moves the line onto that host
+  // as a new node, which the measure must follow.
+  const [statusBody, setStatusBody] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => {
-    const body = toastRef.current?.querySelector<HTMLElement>(
-      '.workspace-toast-body'
-    );
-    const viewer = body?.closest<HTMLElement>('.viewer-area');
-    if (!refusal || !shown || !body || !viewer) return;
+    if (!refusal || !statusBody) return;
+    const viewer = statusBody.closest<HTMLElement>('.viewer-area');
     const measure = () => {
-      const height = body.getBoundingClientRect().height;
+      const height = statusBody.getBoundingClientRect().height;
       if (height > 0) {
-        viewer.style.setProperty(
-          '--workspace-toast-live-h',
-          `${Math.ceil(height)}px`
-        );
+        const value = `${Math.ceil(height)}px`;
+        viewer?.style.setProperty('--workspace-toast-live-h', value);
+        statusHost?.style.setProperty('--workspace-toast-live-h', value);
       }
     };
     measure();
@@ -476,12 +478,13 @@ export function WorkspaceReadout({
       typeof ResizeObserver === 'undefined'
         ? null
         : new ResizeObserver(measure);
-    observer?.observe(body);
+    observer?.observe(statusBody);
     return () => {
       observer?.disconnect();
-      viewer.style.removeProperty('--workspace-toast-live-h');
+      viewer?.style.removeProperty('--workspace-toast-live-h');
+      statusHost?.style.removeProperty('--workspace-toast-live-h');
     };
-  }, [refusal, shown, shownStatus]);
+  }, [refusal, statusBody, statusHost, shownStatus]);
   const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
   const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
   const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
@@ -650,7 +653,6 @@ export function WorkspaceReadout({
       </div>
       {footer(
         <footer
-          ref={toastRef}
           className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}${
             refusal ? ' is-refusal' : ''
           }`}
@@ -660,11 +662,15 @@ export function WorkspaceReadout({
           data-section-line={sectionShown || undefined}
         >
           {compactShell ? (
-            <div className={`workspace-toast-body${quiet ? ' quiet' : ''}`}>
+            <div
+              ref={setStatusBody}
+              className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
+            >
               {toastBody}
             </div>
           ) : (
             <button
+              ref={setStatusBody}
               type="button"
               className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
               // Keep the toast out of the tab order while it is faded out.

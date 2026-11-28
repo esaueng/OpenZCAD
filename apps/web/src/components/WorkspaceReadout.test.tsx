@@ -11,6 +11,7 @@ import {
 import { ViewportDockExtras, WorkspaceReadout } from './WorkspaceReadout';
 import {
   CompactCommandRowContext,
+  CompactNoticeHostContext,
   CompactStatusHostContext
 } from './compact/compactSlots';
 
@@ -138,6 +139,134 @@ describe('WorkspaceReadout', () => {
       );
     } finally {
       rect.mockRestore();
+    }
+  });
+
+  it('follows a refusal onto a full compact sheet and lifts the notice there', () => {
+    // Over a full sheet the line is drawn in the notice host, under the
+    // action notice's Undo, which reads the line's height from the host.
+    const refusal =
+      'Cannot reorder: “Locate Offset vent” would run after “Subtract pocket and vent” already replaced “Offset vent”. Keep “Locate Offset vent” before “Subtract pocket and vent”.';
+    const observed: Element[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe(target: Element) {
+          observed.push(target);
+        }
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    const rect = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        return new DOMRect(
+          0,
+          0,
+          0,
+          this.classList.contains('workspace-toast-body') ? 80.2 : 0
+        );
+      });
+    const host = document.createElement('div');
+    host.className = 'compact-notice-host';
+    document.body.append(host);
+    try {
+      const view = (full: boolean) => (
+        <CompactNoticeHostContext.Provider value={host}>
+          <CompactStatusHostContext.Provider value={full ? host : null}>
+            <div className="viewer-area">
+              <WorkspaceReadout
+                {...SUMMARY}
+                status={refusal}
+                statusImmediate
+                tone="warning"
+                onOpenLog={vi.fn()}
+              />
+            </div>
+          </CompactStatusHostContext.Provider>
+        </CompactNoticeHostContext.Provider>
+      );
+      const { rerender, container } = render(view(false));
+      const viewer = container.querySelector<HTMLElement>('.viewer-area')!;
+      expect(viewer.style.getPropertyValue('--workspace-toast-live-h')).toBe(
+        '81px'
+      );
+      expect(host.style.getPropertyValue('--workspace-toast-live-h')).toBe('');
+      expect(observed.at(-1)).toBe(
+        viewer.querySelector('.workspace-toast-body')
+      );
+      // The full sheet draws the line on the host: a new node, measured and
+      // watched there, and the stage it left keeps no stale height.
+      rerender(view(true));
+      const moved = host.querySelector('.workspace-toast-body');
+      expect(moved).not.toBeNull();
+      expect(viewer.querySelector('.workspace-toast')).toBeNull();
+      expect(observed.at(-1)).toBe(moved);
+      expect(viewer.style.getPropertyValue('--workspace-toast-live-h')).toBe(
+        ''
+      );
+      expect(host.style.getPropertyValue('--workspace-toast-live-h')).toBe(
+        '81px'
+      );
+    } finally {
+      rect.mockRestore();
+      vi.unstubAllGlobals();
+      host.remove();
+    }
+  });
+
+  it('keeps an expiring refusal wrapped and its row reserved through the fade', () => {
+    // Dropped at once, the Undo above came down over the refusal's last
+    // lines while they were still fading out.
+    vi.useFakeTimers();
+    const refusal =
+      'Cannot reorder: “Locate vent” would run after “Subtract 1” already replaced “vent”. Keep “Locate vent” before “Subtract 1”.';
+    const rect = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        return new DOMRect(
+          0,
+          0,
+          0,
+          this.classList.contains('workspace-toast-body') ? 62 : 0
+        );
+      });
+    try {
+      const view = (statusAt: number) => (
+        <div className="viewer-area">
+          <WorkspaceReadout
+            {...SUMMARY}
+            status={refusal}
+            statusAt={statusAt}
+            statusImmediate
+            tone="warning"
+            onOpenLog={vi.fn()}
+          />
+        </div>
+      );
+      const { rerender, container } = render(view(Date.now()));
+      const viewer = container.querySelector<HTMLElement>('.viewer-area')!;
+      const toast = screen.getByRole('contentinfo');
+      expect(toast).toHaveClass('is-refusal');
+      // Expired: hidden, and fading out with its text still drawn.
+      rerender(view(0));
+      expect(toast).toHaveClass('hidden');
+      expect(toast).toHaveTextContent(refusal);
+      expect(toast).toHaveClass('is-refusal');
+      expect(viewer.style.getPropertyValue('--workspace-toast-live-h')).toBe(
+        '62px'
+      );
+      act(() => {
+        vi.advanceTimersByTime(OVERLAY_EXIT_MS);
+      });
+      expect(toast).not.toHaveClass('is-refusal');
+      expect(viewer.style.getPropertyValue('--workspace-toast-live-h')).toBe(
+        ''
+      );
+    } finally {
+      rect.mockRestore();
+      vi.useRealTimers();
     }
   });
 
