@@ -1,11 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   createProjectDocument,
-  filletEdges
+  filletEdges,
+  normalizeDocument
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
+  DRAWING_VIEW_FRAMES,
   drawingPaperMm,
   toUserId,
   type BodyRepresentation,
@@ -15,9 +18,11 @@ import {
   type DrawingSheetId,
   type DrawingView,
   type DrawingViewId,
-  type EdgeTopology
+  type EdgeTopology,
+  type ProjectDocument
 } from '@openzcad/shared';
 import {
+  bodySilhouettes,
   projectView,
   type ViewProjection
 } from '../apps/web/src/lib/drawing/projectView';
@@ -28,6 +33,7 @@ import {
   sectionCaption,
   sectionNoteRefusal,
   SECTION_APPROXIMATE_NOTE,
+  SHEET_HIDDEN_DASH_MM,
   sheetBoxOnPaper,
   sheetMarksOnPaper,
   textWidthMm,
@@ -560,6 +566,350 @@ describe('hidden edges export as hidden (#2073)', () => {
     );
     expect(drawn).toHaveLength(1);
     expect(drawn[0]!.closed).toBe(true);
+  });
+
+  /** The length of a run, round to its start when it is closed. */
+  function runLength(run: { points: number[]; closed: boolean }): number {
+    const points: [number, number][] = [];
+    for (let i = 0; i + 1 < run.points.length; i += 2)
+      points.push([run.points[i]!, run.points[i + 1]!]);
+    return perimeter(points, run.closed);
+  }
+
+  /** `count` chords of a circle about the origin, as one polyline. */
+  function arc(
+    radius: number,
+    from: number,
+    to: number,
+    count: number,
+    wobble = 0
+  ): number[] {
+    return Array.from({ length: count + 1 }, (_, k) => {
+      const a = from + ((to - from) * k) / count;
+      // Off the circle by as much as a kernel's approximated curve is.
+      const r = radius + (k % count === 0 ? 0 : wobble * Math.sin(7 * k));
+      return [r * Math.cos(a), r * Math.sin(a)];
+    }).flat();
+  }
+
+  it('draws two edges that project onto one curve once', () => {
+    // A radial port seen along its axis: its rim, and the saddle it cuts in
+    // the bore, both on one Ø16 circle. The rim is 105 chords from the top;
+    // the saddle is two edges, 127 and 196 chords the other way round, each
+    // sampled at its own points and 0.7 µm off the circle here and there.
+    const rim = arc(8, Math.PI / 2, Math.PI / 2 + 2 * Math.PI, 105);
+    const quarter = arc(8, Math.PI / 2, 0, 127, 7e-4);
+    const rest = arc(8, 2 * Math.PI, Math.PI / 2, 196, 7e-4);
+    const runs = joinHiddenRuns([rim, quarter, rest], [14, 17, 18]);
+    // One closed loop: the longest edge, whole.
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.closed).toBe(true);
+    expect(runs[0]!.points).toHaveLength(2 * 105);
+    expect(runLength(runs[0]!)).toBeCloseTo(
+      2 * 8 * 105 * Math.sin(Math.PI / 105)
+    );
+    // Drawn in any order, it is the same loop.
+    expect(joinHiddenRuns([quarter, rest, rim], [17, 18, 14])).toEqual(runs);
+  });
+
+  it('draws an edge that doubles back over itself once', () => {
+    // The saddle seen from the side: out along a 100 degree arc in 60
+    // chords and back along it in 47, as one edge.
+    const out = arc(20, 0, 1.75, 60);
+    const back = arc(20, 1.75, 0, 47, 5e-4);
+    const runs = joinHiddenRuns([[...out, ...back.slice(2)]], [18]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.closed).toBe(false);
+    expect(runs[0]!.points).toEqual(out);
+    expect(runLength(runs[0]!)).toBeCloseTo(20 * 1.75, 1);
+  });
+
+  it('keeps two curves a visible distance apart, however coarsely sampled', () => {
+    // The inner and outer wall of a tube, half a millimetre apart on the
+    // paper, in 30 chords each: either's chords sit 0.23 mm inside its
+    // circle, more than the walls are apart.
+    const outer = arc(42, 0, 2 * Math.PI, 30);
+    const inner = arc(41.5, 0.1, 0.1 + 2 * Math.PI, 30);
+    const runs = joinHiddenRuns([outer, inner], [1, 2]);
+    expect(runs).toHaveLength(2);
+    expect(runs.every((run) => run.closed)).toBe(true);
+    expect(runs.map((run) => run.points.length)).toEqual([60, 60]);
+  });
+
+  it('takes two straight lines for one only where they are one', () => {
+    // 5 µm apart: two lines, as a DXF reader will find them.
+    expect(
+      joinHiddenRuns(
+        [
+          [0, 0, 10, 0],
+          [0, 0.005, 10, 0.005]
+        ],
+        [1, 2]
+      )
+    ).toHaveLength(2);
+    // A shorter edge along a longer one is the longer one.
+    expect(
+      joinHiddenRuns(
+        [
+          [2, 0, 8, 0],
+          [0, 0, 10, 0]
+        ],
+        [1, 2]
+      )
+    ).toEqual([{ points: [0, 0, 10, 0], closed: false }]);
+    // Two that cross are two, however short the pieces at the crossing.
+    const crossing = joinHiddenRuns(
+      [
+        [0, 0, 10, 0],
+        [4.9, -0.1, 4.9995, -0.0005, 5.0005, 0.0005, 5.1, 0.1]
+      ],
+      [1, 2]
+    );
+    expect(crossing).toHaveLength(2);
+    expect(crossing.map((run) => run.points.length)).toEqual([4, 8]);
+  });
+
+  it('does not take a line that carries on from another for a repeat of it', () => {
+    // An arc, then the edge after it: tangent, and its first piece 4 µm
+    // long, less than the arc's chords may sit from their curve. Past the
+    // arc's end it is no repeat of the arc.
+    const first = arc(8, 0, 1, 20);
+    const [ex, ey] = [8 * Math.cos(1), 8 * Math.sin(1)];
+    const [tx, ty] = [-Math.sin(1), Math.cos(1)];
+    const next = [0, 4e-3, 2, 4].flatMap((t) => [ex + tx * t, ey + ty * t]);
+    const runs = joinHiddenRuns([first, next], [1, 2]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.points).toHaveLength(2 * (21 + 3));
+    expect(runs[0]!.points.slice(-2)).toEqual(next.slice(-2));
+  });
+});
+
+describe('a hidden radial port prints dashed on the kernel’s own geometry (#2073)', () => {
+  /**
+   * `fixtures/drawing/port-block.openzcad`: a 60 x 30 x 16 block with a Ø16
+   * bore through it, a Ø8 port from the bore's axis out through one end, and
+   * a Ø8 bore near the other. Seen from the far end the port is a hidden
+   * Ø8 circle: its rim, the saddle it cuts in the bore (two edges the
+   * kernel approximates, a few tenths of a micron off the port's cylinder)
+   * and, between them, the port's wall, seen along its axis.
+   */
+  let bodies: Readonly<Record<string, BodyRepresentation | undefined>>;
+  let bodyId: string;
+
+  beforeAll(async () => {
+    const file = JSON.parse(
+      readFileSync(
+        new URL('./fixtures/drawing/port-block.openzcad', import.meta.url),
+        'utf8'
+      )
+    ) as { document: ProjectDocument };
+    const document = normalizeDocument(file.document);
+    bodies = (await adapter.syncDocument(document)).bodyRepresentations;
+    bodyId = document.bodyOrder.at(-1)!;
+  });
+
+  const center = { x: 316, y: 205 };
+
+  /** An A3 first-angle sheet at 2:1 with one view of the block. */
+  function pageOf(orientation: DrawingView['orientation']) {
+    const drawn = view(frontId, orientation, {
+      bodyIds: [bodyId as DrawingView['bodyIds'][number]],
+      centerMm: center
+    });
+    const sheet: DrawingSheet = {
+      ...sheetOf([drawn]),
+      scale: { numerator: 2, denominator: 1 },
+      projectionAngle: 'first'
+    };
+    const projection = projectView({
+      orientation,
+      hiddenLines: true,
+      bodies: [projectionBodyInput(bodies[bodyId]!)!]
+    });
+    const page = composeSheetPage(sheet, [{ view: drawn, projection }], {
+      projectName: 'Port block',
+      units: 'mm'
+    });
+    return { projection, page };
+  }
+
+  function strokePoints(stroke: SheetPage['strokes'][number]) {
+    const points: [number, number][] = [];
+    for (let i = 0; i + 1 < stroke.points.length; i += 2)
+      points.push([stroke.points[i]!, stroke.points[i + 1]!]);
+    return points;
+  }
+
+  const strokeLength = (stroke: SheetPage['strokes'][number]) =>
+    perimeter(strokePoints(stroke), stroke.closed === true);
+
+  it('draws a wall seen along its axis as its end edges, with no outline of its own', () => {
+    const { projection } = pageOf('left');
+    const edges = projectionBodyInput(bodies[bodyId]!)!.edges.length;
+    // Every hidden line on the port's circle is a piece of a B-rep edge:
+    // the wall's leaning facets gave it 345 silhouette pieces of its own.
+    const onPort = projection.hidden.flatMap((line, index) => {
+      for (let i = 0; i + 1 < line.length; i += 2)
+        if (Math.abs(Math.hypot(line[i]! + 15, line[i + 1]! - 8) - 4) > 0.01)
+          return [];
+      return [projection.hiddenSources![index]!];
+    });
+    expect(onPort.length).toBeGreaterThan(0);
+    expect(onPort.length).toBeLessThanOrEqual(4);
+    expect(onPort.every((source) => source < edges)).toBe(true);
+    expect(projection.hidden.length).toBeLessThanOrEqual(10);
+  });
+
+  it('exports the port as one dashed loop in SVG, PDF and DXF', () => {
+    const { page } = pageOf('left');
+    const hidden = page.strokes.filter((stroke) => stroke.kind === 'hidden');
+    // The port, and the silhouettes of the two bores: nothing shorter than
+    // a dash, where there were 910 pieces of the port alone.
+    expect(hidden.length).toBeLessThanOrEqual(6);
+    expect(
+      hidden.every((stroke) => strokeLength(stroke) > SHEET_HIDDEN_DASH_MM[0])
+    ).toBe(true);
+    // The port sits at the middle of the view: a Ø16 circle on the paper.
+    const onPort = (points: [number, number][], cy: number) =>
+      points.every(
+        ([x, y]) => Math.abs(Math.hypot(x - center.x, y - cy) - 8) < 0.05
+      );
+    const port = hidden.filter((stroke) =>
+      onPort(strokePoints(stroke), center.y)
+    );
+    expect(port).toHaveLength(1);
+    expect(port[0]!.closed).toBe(true);
+    // Once round: eleven dashes and their gaps.
+    expect(strokeLength(port[0]!)).toBeCloseTo(2 * Math.PI * 8, 1);
+
+    const svg = sheetPageToSvg(page, 'Port block');
+    expect(svg).toMatch(/<g class="hidden"[^>]*stroke-dasharray="3 1.5"/);
+    const svgHidden = svgGroup(svg, 'hidden');
+    expect(svgHidden).toHaveLength(hidden.length);
+    const a3 = drawingPaperMm({ size: 'A3', orientation: 'landscape' });
+    const svgPort = svgHidden.filter((element) =>
+      onPort(svgPoints(element), a3.height - center.y)
+    );
+    expect(svgPort).toHaveLength(1);
+    expect(svgPort[0]).toMatch(/^<polygon /);
+    expect(perimeter(svgPoints(svgPort[0]!), true)).toBeCloseTo(
+      2 * Math.PI * 8,
+      1
+    );
+
+    const paths = pdfHiddenPaths(pdfText(page, 'Port block'));
+    expect(paths).toHaveLength(hidden.length);
+    // One closed path under the dash: the port.
+    expect(paths.filter((path) => / s$/.test(path))).toHaveLength(1);
+
+    const entities = dxfEntities(sheetPageToDxf(page)).filter(
+      (entity) => entity.groups.get(8)?.[0] === 'HIDDEN'
+    );
+    expect(
+      entities.filter((entity) => ['POLYLINE', 'LINE'].includes(entity.type))
+    ).toHaveLength(hidden.length);
+    // One closed polyline, its line type running on from chord to chord.
+    expect(
+      entities.filter(
+        (entity) =>
+          entity.type === 'POLYLINE' && entity.groups.get(70)?.[0] === '129'
+      )
+    ).toHaveLength(1);
+  });
+
+  it('draws the saddle once where it doubles back, seen from the side', () => {
+    // From the front the saddle runs out along its near half and back
+    // along its far one, over the same curve: 8.4 mm above the port's axis
+    // and 8.4 mm below it on the paper.
+    const { page } = pageOf('front');
+    const saddle = page.strokes.filter(
+      (stroke) =>
+        stroke.kind === 'hidden' &&
+        strokePoints(stroke).every(
+          ([x, y]) =>
+            x - center.x > 13.8 &&
+            x - center.x < 16.05 &&
+            Math.abs(y - center.y) < 8.05
+        )
+    );
+    expect(saddle.length).toBeGreaterThan(0);
+    expect(saddle.length).toBeLessThanOrEqual(2);
+    expect(
+      saddle.every((stroke) => strokeLength(stroke) > SHEET_HIDDEN_DASH_MM[0])
+    ).toBe(true);
+    const drawn = saddle.reduce((sum, stroke) => sum + strokeLength(stroke), 0);
+    expect(drawn).toBeGreaterThan(16.5);
+    expect(drawn).toBeLessThan(17.2);
+  });
+});
+
+describe('a face seen edge-on has no silhouette (#2073)', () => {
+  /**
+   * The wall of a Ø8 bore, 20 long, in 48 facets, along `axis`. Its far end
+   * is `ragged` off the cylinder, in and out from one vertex to the next,
+   * as an end the kernel approximates is.
+   */
+  function wall(axis: [number, number, number], ragged: number) {
+    const n = 48;
+    const length = Math.hypot(...axis);
+    const w = axis.map((value) => value / length) as [number, number, number];
+    // Two unit vectors square to the axis.
+    const pick: [number, number, number] =
+      Math.abs(w[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+    const cross = (a: number[], b: number[]) => [
+      a[1]! * b[2]! - a[2]! * b[1]!,
+      a[2]! * b[0]! - a[0]! * b[2]!,
+      a[0]! * b[1]! - a[1]! * b[0]!
+    ];
+    const unit = (a: number[]) => a.map((value) => value / Math.hypot(...a));
+    const p = unit(cross(w, pick));
+    const q = cross(w, p);
+    const vertices: number[] = [];
+    for (const [along, off] of [
+      [0, 0],
+      [20, ragged]
+    ] as const)
+      for (let k = 0; k < n; k += 1) {
+        const a = (2 * Math.PI * k) / n;
+        const r = 4 + (k % 2 === 0 ? off : -off);
+        for (let c = 0; c < 3; c += 1)
+          vertices.push(
+            w[c]! * along + r * (Math.cos(a) * p[c]! + Math.sin(a) * q[c]!)
+          );
+      }
+    const indices: number[] = [];
+    for (let k = 0; k < n; k += 1) {
+      const j = (k + 1) % n;
+      indices.push(k, j, n + j, k, n + j, n + k);
+    }
+    return {
+      vertices: Float64Array.from(vertices),
+      indices: Uint32Array.from(indices),
+      faces: [{ triangleStart: 0, triangleCount: 2 * n }],
+      edges: []
+    };
+  }
+  const top = DRAWING_VIEW_FRAMES.top;
+
+  it('finds none on a wall seen along its axis, however its facets lean', () => {
+    // Exactly along the axis no facet shows; with the far end 0.3 µm off
+    // the cylinder each leans a little, one way and the other.
+    expect(bodySilhouettes(wall([0, 0, 1], 0), top, 1e-9)).toEqual([]);
+    expect(bodySilhouettes(wall([0, 0, 1], 3e-4), top, 1e-9)).toEqual([]);
+  });
+
+  it('still outlines a wall that shows, and a ragged one as before', () => {
+    // Tilted two degrees the wall shows 0.7 mm of itself: two silhouettes
+    // along it, ragged end or not.
+    const tilt = Math.tan((2 * Math.PI) / 180);
+    for (const ragged of [0, 3e-4]) {
+      const lines = bodySilhouettes(wall([tilt, 0, 1], ragged), top, 1e-9);
+      expect(lines).toHaveLength(2);
+      for (const line of lines) expect(line.points).toHaveLength(6);
+    }
+    // Without faces there is nothing to judge a wall by: unchanged.
+    const bare = { ...wall([0, 0, 1], 3e-4), faces: undefined };
+    expect(bodySilhouettes(bare, top, 1e-9).length).toBeGreaterThan(0);
   });
 });
 

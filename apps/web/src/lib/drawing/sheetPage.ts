@@ -762,6 +762,229 @@ const HIDDEN_JOIN_MM = 1e-3;
 const HIDDEN_JOIN_MIN_COS = Math.cos(0.24 + 1e-6);
 
 /**
+ * The display tessellation's angular step (`angularDeflection`), with room
+ * for roundoff: the most one smooth curve's chords turn from one to the next.
+ */
+const HIDDEN_CURVE_STEP = 0.24 + 1e-6;
+/**
+ * The furthest apart two hidden lines may run and still be one line drawn
+ * twice (mm): half the hidden pen, so they print on top of each other.
+ */
+const HIDDEN_SAME_LINE_MAX_MM = SHEET_STROKE_WIDTH_MM.hidden / 2;
+/**
+ * The least two chords of one curve agree in direction, as a cosine: each
+ * may lean its own step from the curve.
+ */
+const HIDDEN_SAME_LINE_MIN_COS = Math.cos(2 * HIDDEN_CURVE_STEP);
+/**
+ * How far past a chord's end a point beside it may lie, per unit of its
+ * distance from the chord, and still be beside that chord: where one
+ * curve's chords meet, the wedge outside their corner belongs to both.
+ */
+const HIDDEN_SAME_LINE_WEDGE = Math.tan(HIDDEN_CURVE_STEP / 2);
+/** The cell of the grid the drawn hidden segments are filed in (mm). */
+const HIDDEN_CELL_MM = 2;
+
+/**
+ * #2073: a view's hidden lines with each place on the paper drawn once.
+ * Two edges often project onto one curve — a radial port's rim and the
+ * saddle it cuts in the bore, seen along the port — and one edge onto
+ * itself: that saddle seen from the side, out along its near half and back
+ * along its far one. Each pass is sampled at its own points, so no piece
+ * of one repeats a piece of the other and both would be drawn, each with
+ * its own dashes: the dashes of one fill the gaps of the other and the
+ * hidden curve prints solid.
+ *
+ * A segment is dropped when its ends and middle each lie beside a segment
+ * already kept that runs the same way (within `HIDDEN_SAME_LINE_MIN_COS`),
+ * no further off than their tessellations account for: what each chord may
+ * sit from its curve (its length times the angle the line turns at its
+ * ends, over four — a chord's sagitta doubled, as `triangleSag` has it; a
+ * turn past the tessellation's step is a corner, not a curve), plus
+ * `HIDDEN_JOIN_MM`, and never more than `HIDDEN_SAME_LINE_MAX_MM`. So two
+ * straight lines are one only within `HIDDEN_JOIN_MM`, and curves a visible
+ * distance apart stay two however coarsely they are sampled. Beside means
+ * abreast of it, not beyond its end (the end being a point `HIDDEN_JOIN_MM`
+ * across): a line that carries on from the end of another is not a repeat
+ * of it, however short its first piece.
+ *
+ * An edge is all the lines of one source (`sources`), or one line without.
+ * The longer edge is kept first (the earlier, of two as long), and along a
+ * line the earlier segment. What is left of a line keeps its order, each
+ * unbroken stretch a line of its own.
+ */
+function hiddenLinesDrawnOnce(
+  lines: readonly (readonly number[])[],
+  sources?: ArrayLike<number | undefined>
+): {
+  lines: readonly (readonly number[])[];
+  sources: ArrayLike<number | undefined> | undefined;
+} {
+  const unitOf: number[] = [];
+  const unitLength: number[] = [];
+  const unitIds = new Map<string, number>();
+  const lengths: number[][] = [];
+  lines.forEach((line, index) => {
+    const source = sources?.[index];
+    const key = source === undefined ? `l${index}` : `e${source}`;
+    let unit = unitIds.get(key);
+    if (unit === undefined) {
+      unit = unitLength.length;
+      unitIds.set(key, unit);
+      unitLength.push(0);
+    }
+    unitOf.push(unit);
+    const own: number[] = [];
+    for (let i = 2; i + 1 < line.length; i += 2) {
+      const length = Math.hypot(
+        line[i]! - line[i - 2]!,
+        line[i + 1]! - line[i - 1]!
+      );
+      own.push(length);
+      unitLength[unit]! += length;
+    }
+    lengths.push(own);
+  });
+
+  /** What each segment may sit from the curve it samples. */
+  const allowance = (line: readonly number[], own: number[]): number[] => {
+    const turn: number[] = [0];
+    for (let i = 2; i + 3 < line.length; i += 2) {
+      const [ax, ay] = [line[i]! - line[i - 2]!, line[i + 1]! - line[i - 1]!];
+      const [bx, by] = [line[i + 2]! - line[i]!, line[i + 3]! - line[i + 1]!];
+      const angle = Math.abs(Math.atan2(ax * by - ay * bx, ax * bx + ay * by));
+      turn.push(angle <= HIDDEN_CURVE_STEP ? angle : 0);
+    }
+    turn.push(0);
+    return own.map(
+      (length, s) => (length * Math.max(turn[s]!, turn[s + 1]!)) / 4
+    );
+  };
+
+  // The segments kept so far (two ends and an allowance each), filed under
+  // the cells they pass through.
+  const kept: number[] = [];
+  const cells = new Map<string, number[]>();
+  const file = (
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number,
+    slack: number
+  ) => {
+    const id = kept.length;
+    kept.push(ax, ay, bx, by, slack);
+    const steps = Math.max(
+      1,
+      Math.ceil(Math.hypot(bx - ax, by - ay) / (HIDDEN_CELL_MM / 2))
+    );
+    for (let k = 0; k <= steps; k += 1) {
+      const x = ax + ((bx - ax) * k) / steps;
+      const y = ay + ((by - ay) * k) / steps;
+      const key = `${Math.floor(x / HIDDEN_CELL_MM)},${Math.floor(y / HIDDEN_CELL_MM)}`;
+      const cell = cells.get(key);
+      if (!cell) cells.set(key, [id]);
+      else if (cell.at(-1) !== id) cell.push(id);
+    }
+  };
+  /** Whether a kept segment runs through (x, y) the way (dx, dy) does. */
+  const drawn = (
+    x: number,
+    y: number,
+    dx: number,
+    dy: number,
+    slack: number
+  ): boolean => {
+    const cx = Math.floor(x / HIDDEN_CELL_MM);
+    const cy = Math.floor(y / HIDDEN_CELL_MM);
+    for (let i = -1; i <= 1; i += 1)
+      for (let j = -1; j <= 1; j += 1)
+        for (const id of cells.get(`${cx + i},${cy + j}`) ?? []) {
+          const ax = kept[id]!;
+          const ay = kept[id + 1]!;
+          const ex = kept[id + 2]! - ax;
+          const ey = kept[id + 3]! - ay;
+          const length = Math.hypot(ex, ey);
+          if (Math.abs(dx * ex + dy * ey) < HIDDEN_SAME_LINE_MIN_COS * length)
+            continue;
+          const along = ((x - ax) * ex + (y - ay) * ey) / length;
+          const off = Math.abs((x - ax) * ey - (y - ay) * ex) / length;
+          if (
+            off <=
+              Math.min(
+                HIDDEN_SAME_LINE_MAX_MM,
+                slack + kept[id + 4]! + HIDDEN_JOIN_MM
+              ) &&
+            Math.max(-along, along - length) <=
+              HIDDEN_JOIN_MM + off * HIDDEN_SAME_LINE_WEDGE
+          )
+            return true;
+        }
+    return false;
+  };
+
+  const order = unitLength
+    .map((_, unit) => unit)
+    .sort((a, b) => unitLength[b]! - unitLength[a]! || a - b);
+  const linesOf: number[][] = unitLength.map(() => []);
+  unitOf.forEach((unit, index) => linesOf[unit]!.push(index));
+  /** Per line, whether each of its segments is drawn already. */
+  const dropped: (boolean[] | undefined)[] = lines.map(() => undefined);
+  let any = false;
+  for (const unit of order)
+    for (const index of linesOf[unit]!) {
+      const line = lines[index]!;
+      const slacks = allowance(line, lengths[index]!);
+      const flags = lengths[index]!.map((length, s) => {
+        if (!(length > 0)) return false;
+        const [ax, ay] = [line[s * 2]!, line[s * 2 + 1]!];
+        const [bx, by] = [line[s * 2 + 2]!, line[s * 2 + 3]!];
+        const [dx, dy] = [(bx - ax) / length, (by - ay) / length];
+        const slack = slacks[s]!;
+        if (
+          drawn(ax, ay, dx, dy, slack) &&
+          drawn((ax + bx) / 2, (ay + by) / 2, dx, dy, slack) &&
+          drawn(bx, by, dx, dy, slack)
+        )
+          return true;
+        file(ax, ay, bx, by, slack);
+        return false;
+      });
+      if (flags.includes(true)) {
+        dropped[index] = flags;
+        any = true;
+      }
+    }
+  if (!any) return { lines, sources };
+
+  const outLines: (readonly number[])[] = [];
+  const outSources: (number | undefined)[] = [];
+  lines.forEach((line, index) => {
+    const flags = dropped[index];
+    if (!flags) {
+      outLines.push(line);
+      outSources.push(sources?.[index]);
+      return;
+    }
+    let stretch: number[] = [];
+    const flush = () => {
+      if (stretch.length >= 4) {
+        outLines.push(stretch);
+        outSources.push(sources?.[index]);
+      }
+      stretch = [];
+    };
+    flags.forEach((drop, s) => {
+      if (drop) return flush();
+      if (stretch.length === 0) stretch.push(line[s * 2]!, line[s * 2 + 1]!);
+      stretch.push(line[s * 2 + 2]!, line[s * 2 + 3]!);
+    });
+    flush();
+  });
+  return { lines: outLines, sources: sources ? outSources : undefined };
+}
+
+/**
  * #2073: a view's hidden lines on the paper as the fewest continuous runs:
  * every repeated segment once, and pieces that meet end to end, with
  * nothing else meeting them there, joined into one polyline (closed where
@@ -785,11 +1008,16 @@ const HIDDEN_JOIN_MIN_COS = Math.cos(0.24 + 1e-6);
  * after the corner would not print at all. Ends are one point when the
  * distance between them (not each coordinate's) is within `HIDDEN_JOIN_MM`.
  * Pure and order-preserving, so the same lines always give the same runs.
+ *
+ * Before any of that, what two edges draw in one place is drawn once
+ * (`hiddenLinesDrawnOnce`): two samplings of one curve share no piece to
+ * be found repeated, and each would carry dashes of its own.
  */
 export function joinHiddenRuns(
-  lines: readonly (readonly number[])[],
-  sources?: ArrayLike<number | undefined>
+  drawnLines: readonly (readonly number[])[],
+  drawnSources?: ArrayLike<number | undefined>
 ): { points: number[]; closed: boolean }[] {
+  const { lines, sources } = hiddenLinesDrawnOnce(drawnLines, drawnSources);
   const q = HIDDEN_JOIN_MM;
   const xs: number[] = [];
   const ys: number[] = [];
