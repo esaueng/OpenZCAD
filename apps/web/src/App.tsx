@@ -131,13 +131,15 @@ import {
   type ExportScope
 } from './lib/exportScope';
 import {
-  SAVE_PREVIEW_EXPORT_REASON,
   SAVE_PREVIEW_MEASURE_REASON,
-  SAVE_PREVIEW_SHARE_REASON,
+  previewLiveOutputRefusal,
   projectSectionView,
+  savePreviewContextKey,
   viewportMeasurementAnnotations,
+  viewportOverlayDocument,
   viewportSectionView,
-  viewportStoredUnits
+  viewportStoredUnits,
+  type PreviewLiveOutput
 } from './lib/saveStatePreview';
 import {
   NO_ROW_DRAW,
@@ -438,7 +440,11 @@ import {
   sketchRelationKeepOuts,
   sketchRelationStrokes
 } from './lib/sketch/relationGlyphs';
-import { toggledSketchVisibility } from './lib/sketch/visibilityOverrides';
+import {
+  consumedSketchIds as consumedSketchIdsOf,
+  hiddenSketchIds as hiddenSketchIdsOf,
+  toggledSketchVisibility
+} from './lib/sketch/visibilityOverrides';
 import {
   sketchGeometryDeleteRefusal,
   sketchSolveEvidenceKey
@@ -1128,7 +1134,12 @@ import {
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import type { AutoFrameRequest } from './lib/autoFrame';
 import { useStoredUnitCamera } from './hooks/useStoredUnitCamera';
-import { legacyViewUnits, scaledSectionView } from './lib/storedUnitView';
+import {
+  legacyViewUnits,
+  scaledCameraPose,
+  scaledSectionView,
+  storedUnitFactor
+} from './lib/storedUnitView';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
 import {
   faceSketchAttachment,
@@ -3938,6 +3949,8 @@ export function App() {
      */
     recovered?: boolean;
   } | null>(null);
+  const savePreviewRef = useRef(savePreview);
+  savePreviewRef.current = savePreview;
   /**
    * L03: counts preview requests. A preview builds before it shows, and
    * whatever ends a shown preview (a workspace switch, another tool,
@@ -4672,7 +4685,9 @@ export function App() {
     onCameraSettled: persistCameraPose,
     persistSection: persistSectionView,
     rescale: rescaleProjectView,
-    forget: forgetProjectView
+    forget: forgetProjectView,
+    suspend: suspendProjectView,
+    resume: resumeProjectView
   } = useProjectView(
     doc?.projectId ?? null,
     (onScreen) => persistedHiddenBodyIds(onScreen, currentBodyIsolation),
@@ -8434,6 +8449,11 @@ export function App() {
   const viewportUnits = doc
     ? viewportStoredUnits(doc.units, savePreviewActive ? savePreview : null)
     : undefined;
+  // #2422: and its overlays (sketches with what consumes them, reference
+  // images, datums) are read from the document it draws.
+  const overlayDocument = doc
+    ? viewportOverlayDocument(doc, savePreviewActive ? savePreview : null)
+    : null;
   const savePreviewActiveRef = useRef(savePreviewActive);
   savePreviewActiveRef.current = savePreviewActive;
   const projectEditDisabledReason =
@@ -10671,9 +10691,10 @@ export function App() {
   );
   // #2422: a previewed version outlines its own sketches, on screen and in
   // a PNG of the view; the project's later ones are not drawn over it.
-  const sketchShownInstead = savePreviewActive
-    ? savePreview.document
-    : viewerRowDocument;
+  const sketchShownInstead =
+    overlayDocument && overlayDocument !== doc
+      ? overlayDocument
+      : viewerRowDocument;
   /**
    * F06: the sketches the viewport outlines, read from the document whose
    * solids it draws. View showing another row draws that row's solved
@@ -11807,9 +11828,9 @@ export function App() {
         ? exportScopeLabel(exportScopeInfo)
         : null;
   // Every control that names why nothing exports names the preview first.
-  const emptyExportReason = savePreviewActive
-    ? SAVE_PREVIEW_EXPORT_REASON
-    : emptyExportMessage(exportScopeInfo);
+  const emptyExportReason =
+    previewLiveOutputRefusal(savePreviewActive, 'export-step') ??
+    emptyExportMessage(exportScopeInfo);
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -12087,6 +12108,24 @@ export function App() {
     renderedRepresentations,
     viewerBodies: completedViewerBodies,
     setStatus
+  });
+  // #2422: where a save preview still building was asked from. Leaving it
+  // any way (a workspace, a tool, a sketch, an edit, Measure, the Revisions
+  // panel closed or moved, another project) ends that request when it lands.
+  const savePreviewContextRef = useRef('');
+  savePreviewContextRef.current = savePreviewContextKey({
+    projectId: doc?.projectId ?? null,
+    workspaceMode: resolvedWorkspaceMode,
+    revisions: [
+      panelStatus(panelLayout, 'revisions'),
+      panelLayout.phoneLane ?? null,
+      panelLayout.options.hidden,
+      compactPanel
+    ],
+    tool,
+    sketching: interaction.mode === 'sketch',
+    editing: modelingEditFeature !== null,
+    measuring
   });
   /**
    * M13: the measurement row under the pointer or focus. Its edges and
@@ -16010,6 +16049,12 @@ export function App() {
     ? {
         projectId: doc.projectId,
         units: doc.units,
+        // #2422: the list is the project's; the view on screen frames the
+        // previewed version, so none is saved, renamed or deleted from it.
+        writeRefusal: previewLiveOutputRefusal(
+          savePreviewActive,
+          'saved-views'
+        ),
         capture() {
           const snapshot = projectViewSnapshot();
           return snapshot
@@ -16053,7 +16098,18 @@ export function App() {
               ...(view.sectionView ? { sectionView: view.sectionView } : {})
             };
           });
-          requestView({ pose: view.camera, projection: view.projection });
+          // A saved view is in the project's unit; over a previewed version
+          // the camera frames the same place in the version's.
+          requestView({
+            pose:
+              viewportUnits && viewportUnits !== doc.units
+                ? scaledCameraPose(
+                    view.camera,
+                    storedUnitFactor(doc.units, viewportUnits)
+                  )
+                : view.camera,
+            projection: view.projection
+          });
           persistSectionView(view.sectionView);
           if (view.sectionView) void requestExactSection(view.sectionView);
           setStatus(`${view.name}.`);
@@ -16321,6 +16377,41 @@ export function App() {
         : viewerSettings,
     [viewerSettings, projectUnits, viewportUnits]
   );
+
+  // #2422: a previewed version is looked at with the project's view held.
+  // Framing, cutting, hiding and display choices made over the version are
+  // of its geometry, in its stored unit: none is written to the project,
+  // and the project's own view is back, as it was, when the preview ends.
+  useEffect(() => {
+    if (!savePreviewActive) return;
+    const projectId = doc?.projectId ?? null;
+    const remembered = rememberedSection.current;
+    suspendProjectView();
+    return () => {
+      const restored = resumeProjectView();
+      if (!restored) return;
+      // After this commit's effects: the remembered cut follows the section
+      // on screen, which is still the one set over the version.
+      queueMicrotask(() => {
+        rememberedSection.current = remembered;
+      });
+      // The exact section on screen was cut from the version.
+      clearSectionOutline();
+      restoredSectionRequestTokenRef.current = null;
+      pendingSectionRestoreRef.current = restored.sectionView
+        ? projectId
+        : null;
+      if (restored.pose)
+        requestView({
+          pose: restored.pose,
+          projection: restored.projection,
+          instant: true
+        });
+    };
+    // Entered and left with the preview alone; the handlers are the entering
+    // render's, which is the one that knows what to put back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savePreviewActive]);
 
   function turnSectionViewOff() {
     if (!viewerSettingsRef.current.sectionView) return;
@@ -16742,6 +16833,9 @@ export function App() {
       const pending = pendingReferenceImageRef.current?.image;
       const images = [
         ...(managerRef.current?.document.referenceImages?.images ?? []),
+        // A previewed version's own pictures, which the project may have
+        // removed since.
+        ...(savePreviewRef.current?.document.referenceImages?.images ?? []),
         ...(pending ? [pending] : [])
       ].filter(
         (candidate) => candidate.source.checksumSha256 === checksumSha256
@@ -16755,59 +16849,28 @@ export function App() {
   );
 
   /** Sketches referenced by any feature: extrude/revolve, loft sections, sweep profile + path. */
-  const consumedSketchIds = useMemo(() => {
-    const consumed = new Set<string>();
-    if (!doc) {
-      return consumed;
-    }
-    for (const feature of listFeaturesInOrder(doc)) {
-      const data = feature.data as {
-        featureKind: string;
-        sketchId?: string;
-        sections?: { sketchId: string }[];
-        profile?: { sketchId?: string };
-        path?: { sketchId?: string };
-        guide?: { sketchId?: string };
-      };
-      // A sketch feature's own row references its sketch without consuming it.
-      if (data.featureKind === 'sketch') {
-        continue;
-      }
-      if (typeof data.sketchId === 'string') {
-        consumed.add(data.sketchId);
-      }
-      for (const section of data.sections ?? []) {
-        consumed.add(section.sketchId);
-      }
-      if (typeof data.profile?.sketchId === 'string') {
-        consumed.add(data.profile.sketchId);
-      }
-      if (typeof data.path?.sketchId === 'string') {
-        consumed.add(data.path.sketchId);
-      }
-      // A sweep's guide rail is consumed by the sweep exactly as its path is.
-      if (typeof data.guide?.sketchId === 'string') {
-        consumed.add(data.guide.sketchId);
-      }
-    }
-    return consumed;
-  }, [doc]);
+  const consumedSketchIds = useMemo(
+    () => (doc ? consumedSketchIdsOf(doc) : new Set<string>()),
+    [doc]
+  );
 
-  const hiddenSketchIds = useMemo(() => {
-    const hidden = new Set<string>();
-    if (!doc) {
-      return hidden;
-    }
-    for (const sketch of listNodesByKind(doc, 'sketch')) {
-      const visible =
-        sketchVisibilityOverrides[sketch.sketchId] ??
-        !consumedSketchIds.has(sketch.sketchId);
-      if (!visible) {
-        hidden.add(sketch.sketchId);
-      }
-    }
-    return hidden;
-  }, [doc, sketchVisibilityOverrides, consumedSketchIds]);
+  const hiddenSketchIds = useMemo(
+    () =>
+      doc
+        ? hiddenSketchIdsOf(doc, sketchVisibilityOverrides, consumedSketchIds)
+        : new Set<string>(),
+    [doc, sketchVisibilityOverrides, consumedSketchIds]
+  );
+  // #2422: what the viewport leaves undrawn is decided on the document it
+  // draws. A previewed version hides the sketches its own features consume;
+  // the project's later features do not hide a sketch the version shows.
+  const viewportHiddenSketchIds = useMemo(
+    () =>
+      overlayDocument && overlayDocument !== doc
+        ? hiddenSketchIdsOf(overlayDocument, sketchVisibilityOverrides)
+        : hiddenSketchIds,
+    [overlayDocument, doc, sketchVisibilityOverrides, hiddenSketchIds]
+  );
 
   function toggleSketchVisibility(sketchId: string) {
     const show = hiddenSketchIds.has(sketchId);
@@ -17989,6 +18052,15 @@ export function App() {
     reportToDialog = false
   ) {
     if (accountSavePendingRef.current) return;
+    // #2422: the copy saved is the project's, not the version on screen.
+    if (project.projectId === managerRef.current?.document.projectId) {
+      const refusal = previewLiveOutputReason('save-to-account');
+      if (refusal !== null) {
+        setStatus(refusal);
+        if (reportToDialog) throw new Error(refusal);
+        return;
+      }
+    }
     if (!session) {
       setStatus('Sign in to save this project to your account.');
       return;
@@ -19872,9 +19944,11 @@ export function App() {
     const current = manager?.document;
     if (!manager || !current || shareSessionRef.current) return;
     const request = ++savePreviewRequestRef.current;
+    const context = savePreviewContextRef.current;
     const superseded = () =>
       managerRef.current !== manager ||
-      savePreviewRequestRef.current !== request;
+      savePreviewRequestRef.current !== request ||
+      savePreviewContextRef.current !== context;
     setBusy(true);
     try {
       const loaded = await loadPreviewSaveState(current.projectId, checkpoint);
@@ -22542,7 +22616,11 @@ export function App() {
     bodyId: string;
     topologyId: string;
   }) {
-    if (exportBlockedByPreview() || exportBlockedByUpdate() || !doc) {
+    if (
+      previewBlocksLiveOutput('export-face-dxf') ||
+      exportBlockedByUpdate() ||
+      !doc
+    ) {
       return;
     }
     // F06: the face is picked on the row View shows, so it is that row's.
@@ -22599,7 +22677,7 @@ export function App() {
    */
   function openFlatPattern(featureId?: FeatureId) {
     const current = managerRef.current?.document;
-    if (!current || exportBlockedByPreview()) return;
+    if (!current || previewBlocksLiveOutput('export-flat-pattern')) return;
     const target = flatPatternTarget(current, featureId);
     if ('error' in target) {
       setStatus(target.error);
@@ -22659,7 +22737,7 @@ export function App() {
     // No rebuild guard: the sketch is read from the saved document, and the
     // worker queues the export behind any rebuild in flight. The dialog
     // offers SVG while the model updates, so it must be able to deliver it.
-    if (!doc || exportBlockedByPreview()) {
+    if (!doc || previewBlocksLiveOutput('export-sketch')) {
       return;
     }
     // F06: the sketch as the row View shows it, at that row's sizes.
@@ -23063,7 +23141,7 @@ export function App() {
 
   /** F06: opens the mesh dialog on the row View shows. */
   function openMeshExport() {
-    if (exportBlockedByPreview()) return;
+    if (previewBlocksLiveOutput('export-mesh')) return;
     setExportRowId(shownExportRowId);
     setMeshExportOpen(true);
   }
@@ -23125,13 +23203,22 @@ export function App() {
   }
 
   /**
-   * #2366: whether an export is refused because a saved version is on
-   * screen, said in the status. The exports read the project, so writing
-   * one now would hand over a model other than the one being looked at.
+   * #2422: the central preview gate. Why `output` is refused while a saved
+   * version is on screen, or null. Every export, share, account save and
+   * saved-view write asks here (`PREVIEW_LIVE_OUTPUTS` names them all):
+   * each reads the project, so running one now would hand over a model
+   * other than the one being looked at. Read through the ref, so a caller
+   * that began before the preview opened is refused too.
    */
-  function exportBlockedByPreview() {
-    if (!savePreviewActive) return false;
-    setStatus(SAVE_PREVIEW_EXPORT_REASON);
+  function previewLiveOutputReason(output: PreviewLiveOutput) {
+    return previewLiveOutputRefusal(savePreviewActiveRef.current, output);
+  }
+
+  /** The gate for a handler: refuses `output` in the status line. */
+  function previewBlocksLiveOutput(output: PreviewLiveOutput) {
+    const reason = previewLiveOutputReason(output);
+    if (reason === null) return false;
+    setStatus(reason);
     return true;
   }
 
@@ -23153,12 +23240,13 @@ export function App() {
   }
 
   /**
-   * The export scope for `rowId` when an export can start now, or null
-   * once the status says why not: the model is still updating, the
+   * The export scope for `rowId` when `output` can start now, or null once
+   * the status says why not: a saved version is previewed (the central
+   * preview gate), the model is still updating, the
    * configuration cannot be exported, or there is nothing to export.
    */
-  function readyExportTarget(rowId: string | null) {
-    if (exportBlockedByPreview() || exportBlockedByUpdate()) {
+  function readyExportTarget(output: PreviewLiveOutput, rowId: string | null) {
+    if (previewBlocksLiveOutput(output) || exportBlockedByUpdate()) {
       return null;
     }
     let target: ReturnType<typeof exportTarget>;
@@ -23180,7 +23268,7 @@ export function App() {
    * scope's bodies laid flat as one layered DXF.
    */
   function handleExportCncLayout() {
-    const target = readyExportTarget(shownExportRowId);
+    const target = readyExportTarget('export-cnc-layout', shownExportRowId);
     if (!target || !doc) return;
     const source = doc;
     const stem = exportStemFor(target.rowName);
@@ -23205,7 +23293,7 @@ export function App() {
 
   /** I06: File › Export IGES, run from its lazy module. */
   function handleExportIges() {
-    const target = readyExportTarget(shownExportRowId);
+    const target = readyExportTarget('export-iges', shownExportRowId);
     if (!target || !doc) return;
     const source = doc;
     const fileName = `${exportStemFor(target.rowName)}.igs`;
@@ -23228,7 +23316,7 @@ export function App() {
   }
 
   async function handleExportStep(rowId: string | null = shownExportRowId) {
-    const target = readyExportTarget(rowId);
+    const target = readyExportTarget('export-step', rowId);
     if (!target || !doc) {
       return;
     }
@@ -23274,7 +23362,7 @@ export function App() {
     deflection: number,
     tolerances: { angularTolerance?: number } & MeshExportPackage = {}
   ) {
-    const target = readyExportTarget(exportRowId);
+    const target = readyExportTarget('export-mesh', exportRowId);
     if (!target || !doc) {
       return;
     }
@@ -23313,7 +23401,7 @@ export function App() {
     deflection: number,
     tolerances: { angularTolerance?: number } = {}
   ) {
-    const written = readyExportTarget(exportRowId);
+    const written = readyExportTarget('open-in-slicer', exportRowId);
     if (!written || !doc) {
       return;
     }
@@ -23365,8 +23453,9 @@ export function App() {
       onProgress?(progress: ExportProgress): void;
     }
   ) {
-    if (savePreviewActive) {
-      return Promise.reject(new Error(SAVE_PREVIEW_EXPORT_REASON));
+    const refusal = previewLiveOutputReason('check-printability');
+    if (refusal !== null) {
+      return Promise.reject(new Error(refusal));
     }
     let target: ReturnType<typeof exportTarget>;
     try {
@@ -28533,6 +28622,7 @@ export function App() {
       void handleExportStep(rowId);
       return;
     }
+    if (previewBlocksLiveOutput('export-mesh')) return;
     setExportRowId(rowId === doc?.configurations?.activeRowId ? null : rowId);
     setMeshExportOpen(true);
   }
@@ -29389,7 +29479,11 @@ export function App() {
       // Consumed sketches auto-hide (Shapr-style); the history row's eye
       // overrides either way. The in-session sketch always renders its rig.
       if (
-        !sketchViewShown(sketch.sketchId, hiddenSketchIds, movingSketch) &&
+        !sketchViewShown(
+          sketch.sketchId,
+          viewportHiddenSketchIds,
+          movingSketch
+        ) &&
         !active &&
         !modelingEditFeature &&
         !inPlaceEditInputSketchIds.has(sketch.sketchId)
@@ -29512,7 +29606,7 @@ export function App() {
     // diagnostic until something unrelated invalidates the memo.
     textFontsVersion,
     textOutlineBudgetError,
-    hiddenSketchIds,
+    viewportHiddenSketchIds,
     movingSketch,
     modelingEditFeature,
     inPlaceEditInputSketchIds
@@ -31701,9 +31795,14 @@ export function App() {
         (view) =>
           view.active ||
           inPlaceEditSketchIds.has(view.sketchId) ||
-          sketchViewShown(view.sketchId, hiddenSketchIds, movingSketch)
+          sketchViewShown(view.sketchId, viewportHiddenSketchIds, movingSketch)
       ),
-    [availableSketchViews, hiddenSketchIds, movingSketch, inPlaceEditSketchIds]
+    [
+      availableSketchViews,
+      viewportHiddenSketchIds,
+      movingSketch,
+      inPlaceEditSketchIds
+    ]
   );
   // E2E builds only: the sketches the viewport outlines, so a spec can tell
   // whose sketches a previewed version is drawn with (#2422).
@@ -40040,11 +40139,12 @@ export function App() {
       keywords: ['laser', 'outline', 'flat', 'cut'],
       icon: <Download size={16} aria-hidden="true" />,
       disabledReason:
-        currentGeometrySnapshot !== null
+        previewLiveOutputRefusal(savePreviewActive, 'export-face-dxf') ??
+        (currentGeometrySnapshot !== null
           ? 'Wait for the model to finish updating'
           : normalToFaceTarget
             ? null
-            : 'Select a planar face first',
+            : 'Select a planar face first'),
       run: () => {
         if (normalToFaceTarget) {
           void handleExportFaceDxf(normalToFaceTarget);
@@ -40073,7 +40173,9 @@ export function App() {
       group: 'File',
       keywords: ['sheet metal', 'dxf', 'bend', 'unfold', 'laser', 'brake'],
       icon: <SquareDashed size={16} aria-hidden="true" />,
-      disabledReason: hasSheetMetal ? null : 'Needs a sheet-metal part',
+      disabledReason:
+        previewLiveOutputRefusal(savePreviewActive, 'export-flat-pattern') ??
+        (hasSheetMetal ? null : 'Needs a sheet-metal part'),
       run: () => openFlatPattern(selectedSheetMetal?.featureId)
     },
     {
@@ -42837,7 +42939,7 @@ export function App() {
             datumDocument={
               inPlace.active && inPlaceSpec?.refKinds && previewDoc
                 ? previewDoc
-                : doc
+                : (overlayDocument ?? doc)
             }
             placementPlane={
               modelingLocked
@@ -42881,8 +42983,10 @@ export function App() {
                     hiddenReferenceImageIds,
                     inPlace.request.image.imageId
                   )
-                : referenceImageDisplays(
-                    doc,
+                : // #2422: a previewed version's own pictures, not ones the
+                  // project added since.
+                  referenceImageDisplays(
+                    overlayDocument ?? doc,
                     hiddenReferenceImageIds,
                     tool === 'reference-image' ? openReferenceImageId : null,
                     tool === 'reference-image' ? referenceImageDraft : null
@@ -43819,14 +43923,11 @@ export function App() {
                 bodyRepresentations={representations}
                 scope={parameterScope.scope}
                 bodies={bodyOptions}
-                // #2422: a feature's values are the project's; a picked body
-                // or face is measured on the geometry on screen, a previewed
-                // version's in its own stored unit.
-                units={
-                  selectedFeature || selectedSketch
-                    ? doc.units
-                    : (viewportUnits ?? doc.units)
-                }
+                // #2422: a feature's values are the project's. The panel
+                // reads each body or face in the stored unit of the document
+                // its geometry is from (`massPropertiesDocument`), a
+                // previewed version's own.
+                units={doc.units}
                 commandSession={commandSession}
                 featureSelectionSource={featureSelectionSource}
                 directPickDetails={editFaceOpen}
@@ -45061,6 +45162,8 @@ export function App() {
                   handleSaveToAccount(summarizeLocalDocument(doc), true)
                 }
                 onBeforeCreateShareLink={async () => {
+                  const refusal = previewLiveOutputReason('share-link');
+                  if (refusal !== null) throw new Error(refusal);
                   await flushPendingLocalSave();
                   const controller = cloudProjectAutosaveRef.current;
                   await controller?.flushPending();
@@ -45123,14 +45226,13 @@ export function App() {
                   setSharingOpen(false);
                   void handleGoHome();
                 }}
-                // #2422: a previewed version is on screen, and freezing would
-                // publish the project behind it.
-                frozenShareRefusal={
-                  savePreviewActive ? SAVE_PREVIEW_SHARE_REASON : null
-                }
+                // #2422: a previewed version is on screen, and a link, an
+                // invitation or an account save would hand over the project
+                // behind it. The dialog asks the central preview gate.
+                outputRefusal={previewLiveOutputReason}
                 onFreezeModel={async (options) => {
-                  if (savePreviewActiveRef.current)
-                    throw new Error(SAVE_PREVIEW_SHARE_REASON);
+                  const refusal = previewLiveOutputReason('share-frozen-model');
+                  if (refusal !== null) throw new Error(refusal);
                   // L08: a link without history shares the model as this
                   // tab shows it now, saved or not.
                   const current = managerRef.current?.document;

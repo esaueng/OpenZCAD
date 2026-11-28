@@ -296,6 +296,24 @@ const CONFIRMABLE_STATES = new Set<OwnerInvitation['state']>([
   'confirm-re-add'
 ]);
 
+/** What a sharing action hands out; see `outputRefusal`. */
+export type SharingOutput =
+  'save-to-account' | 'share-link' | 'share-frozen-model' | 'share-invite';
+
+/**
+ * The output an action of this dialog hands out, by its `mutate` key, or
+ * null for one that hands out nothing (revoke, remove, rename, decline,
+ * leave). Every action runs through `mutate`, so this is the dialog's one
+ * place a refusal is asked.
+ */
+export function sharingActionOutput(key: string): SharingOutput | null {
+  if (key === 'save-account') return 'save-to-account';
+  if (key === 'share-link:create' || key.startsWith('share-link:update:'))
+    return 'share-link';
+  if (key === 'invite') return 'share-invite';
+  return null;
+}
+
 export interface ProjectSharingDialogProps {
   projectId: string;
   localProject?: boolean;
@@ -315,12 +333,13 @@ export interface ProjectSharingDialogProps {
    */
   onFreezeModel?(options?: { parameters?: boolean }): Promise<ProjectDocument>;
   /**
-   * Why no model is frozen into a link right now, when one is not: shown in
-   * place of creating or updating a link without history, before anything
-   * is frozen. A saved version previewed in place of the project is not the
-   * model `onFreezeModel` freezes.
+   * Why the project is not handed out right now, when it is not: asked
+   * before an account save, a link made or updated, or an invitation, and
+   * shown in its place before anything is saved, frozen or sent. A saved
+   * version previewed in place of the project is not the model any of them
+   * hands out. Revoking, removing, renaming and leaving are never refused.
    */
-  frozenShareRefusal?: string | null;
+  outputRefusal?(output: SharingOutput): string | null;
   role: ProjectAccessRole | null;
   collaborationStatus: CollaborationStatus;
   collaborationFailure?: string | null;
@@ -654,7 +673,7 @@ export function ProjectSharingDialog({
   onSaveToAccount,
   onBeforeCreateShareLink,
   onFreezeModel,
-  frozenShareRefusal = null,
+  outputRefusal,
   role,
   collaborationStatus,
   collaborationFailure,
@@ -876,6 +895,10 @@ export function ProjectSharingDialog({
     setBusy(key);
     setError(null);
     try {
+      // Refused before anything is saved, frozen or sent.
+      const output = sharingActionOutput(key);
+      const refusal = output ? outputRefusal?.(output) : null;
+      if (refusal) throw new Error(refusal);
       await action();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -1894,8 +1917,6 @@ export function ProjectSharingDialog({
                       `share-link:update:${shareLink.shareLinkId}`,
                       async () => {
                         if (!onFreezeModel) return;
-                        if (frozenShareRefusal)
-                          throw new Error(frozenShareRefusal);
                         await shareLinkClient.updateProjectShareLinkSnapshot(
                           projectId,
                           shareLink.shareLinkId,
@@ -1911,8 +1932,6 @@ export function ProjectSharingDialog({
                     void mutate('share-link:create', async () => {
                       // Refused before anything is frozen or saved.
                       const label = normalizeShareLinkLabel(name);
-                      if (!history && onFreezeModel && frozenShareRefusal)
-                        throw new Error(frozenShareRefusal);
                       // L08: a link without history is the model frozen in this
                       // browser, so it waits on no save and needs no source file
                       // in the account.
@@ -1997,7 +2016,15 @@ export function ProjectSharingDialog({
                   {...(encryptedShareLinkClient
                     ? { client: encryptedShareLinkClient }
                     : {})}
-                  {...(onFreezeModel ? { onFreezeModel } : {})}
+                  {...(onFreezeModel
+                    ? {
+                        onFreezeModel: async (options) => {
+                          const refusal = outputRefusal?.('share-frozen-model');
+                          if (refusal) throw new Error(refusal);
+                          return onFreezeModel(options);
+                        }
+                      }
+                    : {})}
                   onSummary={setEncryptedLinksSummary}
                 />
               ) : null}

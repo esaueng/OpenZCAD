@@ -677,3 +677,158 @@ describe('a first view of a model shared without history', () => {
     ).toEqual(['body_owner_cover']);
   });
 });
+
+describe('a view held while something else is on screen (#2422)', () => {
+  const defaults = {
+    projection: 'perspective' as const,
+    showGrid: true,
+    displayMode: 'shaded-edges' as const,
+    reducedMotion: false,
+    zoomToCursor: true,
+    middleDrag: 'pan' as const,
+    orbitMode: 'free' as const,
+    pointerNavigation: 'auto' as const
+  };
+  // The version previewed is in millimetres under an inch project: its
+  // framing is 25.4 times further out.
+  const versionPose: ViewportCameraState = {
+    position: [711.2, -406.4, 889],
+    target: [177.8, 127, 76.2],
+    orthographicZoom: 1.25,
+    orthographicHalfHeight: 1828.8
+  };
+
+  function open() {
+    const hook = renderHook(() => useProjectView('preview-project'));
+    act(() => {
+      hook.result.current.restore('preview-project', defaults, 'inch');
+    });
+    act(() =>
+      hook.result.current.onCameraSettled('preview-project', settledPose)
+    );
+    return hook;
+  }
+
+  it('remembers nothing done over it, and puts the project’s view back', () => {
+    const { result } = open();
+    const before = workspaceSession.loadProjectView('preview-project');
+    expect(before?.camera).toEqual(settledPose);
+    expect(before?.units).toBe('inch');
+    const writes = vi.spyOn(workspaceSession, 'saveProjectView');
+
+    act(() => result.current.suspend());
+    // Fit, a cut, a display mode, hidden bodies and sketches, a reload.
+    act(() => result.current.onCameraSettled('preview-project', versionPose));
+    act(() => {
+      result.current.setProjection('orthographic');
+      result.current.setSettings((current) => ({
+        ...current,
+        displayMode: 'wireframe',
+        showGrid: false,
+        xray: true,
+        zoomToCursor: false,
+        sectionView: { plane: 'XY', offset: 127 }
+      }));
+      result.current.setHiddenBodyIds(new Set(['version-body']));
+      result.current.setSketchVisibility({ sketch_1: true });
+      result.current.setHiddenDatumIds(new Set(['datum_1']));
+      result.current.setHiddenReferenceImageIds(new Set(['image_1']));
+    });
+    act(() => result.current.persistSection({ plane: 'XY', offset: 127 }));
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    expect(writes).not.toHaveBeenCalled();
+    expect(workspaceSession.loadProjectView('preview-project')).toEqual(before);
+    // Nothing of what is on screen is offered as the project's view.
+    expect(result.current.snapshot()).toBeNull();
+
+    let landed: ReturnType<typeof result.current.resume> = null;
+    act(() => {
+      landed = result.current.resume();
+    });
+    expect(landed).toEqual({
+      pose: settledPose,
+      projection: 'perspective',
+      sectionView: undefined
+    });
+    expect(result.current.projection).toBe('perspective');
+    expect(result.current.settings).toMatchObject({
+      displayMode: 'shaded-edges',
+      showGrid: true,
+      // A device setting changed meanwhile is not the project's to undo.
+      zoomToCursor: false
+    });
+    expect(result.current.settings.sectionView).toBeUndefined();
+    expect(result.current.settings.xray).toBeUndefined();
+    expect([...result.current.hiddenBodyIds]).toEqual([]);
+    expect(result.current.sketchVisibility).toEqual({});
+    expect([...result.current.hiddenDatumIds]).toEqual([]);
+    expect([...result.current.hiddenReferenceImageIds]).toEqual([]);
+    expect(result.current.snapshot()?.camera).toEqual(settledPose);
+    const after = workspaceSession.loadProjectView('preview-project');
+    expect(after?.camera).toEqual(settledPose);
+    expect(after?.units).toBe('inch');
+    expect(after?.projection).toBe('perspective');
+    expect(after?.hiddenBodyIds).toEqual([]);
+    expect(after?.settings.sectionView).toBeUndefined();
+  });
+
+  it('remembers again once resumed', () => {
+    const { result } = open();
+    act(() => result.current.suspend());
+    act(() => {
+      result.current.resume();
+    });
+    act(() => result.current.onCameraSettled('preview-project', transientPose));
+    expect(workspaceSession.loadProjectView('preview-project')?.camera).toEqual(
+      transientPose
+    );
+  });
+
+  it('holds nothing over to another project', () => {
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useProjectView(id),
+      { initialProps: { id: 'preview-project' } }
+    );
+    act(() => {
+      result.current.restore('preview-project', defaults, 'inch');
+    });
+    act(() => result.current.onCameraSettled('preview-project', settledPose));
+    act(() => result.current.suspend());
+    // The project is switched while the version is still on screen.
+    rerender({ id: 'other-project' });
+    act(() => {
+      result.current.restore('other-project', defaults, 'mm');
+    });
+    act(() => result.current.onCameraSettled('other-project', transientPose));
+    let landed: ReturnType<typeof result.current.resume> = null;
+    act(() => {
+      landed = result.current.resume();
+    });
+    expect(landed).toBeNull();
+    expect(workspaceSession.loadProjectView('other-project')?.camera).toEqual(
+      transientPose
+    );
+    expect(workspaceSession.loadProjectView('preview-project')?.camera).toEqual(
+      settledPose
+    );
+  });
+
+  it('keeps the held view in the project’s unit through a conversion', () => {
+    const { result } = open();
+    act(() => result.current.suspend());
+    act(() => result.current.onCameraSettled('preview-project', versionPose));
+    let rescaled: ReturnType<typeof result.current.rescale> = null;
+    act(() => {
+      rescaled = result.current.rescale('inch', 'mm');
+    });
+    // Nothing on screen moves: what is shown is not the project's view.
+    expect(rescaled).toBeNull();
+    let landed: ReturnType<typeof result.current.resume> = null;
+    act(() => {
+      landed = result.current.resume();
+    });
+    expect(landed!.pose!.target[0]).toBeCloseTo(settledPose.target[0] * 25.4);
+  });
+});

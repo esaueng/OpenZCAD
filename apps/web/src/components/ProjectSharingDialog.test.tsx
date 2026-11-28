@@ -26,8 +26,14 @@ import type { ProjectShareLinkClient } from '../lib/projectShareClient';
 import { setPersonalInfoVisible } from './PersonalInfo';
 import {
   ProjectSharingDialog,
-  type EncryptedSharingClient
+  type EncryptedSharingClient,
+  sharingActionOutput
 } from './ProjectSharingDialog';
+import {
+  SAVE_PREVIEW_ACCOUNT_REASON,
+  SAVE_PREVIEW_SHARE_REASON,
+  previewLiveOutputRefusal
+} from '../lib/saveStatePreview';
 import type { OwnerInvitation } from '../lib/e2ee/invitations';
 import type { EncryptedShareLinkClient } from './EncryptedShareLinks';
 import {
@@ -2294,7 +2300,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
     const onFreezeModel = vi.fn(async () => frozenOf(base));
     const refusal =
       'A saved version is open for preview. Close it to share the project, or branch it to share that version.';
-    await open(links, { onFreezeModel, frozenShareRefusal: refusal });
+    await open(links, { onFreezeModel, outputRefusal: () => refusal });
     await openLinkOptions(user);
     await user.click(
       await screen.findByRole('checkbox', { name: 'Include history' })
@@ -2330,7 +2336,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     await openCard(/^View link · /, user);
-    rerender(<ProjectSharingDialog {...props} frozenShareRefusal={refusal} />);
+    rerender(<ProjectSharingDialog {...props} outputRefusal={() => refusal} />);
     await user.click(
       await screen.findByRole('button', {
         name: /^Update .* to the current model$/
@@ -2339,6 +2345,101 @@ describe('ProjectSharingDialog links without history (L08)', () => {
     expect(await screen.findByText(refusal)).toBeVisible();
     expect(links.updateProjectShareLinkSnapshot).not.toHaveBeenCalled();
     expect(onFreezeModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('links no project with its history while the model on screen is not the project’s (#2422)', async () => {
+    // Include history links the project itself, after flushing it to the
+    // account: neither happens over a previewed version.
+    const links = shareLinkClient();
+    const user = userEvent.setup();
+    const onBeforeCreateShareLink = vi.fn(async () => undefined);
+    const asked: string[] = [];
+    await open(links, {
+      onBeforeCreateShareLink,
+      outputRefusal: (output) => {
+        asked.push(output);
+        return SAVE_PREVIEW_SHARE_REASON;
+      }
+    });
+    await user.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    expect(await screen.findByText(SAVE_PREVIEW_SHARE_REASON)).toBeVisible();
+    expect(asked).toEqual(['share-link']);
+    expect(onBeforeCreateShareLink).not.toHaveBeenCalled();
+    expect(links.createProjectShareLink).not.toHaveBeenCalled();
+  });
+
+  it('invites no one while the model on screen is not the project’s (#2422)', async () => {
+    const sharingClient = client();
+    const user = userEvent.setup();
+    const base = createProjectDocument('Bracket', owner);
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={sharingClient}
+        shareLinkClient={shareLinkClient()}
+        outputRefusal={(output) =>
+          output === 'share-invite' ? SAVE_PREVIEW_SHARE_REASON : null
+        }
+        onClose={vi.fn()}
+      />
+    );
+    await user.type(await screen.findByLabelText('Email'), 'new@example.com');
+    await user.click(screen.getByRole('button', { name: 'Invite' }));
+    expect(await screen.findByText(SAVE_PREVIEW_SHARE_REASON)).toBeVisible();
+    expect(sharingClient.createInvitation).not.toHaveBeenCalled();
+  });
+
+  it('saves no device-only project to the account while the model on screen is not the project’s (#2422)', async () => {
+    const save = vi.fn();
+    render(
+      <ProjectSharingDialog
+        projectId="local-import"
+        role={null}
+        collaborationStatus="offline"
+        lease={null}
+        localProject
+        client={client()}
+        onSaveToAccount={save}
+        outputRefusal={(output) =>
+          output === 'save-to-account' ? SAVE_PREVIEW_ACCOUNT_REASON : null
+        }
+        onClose={() => {}}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Save to my account' })
+    );
+    expect(await screen.findByText(SAVE_PREVIEW_ACCOUNT_REASON)).toBeVisible();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('asks the preview gate for every action that hands the project out, and no other (#2422)', () => {
+    // The dialog's actions, by the key each runs under. One that hands the
+    // model or access to it out names an output the gate refuses; one that
+    // takes access away or tidies the list names none and always runs.
+    const outputs = {
+      'save-account': 'save-to-account',
+      'share-link:create': 'share-link',
+      'share-link:update:link_1': 'share-link',
+      invite: 'share-invite',
+      'share-link:rename:link_1': null,
+      'share-link:revoke:link_1': null,
+      'remove:user_1': null,
+      'decline:inv_1': null,
+      leave: null
+    } as const;
+    for (const [key, output] of Object.entries(outputs)) {
+      expect(sharingActionOutput(key), key).toBe(output);
+      if (output)
+        expect(previewLiveOutputRefusal(true, output), key).toMatch(
+          /^A saved version is open for preview\. Close it to /
+        );
+    }
   });
 
   it('Update freezes the current model into the same link', async () => {

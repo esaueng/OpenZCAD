@@ -3,6 +3,7 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument, findSketch } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
+  bodyCardFromHistory,
   createPrimitiveInPlace,
   expect,
   keepMeasurement,
@@ -586,6 +587,7 @@ test(
 
     await fitView(page);
     const live = await scalePerPixel(page, 'in');
+    const liveDistance = await cameraDistance(page);
     await expect(pins).toHaveCount(1);
 
     await revealModelPanel(page, 'Revisions');
@@ -608,6 +610,9 @@ test(
     expect(previewed / live).toBeGreaterThan(0.5);
     expect(previewed / live).toBeLessThan(2);
     await expect(notice).toBeVisible();
+    // Fitted to the version, the camera stands in its millimetres: 25.4
+    // times further out than the project's inches put it.
+    expect((await cameraDistance(page)) / liveDistance).toBeGreaterThan(10);
 
     // #2422: an edge picked on the version reads its millimetres in the
     // project's inches: about 1 in for a box edge, not its mm number.
@@ -622,20 +627,50 @@ test(
     expect(length).toBeGreaterThan(0.1);
     expect(length).toBeLessThan(5);
 
-    // #2422: a cut moved over the version is in its millimetres on screen,
-    // and stays where it was put once the preview closes: 5 mm is 0.197 in,
-    // not 5 in.
-    await page.getByRole('button', { name: /^Section view — now:/ }).click();
+    // #2422: a cut moved over the version is in its millimetres on screen.
+    const section = page.getByRole('button', { name: /^Section view — now:/ });
+    const uncut = await section.getAttribute('aria-label');
+    await section.click();
     const cut = page.getByLabel('Cut position');
     await expect(cut).toBeEnabled();
     await cut.fill('5');
     await cut.press('Enter');
     await expect(cut).toHaveValue('5');
 
+    // #2422: with a History feature of the project selected, the version's
+    // body is still measured in the version's millimetres: about an inch a
+    // side, not its millimetre number read as inches.
+    const inspector = await bodyCardFromHistory(page);
+    await expect(inspector).toContainText(/size\s*[\d.]+ × [\d.]+ × [\d.]+ in/);
+    const side = Number(
+      /size\s*([\d.]+) ×/.exec(await inspector.innerText())![1]
+    );
+    expect(side).toBeGreaterThan(0.1);
+    expect(side).toBeLessThan(5);
+    await expect(notice).toBeVisible();
+
     await notice.getByRole('button', { name: 'Close preview' }).click();
     await expect(notice).toHaveCount(0);
     await expect(pins).toHaveCount(1, READY);
-    await expect(cut).toHaveValue(/^0\.19685/);
+    // #2422: the fit and the cut were made over the version. The project's
+    // own view is as it was left: framed in its inches, with no cut.
+    await expect(section).toHaveAttribute('aria-label', uncut!);
+    await expect(cut).toHaveCount(0);
+    await expect
+      .poll(async () => (await cameraDistance(page)) / liveDistance, READY)
+      .toBeCloseTo(1, 3);
+    expect((await scalePerPixel(page, 'in')) / live).toBeCloseTo(1, 3);
+
+    // And nothing of the version's view was remembered for the project: a
+    // reload opens on the model, not 25.4 times too far out.
+    await page.waitForTimeout(700);
+    await expect(page.locator('.save-state')).toHaveClass(SAVED, READY);
+    await page.reload();
+    await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
+    await expectShownIn(page, 'Lengths are shown and typed in in.');
+    await expect
+      .poll(async () => (await cameraDistance(page)) / liveDistance, READY)
+      .toBeCloseTo(1, 3);
     expect(errors).toEqual([]);
   }
 );
