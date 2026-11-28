@@ -37,6 +37,59 @@ interface FacePoint {
   sample: { x: number; y: number };
 }
 
+declare global {
+  interface Window {
+    __settledCursor?: Promise<string>;
+  }
+}
+
+/**
+ * Moves the mouse to `point` and returns the canvas cursor once the hover
+ * there has settled. A change of hover target is committed only once it
+ * has been seen for the hover dwell (`HOVER_DWELL_MS`, 60 ms), timed from
+ * the frame in which the viewer first applies the move, and on a frame
+ * after that, so a cursor read straight after a move still names the
+ * previous target. Hover-only frames stopped drawing in #1939, so they no
+ * longer take long enough under software GL to hide the dwell.
+ *
+ * The dwell allowance here starts from that same frame, however late it
+ * comes: a listener on the canvas, which runs after the viewer's (a capture
+ * listener), asks for a frame on the move, so its frames run after the
+ * viewer's, and the first of them follows the viewer applying the move.
+ * Once well past the dwell from there, one frame more is the viewer's
+ * commit, and the cursor is read after it.
+ */
+async function moveAndSettle(
+  canvas: Locator,
+  point: { x: number; y: number }
+): Promise<string> {
+  await canvas.evaluate((element) => {
+    window.__settledCursor = new Promise<string>((resolve, reject) => {
+      const missed = window.setTimeout(() => {
+        element.removeEventListener('pointermove', onMove);
+        reject(new Error('the canvas saw no pointermove'));
+      }, 10_000);
+      const onMove = () => {
+        window.clearTimeout(missed);
+        requestAnimationFrame(() => {
+          const start = performance.now();
+          const tick = () => {
+            if (performance.now() - start < 150) {
+              requestAnimationFrame(tick);
+              return;
+            }
+            requestAnimationFrame(() => resolve(element.style.cursor));
+          };
+          requestAnimationFrame(tick);
+        });
+      };
+      element.addEventListener('pointermove', onMove, { once: true });
+    });
+  });
+  await canvas.page().mouse.move(point.x, point.y);
+  return canvas.evaluate(() => window.__settledCursor!);
+}
+
 /**
  * Points on two different faces of the box. A point is on a face when the
  * pointer turns to a grab there; clicking it says which face, and Escape
@@ -52,10 +105,7 @@ async function twoFacePoints(canvas: Locator): Promise<[FacePoint, FacePoint]> {
         x: bounds.x + bounds.width * xRatio,
         y: bounds.y + bounds.height * yRatio
       };
-      await page.mouse.move(point.x, point.y);
-      if (
-        (await canvas.evaluate((element) => element.style.cursor)) !== 'grab'
-      ) {
+      if ((await moveAndSettle(canvas, point)) !== 'grab') {
         continue;
       }
       await page.mouse.click(point.x, point.y);

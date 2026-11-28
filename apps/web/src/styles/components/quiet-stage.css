@@ -3851,6 +3851,7 @@ button.command-rail.is-suggested {
      test/stage-metric-isolation.test.ts keeps this list complete. */
   --activity-pill-live-h: initial;
   --in-place-command-h: initial;
+  --keypad-sheet-h: initial;
   --lane-base: initial;
   --lane-status: initial;
   --motion-timeline-claim: initial;

@@ -10,11 +10,17 @@
  * (Linux, ChromeOS) the tap that stops a fling is suppressed: no mousedown,
  * mouseup or click is made. Pointer events still arrive.
  *
+ * Only the press of one finger or a pen's tip is held for its lift: not a
+ * second finger, nor a pen's eraser or barrel button.
+ *
  * The click that may follow a run on release is swallowed wherever it
  * lands, in the page and not only in the list: the row has slid back under
  * the finger by then, or the action has opened a prompt there, so nothing
- * runs twice, nothing opens and no prompt is answered by the same tap. The
- * next press or key ends that swallow, whether the click came or not.
+ * runs twice, nothing opens and no prompt is answered by the same tap. It
+ * is told by where and when it comes: at the lift, within the time a
+ * browser may hold a tap's click. Any other click (a script's, a screen
+ * reader's) reaches its button, and the next press or key ends the
+ * swallow, whether the click came or not.
  *
  * A swipe, a hold or a press that closed a row swallows only its row's
  * click: a click on the revealed actions still reaches them. Each press
@@ -26,12 +32,48 @@
 /** Travel within which a lift is still a tap on the action it pressed. */
 export const SWIPE_ACTION_TAP_SLOP_PX = 10;
 
+/**
+ * How far from the lift the click a tap makes may land: the browser may
+ * move it toward the nearest button under the finger's contact.
+ */
+export const SWIPE_ACTION_CLICK_REACH_PX = 32;
+
+/**
+ * How long after the lift the click a tap makes may come: past the 300 ms
+ * a browser may hold it to rule out a double tap.
+ */
+export const SWIPE_ACTION_CLICK_WINDOW_MS = 600;
+
 /** The parts of a pointer event the taps read. */
 export interface TapPointer {
   pointerId: number;
   pointerType: string;
   clientX: number;
   clientY: number;
+}
+
+/** The parts of a press the taps read. */
+export interface TapPress extends TapPointer {
+  isPrimary: boolean;
+  button: number;
+  buttons: number;
+}
+
+/** The parts of the lift an action ran on that the taps read. */
+export interface TapLift {
+  clientX: number;
+  clientY: number;
+  timeStamp: number;
+}
+
+/**
+ * One finger, or a pen's tip alone: not a second finger, a pen's eraser
+ * (button 5) or its barrel button (2), held or pressed.
+ */
+function isTapPress(event: TapPress): boolean {
+  if (!event.isPrimary || event.button !== 0) return false;
+  if (event.pointerType === 'touch') return true;
+  return event.pointerType === 'pen' && (event.buttons & ~1) === 0;
 }
 
 interface ActionPress<T> {
@@ -53,12 +95,13 @@ export class SwipeActionTaps<T> {
   }
 
   /**
-   * A press on a revealed action, after `press()`. A finger or pen is
-   * held for its lift; a mouse is left to the button's click. Returns
+   * A press on a revealed action, after `press()`. One finger or a pen's
+   * tip is held for its lift; a mouse is left to the button's click, and a
+   * second finger, an eraser or a barrel button to nothing. Returns
    * whether the press was taken.
    */
-  pressAction(event: TapPointer, target: T): boolean {
-    if (event.pointerType === 'mouse') return false;
+  pressAction(event: TapPress, target: T): boolean {
+    if (!isTapPress(event)) return false;
     this.pressed = {
       pointerId: event.pointerId,
       target,
@@ -89,14 +132,26 @@ export class SwipeActionTaps<T> {
   }
 
   /**
-   * An action runs on its lift: the click that may follow, anywhere in the
-   * page, is not a tap. Armed until that click, the next press or a key.
+   * An action runs on `lift`: the click that tap may make, anywhere in the
+   * page, is not a tap. That is a click at the lift, within the window;
+   * others pass. Armed until that click, one past the window, the next
+   * press or a key.
    */
-  ran(): void {
+  ran(lift: TapLift): void {
     this.swallowRow = false;
     this.disarm?.();
     if (typeof window === 'undefined') return;
     const onClick = (event: MouseEvent) => {
+      if (event.timeStamp - lift.timeStamp > SWIPE_ACTION_CLICK_WINDOW_MS) {
+        disarm();
+        return;
+      }
+      if (
+        Math.abs(event.clientX - lift.clientX) > SWIPE_ACTION_CLICK_REACH_PX ||
+        Math.abs(event.clientY - lift.clientY) > SWIPE_ACTION_CLICK_REACH_PX
+      ) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       disarm();

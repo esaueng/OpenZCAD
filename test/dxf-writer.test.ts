@@ -251,6 +251,54 @@ describe('writeDxf layers and text', () => {
     expect(writeDxf([], { layers: [] })).toBe(writeDxf([]));
   });
 
+  it.each([
+    ['mm', 1],
+    ['cm', 10],
+    ['m', 1000],
+    ['inch', 25.4]
+  ] as const)(
+    'writes line-type dashes at the same physical length in %s (#2306)',
+    (units, unitMm) => {
+      const p = pairs(
+        writeDxf([], {
+          units,
+          layers: [
+            { name: 'BEND_UP', lineType: 'DASHED' },
+            { name: 'HIDDEN', lineType: 'HIDDEN' },
+            { name: 'CENTER', lineType: 'CENTER' }
+          ]
+        })
+      );
+      const pattern = (type: string) => {
+        const at = p.findIndex(([c, v]) => c === 2 && v === type);
+        const end = p.findIndex(([c], index) => index > at && c === 0);
+        const record = p.slice(at, end);
+        return {
+          total: Number(record.find(([c]) => c === 40)![1]) * unitMm,
+          dashes: record
+            .filter(([c]) => c === 49)
+            .map(([, v]) => Number(v) * unitMm)
+        };
+      };
+      const close = (values: number[], expected: number[]) => {
+        expect(values).toHaveLength(expected.length);
+        values.forEach((entry, index) =>
+          expect(entry).toBeCloseTo(expected[index]!, 6)
+        );
+      };
+      // Millimetres: 0.5/0.25, ISO 128 type 02 and type 04.
+      const dashed = pattern('DASHED');
+      expect(dashed.total).toBeCloseTo(0.75, 6);
+      close(dashed.dashes, [0.5, -0.25]);
+      const hidden = pattern('HIDDEN');
+      expect(hidden.total).toBeCloseTo(4.5, 6);
+      close(hidden.dashes, [3, -1.5]);
+      const center = pattern('CENTER');
+      expect(center.total).toBeCloseTo(15.5, 6);
+      close(center.dashes, [12, -1.5, 0.5, -1.5]);
+    }
+  );
+
   it('writes TEXT with height, rotation and alignment', () => {
     const p = pairs(
       writeDxf([

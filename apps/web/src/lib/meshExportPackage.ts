@@ -104,6 +104,12 @@ export async function packageMeshExport<Id>(input: {
 export interface MeshExportJob {
   fileName: string;
   label: string;
+  /**
+   * What the job writes: the bodies, or (F06) every body another
+   * configuration row shows, which only the kernel can list. The job is
+   * stopped as empty by this, never by the active row's own scope.
+   */
+  target: { bodyIds: BodyId[]; allShownBodies: boolean };
   completed?(bodies: string): string;
   produce(options: {
     signal: AbortSignal;
@@ -153,6 +159,7 @@ export function exportMesh(input: MeshExportRequest): void {
   const fileName = `${input.stemOf(rowName)}.${info.extension}`;
   void input.runExportJob({
     fileName,
+    target,
     label: rowName ? `${info.label} of ${rowName}` : info.label,
     ...(rowName
       ? {
@@ -206,6 +213,7 @@ function exportMeshPackage(input: MeshExportRequest): void {
   }
   void input.runExportJob({
     fileName: `${stem}.zip`,
+    target: input.target,
     label: 'Mesh package',
     produce: async (jobOptions) => {
       const files = await packageMeshExport({

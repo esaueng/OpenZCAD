@@ -12,7 +12,8 @@ const OTHER = 'feature_other' as FeatureId;
 
 /** The spec's L bracket as the adapter returns it (nominal 90° bend). */
 function bracket(
-  changedBy: SheetMetalFlatPattern['changedBy'] = []
+  changedBy: SheetMetalFlatPattern['changedBy'] = [],
+  scaledBy: SheetMetalFlatPattern['scaledBy'] = []
 ): SheetMetalFlatPattern {
   const corners: [number, number][] = [
     [0, 0],
@@ -71,13 +72,14 @@ function bracket(
         lineLength: 40
       }
     ],
-    changedBy
+    changedBy,
+    scaledBy
   };
 }
 
 function renderDialog(
   overrides: Partial<
-    Pick<FlatPatternDialogProps, 'features' | 'loadPattern'>
+    Pick<FlatPatternDialogProps, 'features' | 'loadPattern' | 'units'>
   > = {}
 ) {
   const onSave = vi.fn<FlatPatternDialogProps['onSave']>(async () => true);
@@ -90,7 +92,7 @@ function renderDialog(
     <FlatPatternDialog
       features={overrides.features ?? [{ featureId: SHEET, name: 'Bracket' }]}
       initialFeatureId={SHEET}
-      units="mm"
+      units={overrides.units ?? 'mm'}
       projectName="Shelf"
       revision={revision}
       loadPattern={loadPattern}
@@ -161,6 +163,43 @@ describe('FlatPatternDialog', () => {
       '2 later features change this body; the flat pattern shows the sheet before them.'
     );
   });
+
+  it('labels a pattern a later Scale already scaled (#2122)', async () => {
+    renderDialog({
+      loadPattern: vi.fn(async () =>
+        bracket(
+          [{ featureId: 'feature_hole' as FeatureId, name: 'Hole 1' }],
+          [
+            {
+              featureId: 'feature_scale' as FeatureId,
+              name: 'Scale 1',
+              factor: 1.25
+            }
+          ]
+        )
+      )
+    });
+    expect(await screen.findByRole('note')).toHaveTextContent(
+      'Scaled ×1.25 by Scale 1; every length here is the scaled part’s. 1 later feature changes this body; the flat pattern shows the sheet before it.'
+    );
+  });
+
+  it.each([
+    ['mm', 'millimeters'],
+    ['inch', 'inches']
+  ] as const)(
+    'names the %s files unit in words (#2305)',
+    async (units, name) => {
+      renderDialog({ units });
+      await screen.findByRole('table', { name: 'Bend table' });
+      expect(
+        screen.getByText(`Files are at 1:1 scale in ${name}.`, {
+          exact: false
+        })
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/\bin in\b/)).toBeNull();
+    }
+  );
 
   it('exports the layered DXF and the SVG, and copies the bend table', async () => {
     const props = renderDialog();

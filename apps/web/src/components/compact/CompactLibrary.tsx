@@ -215,7 +215,7 @@ function SwipeLayer({
           .find((entry) => entry.key === key);
         if (openRef.current?.projectId !== projectId) return;
         if (!action || action.disabled) return;
-        taps.ran();
+        taps.ran(event);
         close();
         action.run();
         return;
