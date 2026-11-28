@@ -303,6 +303,7 @@ import {
   type CoilRigParams,
   type CameraGlideStyle,
   type HandleVec3,
+  type NdcFrame,
   type WheelDevice
 } from '@openzcad/viewport';
 import {
@@ -360,6 +361,8 @@ import {
   measureFitFrame,
   measureOpeningFrame,
   measurePickFrame,
+  openingCoverHides,
+  sameOpeningFrame,
   shiftIntoFrame
 } from '../lib/fitFrame';
 import type { DimensionMode } from '../lib/keypad';
@@ -1008,6 +1011,11 @@ function markCommandChipWarning(entry: CommandRigEntry, warning: boolean) {
   entry.chip.setAttribute('aria-invalid', String(warning));
   entry.rig?.setWarning?.(warning);
 }
+/**
+ * How long the opening fit may follow the stage under the workspace cover:
+ * longer than any reveal, short of a cover left up by a failed load.
+ */
+const OPENING_FOLLOW_MS = 15_000;
 /** How far inside the canvas edge a command chip is kept, in CSS pixels. */
 const COMMAND_CHIP_MARGIN_PX = 12;
 /** How far an axis name tag sits along its line from the line's origin. */
@@ -2979,6 +2987,9 @@ export function ModelViewer({
   const geometryTrace = preparing ? undefined : incomingGeometryTrace;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
+  /** The opening fit following the stage under the cover (see its use). */
+  const openingFollowRef = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(openingFollowRef.current), []);
   /** The Assemble workspace's posing, glyphs and drags (AS02). */
   const assemblyViewportRef = useRef<AssemblyViewport | null>(null);
   /**
@@ -16449,20 +16460,62 @@ export function ModelViewer({
     if (!context.hasFitCamera && context.bodyGroup.children.length > 0) {
       // Into the clear stage on a phone, where the rails cover a third of
       // the canvas; the whole canvas otherwise.
-      fitCameraToObjects(
-        context.camera,
-        context.controls.target,
-        context.bodyGroup.children,
-        measureOpeningFrame(context.renderer.domElement)
-      );
-      if (context.projection === 'orthographic') {
-        context.syncOrthographic(true);
-      }
-      context.controls.update();
+      const canvas = context.renderer.domElement;
+      const fitOpening = (frame: NdcFrame | undefined) => {
+        fitCameraToObjects(
+          context.camera,
+          context.controls.target,
+          context.bodyGroup.children,
+          frame
+        );
+        if (context.projection === 'orthographic') {
+          context.syncOrthographic(true);
+        }
+        context.controls.update();
+        const view = context.captureView();
+        onViewChangeRef.current(view);
+        onViewSettledRef.current(view);
+      };
+      let frame = measureOpeningFrame(canvas);
+      fitOpening(frame);
       context.hasFitCamera = true;
-      const view = context.captureView();
-      onViewChangeRef.current(view);
-      onViewSettledRef.current(view);
+      // A model built before the workspace's panels mount (a second project
+      // in a session, its kernel and chunks already warm) was framed
+      // without them: the Mounting Bracket opened on an iPad with its boss
+      // and second hole behind History. Under the cover nobody can have
+      // moved the camera, so the fit follows the stage until the reveal,
+      // and stops at once if anything else does move it.
+      cancelAnimationFrame(openingFollowRef.current);
+      if (openingCoverHides(canvas)) {
+        const pose = () => [
+          ...context.camera.position.toArray(),
+          ...context.controls.target.toArray()
+        ];
+        // Rounding drifts the pose in its last digits from frame to frame.
+        const moved = (from: number[]) => {
+          const now = pose();
+          const reach = 1e-6 * (1 + context.camera.position.length());
+          return now.some(
+            (value, axis) => Math.abs(value - from[axis]!) > reach
+          );
+        };
+        let fitted = pose();
+        const until = performance.now() + OPENING_FOLLOW_MS;
+        const follow = () => {
+          if (contextRef.current !== context || moved(fitted)) return;
+          const next = measureOpeningFrame(canvas);
+          if (!sameOpeningFrame(next, frame)) {
+            frame = next;
+            fitOpening(frame);
+            fitted = pose();
+            context.requestRender();
+          }
+          if (openingCoverHides(canvas) && performance.now() < until) {
+            openingFollowRef.current = requestAnimationFrame(follow);
+          }
+        };
+        openingFollowRef.current = requestAnimationFrame(follow);
+      }
     }
     context.requestRender();
     if (bodiesChanged) {

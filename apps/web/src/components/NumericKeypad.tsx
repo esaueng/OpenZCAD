@@ -25,6 +25,7 @@ import {
   keypadClampPosition,
   keypadDockedPosition,
   keypadInPlacePosition,
+  keypadKeptPosition,
   radialSizeError,
   type DimensionMode,
   type EditControlState,
@@ -427,6 +428,24 @@ export function keypadFloor(host: HTMLElement): number {
 }
 
 /**
+ * How far up the host the keypad may stand: under the top bar, whose
+ * islands (the project's name, the modes, File and Settings) are drawn over
+ * the stage's top edge. An iPad on its side with the keyboard up has a
+ * stage about 390 px tall, and the keypad clamped into it rose under the
+ * bar: the name covered its field and the mode switch its Apply.
+ */
+export function keypadCeiling(host: HTMLElement): number {
+  // The bar is the workspace's sibling in the app shell.
+  const bar = host
+    .closest('.app-shell')
+    ?.querySelector<HTMLElement>(':scope > .topbar');
+  if (!bar) return 0;
+  const bottom =
+    bar.getBoundingClientRect().bottom - host.getBoundingClientRect().top;
+  return bottom > 0 ? Math.ceil(bottom) : 0;
+}
+
+/**
  * Floating exact-value entry anchored at the point of action — the keyboard
  * companion of every drag handle. One instance serves offsets, radii,
  * extrude heights, and sketch dimensions.
@@ -689,8 +708,11 @@ function NumericKeypadControl({
     // never replayed (the width would then keep the sheet's look while the
     // command bar went back to the foot).
     let sheet = false;
+    const heldAt = request.heldAt;
     const held =
-      request.heldAt && request.heldAt.side !== 'sheet' ? request.heldAt : null;
+      heldAt && heldAt.side !== 'sheet'
+        ? { x: heldAt.x, y: heldAt.y, side: heldAt.side }
+        : null;
     let lastAnchor: { x: number; y: number } | null = null;
     const phone = () =>
       asSheetRef.current ||
@@ -713,16 +735,37 @@ function NumericKeypadControl({
         `${Math.max(0, Math.ceil(covered))}px`
       );
     };
+    // The stage's size when the control was last placed: a later resize of
+    // the control alone (or of the bar under it, whose guidance shortens
+    // once a value is typed) keeps it there (keypadKeptPosition); a resized
+    // stage (a turn, the keyboard coming up) places it afresh.
+    let placedFor: { width: number; height: number } | null = null;
+    let placed: KeypadPlacement | null = null;
+    const hostSize = (host: HTMLElement) => {
+      const visual = host.ownerDocument.defaultView?.visualViewport;
+      return {
+        width: host.clientWidth,
+        height: Math.min(host.clientHeight, visual?.height ?? Infinity)
+      };
+    };
     const place = (placement: KeypadPlacement) => {
       sheetArea?.style.removeProperty('--keypad-sheet-h');
+      const host = root.parentElement;
+      // Never under the top bar's islands.
+      const y = host ? Math.max(placement.y, keypadCeiling(host)) : placement.y;
       root.style.visibility = 'visible';
       root.style.left = `${placement.x}px`;
-      root.style.top = `${placement.y}px`;
+      root.style.top = `${y}px`;
       root.dataset.placement = placement.side;
       setPlacement(placement.side);
+      placed = { ...placement, y };
+      placedFor = host ? hostSize(host) : null;
     };
     const measure = (host: HTMLElement) => {
-      root.style.maxHeight = `${Math.max(0, keypadFloor(host) - 16)}px`;
+      root.style.maxHeight = `${Math.max(
+        0,
+        keypadFloor(host) - keypadCeiling(host) - 16
+      )}px`;
       return {
         size: {
           width: root.offsetWidth || 232,
@@ -782,18 +825,23 @@ function NumericKeypadControl({
           Math.min(Math.max(value, 0), Math.max(0, room));
         const left = within(held.x - rect.left, viewport.width - size.width);
         const top = within(held.y - rect.top, viewport.height - size.height);
-        root.style.visibility = 'visible';
-        root.style.left = `${left}px`;
-        root.style.top = `${top}px`;
-        root.dataset.placement = held.side;
-        setPlacement(held.side);
+        place({ x: left, y: top, side: held.side });
         lastAnchor = { x: 0, y: 0 };
         positioned = true;
         return;
       }
       if (!point) {
-        // The pick left the screen while the value was being edited.
-        if (positioned && !docked && !request.fixedClientAnchor) {
+        // The pick left the screen while the value was being edited. Once a
+        // value is typed its live preview stands in the pick's place (a
+        // filleted edge is gone from the model it previews), and docking
+        // then moved Apply out from under the finger after the first key
+        // (the iPad review): only an untouched entry docks.
+        if (
+          positioned &&
+          !docked &&
+          !request.fixedClientAnchor &&
+          untouchedPrefill.current
+        ) {
           const { size, viewport } = measure(host);
           place(keypadDockedPosition(size, viewport, dockedPanelBands(host)));
           docked = true;
@@ -844,6 +892,22 @@ function NumericKeypadControl({
     // or the control changes size (rotation, a dock opening, a refusal line).
     const reposition = () => {
       if (!lastAnchor && !phone() && !sheet) return;
+      const host = root.parentElement;
+      if (host && positioned && placed && placedFor && !sheet && !phone()) {
+        const now = hostSize(host);
+        if (
+          Math.abs(now.width - placedFor.width) <= 1 &&
+          Math.abs(now.height - placedFor.height) <= 1
+        ) {
+          // Only the control changed size (a preview's line, the operation
+          // switch, a refusal): it stays where it stands, on screen.
+          const { size, viewport } = measure(host);
+          place(
+            keypadKeptPosition(placed, size, viewport, dockedPanelBands(host))
+          );
+          return;
+        }
+      }
       const wasPositioned = positioned;
       positioned = false;
       positionAt(lastAnchor);
@@ -1283,6 +1347,11 @@ function NumericKeypadControl({
             ) {
               raiseSystemKeyboard.current = true;
               setSystemKeyboard(true);
+              // The system keyboard stands in for the pad's keys, which
+              // otherwise took the room it leaves: an iPad on its side had
+              // the keys clipped and Apply under the mode switch. The pad's
+              // toggle brings them back.
+              setGridOpen(false);
             }
           }}
           onClick={(event) => {

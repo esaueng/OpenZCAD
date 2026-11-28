@@ -155,6 +155,13 @@ describe('menus over the passive overlays (F013)', () => {
       ).join('\n')
     ).toMatch(/visibility:\s*hidden/);
   });
+
+  it('stands the first-run tour aside while the exact-entry keypad is up', () => {
+    // Its card covered the keypad's lower keys on an iPad's first Extrude.
+    expect(
+      rules(css, '.viewer-area:has(.numeric-keypad) .workspace-tour').join('\n')
+    ).toMatch(/visibility:\s*hidden/);
+  });
 });
 
 describe('a refusal in the command strip (F014)', () => {

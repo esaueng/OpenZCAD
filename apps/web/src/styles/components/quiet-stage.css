@@ -1446,9 +1446,12 @@
    Why? showing as soon as the entry is refused: the keypad stands wherever
    its chip put it, and after a resize the guide covered the Why? button and
    then its explanation. The keypad and the guide share the viewer area, so
-   the guide stands aside while the keypad's refusal is up at all. */
+   the guide stands aside while the keypad is up at all: on an iPad's first
+   Extrude the guide's card stood over the keypad's 1–3, decimal and
+   Backspace keys, which only skipping the tour gave back. It comes back
+   when the entry is applied or cancelled. */
 .viewer-area:has(.edit-refusal.is-bar.is-open) .workspace-tour,
-.viewer-area:has(.numeric-keypad .edit-refusal.is-control) .workspace-tour {
+.viewer-area:has(.numeric-keypad) .workspace-tour {
   visibility: hidden;
 }
 
@@ -3902,6 +3905,22 @@ button.command-rail.is-suggested {
   padding: 0 4px 0 2px;
   border-bottom: var(--border-thin);
   touch-action: none;
+  container: model-panel-header / inline-size;
+}
+
+/* A panel under 200 px wide (History between two rails on an iPad at its
+   largest text size) kept the count and cut the name to "HI…": the count
+   gives way, and the glyph beside the name and the eyebrow's tracking with
+   it. */
+@container model-panel-header (max-width: 199px) {
+  .model-panel-count,
+  .model-panel-header > svg {
+    display: none;
+  }
+
+  .model-panel-title {
+    letter-spacing: 0;
+  }
 }
 
 .model-panel-grip {

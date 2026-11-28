@@ -193,6 +193,32 @@ export function keypadInPlacePosition(
 }
 
 /**
+ * The control kept where it was placed when only its own size changed: a
+ * live preview's first value hides the value chip it stands in for (and
+ * adds the operation switch the chip's tag carried), and placing it afresh
+ * then docked it at the foot of the stage, so Apply jumped from under the
+ * finger after the first key. It moves only as far as it must to stay on
+ * screen and clear of the docked panels.
+ */
+export function keypadKeptPosition(
+  current: KeypadPlacement,
+  size: KeypadSize,
+  viewport: KeypadSize,
+  exclusions: readonly KeypadExclusion[] = []
+): KeypadPlacement {
+  const range = horizontalRange(size, viewport, exclusions);
+  const maxY = Math.max(
+    VIEWPORT_MARGIN,
+    viewport.height - size.height - VIEWPORT_MARGIN
+  );
+  return {
+    x: Math.min(Math.max(current.x, range.min), Math.max(range.max, range.min)),
+    y: Math.min(Math.max(current.y, VIEWPORT_MARGIN), maxY),
+    side: current.side
+  };
+}
+
+/**
  * The control docked at the foot of the stage, centred in the widest gap
  * the docked panels leave: where it goes when its pick is not on screen.
  */

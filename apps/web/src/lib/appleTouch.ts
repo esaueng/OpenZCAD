@@ -22,16 +22,25 @@ export function isAppleTouchDevice(nav: NavigatorLike = navigator): boolean {
 }
 
 /**
- * A file input's `accept`, or none on an Apple touch device. The iOS Files
- * picker greys out every file whose type it cannot match to the list, and it
- * knows no type for `.step`, `.openzcad` or `.shapr`, so those could not be
- * chosen at all. Every import checks the format after picking anyway.
+ * The `accept` that opens the iOS and iPadOS Files picker on every file.
+ * With no `accept` at all, WebKit first asked Photo Library or Choose
+ * Files, for a picker that wants a project backup or a CAD file (the iPad
+ * review). Any file is data, so this filter lists every file and asks for
+ * none of the photo sources: WebKit opens Files straight away.
+ */
+export const APPLE_TOUCH_ANY_FILE_ACCEPT = 'application/octet-stream';
+
+/**
+ * A file input's `accept`, or every file on an Apple touch device. The iOS
+ * Files picker greys out every file whose type it cannot match to the list,
+ * and it knows no type for `.step`, `.openzcad` or `.shapr`, so those could
+ * not be chosen at all. Every import checks the format after picking anyway.
  */
 export function fileAccept(
   accept: string,
   nav: NavigatorLike = navigator
-): string | undefined {
-  return isAppleTouchDevice(nav) ? undefined : accept;
+): string {
+  return isAppleTouchDevice(nav) ? APPLE_TOUCH_ANY_FILE_ACCEPT : accept;
 }
 
 /**
