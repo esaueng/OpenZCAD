@@ -29,6 +29,7 @@ import {
   desktopFetch,
   isDesktopApp
 } from './desktopBridge';
+import { isIosShell } from './nativeShell';
 import {
   projectRequest,
   projectWriteBlocked,
@@ -1356,7 +1357,7 @@ export function useCollaboration({
         return;
       }
       setStatus('connecting');
-      if (isDesktopApp()) {
+      if (isDesktopApp() || isIosShell()) {
         void desktopCollaborationUrl(projectId!)
           .then(connectToUrl)
           .catch(scheduleReconnect);

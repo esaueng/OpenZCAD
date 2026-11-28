@@ -80,6 +80,7 @@ import { api } from '../lib/api';
 import { APP_BUILD, appBuildDetail, appBuildLabel } from '../lib/appBuild';
 import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
 import { isDesktopApp } from '../lib/desktopBridge';
+import { isIosShell, nativeSessionAvailable } from '../lib/nativeShell';
 import { privacyPolicyHref } from '../lib/privacyPolicy';
 import {
   KERNEL_BUILD,
@@ -834,7 +835,10 @@ export function SettingsPage({
   const [active, setActive] = useState<SectionId>(
     initialSection ?? initialViewState.activeSection
   );
-  const desktopApp = isDesktopApp();
+  // A native app signs in through its own session: the Mac app's Rust or
+  // the iPhone and iPad app's Swift (ADR-026), never the web form.
+  const desktopApp = isDesktopApp() || nativeSessionAvailable();
+  const iosApp = isIosShell();
   // A caller-specified section is a task flow (currently desktop auth), so it
   // must not be hidden by a search left over from ordinary Settings browsing.
   const [query, setQuery] = useState(
@@ -2754,11 +2758,15 @@ export function SettingsPage({
                       authConfig?.desktopAuthEnabled ? (
                         <div className="settings-auth-form">
                           <span>
-                            <strong>Sign in with your browser</strong>
+                            <strong>
+                              {iosApp
+                                ? 'Sign in with your email'
+                                : 'Sign in with your browser'}
+                            </strong>
                             <small>
-                              The security check and email code stay in your
-                              browser. macOS stores only the rotating refresh
-                              credential in Keychain.
+                              {iosApp
+                                ? 'A private sign-in page asks for your email code, then the code the app shows. This device keeps only a rotating sign-in credential, in its Keychain.'
+                                : 'The security check and email code stay in your browser. macOS stores only the rotating refresh credential in Keychain.'}
                             </small>
                           </span>
                           <div className="settings-auth-controls">
@@ -2773,13 +2781,15 @@ export function SettingsPage({
                               }
                             >
                               <LogIn size={14} aria-hidden="true" />
-                              Continue in browser
+                              {iosApp ? 'Sign in' : 'Continue in browser'}
                             </button>
                           </div>
                         </div>
                       ) : (
                         <Notice>
-                          Desktop sign-in isn’t available on this server yet.
+                          {iosApp
+                            ? 'App sign-in isn’t available on this server yet.'
+                            : 'Desktop sign-in isn’t available on this server yet.'}
                         </Notice>
                       )
                     ) : authConfig?.emailCodeEnabled &&

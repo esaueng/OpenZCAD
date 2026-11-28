@@ -78,6 +78,7 @@ import {
 } from '@openzcad/shared';
 import { splitProjectStorageUpload } from '@openzcad/persistence';
 import { desktopFetch, isDesktopApp } from './desktopBridge';
+import { isIosShell } from './nativeShell';
 import { rateLimitOf, retryAfterMs, type RateLimit } from './rateLimit';
 import type * as EncryptedProjectsModule from './e2ee/encryptedProjects';
 import { localStoragePreferencePins } from './e2ee/preferencePins';
@@ -2351,8 +2352,11 @@ export const api = {
     body: Blob,
     context: ProjectRequestContext
   ) => {
+    // The native apps check the destination themselves (`apiPath`), and a
+    // custom-scheme origin need not serialise as `location.origin` does.
     if (
       !isDesktopApp() &&
+      !isIosShell() &&
       new URL(uploadUrl, window.location.href).origin !== window.location.origin
     ) {
       throw new Error('Artifact upload URL must use the application origin.');

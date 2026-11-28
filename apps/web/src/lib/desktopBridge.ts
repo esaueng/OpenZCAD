@@ -6,6 +6,12 @@ import {
 } from '@openzcad/shared';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
 import {
+  NATIVE_PREPARED_HEADER,
+  isIosShell,
+  nativePrepare,
+  shellRequestBody
+} from './nativeShell';
+import {
   checkOutboundRequest,
   declaredProjectContext,
   checkProjectRequest,
@@ -101,15 +107,20 @@ export async function desktopCollaborationUrl(
   projectId: string
 ): Promise<string> {
   assertCloudFunctionsEnabled();
-  if (!isDesktopApp()) {
-    throw new Error(
-      'Desktop collaboration is only available in the macOS app.'
-    );
+  let value: string;
+  if (isIosShell()) {
+    value = await shellCollaborationUrl(projectId);
+  } else {
+    if (!isDesktopApp()) {
+      throw new Error(
+        'Desktop collaboration is only available in the macOS app.'
+      );
+    }
+    const { invoke } = await import('@tauri-apps/api/core');
+    value = await invoke<string>('desktop_collaboration_url', {
+      projectId
+    });
   }
-  const { invoke } = await import('@tauri-apps/api/core');
-  const value = await invoke<string>('desktop_collaboration_url', {
-    projectId
-  });
   assertCloudFunctionsEnabled();
   const url = new URL(value);
   const expectedPath = `/api/projects/${encodeURIComponent(projectId)}/collaboration`;
@@ -125,6 +136,52 @@ export async function desktopCollaborationUrl(
     throw new Error('The native collaboration URL is not allowed.');
   }
   return url.toString();
+}
+
+/**
+ * The iPhone and iPad app's room URL: a one-use ticket fetched through the
+ * native proxy with a readied credential, as the desktop's Rust fetches it
+ * (`desktop_collaboration_url`). The ticket ends up in the socket URL either
+ * way, so it reaching the page widens nothing.
+ */
+async function shellCollaborationUrl(projectId: string): Promise<string> {
+  const path = `/api/projects/${encodeURIComponent(projectId)}/collaboration/ticket`;
+  for (let attempt = 0; ; attempt += 1) {
+    const handle = await nativePrepare();
+    if (handle === null) {
+      throw new Error('Sign in before starting live collaboration.');
+    }
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: { [NATIVE_PREPARED_HEADER]: handle },
+      credentials: 'omit',
+      redirect: 'error'
+    });
+    if (response.status === 401 && attempt === 0) continue;
+    if (!response.ok) {
+      throw new Error('Live collaboration is unavailable.');
+    }
+    const issued = (await response.json()) as {
+      ticket?: unknown;
+      expiresAt?: unknown;
+    };
+    const now = Date.now();
+    if (
+      typeof issued.ticket !== 'string' ||
+      !/^[A-Za-z0-9_-]{43}$/.test(issued.ticket) ||
+      typeof issued.expiresAt !== 'number' ||
+      issued.expiresAt <= now ||
+      issued.expiresAt > now + 120_000
+    ) {
+      throw new Error('The collaboration ticket response was invalid.');
+    }
+    const url = new URL(
+      `/api/projects/${encodeURIComponent(projectId)}/collaboration`,
+      CLOUD_SOCKET_ORIGIN
+    );
+    url.searchParams.set('ticket', issued.ticket);
+    return url.toString();
+  }
 }
 
 interface NativeBlobStreamStart {
@@ -483,6 +540,9 @@ async function sendCloudRequest(
   request: ResolvedProjectRequest
 ): Promise<Response> {
   const signal = cloudRequestSignal(init.signal);
+  if (isIosShell()) {
+    return sendShellRequest(input, init, request, signal);
+  }
   if (!isDesktopApp()) {
     // Immediately before the send: nothing is awaited in between.
     checkProjectRequest(request);
@@ -554,6 +614,79 @@ async function sendCloudRequest(
       ? { 'content-type': result.contentType }
       : undefined
   });
+}
+
+/** A GET of a project document that asks for its legacy frame. */
+function rawStoragePath(path: string, init: RequestInit): string {
+  const headers = new Headers(init.headers);
+  if (
+    (init.method ?? 'GET').toUpperCase() === 'GET' &&
+    headers.get('accept') === LEGACY_PROJECT_FRAME_CONTENT_TYPE &&
+    /^\/api\/projects\/[^/?]+(?:\/revisions\/[^/?]+)?(?:\?|$)/.test(path)
+  ) {
+    const raw = new URL(path, CLOUD_API_ORIGIN);
+    raw.searchParams.set('storage', 'raw');
+    return raw.pathname + raw.search;
+  }
+  return path;
+}
+
+/**
+ * The iPhone and iPad app (ADR-026): `/api/*` on its private origin goes to
+ * the native proxy, which attaches the session's credential. A project
+ * request carries a single-send handle readied just before it, as the
+ * desktop's `sendNativeProjectRequest` does, and every project request
+ * carries the header, empty when nothing was readied.
+ */
+async function sendShellRequest(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  request: ResolvedProjectRequest,
+  signal: AbortSignal
+): Promise<Response> {
+  if (signal.aborted) {
+    throw new DOMException('The operation was aborted.', 'AbortError');
+  }
+  // The proxy forwards the content type and share token only, as the
+  // desktop's Rust client does, so legacy frames are asked for by query.
+  const path = rawStoragePath(apiPath(input), init);
+  const body = await shellRequestBody(init.body);
+  // Each send gets its own headers: a page-set handle is never forwarded,
+  // and only the one readied for this send is added.
+  const send = (handle?: string) => {
+    const headers = new Headers(init.headers);
+    headers.delete(NATIVE_PREPARED_HEADER);
+    if (handle !== undefined) headers.set(NATIVE_PREPARED_HEADER, handle);
+    return fetch(path, {
+      ...init,
+      body: body as BodyInit | undefined,
+      headers,
+      credentials: 'omit',
+      redirect: 'error',
+      signal
+    });
+  };
+  let response: Response;
+  if (
+    request.projectId === null &&
+    declaredProjectContext(init) === undefined
+  ) {
+    // Immediately before the send: nothing is awaited in between.
+    checkProjectRequest(request);
+    response = await send();
+  } else {
+    for (let attempt = 0; ; attempt += 1) {
+      const handle = await nativePrepare();
+      if (signal.aborted) {
+        throw new DOMException('The operation was aborted.', 'AbortError');
+      }
+      checkProjectRequest(request);
+      response = await send(handle ?? '');
+      if (response.status !== 401 || handle === null || attempt > 0) break;
+    }
+  }
+  assertCloudFunctionsEnabled();
+  return response;
 }
 
 export async function startDesktopSignIn(): Promise<{
