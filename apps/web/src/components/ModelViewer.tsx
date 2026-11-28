@@ -1,4 +1,5 @@
 import { denseBodyNeedsPreparation } from './viewer/bodyPreparationPolicy';
+import { drawnOffsetReporter } from '../lib/drawnOffsetReport';
 import type * as AnalysisOverlayTypes from '@openzcad/viewport/analysis-overlay';
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
 import {
@@ -1483,6 +1484,14 @@ export interface ModelViewerProps {
   /** Streamed signed offset; App coalesces exact rebuilds. */
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   /**
+   * The offset the viewer's own mesh proxy draws the offset face at,
+   * whenever that changes; null once it draws the part as it is (restored,
+   * discarded, or replaced by exact bodies). The one source for what a
+   * proxy shows: a rejected deformation that keeps the last drawable mesh
+   * reports nothing new.
+   */
+  onOffsetProxyShown?: (offset: number | null) => void;
+  /**
    * Fired when an offset-handle drag releases with a non-zero offset.
    * `reading.total`: the Total the chip showed at release, when it read one.
    */
@@ -2832,6 +2841,7 @@ export function ModelViewer({
   offsetSetTicks = null,
   offsetDragTarget,
   onOffsetPreview,
+  onOffsetProxyShown,
   onOffsetCommit,
   onOffsetCancel,
   offsetPreviewInvalid,
@@ -3208,6 +3218,8 @@ export function ModelViewer({
   onOffsetCommitRef.current = onOffsetCommit;
   const onOffsetPreviewRef = useRef(onOffsetPreview);
   onOffsetPreviewRef.current = onOffsetPreview;
+  const onOffsetProxyShownRef = useRef(onOffsetProxyShown);
+  onOffsetProxyShownRef.current = onOffsetProxyShown;
   const onOffsetCancelRef = useRef(onOffsetCancel);
   onOffsetCancelRef.current = onOffsetCancel;
   const offsetPreviewInvalidRef = useRef(offsetPreviewInvalid);
@@ -4764,6 +4776,9 @@ export function ModelViewer({
       hud
     });
     assemblyViewportRef.current = assemblyViewport;
+    const reportOffsetProxyShown = drawnOffsetReporter((offset) =>
+      onOffsetProxyShownRef.current?.(offset)
+    );
     let offsetBodyProxy: {
       preview: CylinderProfilePreview;
       pending: number | null;
@@ -4889,6 +4904,7 @@ export function ModelViewer({
       offsetBodyProxy?.preview.restore();
       offsetBodyProxy = null;
       delete renderer.domElement.dataset.e2eHeightProxyOffset;
+      reportOffsetProxyShown(null);
     }
     function restoreOffsetBodyProxy() {
       const hadProxy = offsetBodyProxy !== null;
@@ -5037,6 +5053,7 @@ export function ModelViewer({
       }
       proxy.shown = offset;
       renderer.domElement.dataset.e2eHeightProxyOffset = String(offset);
+      reportOffsetProxyShown(offset);
       refreshShadowMap();
       return { offset, requestedAt: proxy.requestedAt };
     }
@@ -15341,6 +15358,8 @@ export function ModelViewer({
       openExactEntryRef.current = null;
       cylinderRadiusProxyControllerRef.current = null;
       offsetBodyProxyControllerRef.current = null;
+      // The scene and its proxy go with this effect: nothing is drawn moved.
+      onOffsetProxyShownRef.current?.(null);
       resetBodyPickingRef.current = null;
       retireOffsetDragRef.current = null;
       offsetGhostClearRef.current?.();

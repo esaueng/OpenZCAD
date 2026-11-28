@@ -225,10 +225,13 @@ describe('shownFaceOffset with the viewer mesh proxy', () => {
     ).toEqual({ previewOffset: 2, movedTopologyIds: ['side'] });
   });
 
-  it('lets an exact frame stand over the proxy, and nothing over neither', () => {
+  it('reads the proxy the viewer draws over the frame it was given', () => {
+    // The viewer reports null as exact bodies replace its proxy, so a
+    // proxy still reported is the mesh on screen.
     expect(
       shownFaceOffset({ offset: 3 }, { offset: 2, movedTopologyIds: ['side'] })
-    ).toEqual({ previewOffset: 3 });
+    ).toEqual({ previewOffset: 2, movedTopologyIds: ['side'] });
+    expect(shownFaceOffset({ offset: 3 }, null)).toEqual({ previewOffset: 3 });
     expect(shownFaceOffset(null, null)).toEqual({ previewOffset: null });
   });
 

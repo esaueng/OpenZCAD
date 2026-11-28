@@ -297,6 +297,8 @@ interface ViewerShellProps {
   offsetSetTicks?: ModelViewerProps['offsetSetTicks'];
   offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
+  /** The viewer's mesh proxy offset as drawn (ModelViewer `onOffsetProxyShown`). */
+  onOffsetProxyShown?: (offset: number | null) => void;
   onOffsetCommit: ModelViewerProps['onOffsetCommit'];
   onOffsetCancel: ModelViewerProps['onOffsetCancel'];
   offsetPreviewInvalid: boolean;
@@ -595,6 +597,7 @@ export function ViewerShell({
   offsetSetTicks,
   offsetDragTarget,
   onOffsetPreview,
+  onOffsetProxyShown,
   onOffsetCommit,
   onOffsetCancel,
   offsetPreviewInvalid,
@@ -1110,6 +1113,7 @@ export function ViewerShell({
                 })
             : onOffsetPreview
         }
+        onOffsetProxyShown={onOffsetProxyShown}
         onOffsetCommit={(value, reading) => {
           if (!datumHandle || !onDatumOffsetDrag)
             return onOffsetCommit(value, reading);

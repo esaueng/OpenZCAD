@@ -206,21 +206,21 @@ export interface ShownFaceFrame {
 }
 
 /**
- * What the viewer draws the edit at, read from the same state it draws
- * from: the exact frame when one is up, its leading-plane frame moving only
- * the faces it names; otherwise the viewer's own mesh proxy, which follows
- * the hand while no exact frame comes (a primitive face held still never
- * gets one); otherwise nothing has moved (none yet, or a frame taken down
+ * What the viewer draws the edit at, as it reports it: its own mesh proxy
+ * while it draws one (the viewer reports that offset itself, and drops it
+ * when it restores the part or exact bodies replace the mesh); otherwise
+ * the exact frame it was given, a leading-plane frame moving only the faces
+ * it names; otherwise nothing has moved (no frame yet, or one taken down
  * after a refusal), as the offset handle reads it too.
  */
 export function shownFaceOffset(
   frame: ShownFaceFrame | null,
-  projected: ShownFaceFrame | null = null
+  proxy: ShownFaceFrame | null = null
 ): {
   previewOffset: number | null;
   movedTopologyIds?: readonly string[];
 } {
-  const drawn = [frame, projected].find(
+  const drawn = [proxy, frame].find(
     (candidate) =>
       candidate?.offset !== undefined && Number.isFinite(candidate.offset)
   );
