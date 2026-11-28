@@ -61,23 +61,49 @@ beforeAll(async () => {
 }, 120_000);
 afterAll(() => adapter.dispose());
 
-/** Builds `document`; fails on any refusal or an open or inexact body. */
-async function built(document: ProjectDocument, label: string) {
+/**
+ * The two advisories this part is expected to carry, word for word: the R2
+ * round's corner blends are NURBS fits, and the Thread's 30° flanks overhang
+ * when printed upright. Any other warning, advisory or not, fails the build.
+ */
+const ROUND_ADVICE =
+  'Feature "Round": This fillet is approximate: its blend surface is a NURBS fit within modeling tolerance, not an exact fillet surface. Volume, measurements and STEP export use that approximate surface.';
+const THREAD_ADVICE =
+  'Feature "Thread": Printed upright, a 30° flank overhangs 60° from vertical, past 45°. The Printable profile keeps both flanks at 45°.';
+const ADVICE: Record<string, string> = {
+  Round: ROUND_ADVICE,
+  Thread: THREAD_ADVICE
+};
+
+/**
+ * Builds `document`; fails on any refusal, an open or inexact body, or any
+ * warning but the advisories of the features named in `advised`.
+ */
+async function built(
+  document: ProjectDocument,
+  label: string,
+  advised: Array<keyof typeof ADVICE> = []
+) {
   const derived = await adapter.syncDocument(document);
   const refused = refusal(derived, label);
   expect(refused?.evidence, `${label}: expected built`).toBeUndefined();
-  // The R2 round's corner blends are NURBS fits, disclosed as advisory.
-  const advice = new Set(
-    (derived.featureWarnings ?? [])
-      .filter((warning) => warning.kind === 'advisory')
-      .map((warning) => warning.message)
-  );
   expect(
-    derived.warnings.filter(
-      (warning) => ![...advice].some((message) => warning.includes(message))
-    ),
-    label
-  ).toEqual([]);
+    (derived.featureWarnings ?? []).map((warning) => ({
+      kind: warning.kind,
+      featureName: warning.featureName,
+      message: warning.message
+    })),
+    `${label}: feature warnings`
+  ).toEqual(
+    advised.map((featureName) => ({
+      kind: 'advisory',
+      featureName,
+      message: ADVICE[featureName]
+    }))
+  );
+  expect(derived.warnings, `${label}: warnings`).toEqual(
+    advised.map((featureName) => ADVICE[featureName])
+  );
   const body = derived.bodyRepresentations[last(document)];
   expect(body, `${label}: body`).toBeDefined();
   expect(body!.exportableStep, `${label}: exact`).toBe(true);
@@ -205,7 +231,7 @@ async function threadedPart() {
       : {}),
     size: ROUND
   }).document;
-  await built(document, 'round');
+  await built(document, 'round', ['Round']);
   const rounded = last(document);
 
   document = addPrimitiveFeature(document, {
@@ -224,7 +250,7 @@ async function threadedPart() {
     operation: 'subtract',
     targetBodyIds: [rounded, last(document)]
   }).document;
-  const bored = await built(document, 'bore');
+  const bored = await built(document, 'bore', ['Round']);
 
   const wall = bored.body.topology!.faces.filter(
     (face) =>
@@ -241,20 +267,21 @@ async function threadedPart() {
     majorDiameter: 24,
     pitch: 1.5
   }).document;
-  const threaded = await built(document, 'thread');
+  const threaded = await built(document, 'thread', ['Round', 'Thread']);
+  // Every caller's precondition: the bore is threaded with modeled flanks.
+  const freeform = threaded.body.topology!.faces.filter(
+    (face) =>
+      !['plane', 'cylinder', 'cone', 'sphere', 'torus'].includes(
+        face.geometry?.surfaceType ?? ''
+      )
+  );
+  expect(freeform.length, 'thread flank faces').toBeGreaterThan(50);
   return { document, ...threaded };
 }
 
 describe('K10: a block top moved beside a threaded bore (remus#2017)', () => {
   it('builds the upstream part with a modeled thread', async () => {
-    const { body, derived, document } = await threadedPart();
-    const freeform = body.topology!.faces.filter(
-      (face) =>
-        !['plane', 'cylinder', 'cone', 'sphere', 'torus'].includes(
-          face.geometry?.surfaceType ?? ''
-        )
-    );
-    expect(freeform.length, 'thread flank faces').toBeGreaterThan(50);
+    const { derived, document } = await threadedPart();
     // The block top's box reaches over the bore's footprint: the case the
     // kernel's box-only sweep check refused.
     const top = upFace(derived, last(document), H);
@@ -287,7 +314,7 @@ describe('K10: a block top moved beside a threaded bore (remus#2017)', () => {
           offset: distance
         }
       }).document;
-      const after = await built(moved, `+${distance} mm`);
+      const after = await built(moved, `+${distance} mm`, ['Round', 'Thread']);
       expect(after.body.faceCount).toBe(body.faceCount);
       // Closed form: the roof's section times the distance.
       expect(

@@ -716,9 +716,10 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
   // equator. Until remus#2023 the kernel judged "entirely on one side" from
   // the body's edges alone, so z = 1 was refused like z = 6. It now sections
   // a sphere or torus face the plane crosses between its edges, so the
-  // horizontal planes below (z = 1, −1 and the equator) build two exact
-  // halves. Not every plane through the sphere does: a tilted plane clear of
-  // the equator is still refused (the last case here). A tangent or missing
+  // horizontal planes below build two exact pieces: unequal ones at z = 1
+  // and z = −1 (176π/3 and 108π each time), true halves only along the
+  // equator. Not every plane through the sphere builds: a tilted plane clear
+  // of the equator is still refused (the last case here). A tangent or missing
   // plane is still refused, and the adapter, which cannot prove a miss on a
   // curved body, still claims no cause.
   describe('S7: a Split through a sphere', () => {
@@ -743,7 +744,7 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
       ['z = 1, through a hemisphere', 1, cap(R - 1)],
       ['z = −1, through the other', -1, cap(R + 1)],
       ['z = 0, along the equator', 0, whole / 2]
-    ])('%s: two exact halves', async (label, z, above) => {
+    ])('%s: two exact pieces', async (label, z, above) => {
       const { document, ball } = sphere();
       const split = addSplitFeature(document, {
         name: 'Split',
@@ -766,7 +767,7 @@ describe('K10 workflow coupon: Split on the A0 blank (S1–S6)', () => {
       );
     });
 
-    it('pins the z = 1 halves to 176π/3 and 108π', () => {
+    it('pins the z = 1 pieces to 176π/3 and 108π', () => {
       expect(cap(R - 1)).toBeCloseTo((176 * PI) / 3, 12);
       expect(whole - cap(R - 1)).toBeCloseTo(108 * PI, 12);
     });
