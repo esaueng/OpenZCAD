@@ -9,6 +9,8 @@ import {
   measureFitFrame,
   measureOpeningFrame,
   measurePickFrame,
+  openingCoverHides,
+  sameOpeningFrame,
   shiftIntoFrame
 } from './fitFrame';
 
@@ -921,5 +923,34 @@ describe('cornersWithinFrame', () => {
     expect(cornersWithinFrame([corner(0.55, 0)], frame, 0.2)).toBe(false);
     expect(cornersWithinFrame([corner(0.5, 0.85)], frame, 0.2)).toBe(true);
     expect(cornersWithinFrame([corner(0, 0.9)], frame, 0.2)).toBe(false);
+  });
+});
+
+describe('the opening fit under the workspace cover', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('follows the stage only while the cover hides the canvas', () => {
+    // A warm second project built its model before the panels mounted, and
+    // the fit made then ignored them (the iPad review's Mounting Bracket).
+    const cover = document.createElement('div');
+    cover.className = 'workspace-reveal';
+    const canvas = document.createElement('canvas');
+    cover.append(canvas);
+    document.body.append(cover);
+    cover.style.visibility = 'hidden';
+    expect(openingCoverHides(canvas)).toBe(true);
+    cover.style.visibility = 'visible';
+    expect(openingCoverHides(canvas)).toBe(false);
+    expect(openingCoverHides(document.createElement('canvas'))).toBe(false);
+  });
+
+  it('refits only for a frame that moved', () => {
+    const frame = { minX: -0.82, maxX: 0.1, minY: -1, maxY: 0.9 };
+    expect(sameOpeningFrame(frame, { ...frame })).toBe(true);
+    expect(sameOpeningFrame(frame, { ...frame, maxX: 0.82 })).toBe(false);
+    expect(sameOpeningFrame(undefined, undefined)).toBe(true);
+    expect(sameOpeningFrame(frame, undefined)).toBe(false);
   });
 });

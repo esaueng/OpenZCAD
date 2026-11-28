@@ -187,3 +187,48 @@ test('a standard view stays in the project it was chosen in', async ({
     )
     .toBe(true);
 });
+
+// The iPad review and its preview check on #2451: a second project in a
+// session builds its model before its panels mount, and a Fit asked for in
+// the last project fitted the next one as it mounted; either way the
+// Mounting Bracket opened with its boss behind History.
+test('a demo opened after another project opens clear of the docked panels', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 834, height: 1210 });
+  await createBox(page, 'Fit Before Demo');
+  const canvas = page.locator('.viewer-host canvas');
+  await settledCamera(canvas);
+  await page
+    .getByRole('button', { name: /^Fit view/ })
+    .first()
+    .click();
+  await settledCamera(canvas);
+
+  await page.getByTitle('Back to projects').click();
+  await page
+    .getByRole('button', { name: /Open demo: Mounting Bracket/ })
+    .first()
+    .click();
+  await expect(page.getByText('Demo ready')).toBeVisible({ timeout: 60_000 });
+  await settledCamera(canvas);
+  const screenRight = await canvas.evaluate(
+    (element) =>
+      new Promise<number>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-bodies-in-view', {
+            detail: {
+              resolve: (state: { screen: { right: number } | null }) =>
+                resolve(state.screen?.right ?? Infinity)
+            }
+          })
+        );
+      })
+  );
+  const railLeft = await page
+    .locator('.viewer-area .instrument-rail')
+    .first()
+    .evaluate((element) => element.getBoundingClientRect().left);
+  expect(screenRight).toBeLessThanOrEqual(railLeft);
+});

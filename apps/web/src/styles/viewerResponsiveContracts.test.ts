@@ -155,6 +155,32 @@ describe('menus over the passive overlays (F013)', () => {
       ).join('\n')
     ).toMatch(/visibility:\s*hidden/);
   });
+
+  it('stands the first-run tour aside while the exact-entry keypad is up', () => {
+    // Its card covered the keypad's lower keys on an iPad's first Extrude.
+    expect(
+      rules(css, '.viewer-area:has(.numeric-keypad) .workspace-tour').join('\n')
+    ).toMatch(/visibility:\s*hidden/);
+  });
+});
+
+describe('the exact-entry keypad on a short stage', () => {
+  it('stands over a command card in the right lane', () => {
+    // The preview check on #2451: at an iPad's keyboard height the Extrude
+    // card (z-panel-float + 8) covered the keypad's Apply.
+    const keypad = rules(sheet('edit-control.css'), '.numeric-keypad').join(
+      '\n'
+    );
+    const lane = rules(
+      sheet('quiet-stage.css'),
+      '.stage-right:has(> :is(.command-float, .inspector-float))'
+    ).join('\n');
+    const offset = (css: string) =>
+      Number(
+        /z-index:\s*calc\(var\(--z-panel-float\) \+ (\d+)\)/.exec(css)?.[1]
+      );
+    expect(offset(keypad)).toBeGreaterThan(offset(lane));
+  });
 });
 
 describe('a refusal in the command strip (F014)', () => {

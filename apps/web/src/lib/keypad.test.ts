@@ -7,6 +7,7 @@ import {
   editControlState,
   keypadClampPosition,
   keypadInPlacePosition,
+  keypadKeptPosition,
   radialSizeError,
   typedUnitValue
 } from './keypad';
@@ -120,6 +121,43 @@ describe('keypadInPlacePosition', () => {
       );
     }
   );
+});
+
+describe('keypadKeptPosition', () => {
+  it('keeps a control that only grew where it stands', () => {
+    // The iPad review: a fillet's first key hid the chip and added the
+    // Fillet switch, and the control re-placed itself 48 px left and docked.
+    const placed = { x: 242, y: 300, side: 'over' as const };
+    expect(
+      keypadKeptPosition(placed, { width: 353, height: 343 }, VIEWPORT)
+    ).toEqual(placed);
+  });
+
+  it('keeps a control that shrank where it still fits, beside a panel', () => {
+    // Review on #2451: placed squeezed at x=100 beside a panel at 400–550,
+    // a control that shrank to 232 px fits where it is and stays there,
+    // rather than jumping to the widest gap at 558.
+    expect(
+      keypadKeptPosition(
+        { x: 100, y: 200, side: 'over' },
+        { width: 232, height: 200 },
+        VIEWPORT,
+        [{ x: 400, width: 150 }]
+      )
+    ).toEqual({ x: 100, y: 200, side: 'over' });
+  });
+
+  it('moves it only as far as the stage and the docked panels require', () => {
+    const placed = { x: 700, y: 500, side: 'over' as const };
+    expect(
+      keypadKeptPosition(placed, { width: 353, height: 343 }, VIEWPORT)
+    ).toEqual({ x: 1000 - 353 - 8, y: 700 - 343 - 8, side: 'over' });
+    expect(
+      keypadKeptPosition({ x: 20, y: 40, side: 'docked' }, SIZE, VIEWPORT, [
+        { x: 0, width: 300 }
+      ])
+    ).toEqual({ x: 308, y: 40, side: 'docked' });
+  });
 });
 
 describe('editControlState', () => {

@@ -644,6 +644,8 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+  /* Its rows read their own width (below), not the window's. */
+  container: history-timeline / inline-size;
 }
 
 .history-find-toggle {
@@ -1616,6 +1618,48 @@ button.history-row-refused.is-reopen:focus-visible {
   .history-timeline .feature-row-main {
     gap: 3px;
     padding-inline: 2px;
+  }
+}
+
+/* The same in a narrow panel on a wide window. An iPad at its largest text
+   size is a 556 px page, where History stands between two rails at 160 px:
+   Suppress, Roll back and More took 74 px of it and every name read "B…".
+   Under 260 px the row keeps More (which has both) and the name the rest. */
+@container history-timeline (max-width: 259px) {
+  .history-timeline .history-row-actions :is(.row-suppression, .row-rollback) {
+    display: none;
+  }
+
+  .history-timeline .feature-row {
+    --history-actions-w: 24px;
+  }
+
+  .history-timeline .history-row-actions {
+    position: static;
+    margin-top: 0;
+    opacity: 1;
+    transform: none;
+  }
+
+  .history-timeline .history-row-tail {
+    min-width: 0;
+  }
+
+  .history-timeline .feature-row-main {
+    gap: 3px;
+    padding-inline: 2px;
+  }
+
+  /* More has its own room here, so hovering or focusing the row no longer
+     fades the value it used to cover. */
+  .history-timeline
+    .feature-row:is(
+      :hover,
+      :has(:focus-visible),
+      :has(.history-row-actions :focus)
+    )
+    .history-row-value {
+    opacity: 1;
   }
 }
 

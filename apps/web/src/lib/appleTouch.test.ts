@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  APPLE_TOUCH_ANY_FILE_ACCEPT,
   CAD_IMPORT_ACCEPT,
   CAD_IMPORT_FORMAT_LINE,
   CAD_IMPORT_FORMATS,
@@ -36,10 +37,15 @@ describe('Apple touch devices', () => {
     );
   });
 
-  it('drops the extension filter only where the Files picker would grey files out', () => {
+  it('takes every file where the Files picker would grey files out', () => {
+    // Not undefined either: with no accept at all WebKit asks Photo Library
+    // or Choose Files first, for a project or CAD import.
     expect(
       fileAccept(CAD_IMPORT_ACCEPT, { userAgent: IPAD, maxTouchPoints: 5 })
-    ).toBeUndefined();
+    ).toBe(APPLE_TOUCH_ANY_FILE_ACCEPT);
+    expect(fileAccept('.openzcad', { userAgent: IPHONE })).toBe(
+      'application/octet-stream'
+    );
     expect(
       fileAccept('.openzcad', { userAgent: WINDOWS, maxTouchPoints: 10 })
     ).toBe('.openzcad');
