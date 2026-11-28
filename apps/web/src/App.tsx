@@ -1239,6 +1239,12 @@ import {
   type ResolvedExtrudePreview
 } from './lib/resolvedExtrudePreview';
 import { isExtrudeChangeClipped } from './lib/extrudeSectionVisibility';
+import {
+  offsetFaceExtents,
+  sectionHidesFaceOffset,
+  shownFaceOffset
+} from './lib/faceOffsetSectionVisibility';
+import { SectionHidesEditNotice } from './components/SectionHidesEditNotice';
 import type {
   ExtrudeFaceTarget,
   ExtrudeFormValue,
@@ -2769,6 +2775,11 @@ interface OffsetPreviewCandidate {
   preflightRejection?: string;
   /** The display mesh's view of the path, read only after a collision refusal. */
   sweepReading?: () => FaceSweepReading | undefined;
+  /**
+   * A face set's leading-plane frame: the faces it moves. The rest of the
+   * set stays where it is on the source body. Absent: every face moves.
+   */
+  movedTopologyIds?: string[];
 }
 
 type RadiusPreviewCandidate = Omit<
@@ -4787,6 +4798,10 @@ export function App() {
     geometry: GeometryReadyState;
     /** Radius of this published cylinder frame, which can lag the handle. */
     radius?: number;
+    /** Signed offset of this published face-offset frame (either lane). */
+    offset?: number;
+    /** A leading-plane frame's moved faces; absent when every face moved. */
+    movedTopologyIds?: string[];
   } | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
   const checkpointRoomRef = useRef<{
@@ -5279,6 +5294,11 @@ export function App() {
   keypadRef.current = keypad;
   /** Latest pointer/entry value stays transient until an exact frame lands. */
   const offsetPreviewValueRef = useRef<number | null>(null);
+  /**
+   * The offset the viewer's own mesh proxy draws the offset face at, as the
+   * viewer reports it (`onOffsetProxyShown`); null while it draws the part.
+   */
+  const [proxyFaceOffset, setProxyFaceOffset] = useState<number | null>(null);
   const submittedOffsetExpression = useRef<{
     document: ProjectDocument;
     key: string;
@@ -7017,18 +7037,29 @@ export function App() {
         ) {
           return null;
         }
-        const command = offsetChainRef.current?.buildOffsetFaceSetLead({
+        const setInput = {
           document: base,
           bodyId: current.target.bodyId as BodyId,
           face: {
             topologyId: current.target.topologyId,
             hash: current.target.hash
           },
-          members: current.target.offsetFaceSet,
+          members: current.target.offsetFaceSet
+        };
+        const command = offsetChainRef.current?.buildOffsetFaceSetLead({
+          ...setInput,
           offset
         });
         if (!command) return null;
+        // The chain's first plane, which this frame alone moves.
+        const leading = offsetChainRef.current?.faceSetOffsetPlanes(
+          setInput,
+          offset
+        )?.[0];
         return {
+          ...(leading
+            ? { movedTopologyIds: leading.map((face) => face.topologyId) }
+            : {}),
           selectionKey: faceOffsetPlanKey(current) ?? '',
           document: command.apply(base),
           offset,
@@ -33034,6 +33065,48 @@ export function App() {
     keypad?.kind === 'offset' ? offsetPreviewValueRef.current : null
   );
 
+  // While a section view is on, whether it hides part of the face being
+  // offset (or of where its preview puts it): the command bar then says so
+  // and offers the way to see the whole edit. A cut clear of it says nothing.
+  const offsetSectionView = viewerSettings.sectionView;
+  const offsetHiddenBySection = useMemo(() => {
+    if (
+      !offsetSectionView ||
+      interaction.mode !== 'face' ||
+      interaction.op !== 'offset-face'
+    ) {
+      return false;
+    }
+    const { target } = interaction;
+    const body = ownEntry(representations, target.bodyId as BodyId);
+    if (!body || body.consumed || hiddenBodyIds.has(body.bodyId)) return false;
+    // Read from what the viewer draws: its mesh proxy while it reports one
+    // (it moves the handle's face alone), else the exact frame it was given,
+    // else the source body, on which nothing has moved.
+    return sectionHidesFaceOffset(
+      {
+        faces: offsetFaceExtents(body, target),
+        ...shownFaceOffset(
+          currentFaceGeometryPreview,
+          proxyFaceOffset === null
+            ? null
+            : {
+                offset: proxyFaceOffset,
+                movedTopologyIds: [target.topologyId]
+              }
+        )
+      },
+      offsetSectionView
+    );
+  }, [
+    offsetSectionView,
+    interaction,
+    representations,
+    hiddenBodyIds,
+    currentFaceGeometryPreview,
+    proxyFaceOffset
+  ]);
+
   // M07: the armed face set's faces, for their direction ticks.
   const offsetSetTarget =
     interaction.mode === 'face' &&
@@ -40936,6 +41009,15 @@ export function App() {
   // "Tick the bodies that are parts", and "Drag the arrow to set the fillet
   // on edge" once a part was clicked, with no arrow to drag. It rests.
   const panelModeHint = assembleMode ? idleHint : tweakModeHint;
+  // The section note takes the guidance row's notice slot when nothing with
+  // more to say (a save preview, the live session) has it. A refusal shares
+  // the slot: its last valid preview stays drawn, and the cut can hide it.
+  // The compact workspace reads it in its sheet, as it does a refusal.
+  const offsetSectionNoteShown =
+    offsetHiddenBySection &&
+    !modelingLocked &&
+    !savePreviewActive &&
+    !liveSessionConnecting;
   const workspacePrompt =
     !displayedGeometryComplete && !drawingMode
       ? 'Preparing model · viewing is available; editing waits until it is ready'
@@ -42989,6 +43071,7 @@ export function App() {
                 : null
             }
             onOffsetPreview={handleOffsetPreview}
+            onOffsetProxyShown={setProxyFaceOffset}
             onOffsetCommit={(value, reading) => {
               if (interactionRef.current.mode === 'region') {
                 regionDistanceSetter.current?.(Math.round(value * 1000) / 1000);
@@ -44618,7 +44701,8 @@ export function App() {
             // The compact workspace has no guidance row: it is in the sheet.
             noticeInSheet={
               !savePreviewActive &&
-              Boolean(!keypad && calloutWithOperation?.operation?.error)
+              (Boolean(!keypad && calloutWithOperation?.operation?.error) ||
+                offsetSectionNoteShown)
             }
             notice={
               savePreviewActive ? (
@@ -44661,25 +44745,32 @@ export function App() {
                   onRetry={collaboration.reconnect}
                 />
               ) : !keypad && calloutWithOperation?.operation?.error ? (
-                <EditRefusal
-                  operation={calloutWithOperation.operation}
-                  // The compact sheet has the width for the whole line, and
-                  // its explanation opens in the sheet's flow (U12).
-                  variant={compactShell ? 'control' : 'bar'}
-                  revealRequest={
-                    refusalReveal?.interaction === interaction
-                      ? refusalReveal.count
-                      : 0
-                  }
-                  unitLabel={displayLengthName(doc.units)}
-                  onTrySize={tryRefusalSize}
-                  onPickAnother={pickAnotherAfterRefusal}
-                  pickAnotherLabel={
-                    interaction.mode === 'edges'
-                      ? 'Pick another edge'
-                      : 'Pick another face'
-                  }
-                />
+                <>
+                  <EditRefusal
+                    operation={calloutWithOperation.operation}
+                    // The compact sheet has the width for the whole line, and
+                    // its explanation opens in the sheet's flow (U12).
+                    variant={compactShell ? 'control' : 'bar'}
+                    revealRequest={
+                      refusalReveal?.interaction === interaction
+                        ? refusalReveal.count
+                        : 0
+                    }
+                    unitLabel={displayLengthName(doc.units)}
+                    onTrySize={tryRefusalSize}
+                    onPickAnother={pickAnotherAfterRefusal}
+                    pickAnotherLabel={
+                      interaction.mode === 'edges'
+                        ? 'Pick another edge'
+                        : 'Pick another face'
+                    }
+                  />
+                  {offsetSectionNoteShown ? (
+                    <SectionHidesEditNotice onTurnOff={turnSectionViewOff} />
+                  ) : null}
+                </>
+              ) : offsetSectionNoteShown ? (
+                <SectionHidesEditNotice onTurnOff={turnSectionViewOff} />
               ) : null
             }
             commandRow={
