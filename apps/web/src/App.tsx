@@ -3866,7 +3866,7 @@ export function App() {
     pendingInvitationToken
       ? 'Sign in to open the shared project automatically.'
       : desktopAuthorizationAttempt
-        ? 'Sign in if needed, then approve OpenZCAD for macOS.'
+        ? 'Sign in if needed, then approve the OpenZCAD app.'
         : // Settings' own footer says where changes save; the header is
           // for news (an error, a sign-in step), not a second copy of it.
           ''
@@ -17493,7 +17493,7 @@ export function App() {
       throw new Error('The desktop sign-in attempt is missing.');
     }
     setSettingsBusy(true);
-    setSettingsMessage('Connecting OpenZCAD for macOS…');
+    setSettingsMessage('Connecting the OpenZCAD app…');
     try {
       await api.approveDesktopLogin(
         desktopAuthorizationAttempt,
@@ -17501,11 +17501,11 @@ export function App() {
       );
       setDesktopAuthorizationApproved(true);
       setSettingsMessage(
-        'OpenZCAD for macOS is connected. You can return to the app.'
+        'The OpenZCAD app is connected. You can return to it.'
       );
     } catch (error) {
       setSettingsMessage(
-        errorMessage(error, 'Could not connect OpenZCAD for macOS.')
+        errorMessage(error, 'Could not connect the OpenZCAD app.')
       );
       throw error;
     } finally {
