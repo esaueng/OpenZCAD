@@ -1230,6 +1230,11 @@ import {
   type ResolvedExtrudePreview
 } from './lib/resolvedExtrudePreview';
 import { isExtrudeChangeClipped } from './lib/extrudeSectionVisibility';
+import {
+  faceMeshBounds,
+  sectionHidesFaceOffset
+} from './lib/faceOffsetSectionVisibility';
+import { SectionHidesEditNotice } from './components/SectionHidesEditNotice';
 import type {
   ExtrudeFaceTarget,
   ExtrudeFormValue,
@@ -32940,6 +32945,42 @@ export function App() {
     keypad?.kind === 'offset' ? offsetPreviewValueRef.current : null
   );
 
+  // While a section view is on, whether it hides part of the face being
+  // offset (or of where its preview puts it): the command bar then says so
+  // and offers the way to see the whole edit. A cut clear of it says nothing.
+  const offsetSectionView = viewerSettings.sectionView;
+  const offsetHiddenBySection = useMemo(() => {
+    if (
+      !offsetSectionView ||
+      interaction.mode !== 'face' ||
+      interaction.op !== 'offset-face'
+    ) {
+      return false;
+    }
+    const { target } = interaction;
+    const body = ownEntry(representations, target.bodyId as BodyId);
+    if (!body || body.consumed || hiddenBodyIds.has(body.bodyId)) return false;
+    const faces = [
+      target.topologyId,
+      ...(target.offsetFaceSet ?? []).map((member) => member.topologyId)
+    ].flatMap((topologyId) => faceMeshBounds(body, topologyId) ?? []);
+    const [x, y, z] = target.normal;
+    return sectionHidesFaceOffset(
+      {
+        faces,
+        normal: { x, y, z },
+        previewOffset: renderedOffsetPreview
+      },
+      offsetSectionView
+    );
+  }, [
+    offsetSectionView,
+    interaction,
+    representations,
+    hiddenBodyIds,
+    renderedOffsetPreview
+  ]);
+
   // M07: the armed face set's faces, for their direction ticks.
   const offsetSetTarget =
     interaction.mode === 'face' &&
@@ -40843,6 +40884,15 @@ export function App() {
   // "Tick the bodies that are parts", and "Drag the arrow to set the fillet
   // on edge" once a part was clicked, with no arrow to drag. It rests.
   const panelModeHint = assembleMode ? idleHint : tweakModeHint;
+  // The section note takes the guidance row's notice slot only when nothing
+  // with more to say (a save preview, the live session, a refusal) has it.
+  // The compact workspace reads it in its sheet, as it does a refusal.
+  const offsetSectionNoteShown =
+    offsetHiddenBySection &&
+    !modelingLocked &&
+    !savePreviewActive &&
+    !liveSessionConnecting &&
+    !(!keypad && calloutWithOperation?.operation?.error);
   const workspacePrompt =
     !displayedGeometryComplete && !drawingMode
       ? 'Preparing model · viewing is available; editing waits until it is ready'
@@ -44525,7 +44575,8 @@ export function App() {
             // The compact workspace has no guidance row: it is in the sheet.
             noticeInSheet={
               !savePreviewActive &&
-              Boolean(!keypad && calloutWithOperation?.operation?.error)
+              (Boolean(!keypad && calloutWithOperation?.operation?.error) ||
+                offsetSectionNoteShown)
             }
             notice={
               savePreviewActive ? (
@@ -44587,6 +44638,8 @@ export function App() {
                       : 'Pick another face'
                   }
                 />
+              ) : offsetSectionNoteShown ? (
+                <SectionHidesEditNotice onTurnOff={turnSectionViewOff} />
               ) : null
             }
             commandRow={

@@ -132,6 +132,7 @@
   "new-project-startup.spec.ts": 3,
   "objects-folders.spec.ts": 20,
   "offline-startup.spec.ts": 6,
+  "offset-face-section-note.spec.ts": 60,
   "offset-face-set.spec.ts": 75,
   "offset-rim-choice.spec.ts": 9,
   "open-in-slicer.spec.ts": 16,
