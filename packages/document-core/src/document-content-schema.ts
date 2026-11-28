@@ -257,6 +257,15 @@ export function assertModelPmiSchema(version: unknown): void {
 }
 
 /**
+ * #2375 (schema v157): a `pmi.update` that carries a datum's renamed letter
+ * to the frames naming it. An older reader would replay only the datum and
+ * leave those frames naming a datum the model no longer declares.
+ */
+export function assertModelPmiFollowReferencesSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 157, 'Datum renames that update frames');
+}
+
+/**
  * F06 configurations (schema v72): `configurations` and its commands. An
  * older reader would show and export the bodies the active row hides.
  */
@@ -1136,6 +1145,12 @@ export function assertDocumentContentCommandSchema(
     }
     if (typeof command.kind === 'string' && command.kind.startsWith('pmi.'))
       assertModelPmiSchema(document.schemaVersion);
+    if (
+      command.kind === 'pmi.update' &&
+      record(command.payload) &&
+      command.payload.followReferences !== undefined
+    )
+      assertModelPmiFollowReferencesSchema(document.schemaVersion);
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('configuration.')

@@ -2380,6 +2380,10 @@ import {
   type ToastAction,
   type ToastModel
 } from './lib/toasts';
+import {
+  stepPmiOmissionClause,
+  stepPmiOmissionNote
+} from './lib/pmi/stepPmiDisclosure';
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
 import {
   keptOffsetValue,
@@ -23120,7 +23124,17 @@ export function App() {
     produce(options: {
       signal: AbortSignal;
       onState(state: GeometryWorkerState): void;
-    }): Promise<{ save(): Promise<boolean>; warnings: number }>;
+    }): Promise<{
+      save(): Promise<boolean>;
+      warnings: number;
+      /**
+       * #2258/#2321: what the file says about its model PMI: one
+       * "<entry> — <reason>" per entry left out, one "face type not
+       * verified: …" per form tolerance written on a freeform face. Said
+       * after the outcome, and the card waits to be read.
+       */
+      pmiWarnings?: readonly string[];
+    }>;
     /** The status once the file is saved, when not the export's own. */
     completed?(bodies: string): string;
     /**
@@ -23180,16 +23194,23 @@ export function App() {
         ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
         : '';
       const bodies = `${countLabel(exportBodyIds.length, 'body', 'bodies')}${hiddenNote}`;
+      const pmiWarnings = produced.pmiWarnings ?? [];
+      const pmiNote = stepPmiOmissionNote(pmiWarnings);
       const outcome =
         produced.warnings > 0
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
           : input.completed
             ? input.completed(bodies)
             : `Exported ${bodies} to ${input.fileName}.`;
+      const said = pmiNote ? `${outcome} ${pmiNote}` : outcome;
       setStatus(
-        exportWithheldMessage ? `${outcome} ${exportWithheldMessage}` : outcome
+        exportWithheldMessage ? `${said} ${exportWithheldMessage}` : said
       );
-      sink.finish({ tone: 'ok', message: bodies, landed: true });
+      sink.finish({
+        tone: pmiNote ? 'warning' : 'ok',
+        message: stepPmiOmissionClause(bodies, pmiWarnings),
+        landed: true
+      });
     } catch (error) {
       if (signal.aborted) {
         cancelled();
@@ -23420,6 +23441,10 @@ export function App() {
     }
     const source = doc;
     const { bodyIds, allShownBodies, rowName } = target;
+    // #2258: a selected body's file leaves the rest of the model's PMI out
+    // of scope; a whole-model file names PMI it cannot place.
+    const bodySelection =
+      !allShownBodies && exportScopeInfo?.selection === true;
     const fileName = `${exportStemFor(rowName)}.step`;
     await runExportJob({
       fileName,
@@ -23435,6 +23460,7 @@ export function App() {
         const result = await geometry.exportModel('step', exported, bodyIds, {
           ...options,
           ...(allShownBodies ? { allShownBodies: true } : {}),
+          ...(bodySelection ? { bodySelection: true } : {}),
           fileName,
           units: exportUnitsFor(doc.units),
           stepProtocol: appSettingsRef.current.files.stepProtocol
@@ -23442,9 +23468,11 @@ export function App() {
         if (!('text' in result)) {
           throw new Error('The STEP export returned no text.');
         }
+        // The STEP's only warnings are about its model PMI (#2258/#2321).
         return {
           save: () => saveCadTextFile(fileName, 'step', result.text),
-          warnings: result.warnings.length
+          warnings: 0,
+          pmiWarnings: result.warnings
         };
       }
     });

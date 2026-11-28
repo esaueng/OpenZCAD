@@ -246,6 +246,11 @@ export type GeometryWorkerRequest =
       /** 'step' only: the application protocol to state; AP214 when unset. */
       stepProtocol?: StepProtocol;
       /**
+       * 'step' only: `bodyIds` is the user's selection, so PMI on other
+       * bodies is not reported as left out (#2258).
+       */
+      bodySelection?: boolean;
+      /**
        * F06: ignore `bodyIds` and write every body the document itself shows
        * once built — a configuration that is not the displayed one, whose
        * bodies the caller cannot list.
@@ -1814,38 +1819,40 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('ready', request, { stale: false }));
         return;
       }
-      const text =
+      // #2258: a STEP says which model PMI an AP242 file left out.
+      const step =
         request.format === 'step'
-          ? await exact.exportStep(document, exportBodyIds, {
+          ? await exact.exportStepReport(document, exportBodyIds, {
               ...(request.units ? { units: request.units } : {}),
               ...(request.fileName ? { fileName: request.fileName } : {}),
               ...(request.stepProtocol
                 ? { protocol: request.stepProtocol }
+                : {}),
+              ...(request.bodySelection && !request.allShownBodies
+                ? { bodySelection: true }
                 : {})
             })
-          : request.format === 'iges'
-            ? await exact.exportIges(document, exportBodyIds, {
-                ...(request.units ? { units: request.units } : {}),
-                ...(request.fileName ? { fileName: request.fileName } : {})
-              })
-            : await exact.exportStl(
-                document,
-                exportBodyIds,
-                request.deflection,
-                {
-                  ...(request.units ? { units: request.units } : {}),
-                  ...(request.angularTolerance !== undefined
-                    ? { angularTolerance: request.angularTolerance }
-                    : {})
-                }
-              );
+          : null;
+      const text = step
+        ? step.text
+        : request.format === 'iges'
+          ? await exact.exportIges(document, exportBodyIds, {
+              ...(request.units ? { units: request.units } : {}),
+              ...(request.fileName ? { fileName: request.fileName } : {})
+            })
+          : await exact.exportStl(document, exportBodyIds, request.deflection, {
+              ...(request.units ? { units: request.units } : {}),
+              ...(request.angularTolerance !== undefined
+                ? { angularTolerance: request.angularTolerance }
+                : {})
+            });
       const result: GeometryExportResult = {
         type: 'export',
         ok: true,
         requestId: request.requestId,
         format: request.format,
         text,
-        warnings: []
+        warnings: step ? step.warnings : []
       };
       post(result);
       post(stateFor('ready', request, { stale: false }));
