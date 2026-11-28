@@ -102,8 +102,7 @@ export function planStepPmi(
     const name = entry.name ?? entry.characteristic;
     const surface = modelPmiSurfaceError(
       entry.characteristic,
-      entry.face.surface,
-      entry.face.support
+      entry.face.surface
     );
     if (surface) {
       omitted.push({ name, reason: surface.replace(/\.$/, '') });
